@@ -55,6 +55,7 @@ Each Plug-in module is a [VCOM (Vectorworks Component Object Model)](Info/VCOM%2
 
 ## Version Information
 
+- [Vectorworks 2026](Versions/Vectorworks%202026%20Development.md)
 - [Vectorworks 2025](Versions/Vectorworks%202025%20Development.md)
 - [Vectorworks 2024](Versions/Vectorworks%202024%20Development.md)
 - [Vectorworks 2023](Versions/Vectorworks%202023%20Development.md)
