@@ -7,6 +7,12 @@ The Vectorworks 2025 SDK requires:
 Before debugging Vectorworks on the Mac, please make sure to turn off Metal API Validation. This option can be turned off by going to **Edit Scheme** → **Diagnostics** → **API Validation**.  
 ![Metal Validation](images/MetalValidation.png)
 
+## Plugin Credential files
+
+Vectorworks 2026 introduces the requirement for script plugins that are encrypted/obfuscated and SDK plugins to have a satellite credentials file that defines who is the developer of the plugins is.
+
+More information can be found here: [Plugin Credentials](https://github.com/Vectorworks/developer-scripting/blob/main/Common/Tasks/Info/PluginCredentials.md)
+
 ## Examples
 
 [SDK Examples on GitHub](https://github.com/VectorworksDeveloper/SDKExamples)

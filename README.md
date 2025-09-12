@@ -53,6 +53,12 @@ Each Plug-in module is a [VCOM (Vectorworks Component Object Model)](Info/VCOM%2
 
 [VectorWorks Foundation Classes](Info/VectorWorks%20Foundation%20Classes.md)
 
+## Plugin Credential files
+
+Vectorworks 2026 introduces the requirement for script plugins that are encrypted/obfuscated and SDK plugins to have a satellite credentials file that defines who is the developer of the plugins is.
+
+More information can be found here: [Plugin Credentials](https://github.com/Vectorworks/developer-scripting/blob/main/Common/Tasks/Info/PluginCredentials.md)
+
 ## Version Information
 
 - [Vectorworks 2026](Versions/Vectorworks%202026%20Development.md)
