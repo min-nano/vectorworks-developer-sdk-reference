@@ -4,6 +4,19 @@ Vectorworks http://www.vectorworks.net provides an open architecture that allows
 
 The SDK https://www.vectorworks.net/en-US/support/custom/sdk/sdkdown provides OS-independent functionality for accessing the application routines. Also, it provides functions for creating OS-independent User Interfaces for your plug-ins.
 
+## このフォークについて（実測知見）
+
+このリポジトリは公式リファレンスのフォークに、実際のプラグイン開発で判明した
+**Vectorworks SDK の実測知見**と、リモート環境から SDK を調べるための**調査用 CI** を
+足したものです。公式リファレンス（`Info/` / `Versions/`）だけでは分からない
+「実機でしか判明しない挙動」「SDK に無い／効かない API」はこちらにあります。
+
+- **[実測知見の索引 — `Findings/`](Findings/README.md)** … PIO・シンボル・壁・スラブ・
+  屋根面・レイヤ・ビューポート・用紙・データタグ・グラフィック凡例・タグ付きデータ・
+  Undo・ダイアログ・調査の作法
+- [`CLAUDE.md`](CLAUDE.md) … 調査のフロー（issue → CI 調査 → PR → 実機確認 → 反映）と
+  作業時の規約
+
 ## Basics
 
 The Vectorworks SDK uses the C++ language to develop extension functionality. To develop SDK plug-ins for Vectorworks, you will need the following tools:

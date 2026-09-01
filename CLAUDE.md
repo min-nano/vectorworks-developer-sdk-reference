@@ -1,0 +1,170 @@
+# CLAUDE.md
+
+このファイルは Claude Code（claude.ai/code）がこのリポジトリで作業するときの指針です。
+**この指示は既定の挙動より優先されます。正確に従ってください。**
+
+## このリポジトリについて
+
+Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https://github.com/Vectorworks/developer-sdk)）の
+フォークに、**実測知見（`Findings/`）と調査用 CI** を足したものです。公式リファレンスは
+実際の開発には情報が足りないため、実機（ローカルの VectorWorks）と CI（SDK ヘッダ検索・
+コンパイル確認）で調査した結果をここへ蓄積し、**プラグイン開発（現在は
+[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)）
+から参照する唯一の置き場**にします。
+
+| 場所 | 中身 | 書き換え |
+| --- | --- | --- |
+| `README.md` | 公式リファレンスの入口＋このフォークの追加分への導線 | 追加分の節だけ触る |
+| `Info/` / `Versions/` | **上流（公式）由来のリファレンス** | **原則書き換えない**（上流の更新を取り込めるように保つ。誤りを見つけたら Findings 側に注記を書く） |
+| `Findings/` | **実測知見**。トピック別のファイル＋[索引と規約](Findings/README.md) | ここが本体。知見はここへ足す |
+| `probes/` | 調査用のコンパイルスニペット（[規約](probes/README.md)） | 調査中だけ。役目を終えたら消す |
+| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint | — |
+| `CLAUDE.md`（本ファイル） | 作業時の規約。調査のフロー・PR とマージ・CI の待ち方 | — |
+
+## 調査のフロー
+
+調査は issue 単位で回す。**調べたいことが出たら issue を立て、このリポジトリで調査して
+PR にし、必要な実機確認を経て Findings へ確定内容を反映する。**
+
+1. **issue を立てる**（テンプレート `調査` がある）。何を・なぜ・どの水準まで確かめるか。
+2. **既に答えが無いか確かめる。** `Findings/` の該当トピックと「打ち切った調査」を先に
+   読む。**打ち切った調査に書いてあることは再調査しない**（状況——VW のバージョン・SDK の
+   版——が変わらない限り）。
+3. **作業ブランチで調査する。** ヘッダで答えが出る問いは `ci-debug` の `sdk-grep` /
+   `sdk-ls`、「この呼び出しはコンパイルが通るか」は `probes/` にスニペットを置いて
+   `compile`（下記「CI デバッグ」）。
+4. **Findings へ反映する PR を作る。** 確認水準の印（無印＝実機確認済み・【推定】・
+   【ヘッダ根拠】）を正直に付ける（[`Findings/README.md`](Findings/README.md)）。
+   調査に使ったスニペット・一時計装は PR をマージする前に消す（結論は文章で残る）。
+5. **実機確認が要るものは確認後にマージする**（下記「PR とマージ」）。
+
+## 知見の書き方
+
+- **なぜ（根拠）と実測値を書く。** 「動かない」だけでなく、何を試してどう切り分けたかを
+  残す。表・実測の数値・ダンプは省略しない。
+- **確認水準を偽らない。** 実機で確かめていないことを確認済みのように書かない。
+  【推定】【ヘッダ根拠】の印は、実機確認が取れた時点で外す。
+- **「できない」も知見。** 打ち切った調査は消さずに、潰した道と教訓ごと残す。
+- **実装例へのリンクは実プラグインのソースを指す**（`draw/DrawUtil` 等のパス表記）。
+  こちらへコードを複製しない。
+- 日本語で書く。既存ファイルの密度・体裁（手折りの箇条書き）に合わせる。
+
+## 開発プロセス: PR とマージ
+
+1. **PR は自動で作ってよい。** 作成後は `subscribe_pr_activity` で CI 結果とレビューを
+   監視し、CI の失敗は診断して修正を push する（待機は必ず `ci-wait`。下記）。
+2. **「実機確認済み」として書く内容の PR は、確認が済んでからマージする。** 実機でしか
+   確かめられない挙動を無印（＝実機確認済み）で Findings に書く PR は、ユーザーが
+   VectorWorks 実機で確認し「確認できた」と伝えるまで open のまま待つ。未確認の記述が
+   確認済みの顔をして蓄積すると、リファレンス全体の信頼が崩れる。
+3. **実機確認の要らない変更は CI green で自動マージしてよい。** 【推定】【ヘッダ根拠】の
+   印付きの追記、`sdk-grep` の結果の転記、目次・体裁・スクリプト・CI 設定など。
+   判断に迷うなら 2 に倒す。
+4. **コミットメッセージ**には Claude セッション URL を入れる
+   （`https://claude.ai/code/session_<SESSION_ID>` の形式）。
+
+## CI の完了を待つ（待機は必ず `ci-wait` / `ci-debug` で行う）
+
+リモートセッションから「CI が終わった」ことを知る手段は、**完了した瞬間に exit する
+プロセスをバックグラウンドで走らせる**ことだけである（PR 購読で配信されるのは CI の
+**失敗**とコメントだけで、**成功は配信されない**）。バックグラウンドコマンドの終了は
+ハーネスが通知するので、**exit がそのまま完了通知になる**。
+
+したがって次の 2 つは**禁止**する。
+
+- **`sleep` で待つ**（完了時刻の予測が要るうえ、外れれば無駄待ちか取りこぼし）。
+- **待機ループをその場で手書きする**（`while : ; do gh/curl …; sleep 30; done`）。
+  締切もウォッチドッグも HTTP の時間上限も無いので、API が固まればぶら下がる。
+
+```
+Bash(run_in_background: true):
+  scripts/ci-wait.sh --pr 12        # PR の head（新しい push が入ったら追随する）
+  scripts/ci-wait.sh --ref main     # ブランチ / タグ
+  scripts/ci-wait.sh                # いま checkout しているブランチ
+```
+
+投げたら別作業を続け、終了通知が来たら出力ファイルを `Read` するだけでよい。出力の
+最終行は必ず `ci-wait: done (conclusion=<結果> exit=<終了コード>)` で、
+`conclusion=success` 以外は exit 1（`no-checks` は「チェックが 1 件も登録されなかった」、
+`timed-out-waiting` / `api-error` は「待機側が見届けられなかった」——CI の失敗ではない）。
+このリポジトリの PR CI は `lint.yml`（shellcheck / actionlint）だけなので、出力に並ぶ
+チェック名を読み、`debug`（ci-debug の run）だけを見て green と誤読しないこと。
+
+待機の土台は `scripts/ci-common.sh`（`ci-wait.sh` と `ci-debug.sh` が共有）。
+**どんな異常でも必ず有限時間で exit する**ことが唯一にして最大の要件で、HTTP の時間上限・
+締切判定・ウォッチドッグの三重の歯止めを持つ。新しく「何かの完了を待つ」道具が要るときは
+`poll_until` の上に probe を 1 つ書く。**待機ループを増やさない。**
+
+## CI デバッグ（SDK 調査は `ci-debug` を使う）
+
+リモートセッション（クラウド上のコンテナ）には **Vectorworks SDK が無い**。SDK に関する
+問いは `.github/workflows/ci-debug.yml`（`workflow_dispatch` 専用。push / PR では決して
+走らない）で CI 上に答えさせる。
+
+### 使い方（リモートセッションの AI はこの 2 手順）
+
+リモートセッションの `GITHUB_TOKEN` は読み取り専用で `actions: write` を持たない
+（REST でのディスパッチは 403）。**起動は GitHub MCP、待機はスクリプト**の 2 手順で行う。
+
+```
+1. mcp__github__actions_run_trigger
+     method: run_workflow, workflow_id: "ci-debug.yml", ref: <調査したいブランチ>,
+     inputs: {mode, platform, label, args, script, notify_pr}
+     ※ label は一意な文字列にする（これで run を特定する）
+
+2. Bash(run_in_background: true):
+     scripts/ci-debug.sh wait --label <label>
+```
+
+**手順 2 は必ず `run_in_background: true` で投げる**（完了した瞬間に exit する＝通知に
+なる）。**`sleep` で待ってはいけない。** 書き込み権限のあるトークンが使える環境では
+`scripts/ci-debug.sh run --mode sdk-grep --args 'GetLayerByName'` が 1 コマンドで両方やる。
+
+| mode | 用途 | `--args` |
+| --- | --- | --- |
+| `sdk-grep` | SDK ヘッダを拡張正規表現で検索（**調査の主力**） | 検索パターン |
+| `sdk-ls` | ヘッダの全文表示 / パス部分一致の一覧 | ヘッダのパスまたは部分文字列 |
+| `compile` | `probes/` のスニペット 1 ファイルを SDK ヘッダに対して構文チェック（mac 専用。リンクはしない） | ソースのパス（例 `probes/example.cpp`） |
+| `shell` | 任意の bash（`--script`）。逃げ道 | — |
+
+`--platform` は `mac`（既定）/ `windows` / `linux`。`windows` は Windows 版 SDK ヘッダを
+引きたいときだけ。`linux` は SDK を用意しないので `shell` 専用。
+
+**`compile` が通っても「動く」とは限らない**——構文チェック（`-fsyntax-only`）であって、
+リンクも実行もしていない。実挙動の確認は実機（または実プラグイン側のビルド）で行い、
+Findings に書くときの確認水準の印もそれに合わせる。
+
+### 結果の読み方
+
+出力は必ず次のマーカーで挟まれている。`truncated=yes` のときは**全部は見えていない**ので、
+`--args` を絞るか `mode=shell` で件数を数える。
+
+```
+===== BEGIN PAYLOAD (mode=... platform=...) =====
+...
+===== END PAYLOAD (exit=N lines_total=N truncated=yes|no) =====
+```
+
+`... (annotation truncated by GitHub's 4096-char limit …)` が出ていたら注釈経路の上限で
+切られたということ（END の `lines_total` が本当の行数）。ペイロードの取得経路は
+① チェックラン注釈（api.github.com だけで読める。通常はこちら）② ジョブログ（署名付き
+ストレージへの 302 が egress ポリシーで拒否される環境では取れない。そのときは GitHub MCP の
+`get_job_logs`）。失敗して調査コマンドに到達しなかった場合はマーカーが無く、理由が出る。
+全文ログは run のアーティファクト（`ci-debug-<label>`）に残るが、**AI はアーティファクトを
+取得できない**ので、必要な情報は必ずログ側に出すこと（モードを足すときの原則）。
+
+### 制約
+
+- `workflow_dispatch` は**デフォルトブランチに存在するワークフロー**しか起動できない。
+  `ci-debug.yml` が `main` にマージされて初めて、作業ブランチを `ref` に指定して使える。
+- **モードの追加・修正は `scripts/ci-debug-job.sh`（ランナー側）で行う。** ワークフロー
+  本体は薄く保ってあるので、作業ブランチに push するだけで新しいモードを試せる
+  （`ref` がそのブランチのため）。ワークフロー本体を変えると main へのマージが要る。
+- SDK ヘッダはキャッシュされる（初回だけ〜140MB のダウンロードが走る）。
+
+## 関連リポジトリ
+
+- [vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)
+  — 実測知見の出どころで、Findings の「実装例」が指す先。あちらの開発で SDK の新しい
+  挙動が分かったときは、**あちらの開発メモではなくこのリポジトリの `Findings/` へ足す**
+  （あちらの CLAUDE.md にも同じ規約がある）。
