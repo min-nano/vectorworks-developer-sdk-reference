@@ -168,6 +168,13 @@ namespace vwprobe
 				return fSelection;
 			}
 
+			// **実際に出せたか。** 組めなかったときは呼び出し側が素のアラートへ落とす
+			// （Findings「Layout Dialogs」——出せなかったときの逃げ道を必ず持つ）。
+			bool Shown() const
+			{
+				return fShown;
+			}
+
 		protected:
 			bool CreateDialogLayout() override
 			{
@@ -198,6 +205,7 @@ namespace vwprobe
 					fPopup.AddItem(item);
 				if (fSelection >= 0 && size_t(fSelection) < fItems.size())
 					fPopup.SelectIndex(size_t(fSelection));
+				fShown = true;
 			}
 
 			// 選択した添字を fSelection へ結び付ける（双方向）。
@@ -224,6 +232,7 @@ namespace vwprobe
 			VWPullDownMenuCtrl fPopup;
 			std::vector<TXString> fItems;
 			short fSelection;
+			bool fShown = false;
 		};
 
 		// EVENT_DISPATCH_MAP_BEGIN は SDK のマクロ。展開の中で clang-tidy が const を
@@ -461,7 +470,16 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 		items.emplace_back(pickerItem(all[index]).c_str());
 
 	CProbePickerDialog picker(items, 0);
-	if (picker.RunDialogLayout("") != VWFC::VWUI::kDialogButton_Ok)
+	const bool accepted = (picker.RunDialogLayout("") == VWFC::VWUI::kDialogButton_Ok);
+	if (!picker.Shown())
+	{
+		// ダイアログを組めなかった。**黙って終わらない**——プローブは 1 件も走らない
+		// ので、なぜ何も起きなかったのかを伝える（Findings「Layout Dialogs」）。
+		gSDK->AlertInform("プローブの選択ダイアログを組めませんでした。", buildStamp().c_str(),
+						  false);
+		return;
+	}
+	if (!accepted)
 		return; // キャンセルなら静かに終える
 	const short selection = picker.GetSelection();
 	if (selection < 0 || size_t(selection) >= order.size())
