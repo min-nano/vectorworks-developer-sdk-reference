@@ -18,7 +18,7 @@ Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https
 | `Info/` / `Versions/` | **上流（公式）由来のリファレンス** | **原則書き換えない**（上流の更新を取り込めるように保つ。誤りを見つけたら Findings 側に注記を書く） |
 | `Findings/` | **実測知見**。トピック別のファイル＋[索引と規約](Findings/README.md) | ここが本体。知見はここへ足す |
 | `probes/` | 調査用のコンパイルスニペット（[規約](probes/README.md)） | 調査中だけ。役目を終えたら消す |
-| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint | — |
+| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`） | — |
 | `CLAUDE.md`（本ファイル） | 作業時の規約。調査のフロー・PR とマージ・CI の待ち方 | — |
 
 ## 調査のフロー
@@ -51,6 +51,26 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
 - **実装例へのリンクは実プラグインのソースを指す**（`draw/DrawUtil` 等のパス表記）。
   こちらへコードを複製しない。
 - 日本語で書く。既存ファイルの密度・体裁（手折りの箇条書き）に合わせる。
+
+## 上流（フォーク元）の取り込み
+
+`Info/` と `Versions/` を上流由来のまま保つには、上流
+（[Vectorworks/developer-sdk](https://github.com/Vectorworks/developer-sdk)）の更新を
+流し込み続ける必要がある。これは **`.github/workflows/upstream-sync.yml`（週 1 回 +
+手動）が自動でやる**——上流に新しいコミットがあれば `upstream-sync` ブランチへ merge し、
+取り込み PR を作る（既に開いていれば同じ PR を更新する）。実体は
+[`scripts/upstream-sync.sh`](scripts/upstream-sync.sh)。
+
+- **取り込み PR のレビューでは `Info/` `Versions/` を書き換えない。** 上流の内容を
+  そのまま入れる。誤りを見つけたら `Findings/` 側に注記を書く。
+- **競合したときは PR が draft（タイトルに `[競合あり]`）で立ち、run は失敗する。**
+  競合マーカーを含んだままコミットしてあるので、**そのままマージしないこと**。
+  手で解消して push すると、そのブランチは以後自動更新の対象から外れる（bot 以外の
+  コミットがあるブランチには触らない作りなので、解消内容が force push で消えることはない）。
+- この PR は `GITHUB_TOKEN` で作られるので **lint の CI は自動では走らない**（GitHub の
+  仕様）。走らせたいときは close → reopen する。
+- 手動で回したいとき・挙動を確かめたいときは Actions の "Upstream sync" を
+  `workflow_dispatch` で叩く（`dry_run` を立てると push も PR 作成もせず、何をするかだけ出す）。
 
 ## 開発プロセス: PR とマージ
 

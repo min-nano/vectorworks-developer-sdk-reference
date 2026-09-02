@@ -1,0 +1,70 @@
+name: Upstream sync
+
+# ---------------------------------------------------------------------------
+# フォーク元（Vectorworks/developer-sdk）の更新を見張り、差分があれば取り込む PR を
+# 立てる。
+#
+# なぜ必要か: このリポジトリは公式リファレンスのフォークで、`Info/` と `Versions/` は
+# **上流由来のまま保つ**という約束になっている（CLAUDE.md「このリポジトリについて」）。
+# 上流の更新は年に数回だが、気付かないまま放置すると何十コミットも離れて取り込みが
+# 難しくなる。週に一度覗いて、差分があれば PR にして人の目に掛ける。
+#
+# 実体は scripts/upstream-sync.sh（ここは薄く保つ。ci-debug.yml と同じ方針）。
+# ローカルや手動実行での挙動・環境変数はそちらのヘッダを参照。
+#
+# NOTE: schedule はデフォルトブランチにあるワークフロー定義でしか走らない。このファイルが
+# main にマージされて初めて動き出す。またフォークでは Actions が有効でないと schedule は
+# 走らず、**リポジトリが 60 日間まったく更新されないと GitHub が schedule を自動停止する**
+# （その場合は Actions タブから手動で再開する）。急ぎのときは workflow_dispatch で叩く。
+#
+# NOTE: この PR / push は GITHUB_TOKEN で行われるため、**lint.yml は自動では走らない**
+# （GITHUB_TOKEN 由来のイベントは別のワークフローを起動しない、という GitHub の仕様）。
+# 上流の更新はドキュメントだけなので実害は無いが、走らせたいときは PR を close → reopen する。
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    # 毎週月曜 00:00 UTC（= 09:00 JST）。上流の更新頻度（年に数回）に対して十分。
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "push も PR 作成もせず、何をするかだけ出す"
+        required: false
+        default: false
+        type: boolean
+      upstream_branch:
+        description: "上流のブランチ（空なら上流の HEAD が指すブランチを自動判定）"
+        required: false
+        type: string
+
+# 同期は 1 本ずつ。走っている最中に手動実行が重なると、同じブランチへの force push が
+# 交差して片方の結果が消える。走っているものは殺さず待たせる。
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+# 作業ブランチの push（contents）と PR の作成・更新（pull-requests）にだけ使う。
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # merge するので全履歴が要る（浅いクローンでは上流との共通祖先に届かない）。
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Sync from upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch }}
+          DRY_RUN: ${{ inputs.dry_run && 'yes' || 'no' }}
+        run: scripts/upstream-sync.sh
