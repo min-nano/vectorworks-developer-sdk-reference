@@ -116,8 +116,9 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
   入力 `prs` に**確かめたい PR 番号をカンマ区切り**で入れると、その PR たちのプローブが
   main のものと同居した 1 本のプラグインになる。公開先は転がりタグ `probes`
   （プレリリース）で、**リリースノートに何が入っているかの表が必ず載る**。
-- **PR では公開せず、ビルドが通るかだけを見る**（`plugin/**` か `probes/runtime/**` を
-  触った PR で自動的に走る）。「ディスパッチしたらコンパイルエラーだった」を防ぐ門。
+- **PR では公開せず、ビルドが通るかだけを見る**（ビルドに入るもの——`plugin/src/**` /
+  `plugin/resources/**` / `plugin/CMakeLists.txt` / `probes/runtime/**`——を触った PR で
+  自動的に走る）。「ディスパッチしたらコンパイルエラーだった」を防ぐ門。
 - **実機で走らせるのはユーザー。** AI はビルドをディスパッチし、リリースができたことを
   伝えるところまで。結果（ログ）を受け取ってから `Findings/` へ反映する。
 - **役目を終えたプローブは消す**（結論は `Findings/` に文章で残る。上記「調査のフロー」4）。
@@ -150,8 +151,8 @@ Bash(run_in_background: true):
 `conclusion=success` 以外は exit 1（`no-checks` は「チェックが 1 件も登録されなかった」、
 `timed-out-waiting` / `api-error` は「待機側が見届けられなかった」——CI の失敗ではない）。
 このリポジトリの PR CI は `lint.yml`（shellcheck / actionlint / clang-format）と、
-`plugin/**` や `probes/runtime/**` を触ったときだけ走る `probe-build.yml`（mac / Windows の
-実ビルド）。出力に並ぶチェック名を読み、`debug`（ci-debug の run）だけを見て green と
+`plugin/src/**` や `probes/runtime/**`（ビルドに入るもの）を触ったときだけ走る
+`probe-build.yml`（mac / Windows の実ビルド）。出力に並ぶチェック名を読み、`debug`（ci-debug の run）だけを見て green と
 誤読しないこと。
 
 待機の土台は `scripts/ci-common.sh`（`ci-wait.sh` と `ci-debug.sh` が共有）。

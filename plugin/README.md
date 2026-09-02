@@ -72,9 +72,22 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
    リリースノートに**そのビルドに入っているプローブの表**が必ず載っている。
    - macOS: `VwSdkProbes.vwlibrary.zip`
    - Windows: `VwSdkProbes.vlb.zip`
-3. **入れる。** 展開して Vectorworks の Plug-ins フォルダへ置き、Vectorworks を起動し
-   直す（初回はワークスペース編集でメニューへ追加する）。**入れ替えるときは
-   Vectorworks を終了してから**——読み込み済みのモジュールは差し替えられない。
+3. **入れる。** 置き場所は Vectorworks 2026 の**ユーザフォルダ**内の `Plug-Ins`
+   ディレクトリ（Vectorworks ▸ 環境設定 ▸ *ユーザフォルダ* から辿れる）。**入れ替える
+   ときは Vectorworks を終了してから**——読み込み済みのモジュールは差し替えられない。
+   - **macOS**: `VwSdkProbes.vwlibrary` バンドルだけで完結する（リソースは中）。
+     ローカルディスクへ置き（iCloud Drive は不可）、隔離フラグを外す:
+     `xattr -dr com.apple.quarantine VwSdkProbes.vwlibrary`。CI ビルドは
+     **アドホック署名済み**（Apple Silicon がロードするのに必須。Developer ID 署名では
+     ない）だが、「壊れている」と言われたら `codesign --force --deep --sign -` で
+     署名し直す。
+   - **Windows**: `VwSdkProbes.vlb` と `VwSdkProbes.vwr` を**同じフォルダへ一緒に**置く
+     （同名・同フォルダである必要がある。`VwSdkProbes.build-info.txt` は素性の控え）。
+   - 未署名なので、Vectorworks 2026 は起動時に「不明／未署名のプラグイン」警告を出して
+     既定で無効にすることがある。了解して有効化する。
+   - **初回はワークスペースへ追加する**: ツール ▸ ワークスペース ▸ 現在のワークスペースを
+     編集 ▸ *メニュー*。**ツール** カテゴリの中に **SDK 実機プローブ…** があるので、
+     メニューへドラッグする。
 4. **走らせる。** メニュー「SDK 実機プローブ…」→ 一覧から選んで「実行」。
    - **プローブは図面を変更することがある。作業中の図面では実行しない**
      （新規の空図面で走らせる）。取り消しは保証しない——プローブは undo イベントを

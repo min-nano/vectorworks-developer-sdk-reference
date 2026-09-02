@@ -33,14 +33,22 @@ on:
   push:
     branches: [main]
     paths:
-      - "plugin/**"
+      # plugin/README.md のような読み物だけの変更で mac / Windows の実ビルドを
+      # 走らせないよう、ビルドに入るものだけを並べる。
+      - "plugin/src/**"
+      - "plugin/resources/**"
+      - "plugin/CMakeLists.txt"
       - "probes/runtime/**"
       - "scripts/gather-probes.sh"
       - "scripts/fetch-vw-sdk.sh"
       - ".github/workflows/probe-build.yml"
   pull_request:
     paths:
-      - "plugin/**"
+      # plugin/README.md のような読み物だけの変更で mac / Windows の実ビルドを
+      # 走らせないよう、ビルドに入るものだけを並べる。
+      - "plugin/src/**"
+      - "plugin/resources/**"
+      - "plugin/CMakeLists.txt"
       - "probes/runtime/**"
       - "scripts/gather-probes.sh"
       - "scripts/fetch-vw-sdk.sh"
