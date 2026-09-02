@@ -120,3 +120,33 @@ X と Y を別々に持たせるには、先に `SetScaleType(kScaleTypeAsymmetr
 すべて作れる（回転だけで済ませようとすると鏡像が作れず定義が 2 つ要る）。
 
 実装例: ホームズ君プラグインの `Extensions/ExtShearWall` の `AddMarkSymbol`。
+
+## シンボル定義のサムネイル・一覧を UI に出す
+
+シンボル選択 UI 用に、**図面のシンボル定義一覧**と**選んだ定義の絵**を採る実測
+（実機・VW 2026 / macOS）。
+
+- **図面のシンボル定義の一覧は `VWResourceList::BuildList(kSymDefNode, sort)` で
+  採れる**（`VWFC::Tools::VWResourceList::BuildList(short objectType, bool sort =
+  true)`。`kSymDefNode` は `Kernel/API/Objs.TDType.h` で **16**）。1 件ずつの名前は
+  `GetResourceName(i, name)` で引ける。
+- **シンボルの絵を出すのは `VWSymbolDisplayCtrl`。** レイアウトダイアログでは
+  `CreateControl(dlg, width, height, margin)` → `Update(name, renderMode, view)`
+  の順で問題なく使える（自前のレイアウトダイアログでの生成も成功している）。
+- **`renderMode = 0`（ワイヤーフレーム）・`view = 2`（Top/Plan）を渡すと、2D 部品
+  だけのシンボルでも絵が出る。** この 2 値は当てずっぽうではなく、
+  `Kernel/API/MiniCadCallBacks.h` の `SymbolImgInfo` の既定構築子が使っている値
+  そのもの（`sdk-grep` で確認済み・【ヘッダ根拠】）。
+
+  ```cpp
+  // Kernel/API/MiniCadCallBacks.h（引数順は width, height, margin, view, renderMode, ...）
+  SymbolImgInfo() : SymbolImgInfo(-1, -1, -1, 2/*TopPlan*/, 0/*Wireframe*/,
+      EImageViewComponent::StandardView2D, ELevelsOfDetail::Medium,
+      false /*sizing is done by layer scale*/, false) {};
+  ```
+
+  **`TStandardView` の名前つき定数 `standardViewTop` は 7 で、既定構築子が使う
+  `2`（Top/Plan）とは別物。** `standardViewTop`（7）を渡すと、実機で 2D 部品が
+  映らないことを確認している——「Top（真上からの 3D 直交視点）」と「Top/Plan
+  （画面平面＝2D 部品を特別扱いする視点）」は同じ「上から見る」でも別の値なので、
+  名前で類推して 7 を選ぶと取り違える。
