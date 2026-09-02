@@ -2,11 +2,16 @@
 #
 # fetch-vw-sdk.sh — Vectorworks SDK を CI ランナーへ用意する（唯一の定義）。
 #
-# このリポジトリはドキュメント（SDK リファレンス）なのでビルドは持たない。SDK が
-# 要るのは調査ワークフロー（ci-debug.yml）の sdk-grep / sdk-ls / compile だけで、
-# どれも**ヘッダがあれば足りる**。したがってリンク用ライブラリや BuildVWR は取り込まず、
-# Include と Source（Include/ の一部が ../../../Source/VWSDK/... を include する）だけを
-# 残す。キャッシュも小さくなる。
+# 取り込む範囲は用途で 2 通りある（VW_SDK_PARTS で選ぶ）。
+#
+#   headers（既定）  調査ワークフロー（ci-debug.yml）の sdk-grep / sdk-ls / compile 用。
+#                    どれも**ヘッダがあれば足りる**ので、Include と Source（Include/ の
+#                    一部が ../../../Source/VWSDK/... を include する）だけを残す。
+#   plugin           実機確認プラグイン（plugin/）のビルド用。上に加えてリンクする
+#                    ライブラリ（LibMac / LibWin）と、.vwr を固める BuildVWR
+#                    （ToolsMac / ToolsWin）が要る。
+#
+# キャッシュは用途ごとに別のキーを使うこと（中身が違うため。.github/workflows/ を参照）。
 #
 # **キャッシュがヒットしていれば何もしない。** 呼び出し側は actions/cache で
 # $VW_SDK_DIR を復元してからこれを呼ぶだけでよく、「ヒットしたか」で分岐する必要は
@@ -14,20 +19,58 @@
 # 壊れたキャッシュを引いた場合もその場で分かる。
 #
 # 環境変数:
-#   VW_SDK_DIR   トリミング済み SDK の置き場所（この下に SDKLib/ を作る）
-#   VW_SDK_URL   SDK zip の URL
+#   VW_SDK_DIR    トリミング済み SDK の置き場所（この下に SDKLib/ を作る）
+#   VW_SDK_URL    SDK zip の URL
+#   VW_SDK_PARTS  headers（既定）または plugin
+#   RUNNER_OS     GitHub が設定する（Windows / macOS）。未設定なら uname から推測する。
 #
 set -euo pipefail
 
 SDK_DIR="${VW_SDK_DIR:?VW_SDK_DIR is not set}"
 SDK_URL="${VW_SDK_URL:?VW_SDK_URL is not set}"
+PARTS="${VW_SDK_PARTS:-headers}"
 
-SUBDIRS="Include Source"
+case "${RUNNER_OS:-$(uname -s)}" in
+	Windows | MINGW* | MSYS* | CYGWIN*) OS=windows ;;
+	macOS | Darwin) OS=mac ;;
+	*) OS=other ;;
+esac
 
-# verify: 調査モードに最低限要るものが揃っているか。ダウンロード直後だけでなく
+case "$PARTS" in
+	headers)
+		SUBDIRS="Include Source"
+		;;
+	plugin)
+		if [ "$OS" = windows ]; then
+			SUBDIRS="Include Source LibWin ToolsWin"
+		elif [ "$OS" = mac ]; then
+			SUBDIRS="Include Source LibMac ToolsMac"
+		else
+			echo "::error::fetch-vw-sdk.sh: VW_SDK_PARTS=plugin は macOS / Windows でしか使えません" >&2
+			exit 1
+		fi
+		;;
+	*)
+		echo "::error::fetch-vw-sdk.sh: VW_SDK_PARTS は headers か plugin です（VW_SDK_PARTS=$PARTS）" >&2
+		exit 1
+		;;
+esac
+
+# verify: その用途に最低限要るものが揃っているか。ダウンロード直後だけでなく
 # キャッシュヒット時にも走らせる（壊れた・古い形のキャッシュをここで弾く）。
 verify() {
-	[ -f "$SDK_DIR/SDKLib/Include/VectorworksSDK.h" ]
+	local ok=0
+	[ -f "$SDK_DIR/SDKLib/Include/VectorworksSDK.h" ] || ok=1
+	if [ "$PARTS" = plugin ]; then
+		if [ "$OS" = windows ]; then
+			[ -f "$SDK_DIR/SDKLib/LibWin/Release/VWSDK.lib" ] || ok=1
+			[ -f "$SDK_DIR/SDKLib/ToolsWin/BuildVWR/buildvwr.exe" ] || ok=1
+		else
+			[ -f "$SDK_DIR/SDKLib/LibMac/Release/libVWSDK.a" ] || ok=1
+			[ -x "$SDK_DIR/SDKLib/ToolsMac/BuildVWR/BuildVWR" ] || ok=1
+		fi
+	fi
+	return "$ok"
 }
 
 if verify; then
@@ -81,6 +124,12 @@ for sub in $SUBDIRS; do
 		echo "(note) SDKLib/$sub not present in this SDK; skipping."
 	fi
 done
+
+if [ "$PARTS" = plugin ] && [ "$OS" = mac ]; then
+	# BuildVWR が実行できる状態か確かめる（実行ビット・Gatekeeper の隔離属性）。
+	chmod +x "$SDK_DIR/SDKLib/ToolsMac/BuildVWR/BuildVWR" || true
+	xattr -dr com.apple.quarantine "$SDK_DIR/SDKLib/ToolsMac" 2>/dev/null || true
+fi
 
 echo "Trimmed SDK size:"
 du -sh "$SDK_DIR"

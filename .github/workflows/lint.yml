@@ -4,11 +4,14 @@ name: Lint
 # スクリプト）を検査する。ドキュメント（Markdown）の内容そのものは人（と実機確認）が
 # 見るのでここでは検査しない。
 #
-#   * shellcheck  — scripts/ のシェルスクリプト。
-#   * actionlint  — GitHub ワークフロー定義そのもの＋インライン run: スクリプト。
+#   * shellcheck    — scripts/ のシェルスクリプト。
+#   * actionlint    — GitHub ワークフロー定義そのもの＋インライン run: スクリプト。
+#   * clang-format  — 実機確認プラグイン（plugin/）と実機プローブ（probes/）の C++。
+#                     整形の唯一の真実は .clang-format で、手で例外を作らない。
 #
-# これが PR の唯一の CI なので、リモートセッションからの完了待ちは
-# `scripts/ci-wait.sh --pr <番号>` で行う（CLAUDE.md「CI の完了を待つ」）。
+# 完了待ちは `scripts/ci-wait.sh --pr <番号>` で行う（CLAUDE.md「CI の完了を待つ」）。
+# plugin/ や probes/runtime/ を触った PR ではこれに加えて probe-build.yml（mac / Windows の
+# 実ビルド）も走る。
 
 on:
   push:
@@ -37,6 +40,34 @@ jobs:
           set -euo pipefail
           shellcheck --version
           shellcheck scripts/*.sh
+
+  clang-format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # 版を固定する。clang-format は版が変わると整形結果も変わるので、「手元で
+      # かけたのに CI が落ちる」を避けるにはバージョンを 1 つに決めるしかない
+      # （18 は実プラグイン側が .clang-format を合わせた版）。
+      - name: Install clang-format 18
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang-format-18
+          clang-format-18 --version
+
+      - name: Check formatting
+        run: |
+          set -euo pipefail
+          files="$(find plugin/src probes -type f \( -name '*.cpp' -o -name '*.h' \) | sort)"
+          if [ -z "$files" ]; then
+            echo "整形対象の C++ がありません。"
+            exit 0
+          fi
+          echo "$files"
+          # shellcheck disable=SC2086  # 改行区切りの一覧をそのまま引数へ展開する
+          clang-format-18 --dry-run --Werror $files
 
   actionlint:
     runs-on: ubuntu-latest

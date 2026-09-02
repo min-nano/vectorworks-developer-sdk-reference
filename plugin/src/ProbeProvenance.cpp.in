@@ -1,0 +1,20 @@
+//
+//	ProbeProvenance.cpp — **自動生成。編集しない。**
+//
+//	どのプローブがどの PR / コミットから取り込まれたかの表。中身は CMake が
+//	VW_PROBE_ENTRIES から生成する（その元を作るのは scripts/gather-probes.sh、
+//	ローカルビルドでは plugin/CMakeLists.txt のローカル既定）。
+//
+//	コード側（probes/runtime/<slug>/probe.cpp）に PR 番号を書かせないのは、
+//	**出所はビルドのときにしか決まらない**から——同じプローブが PR 中に何度も
+//	作り直され、マージ後は main のものになる。
+//
+
+#include "Probe.h"
+
+namespace
+{
+	// 静的初期化の順序には依存しない（登録先は関数ローカル static。Probe.cpp 冒頭）。
+	const ::vwprobe::ProvenanceRegistrar sVwProbeProvenance({
+@VW_PROBE_PROVENANCE_ENTRIES@	});
+} // namespace

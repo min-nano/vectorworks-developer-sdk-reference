@@ -1,0 +1,324 @@
+name: Probe plug-in
+
+# ---------------------------------------------------------------------------
+# 実機確認プラグイン（plugin/ — VwSdkProbes）をビルドし、GitHub Release として配る。
+#
+# なぜ必要か: Findings に**無印（＝実機確認済み）**で書ける知見は、ローカルの
+# VectorWorks でしか取れない。その実機で動かす道具がこのプラグインで、中身は
+# 「メニューコマンド 1 つ＋そこから選んで走らせるプローブ（PR ごとの調査コード）」。
+#
+# 3 つの入口があり、publish するのは push / workflow_dispatch だけ:
+#
+#   workflow_dispatch  main で叩く**主たる入口**。inputs.prs に PR 番号を並べると、
+#                      その PR たちの probes/runtime/ を main のものと**同居**させて
+#                      1 本のプラグインにする（マージ前に実機で確かめるため）。
+#   push (main)        main のプローブだけでリリースを作り直す。
+#   pull_request       **ビルドが通るかの確認だけ**（公開しない）。プローブを足す PR で
+#                      「ディスパッチしたらコンパイルエラーだった」を防ぐための門。
+#
+# 公開先は転がり続けるタグ 1 つ（probes）。リリースノートに「何が入っているか」の表を
+# 必ず載せる——同居する顔ぶれは実行のたびに変わるので、そこだけが真実になる。
+# ---------------------------------------------------------------------------
+
+run-name: >-
+  probe build (${{ inputs.prs && format('PR {0} + ', inputs.prs) || '' }}${{ github.ref_name }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      prs:
+        description: "同居させる PR 番号（カンマ区切り。空なら main のプローブだけ）"
+        required: false
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - "plugin/**"
+      - "probes/runtime/**"
+      - "scripts/gather-probes.sh"
+      - "scripts/fetch-vw-sdk.sh"
+      - ".github/workflows/probe-build.yml"
+  pull_request:
+    paths:
+      - "plugin/**"
+      - "probes/runtime/**"
+      - "scripts/gather-probes.sh"
+      - "scripts/fetch-vw-sdk.sh"
+      - ".github/workflows/probe-build.yml"
+
+permissions:
+  contents: read
+
+# 1 つの ref につき 1 本。PR では新しい push が走行中のビルドを止める（古いコミットの
+# 確認用ビルドに意味は無い）。main / dispatch は止めない——それぞれが公開まで走り切る。
+concurrency:
+  group: probe-build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 何を同居させるかを**1 か所で**決める。ここで作ったソース一式とマニフェストを
+  # 両プラットフォームのビルドが同じものとして受け取るので、「mac と win で入っている
+  # プローブが違う」が構造的に起こらない。
+  gather:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # PR では GITHUB_SHA が一時的なマージコミットなので head を見る（開発者が
+          # push したコミット＝確認したいもの）。
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Gather probes
+        env:
+          # PR タイトル・ブランチ名を引くのに使う（取れなくてもビルドは通る）。
+          GH_TOKEN: ${{ github.token }}
+          PRS: ${{ inputs.prs }}
+        run: scripts/gather-probes.sh --prs "$PRS"
+
+      - name: Summary
+        run: cat build-probes/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload gathered probes
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: probe-sources
+          path: build-probes
+
+  # -------------------------------------------------------------------------
+  build-mac:
+    needs: gather
+    runs-on: macos-15
+
+    env:
+      VW_SDK_URL: https://release.vectorworks.net/latest/Vectorworks/2026-NNA-eng-mac-SDK.zip
+      VW_SDK_DIR: ${{ github.workspace }}/vw-sdk-plugin
+      # ヘッダだけの ci-debug 用キャッシュとは**別のキー**（中身が違う。Lib と Tools を含む）。
+      VW_SDK_CACHE_KEY: vw-sdk-2026-NNA-mac-plugin-v1
+      VW_SDK_PARTS: plugin
+      BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      VW_BUILD_BRANCH: ${{ github.head_ref || github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BUILD_SHA }}
+
+      # 実プラグイン（vectorworks-plugin-import-ifc-homeskz）が Vectorworks 2026 向けに
+      # 使っているのと同じ Xcode に合わせる。
+      - name: Select Xcode 16.2
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1
+        with:
+          xcode-version: "16.2"
+
+      - name: Cache Vectorworks SDK
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.VW_SDK_DIR }}
+          key: ${{ env.VW_SDK_CACHE_KEY }}
+
+      - name: Set up Vectorworks SDK
+        run: scripts/fetch-vw-sdk.sh
+
+      - name: Download gathered probes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: probe-sources
+          path: build-probes
+
+      - name: Configure
+        # 短縮 sha の切り出しだけはシェル側（GitHub の式に部分文字列が無い）。
+        run: |
+          cmake -S plugin -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DVW_SDK_DIR="$VW_SDK_DIR" \
+            -DVW_BUILD_VERSION="${BUILD_SHA:0:7}" \
+            -DVW_BUILD_BRANCH="$VW_BUILD_BRANCH" \
+            -DVW_PROBE_MANIFEST="$GITHUB_WORKSPACE/build-probes/manifest.cmake"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel "$(sysctl -n hw.ncpu)"
+
+      # Apple Silicon はすべての Mach-O に署名を要求する。証明書の要らない ad-hoc 署名
+      # （"-"）で足りる（Developer ID 署名ではないので、VW の「不明なプラグイン」警告は出る）。
+      # .vwr を固めた後に署名するので、リソースまで含めて封がかかる。
+      - name: Ad-hoc code-sign the bundle
+        run: |
+          set -euo pipefail
+          codesign --force --deep --sign - build/VwSdkProbes.vwlibrary
+          codesign --verify --strict --verbose=2 build/VwSdkProbes.vwlibrary
+
+      - name: Inspect built plug-in
+        run: |
+          set -euo pipefail
+          bundle="build/VwSdkProbes.vwlibrary"
+          test -d "$bundle" || { echo "::error::$bundle が作られていません"; exit 1; }
+          find "$bundle" -maxdepth 3
+          lipo -info "$bundle/Contents/MacOS/VwSdkProbes"
+          test -e "$bundle/Contents/Resources/VwSdkProbes.vwr" \
+            || { echo "::error::VwSdkProbes.vwr がバンドルへ入っていません"; exit 1; }
+          /usr/libexec/PlistBuddy -c "Print :VWBuildCommit" "$bundle/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :VWProbes"      "$bundle/Contents/Info.plist"
+
+      # "<name>.vwlibrary/" の階層を保ったまま zip する（展開してそのまま使えるように）。
+      - name: Package bundle
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ( cd build && zip -qry "$GITHUB_WORKSPACE/dist/VwSdkProbes.vwlibrary.zip" VwSdkProbes.vwlibrary )
+          ls -l dist
+
+      - name: Upload plug-in artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vwlibrary-zip
+          path: dist
+
+  # -------------------------------------------------------------------------
+  build-windows:
+    needs: gather
+    runs-on: windows-latest
+
+    env:
+      VW_SDK_URL: https://release.vectorworks.net/latest/Vectorworks/2026-NNA-eng-win-SDK.zip
+      VW_SDK_DIR: ${{ github.workspace }}/vw-sdk-plugin-win
+      VW_SDK_CACHE_KEY: vw-sdk-2026-NNA-win-plugin-v1
+      VW_SDK_PARTS: plugin
+      BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      VW_BUILD_BRANCH: ${{ github.head_ref || github.ref_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BUILD_SHA }}
+
+      - name: Cache Vectorworks SDK
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.VW_SDK_DIR }}
+          key: ${{ env.VW_SDK_CACHE_KEY }}
+
+      - name: Set up Vectorworks SDK
+        shell: bash
+        run: scripts/fetch-vw-sdk.sh
+
+      - name: Download gathered probes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: probe-sources
+          path: build-probes
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S plugin -B build -A x64 \
+            -DVW_SDK_DIR="$VW_SDK_DIR" \
+            -DVW_BUILD_VERSION="${BUILD_SHA:0:7}" \
+            -DVW_BUILD_BRANCH="$VW_BUILD_BRANCH" \
+            -DVW_PROBE_MANIFEST="$GITHUB_WORKSPACE/build-probes/manifest.cmake"
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --parallel "$(nproc)"
+
+      - name: Inspect built plug-in
+        shell: bash
+        run: |
+          set -euo pipefail
+          d="build/Release"
+          test -f "$d/VwSdkProbes.vlb" || { echo "::error::VwSdkProbes.vlb が作られていません"; exit 1; }
+          test -f "$d/VwSdkProbes.vwr" || { echo "::error::VwSdkProbes.vwr が作られていません"; exit 1; }
+          cat "$d/VwSdkProbes.build-info.txt"
+
+      - name: Package module
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
+          $files = @(
+            'build/Release/VwSdkProbes.vlb',
+            'build/Release/VwSdkProbes.vwr',
+            'build/Release/VwSdkProbes.build-info.txt'
+          ) | Where-Object { Test-Path $_ }
+          Compress-Archive -Path $files -DestinationPath 'dist/VwSdkProbes.vlb.zip' -Force
+          Get-ChildItem dist | Select-Object Name, Length
+
+      - name: Upload plug-in artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vlb-zip
+          path: dist
+
+  # -------------------------------------------------------------------------
+  # 転がり続けるリリース（タグ probes）を作り直す。PR では公開しない
+  # （PR の役目はコンパイルが通ることの確認だけ）。
+  release:
+    needs: [gather, build-mac, build-windows]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    env:
+      BUILD_SHA: ${{ github.sha }}
+      PRS: ${{ inputs.prs }}
+
+    steps:
+      - name: Download gathered probes
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: probe-sources
+          path: build-probes
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vwlibrary-zip
+          path: dist
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: vlb-zip
+          path: dist
+
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          short="${BUILD_SHA:0:7}"
+          title="Probes (${short})"
+          if [ -n "$PRS" ]; then
+            title="Probes (${short} + PR ${PRS})"
+          fi
+          {
+            echo "実機確認プラグイン **VwSdkProbes**（${short} / $(date -u +%Y-%m-%dT%H:%M:%SZ)）。"
+            echo
+            echo "## 入っているプローブ"
+            echo
+            cat build-probes/summary.md
+            echo
+            echo "## 使い方"
+            echo
+            echo "1. 自分のプラットフォームの zip を展開し、Vectorworks の Plug-ins フォルダへ置く"
+            echo "2. Vectorworks を起動し直す（ワークスペース編集でメニューへ追加する）"
+            echo "3. メニュー「SDK 実機プローブ…」→ 一覧から選んで実行"
+            echo
+            echo "詳細は [plugin/README.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/plugin/README.md)。"
+          } > notes.md
+          # 転がりタグなので、毎回消して作り直す（常にこのビルドを指すように）。
+          gh release delete probes --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
+          gh release create probes \
+            "dist/VwSdkProbes.vwlibrary.zip" \
+            "dist/VwSdkProbes.vlb.zip" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$BUILD_SHA" \
+            --title "$title" \
+            --notes-file notes.md \
+            --prerelease
