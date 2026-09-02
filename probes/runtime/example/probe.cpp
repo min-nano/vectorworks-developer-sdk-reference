@@ -12,6 +12,7 @@
 
 #include "Probe.h"
 
+#include "VWFC/VWObjects/VWDocument.h"
 #include "VWFC/VWObjects/VWLayerObj.h"
 
 #include <string>

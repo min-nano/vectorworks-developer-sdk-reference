@@ -152,6 +152,11 @@ namespace vwprobe
 		}
 	}
 
+	void Report::log(const char* line)
+	{
+		this->log(std::string((line != nullptr) ? line : ""));
+	}
+
 	void Report::log(const TXString& line)
 	{
 		// TXString の operator const char*() は UTF-8。

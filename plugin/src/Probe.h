@@ -54,6 +54,11 @@ namespace vwprobe
 		// TXString をそのまま渡せる口（SDK から読み戻した値をログに出す用）。
 		// TXString の operator const char*() は UTF-8 を返す。
 		void log(const TXString& line);
+		// **文字列リテラルのための口。** これが無いと `probe.log("...")` が
+		// std::string と TXString の**どちらへも 1 段の変換で行けてしまい、曖昧になる**
+		// （実機 SDK に対する構文チェックで判明。TXString は const char* から暗黙変換
+		//  される）。const char* を厳密に受けるこの多重定義が完全一致で勝つ。
+		void log(const char* line);
 
 		// 「調べたいことは確かめられなかった」と記録する。最初の 1 件を結果の見出しに
 		// 出す（2 件目以降も本文には残る）。例外を投げるより、**続きも動かして情報を
