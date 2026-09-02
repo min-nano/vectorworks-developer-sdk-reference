@@ -30,7 +30,7 @@
 | --- | --- |
 | [VectorScript to SDK Mapping](VectorScript%20to%20SDK%20Mapping.md) | VectorScript（`vs.*`）の名前と ISDK の対応・非対応の一覧。**着手前にまず引く** |
 | [Parametric Objects](Parametric%20Objects.md) | PIO 全般。パスの型・ストーリバウンド・パラメータ名・設定ダイアログ抑止・スタイル・ポップアップの値・自作 PIO の作法 |
-| [Symbols](Symbols.md) | シンボル配置の 2 つの作法（レイヤへ入れ直す・非 nil を成功と見ない）・高さ合わせ |
+| [Symbols](Symbols.md) | シンボル配置の 2 つの作法（レイヤへ入れ直す・非 nil を成功と見ない）・高さ合わせ・**定義を組み立てる**（中身を入れたら `ResetObject`）・用紙基準の大きさ・インスタンスの反転（負の倍率） |
 | [Walls](Walls.md) | 壁の生成・高さ・結合（`JoinWalls`）・キャップ・2D 表現の更新 |
 | [Slabs and Extrudes](Slabs%20and%20Extrudes.md) | スラブの構成層・`VWExtrudeObj` の平行移動・`ModifySlab` の不具合（打ち切り） |
 | [Roof Faces](Roof%20Faces.md) | 屋根面オブジェクトの正しい作り方（コンストラクタは使えない・オブジェクト変数で与える） |
