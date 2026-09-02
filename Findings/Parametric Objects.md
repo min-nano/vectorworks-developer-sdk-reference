@@ -112,6 +112,78 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 描くなら、パスの始端を支持点ではなく**軒先**にし、その位置・高さ・バウンド offset を
 自分で計算する必要がある。
 
+## 構造材同士の「自動結合」を作る API は無い【ヘッダ根拠】
+
+構造材ツールには **自動結合（Auto Join Members）** モードがあり、この状態で置いた構造材同士は
+**関連付け（association）**を持って、片方を動かすともう片方が長さを変えて追随する
+（[VW ヘルプ](https://app-help.vectorworks.net/2023/eng/VW2023_Guide/Structural/Creating_structural_members.htm)）。
+これを SDK から作る／読む口があるかを、VW 2026 SDK（mac）の `SDKLib/Include` 全体
+（ヘッダ 456 本 ＋ VectorScript の宣言集 `vs.py`）の全数検索で確かめた。**専用の API は
+1 つも無い。**
+
+**構造材について SDK が持っているもの（`Structural` を含む識別子はこれで全部）**:
+
+| 場所 | 識別子 | 中身 |
+| --- | --- | --- |
+| `Kernel/API/MiniCadHookIntf.h:1798-1799` | `kInternalID_StructuralMember = 537` / `kInternalID_StructuralComponent = 538` | PIO の内部 ID |
+| `Kernel/Core/FolderSpecifiers.h:92` | `kDefaultStructuralShapesFolder = 142` | 断面形状の既定フォルダ |
+| `Kernel/Core/FolderSpecifiers.h:326` | `kObjectStylesStructuralMemberFolder = 362` | オブジェクトスタイルのフォルダ |
+| `Kernel/API/ObjectVariables.h:901` | `ovIsStructural = 702` | 「構造用」印の Boolean。結合とは無関係 |
+| `vs.py:41643` / `vs.py:41657` | `SM_FromShape(hObj)` / `SM_Preferences()` | **VectorScript/Python のみ**。図形から構造材を作る／設定ダイアログを出す。どちらも結合に触れない |
+
+**「結合」と名の付く API は全部よそのもの**:
+
+| API | 対象 |
+| --- | --- |
+| `ISDK::JoinWalls`（`ISDK.h:1789`）と `kTWallJoin` / `kLWallJoin` / `kXWallJoin` / `kAutoWallJoin` / `kAutoLWallJoin`（`Kernel/API/MiniCadCallBacks.h:151-155`） | **壁だけ**（[Walls](Walls.md)） |
+| `Get/SetComponentAlwaysAutoJoinInCappedJoinMode`（`ISDK.h:2777-2778`）・`varWallAutoJoin`（`ProgramVariables.h:48`） | 壁の構成要素 |
+| `IPoly2DMath::JoinPolylines` / `JoinSinglePolyline` | 2D ポリライン |
+| `IAssemblyUnitObject::OnJoinAssembly` | Braceworks のアセンブリ（建具・トラス側。構造材とは別系統） |
+
+**汎用の関連付け API は「読む・消す」しか無い**:
+
+| 用途 | ISDK | VectorScript/Python |
+| --- | --- | --- |
+| 数を数える | `GetNumAssociations(h)`（`ISDK.h:2323`） | `GetNumAssociations` |
+| 1 件読む | `GetAssociation(h, index, associationKind, value)`（`ISDK.h:2324`） | `GetAssociation` |
+| 消す | `DeleteAssociations(h, associationKind)`（`ISDK.h:2408`） | `RemoveAssociation` |
+| **足す** | **無い** | `AddAssociation(owner, kind, target)` |
+
+- ISDK の関連付け 3 メソッドには**コメントが 1 行も付いておらず**、しかも
+  **`associationKind` の定数が SDK ヘッダのどこにも定義されていない**（`kAssociation*` の
+  ヒットは文書ノード種別の `kAssociationNode = 124` だけ。`Kernel/API/Objs.TDType.h:190`）。
+  読めても整数の意味は当てものになる。VW 開発者 wiki 側には `kOnDeleteDelete = 4` /
+  `kOnDeleteReset = 5`（所有側を消したとき相手を消す／リセットする）しか出ておらず、
+  **これは寿命の連動であって構造材の自動結合とは別物**の可能性が高い。
+- `Interfaces/Base/ExtendedProperties.h:70-71` に `kKludgeAddAssociation = 19` /
+  `kKludgeRemoveAssociation = 20` があるが、"DO NOT USE THOSE SELECTORS !!!" と明記された
+  private API で、渡す `fData` の構造体すら公開されていない。**逃げ道にならない。**
+- **VectorScript を SDK から流す道はある**（`IVectorScriptEngine::ExecuteScript(const TXString&)`
+  ／ `IPythonScriptEngine::ExecuteScript`。`Interfaces/VectorWorks/Scripting/`）。
+  したがって `AddAssociation` を呼ぶこと自体は SDK 側から可能だが、**それで構造材ツールの
+  自動結合が作れるとは限らない**（`AddAssociation` は汎用の関連付けで、自動結合と同じ
+  仕組みかどうかがそもそも未確認）。
+
+現時点の結論:
+
+- **作成**——構造材同士の自動結合を作る公開 API は SDK にも VectorScript にも無い。
+  取り合いの**見た目**だけが要るなら、構造材はパスがそのまま材の範囲なので（上記）、
+  呼び出し側でパスを詰めて突き付ける方が確実。ただしそれは関連付けではないので、
+  後から VW 側で片方を動かしても追随しない。
+- **読み取り**——構造材専用の口は無い。汎用の `GetNumAssociations` / `GetAssociation` が
+  自動結合を返すかどうかは**実機で確かめる**しかない（下記）。
+
+### 実機で確かめる手順（未実施）
+
+1. VW で構造材を 2 本、**自動結合モードで**繋いで置く。
+2. 両方のハンドルに `GetNumAssociations` を呼ぶ。0 なら、自動結合はこの口からは読めない。
+3. 0 でなければ `GetAssociation` を index 全部について回し、返る
+   `(handle, associationKind, value)` を全部ログに出す。返ったハンドルが
+   もう 1 本の構造材かを `GetObjectTypeN` と PIO 名で確かめる。
+4. **同じ 2 本を結合せずに置いた場合と差分を取る**（[Investigation Techniques](Investigation%20Techniques.md)）。
+   差が出た `associationKind` の値が自動結合の印。
+5. 併せて構造材の PIO レコードのフィールドを全数ダンプし、結合相手を指す欄が無いかを見る。
+
 ## 自作 PIO を足すときの 3 点
 
 CI が全て緑でも次の 3 つは通ってしまい、実機で初めて出る。**新しい PIO を足すときは
