@@ -204,7 +204,16 @@ fi
 # 汚さない。git archive → tar で一時ディレクトリへ展開する）。
 for pr in ${PRS[@]+"${PRS[@]}"}; do
 	echo "PR #$pr のプローブ:"
-	if ! git fetch --no-tags --quiet origin "pull/$pr/head:refs/remotes/probe-pr/$pr" 2>/dev/null; then
+	# 浅いクローン（CI の actions/checkout は既定で fetch-depth 1）では、PR の head を
+	# 普通に fetch すると履歴を深く引きに行く。木さえ取れればよいので、浅いときだけ
+	# --depth=1 を足す（手元の完全なクローンを浅くしてしまわないよう、条件付きにする）。
+	# 参照は "+" で上書き（作り直しのたびに non-fast-forward で落ちないように）。
+	depth_args=()
+	if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+		depth_args=(--depth=1)
+	fi
+	if ! git fetch --no-tags --quiet ${depth_args[@]+"${depth_args[@]}"} origin \
+		"+pull/$pr/head:refs/remotes/probe-pr/$pr" 2>/dev/null; then
 		# 既に取得済みのときは fetch が失敗しうるので、参照が解決できれば続行する。
 		if ! git rev-parse --verify --quiet "refs/remotes/probe-pr/$pr" >/dev/null; then
 			echo "::error::PR #$pr の head を取得できませんでした（番号は正しいですか）。" >&2
