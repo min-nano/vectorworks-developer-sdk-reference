@@ -94,16 +94,21 @@ need_args() {
 # モード実装。すべて stdout/stderr に出し、呼び出し元が RAW へリダイレクトする。
 # ---------------------------------------------------------------------------
 
-# sdk-grep: SDK ヘッダを拡張正規表現で検索する。「この API は SDK にあるか」を
-# 確かめる設計調査用で、ローカル（リモートセッションのコンテナ）に SDK が無い以上
-# CI 経由でしか答えられない問いに答えるための最重要モード。
+# sdk-grep: SDK を拡張正規表現で検索する。「この API は SDK にあるか」「この関数は
+# 何をしているか」を確かめる設計調査用で、ローカル（リモートセッションのコンテナ）に
+# SDK が無い以上 CI 経由でしか答えられない問いに答えるための最重要モード。
+#
+# 検索範囲は SDKLib 全体（Include だけでなく **Source も**）。VW の SDK は VWFC
+# （VWFC::VWUI / VWFC::Tools …）の実装 .cpp を SDKLib/Source/VWSDK/ に同梱しており、
+# 「ヘッダには宣言しか無いので理由が分からない」という問いの多くは、そちらを読めば
+# その場で答えが出る（`VWImagePopupCtrl::CreateControl` が false を返す条件など）。
 mode_sdk_grep() {
 	need_sdk
 	need_args "検索する拡張正規表現"
-	echo "# grep -rnIE '$ARGS' in SDKLib/Include (paths are relative to it)"
+	echo "# grep -rnIE '$ARGS' in SDKLib (Include + Source; paths are relative to SDKLib)"
 	echo
 	local status=0
-	( cd "$SDK/SDKLib/Include" && grep -rnIE -- "$ARGS" . ) | sed 's#^\./##' || status=$?
+	( cd "$SDK/SDKLib" && grep -rnIE -- "$ARGS" . ) | sed 's#^\./##' || status=$?
 	# grep はヒット 0 件で 1 を返す。「見つからなかった」は調査結果であって失敗では
 	# ないので run を赤くしない（本当のエラーは 2 以上なのでそれだけ伝播させる）。
 	if [ "$status" -eq 1 ]; then
@@ -113,18 +118,29 @@ mode_sdk_grep() {
 	return "$status"
 }
 
-# sdk-ls: ARGS がヘッダの実ファイルを指していればその全文、そうでなければパスの
-# 部分一致で一覧を出す。grep で当たりを付けてから宣言の前後を読む、という流れ。
+# sdk-ls: ARGS が実ファイルを指していればその全文、そうでなければパスの部分一致で
+# 一覧を出す。grep で当たりを付けてから宣言・実装の前後を読む、という流れ。
+#
+# パスは SDKLib からの相対（例 `Include/VWFC/VWUI/ImagePopupCtrl.h` /
+# `Source/VWSDK/VWFC/VWUI/ImagePopupCtrl.cpp`）だが、`Include/` を省いた従来の
+# 書き方（`VWFC/VWUI/ImagePopupCtrl.h`）でも引けるようにしてある。
 mode_sdk_ls() {
 	need_sdk
-	need_args "ヘッダのパス、またはパスの部分一致文字列"
-	local root="$SDK/SDKLib/Include"
-	if [ -f "$root/$ARGS" ]; then
-		echo "# cat SDKLib/Include/$ARGS"
+	need_args "SDKLib からの相対パス、またはパスの部分一致文字列"
+	local root="$SDK/SDKLib" rel=""
+	local cand
+	for cand in "$ARGS" "Include/$ARGS" "Source/VWSDK/$ARGS"; do
+		if [ -f "$root/$cand" ]; then
+			rel="$cand"
+			break
+		fi
+	done
+	if [ -n "$rel" ]; then
+		echo "# cat SDKLib/$rel"
 		echo
-		cat "$root/$ARGS"
+		cat "$root/$rel"
 	else
-		echo "# find SDKLib/Include -ipath '*$ARGS*' (paths are relative to it)"
+		echo "# find SDKLib -ipath '*$ARGS*' (paths are relative to SDKLib)"
 		echo
 		( cd "$root" && find . -type f -ipath "*$ARGS*" ) | sed 's#^\./##' | sort
 	fi
