@@ -37,6 +37,13 @@
   （`GetObjectTypeN`）を数える 1 行を診断へ出すだけで、正体が割れることがある（実例:
   凡例イメージがビューポートだと分かった）。**中を見ずにヘッダだけで推測していた間は
   ずっと外していた。**
+- **「ヘッダに書いていないから分からない」で止めない——SDK は実装ソースを同梱している。**
+  `SDKLib/Source/VWSDK/` に VWFC（`VWFC::VWUI` / `VWFC::Tools` …）の `.cpp` が丸ごと入って
+  いるので、`sdk-grep` / `sdk-ls` はそこも見る。「この関数が false を返す条件は？」は
+  たいていその場で確定する（実例: `VWImagePopupCtrl::CreateControl` が **`return false`
+  のスタブ**だと分かり、実機での条件出しが丸ごと不要になった。
+  [Layout Dialogs](Layout%20Dialogs.md)）。**宣言だけを読んで推測を重ねる前に、実装を
+  探す。**
 - **信用できるのはハンドルの生バイト。** タグ付きデータの読み出し API は当てにならない
   ので、探索は 16 進ダンプでやる（[Tagged Data](Tagged%20Data.md)）。
 

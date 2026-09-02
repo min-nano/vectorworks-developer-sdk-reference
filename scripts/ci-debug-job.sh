@@ -147,7 +147,8 @@ mode_sdk_ls() {
 }
 
 # compile: リポジトリ内の調査スニペット 1 ファイルを SDK ヘッダに対して構文チェック
-# する（-fsyntax-only。リンクはしない — このリポジトリの SDK はヘッダしか持たない）。
+# する（-fsyntax-only。リンクはしない — 用意する SDK はヘッダと実装ソースだけで、
+# リンク用のライブラリを持たない）。
 # 「この API はこの引数で呼べるか」を数十秒で確かめる用途。スニペットは probes/ に
 # 置き、先頭で #include "VectorworksSDK.h" する（probes/README.md 参照）。
 #
