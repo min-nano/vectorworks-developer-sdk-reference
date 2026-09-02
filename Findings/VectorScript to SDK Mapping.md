@@ -19,6 +19,8 @@ VectorScript の資料（`vs.py`、スクリプトのエクスポート）から
 | `HMoveForward` / `HMoveBackward`（レイヤ重ね順） | `InsertObjectAfter` / `InsertObjectBefore` | デザインレイヤは図面のオブジェクト列に並んでいる。[Layers and Stories](Layers%20and%20Stories.md) |
 | `PlaceSymbol` | `VWSymbolObj(name, VWPoint2D, angleDeg)` | レガシー `PlaceSymbol` のラッパー。**2 つの作法**を外すと静かに壊れる。[Symbols](Symbols.md) |
 | ビューポートの重ね順上書き | **書けない**（読み出しのみ） | VectorScript にも無い（`vs.py` に `Stacking` のヒット無し）。[Layers and Stories](Layers%20and%20Stories.md) |
+| `AddAssociation` / `RemoveAssociation`（図形同士の関連付け） | **無い**（読む `GetNumAssociations` / `GetAssociation`、消す `DeleteAssociations` だけ） | `associationKind` の定数は SDK ヘッダに 1 つも無い。[Parametric Objects](Parametric%20Objects.md) |
+| `SM_FromShape`（図形から構造材を作る） | **無い** | 構造材は PIO として `CreateCustomObject` で作る。構造材同士の自動結合を作る API は VectorScript 側にも無い。[Parametric Objects](Parametric%20Objects.md) |
 
 **逆に、VectorScript 運用より SDK が楽になった例**: 断面ビューポートは
 `ISDK::CreateSectionViewport` で**新規作成できる**（VectorScript 時代に既製ビューポートを
