@@ -12,9 +12,15 @@ name: Probe plug-in
 #   workflow_dispatch  main で叩く**主たる入口**。inputs.prs に PR 番号を並べると、
 #                      その PR たちの probes/runtime/ を main のものと**同居**させて
 #                      1 本のプラグインにする（マージ前に実機で確かめるため）。
+#                      **probes/runtime/ を触った PR では、これを probe-auto-update.yml
+#                      が自動で叩く**（プローブを置いたら公開まで自動で進む）。
 #   push (main)        main のプローブだけでリリースを作り直す。
-#   pull_request       **ビルドが通るかの確認だけ**（公開しない）。プローブを足す PR で
-#                      「ディスパッチしたらコンパイルエラーだった」を防ぐための門。
+#   pull_request       **ビルドが通るかの確認だけ**（公開しない）。プラグイン本体
+#                      （plugin/ とビルドの仕掛け）を触った PR で「ディスパッチしたら
+#                      コンパイルエラーだった」を防ぐための門。**probes/runtime/ だけの
+#                      PR はここでは走らない**——そちらは probe-auto-update.yml が
+#                      main のビルドを起動し、その結果を PR のチェックにするので、
+#                      同じものを二度ビルドすることになるため。
 #
 # 公開先は転がり続けるタグ 1 つ（probes）。リリースノートに「何が入っているか」の表を
 # 必ず載せる——同居する顔ぶれは実行のたびに変わるので、そこだけが真実になる。
@@ -46,10 +52,12 @@ on:
     paths:
       # plugin/README.md のような読み物だけの変更で mac / Windows の実ビルドを
       # 走らせないよう、ビルドに入るものだけを並べる。
+      # **probes/runtime/ はここに無い。** プローブだけの PR は probe-auto-update.yml
+      # が main のビルドを起動し、その結果を PR のチェックにするので、ここでも
+      # 走らせると同じものを二度ビルドすることになる。
       - "plugin/src/**"
       - "plugin/resources/**"
       - "plugin/CMakeLists.txt"
-      - "probes/runtime/**"
       - "scripts/gather-probes.sh"
       - "scripts/fetch-vw-sdk.sh"
       - ".github/workflows/probe-build.yml"

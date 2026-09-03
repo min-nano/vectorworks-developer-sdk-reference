@@ -67,9 +67,13 @@ mcp__github__actions_run_trigger  ci-debug.yml
   inputs: {mode: compile, platform: mac, label: <一意>, args: probes/runtime/<slug>/probe.cpp}
 scripts/ci-debug.sh wait --label <一意>     ← Bash(run_in_background: true)
 
-# ② PR を出す（mac / Windows の実ビルドが自動で走る。公開はされない）
+# ② PR を出す（あとは自動）
+probe-auto-update.yml が "Probe plug-in" を prs=<その PR> で起動し、完了まで待つ。
+  * その待機がそのまま PR のチェック（プローブがコンパイルできなければ赤くなる）
+  * 成功すると転がりタグ probes のリリースが更新され、PR にコメントが 1 つ付く
+  * **すでにプラグインを入れてあるなら、次に Vectorworks を起動すると
+    「入れ替えますか？」と尋ねてくる**（初回だけ手で入れる。plugin/README.md）
 
-# ③ 実機用のビルドを作る
+# ③ 複数の PR のプローブを 1 本に同居させたいときだけ、手で叩く
 Actions の "Probe plug-in" を workflow_dispatch、inputs.prs に PR 番号（例 "12,15"）
-→ リリース（タグ probes）から zip を落として実機へ
 ```

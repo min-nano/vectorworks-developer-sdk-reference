@@ -66,13 +66,21 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
 
 ## 使い方（実機で確かめる人）
 
-1. **ビルドを頼む。** Actions の "Probe plug-in" を `workflow_dispatch` で叩く。
-   入力 `prs` に**確かめたい PR 番号をカンマ区切り**で入れる（例 `12,15`）。空なら
-   main に入っているプローブだけでビルドする。
+1. **ビルドを頼む——たいていは何もしなくてよい。** PR の `probes/runtime/` に
+   プローブが push されると、[`probe-auto-update.yml`](../.github/workflows/probe-auto-update.yml)
+   が **"Probe plug-in" を自動で叩き**（`prs=<その PR>`）、完了まで見届けて PR へ
+   「公開しました」と 1 つコメントする。つまり**プローブを書いて push した時点で、
+   実機で走らせられるビルドが出来上がる**。
+   - **手で叩くのは「複数の PR を 1 本に同居させたいとき」だけ。** Actions の
+     "Probe plug-in" を `workflow_dispatch` で叩き、入力 `prs` に PR 番号を
+     カンマ区切りで入れる（例 `12,15`）。空なら main に入っているプローブだけ。
    - `workflow_dispatch` は**デフォルトブランチにあるワークフローしか起動できない**
      （GitHub の仕様）。このワークフロー自体を変える PR の間は使えないので、そのときは
      **PR の Actions 実行ページから成果物（`vwlibrary-zip` / `vlb-zip`）を直接
      ダウンロードする**（PR でもビルドはしている。公開だけしない）。
+   - 転がりタグ `probes` は**最後に公開したビルド**を指す。プローブを持つ PR が複数
+     動いていると、後から push した方で置き換わる（何が入っているかはリリースノートの
+     表とピッカーの出所欄で分かる）。
 2. **リリースから落とす。** 公開先は転がり続けるタグ [`probes`]（プレリリース）。
    リリースノートに**そのビルドに入っているプローブの表**が必ず載っている。
    - macOS: `VwSdkProbes.vwlibrary.zip`
@@ -178,8 +186,10 @@ pr=<番号>:<その PR の head の full sha>   … 同居させる PR のぶん
 - `probes/runtime/example/` を写して `probes/runtime/<slug>/` にし、`VW_PROBE` の
   第 1 引数を**ディレクトリ名と同じ slug**にする。
 - 使える API は `probe.log(...)` と `probe.fail(...)` の 2 つだけ（[`src/Probe.h`](src/Probe.h)）。
-- PR を作ったら、Actions の "Probe plug-in" をその PR 番号付きで叩いてビルドしてもらう。
-  PR 自体でも**コンパイルが通るかの確認**は自動で走る（公開はしない）。
+- PR を作れば**ビルドと公開は自動**（`probe-auto-update.yml` が "Probe plug-in" を
+  その PR 番号付きで叩き、完了まで待つ）。**その待機がそのまま PR のチェック**なので、
+  プローブがコンパイルできなければ PR が赤くなる。実機で走らせるのは、リリースが
+  更新されたあと（プラグインが起動時に入れ替えを尋ねる）。
 
 ## ローカルでビルドする
 

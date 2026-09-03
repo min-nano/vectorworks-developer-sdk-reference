@@ -14,8 +14,9 @@ name: Lint
 #                     mac / Windows の実ビルドとは別に、ここで確かめる。
 #
 # 完了待ちは `scripts/ci-wait.sh --pr <番号>` で行う（CLAUDE.md「CI の完了を待つ」）。
-# plugin/ や probes/runtime/ を触った PR ではこれに加えて probe-build.yml（mac / Windows の
-# 実ビルド）も走る。
+# plugin/ を触った PR ではこれに加えて probe-build.yml（mac / Windows の実ビルド）が、
+# probes/runtime/ を触った PR では probe-auto-update.yml（main のビルドを起動して
+# 完了まで待ち、リリースを更新する）が走る。
 
 on:
   push:
