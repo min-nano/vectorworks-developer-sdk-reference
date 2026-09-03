@@ -64,7 +64,7 @@ DialogImagePopup_Init(dialog, id)` も関係ない**。項目を足す前に落�
 `GetSelectedItemIndex` …）自体は実装されているが、どれも `CreateControl` が覚える
 親ダイアログ（`fpParentDlg`）を使うため、生成に失敗したままでは呼べない。
 
-### 代わりに `VWThumbnailPopupCtrl` を使う【ソース根拠】
+### 代わりに `VWThumbnailPopupCtrl` を使う（実機確認済み）
 
 同じコンポーネント種別（`VWControlType::eCompThumbnailPopup`）を指す双子のクラス
 `VWFC::VWUI::VWThumbnailPopupCtrl`（`VWFC/VWUI/ThumbnailPopupCtrl.h`）は**実装が
@@ -82,7 +82,8 @@ bool VWThumbnailPopupCtrl::CreateControl(VWDialog* pDlg, ThumbnailSizeType sizeT
 
 `VWDialog` 側にも受け口があり（`GetThumbnailPopupCtrlByID(TControlID)`。未登録の ID なら
 ラッパを作って親を結び付けて返す）、レイアウトダイアログで使う想定のコントロールである
-ことが分かる。最小の手順は次のとおり（`compile` で構文確認済み・**実機未確認**）。
+ことが分かる。**実機（VW 2026 / macOS）で確認した**——この形でコントロールが作られ、
+シンボルのサムネイルが並ぶポップアップが実際に出る。最小の手順は次のとおり。
 
 ```cpp
 // ダイアログのメンバ: VWThumbnailPopupCtrl fThumb{ kThumbID }; VWResourceList fList;
@@ -104,18 +105,35 @@ bool CMyDialog::CreateDialogLayout()
 }
 ```
 
+- **項目は `AddImageFromResource` の順に並び、添字は一覧の添字と一致する。** 実測:
+  16 件のシンボル定義を足すと `GetItemsCount()` も 16 になり、2 番目を選んだときの
+  `GetSelectedItemIndex()` は 1、その名前は一覧の 1 番目と同じだった。
 - **選択は添字でもリソースそのものでも引ける。** `GetSelectedItemIndex()` は 0 始まりの
-  添字（未選択のときは `(size_t)-1`）、`GetSelectedItem()` は**選ばれたリソースの
-  `InternalIndex`** を返す。後者を使えば「追加した順と添字が一致するか」を気にしなくて
-  よい（`GetItemObject(i)` / `GetObjectItemIndex(item)` で相互に引ける）。
+  添字、`GetSelectedItem()` は**選ばれたリソースの `InternalIndex`** を返す。
   `InternalIndex` からシンボル定義そのものへは `gSDK->InternalIndexToHandle(index)`、
-  名前だけなら `gSDK->InternalIndexToNameN(index, outName)`（`ISDK.h`）。
-- **選択イベントは `SetAdvanced` 無しで届く。** `VWDialogEventArgs::IsImagePopupSelected()`
-  の実体は `!fbNegativeControlID`——つまり**そのコントロール ID への通常のディスパッチ
-  イベント**が「選ばれた」を意味する。`gSDK->SetImagePopupResourceAdvanced(dialogID,
-  controlID)` が要るのは `IsImagePopupBeforeOpen()` /
-  `IsImagePopupCategoryChanged()`（負のコントロール ID で来る advanced イベント。
-  `SImagePopupAdvancedMsgData` を伴う）のほうだけ。
+  名前だけなら `gSDK->InternalIndexToNameN(index, outName)`（`ISDK.h`）。添字は一致する
+  ものの、**一覧を作り直したり項目を出し入れする作りなら `InternalIndex` 側で持つ**ほうが
+  崩れない（`GetItemObject(i)` / `GetObjectItemIndex(item)` で相互に引ける）。
+- **「未選択」は読み取れない——項目を足した時点で先頭が選ばれている。** 実測で、
+  `AddImageFromResource` を済ませた直後の `GetSelectedItemIndex()` は **0**（＝先頭）
+  だった。ソースは `GS_GetImagePopupSelectedItem` の戻りから 1 を引くので「本当に何も
+  選ばれていなければ `(size_t)-1`」になるはずだが、**実機ではそうならない**。
+  したがって**「まだ選んでいない」を添字で判別することはできない**——必要なら
+  「ユーザが選択イベントを起こしたか」を自分で覚えておく。
+- **選択イベントは `selected` として届く。** `VWDialogEventArgs::IsImagePopupSelected()`
+  の実体は `!fbNegativeControlID`——**そのコントロール ID への通常のディスパッチイベント**
+  が「選ばれた」を意味する。`gSDK->SetImagePopupResourceAdvanced(dialogID, controlID)`
+  を立てると、これに加えて `IsImagePopupBeforeOpen()`（ポップアップを開く直前。負の
+  コントロール ID で来る advanced イベント。`SImagePopupAdvancedMsgData` を伴う）も
+  届く。実機のログ例（1 回開いて 2 番目を選んだとき）:
+
+  ```
+  イベント: before-open   → GetSelectedItemIndex() = 0（先頭が選ばれている状態）
+  イベント: selected      → GetSelectedItemIndex() = 1 / 'アンカーボルト_M16'
+  ```
+
+  選んだ値はこの `selected` で読んでもよいし、OK のときにまとめて読んでもよい
+  （どちらでも同じ値が返る）。
 - **DDX では受けられない。** `VWDialog::AddDDX_ImagePopup` の実装は
   `VWImagePopupCtrl::PullDownResourceLayout{Set,Get}SelectedResourceName` を呼ぶだけで、
   **`PullDownResourceLayout` 系（リソース名の文字列でやり取りする経路）専用**。この
@@ -146,19 +164,17 @@ popup.AddItems(fList);
 **同じコントロールをどちらのクラスからでも触れる**道理だが、実挙動は未確認。まず
 `VWThumbnailPopupCtrl` で足りるかを確かめ、足りないときだけこの道を試すこと。
 
-### 実機で確かめるべきこと（未確認）
+### 一覧には「ユーザが置くシンボル」以外も混ざる
 
-次の 4 点はソースからは決まらない。1〜3 は実機プローブ
-`probes/runtime/thumbnail-popup/`（[実機確認プラグイン](../plugin/README.md)）で
-1 周で測れるようにしてある——ダイアログを実際に出し、コントロールの生成結果・項目数・
-未選択の戻り・届いたイベント・選択から引いた名前をログへ出す。
+`VWResourceList::BuildList(kSymDefNode, true)` は**図面にあるシンボル定義を全部**返す。
+実測（16 件）の内訳には、ユーザが置く部品（`アンカーボルト_M12` / `床束` / `仕口` …）に
+混じって、**VectorWorks 自身が使うもの**が並んでいた——`図面ラベル – 図番`・`断面寸法`・
+`立断面指示線`・`グリッド線`（プラグインオブジェクトのスタイルや記号）や、
+`遠山信夫アトリエ一級建築士事務所`（タイトルブロックの記入内容）。
 
-- `VWThumbnailPopupCtrl::CreateControl` が実機でコントロールを作れるか（サムネイルが
-  実際に出るか。シンボル定義の絵が期待どおりに描かれるか）。
-- 未選択のときの `GetSelectedItemIndex()` の実際の戻り（ソース上は `(size_t)-1`）。
-- `SetImagePopupResourceAdvanced` を立てたときの advanced イベントの届き方。
-- 上の「基底の `CreateControl` を明示呼び出し」が実機で通るか（上の 3 つで足りるなら
-  試す必要は無いので、プローブには入れていない）。
+**「シンボル定義」であることと「ユーザが図面に置きたい部品」であることは別**なので、
+選択 UI に出すなら絞り込みが要る。絞り方は
+[`Symbols.md`](Symbols.md) の「シンボル定義のサムネイル・一覧を UI に出す」を参照。
 
 ### 代わりの道（実機で確認済み）
 
