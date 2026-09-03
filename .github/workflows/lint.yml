@@ -4,10 +4,14 @@ name: Lint
 # スクリプト）を検査する。ドキュメント（Markdown）の内容そのものは人（と実機確認）が
 # 見るのでここでは検査しない。
 #
-#   * shellcheck    — scripts/ のシェルスクリプト。
+#   * shellcheck    — scripts/ と plugin/scripts/ のシェルスクリプト。
 #   * actionlint    — GitHub ワークフロー定義そのもの＋インライン run: スクリプト。
 #   * clang-format  — 実機確認プラグイン（plugin/）と実機プローブ（probes/）の C++。
 #                     整形の唯一の真実は .clang-format で、手で例外を作らない。
+#   * unit-tests    — 自動アップデートの純粋な部分（plugin/src/UpdateParse.h）。SDK にも
+#                     プラットフォームにも依存しないので普通のコンパイラで走る。**壊れても
+#                     静かに壊れる**（更新が来ない／常に来る／再起動が空振りする）ので、
+#                     mac / Windows の実ビルドとは別に、ここで確かめる。
 #
 # 完了待ちは `scripts/ci-wait.sh --pr <番号>` で行う（CLAUDE.md「CI の完了を待つ」）。
 # plugin/ や probes/runtime/ を触った PR ではこれに加えて probe-build.yml（mac / Windows の
@@ -39,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           shellcheck --version
-          shellcheck scripts/*.sh
+          shellcheck scripts/*.sh plugin/scripts/*.sh
 
   clang-format:
     runs-on: ubuntu-latest
@@ -60,7 +64,7 @@ jobs:
       - name: Check formatting
         run: |
           set -euo pipefail
-          files="$(find plugin/src probes -type f \( -name '*.cpp' -o -name '*.h' \) | sort)"
+          files="$(find plugin/src plugin/tests probes -type f \( -name '*.cpp' -o -name '*.h' \) | sort)"
           if [ -z "$files" ]; then
             echo "整形対象の C++ がありません。"
             exit 0
@@ -68,6 +72,21 @@ jobs:
           echo "$files"
           # shellcheck disable=SC2086  # 改行区切りの一覧をそのまま引数へ展開する
           clang-format-18 --dry-run --Werror $files
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # CMake も SDK も要らない（テスト対象はヘッダ 1 つ＋標準ライブラリだけ）。
+      - name: Build and run the SDK-free unit tests
+        run: |
+          set -euo pipefail
+          g++ --version | head -n 1
+          g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
+            plugin/tests/UpdateParseTests.cpp -o /tmp/update-parse-tests
+          /tmp/update-parse-tests
 
   actionlint:
     runs-on: ubuntu-latest

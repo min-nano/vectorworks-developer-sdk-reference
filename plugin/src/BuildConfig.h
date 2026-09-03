@@ -34,3 +34,10 @@
 #ifndef VW_BUILD_TIME
 #	define VW_BUILD_TIME "unknown"
 #endif
+
+// ビルドを一意に指す ID（CI ではワークフローの run id、ローカルでは "local"）。
+// **自動アップデートが新旧を比べるのはこれ**——コミットではない（同じ sha から、同居
+// させる PR を変えて何度もビルドされるため）。plugin/src/Update.h を参照。
+#ifndef VW_BUILD_ID
+#	define VW_BUILD_ID "local"
+#endif

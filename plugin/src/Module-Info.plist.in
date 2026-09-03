@@ -24,6 +24,10 @@
 	<string>yes</string>
 	<!-- ビルドの素性（CMake / CI が埋める）。どのビルドを入れているかを、
 	     プラグインを起動しなくても確かめられるようにするため。 -->
+	<!-- VWBuildId は**自動アップデートが読む鍵**（入っているビルドの ID）。
+	     plugin/scripts/vw-probes-update.sh の installed_build と対。 -->
+	<key>VWBuildId</key>
+	<string>@VW_BUILD_ID@</string>
 	<key>VWBuildBranch</key>
 	<string>@VW_BUILD_BRANCH@</string>
 	<key>VWBuildCommit</key>

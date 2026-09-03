@@ -145,6 +145,7 @@ jobs:
             -DVW_SDK_DIR="$VW_SDK_DIR" \
             -DVW_BUILD_VERSION="${BUILD_SHA:0:7}" \
             -DVW_BUILD_BRANCH="$VW_BUILD_BRANCH" \
+            -DVW_BUILD_ID="$GITHUB_RUN_ID" \
             -DVW_PROBE_MANIFEST="$GITHUB_WORKSPACE/build-probes/manifest.cmake"
 
       - name: Build
@@ -170,6 +171,10 @@ jobs:
             || { echo "::error::VwSdkProbes.vwr がバンドルへ入っていません"; exit 1; }
           /usr/libexec/PlistBuddy -c "Print :VWBuildCommit" "$bundle/Contents/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :VWProbes"      "$bundle/Contents/Info.plist"
+          # 自動アップデートが読む鍵。ここが空だと「常に最新」になって更新が止まる。
+          /usr/libexec/PlistBuddy -c "Print :VWBuildId"     "$bundle/Contents/Info.plist"
+          test -f "$bundle/Contents/Resources/vw-probes-update.sh" \
+            || { echo "::error::vw-probes-update.sh がバンドルへ入っていません"; exit 1; }
 
       # "<name>.vwlibrary/" の階層を保ったまま zip する（展開してそのまま使えるように）。
       - name: Package bundle
@@ -227,6 +232,7 @@ jobs:
             -DVW_SDK_DIR="$VW_SDK_DIR" \
             -DVW_BUILD_VERSION="${BUILD_SHA:0:7}" \
             -DVW_BUILD_BRANCH="$VW_BUILD_BRANCH" \
+            -DVW_BUILD_ID="$GITHUB_RUN_ID" \
             -DVW_PROBE_MANIFEST="$GITHUB_WORKSPACE/build-probes/manifest.cmake"
 
       - name: Build
@@ -240,6 +246,8 @@ jobs:
           d="build/Release"
           test -f "$d/VwSdkProbes.vlb" || { echo "::error::VwSdkProbes.vlb が作られていません"; exit 1; }
           test -f "$d/VwSdkProbes.vwr" || { echo "::error::VwSdkProbes.vwr が作られていません"; exit 1; }
+          test -f "$d/vw-probes-update.ps1" \
+            || { echo "::error::vw-probes-update.ps1 が置かれていません"; exit 1; }
           cat "$d/VwSdkProbes.build-info.txt"
 
       - name: Package module
@@ -250,7 +258,8 @@ jobs:
           $files = @(
             'build/Release/VwSdkProbes.vlb',
             'build/Release/VwSdkProbes.vwr',
-            'build/Release/VwSdkProbes.build-info.txt'
+            'build/Release/VwSdkProbes.build-info.txt',
+            'build/Release/vw-probes-update.ps1'
           ) | Where-Object { Test-Path $_ }
           Compress-Archive -Path $files -DestinationPath 'dist/VwSdkProbes.vlb.zip' -Force
           Get-ChildItem dist | Select-Object Name, Length
@@ -305,7 +314,19 @@ jobs:
           if [ -n "$PRS" ]; then
             title="Probes (${short} + PR ${PRS})"
           fi
+          # 隠しメタデータ。**自動アップデータ（plugin/scripts/vw-probes-update.*）が
+          # 読むのはここ**で、build= がビルドを一意に指す ID（この run の id）。
+          # コミットで比べないのは、同じ sha から同居させる PR を変えて何度もビルド
+          # されるため（plugin/src/UpdateParse.h の Evaluate）。HTML コメントなので
+          # リリースのページには出ないが、API の body には入る。
           {
+            echo "<!-- vw-probes"
+            echo "build=${GITHUB_RUN_ID}"
+            echo "commit=${BUILD_SHA}"
+            echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "probes=$(cat build-probes/summary-line.txt 2>/dev/null || true)"
+            echo "-->"
+            echo
             echo "実機確認プラグイン **VwSdkProbes**（${short} / $(date -u +%Y-%m-%dT%H:%M:%SZ)）。"
             echo
             echo "## 入っているプローブ"
@@ -313,6 +334,11 @@ jobs:
             cat build-probes/summary.md
             echo
             echo "## 使い方"
+            echo
+            echo "**すでに入れてある場合は何もしなくてよい**——次に Vectorworks を起動したときに"
+            echo "プラグイン自身が「入れ替えますか？」と尋ねる（メニューの先頭項目からも確認できる）。"
+            echo
+            echo "初回だけ手で入れる:"
             echo
             echo "1. 自分のプラットフォームの zip を展開し、Vectorworks の Plug-ins フォルダへ置く"
             echo "2. Vectorworks を起動し直す（ワークスペース編集でメニューへ追加する）"

@@ -262,12 +262,17 @@ manifest="$OUT/manifest.cmake"
 
 summary_md="$OUT/summary.md"
 summary_txt="$OUT/summary.txt"
+# 1 行版。リリース本文の隠しメタデータ（probes=）と、更新ダイアログの
+# 「入っているプローブ」に出す（plugin/src/Update.cpp）。
+summary_line="$OUT/summary-line.txt"
 : >"$summary_md"
 {
 	echo "| プローブ | 出所 | コミット | ブランチ | PR タイトル |"
 	echo "| --- | --- | --- | --- | --- |"
 } >>"$summary_md"
 : >"$summary_txt"
+: >"$summary_line"
+line_parts=()
 
 entries=()
 for i in ${SLUGS[@]+"${!SLUGS[@]}"}; do
@@ -290,9 +295,11 @@ for i in ${SLUGS[@]+"${!SLUGS[@]}"}; do
 	if [ -n "$pr" ]; then
 		echo "| \`$slug\` | PR #$pr | \`$commit\` | $branch | $title |" >>"$summary_md"
 		echo "$slug <- PR #$pr ($commit)" >>"$summary_txt"
+		line_parts+=("$slug(#$pr)")
 	else
 		echo "| \`$slug\` | ${branch:-main} | \`$commit\` | $branch | |" >>"$summary_md"
 		echo "$slug <- ${branch:-main} ($commit)" >>"$summary_txt"
+		line_parts+=("$slug")
 	fi
 done
 
@@ -304,6 +311,14 @@ done
 	done
 	echo ")"
 } >>"$manifest"
+
+# 1 行版（", " 区切り）。空なら空ファイルのまま。
+if [ "${#line_parts[@]}" -gt 0 ]; then
+	printf '%s' "$(
+		IFS=', '
+		echo "${line_parts[*]}"
+	)" >"$summary_line"
+fi
 
 echo
 echo "集めたプローブ: ${#entries[@]} 件"

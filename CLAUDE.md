@@ -121,6 +121,11 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
   自動的に走る）。「ディスパッチしたらコンパイルエラーだった」を防ぐ門。
 - **実機で走らせるのはユーザー。** AI はビルドをディスパッチし、リリースができたことを
   伝えるところまで。結果（ログ）を受け取ってから `Findings/` へ反映する。
+- **入れ替えは自動。** プラグインは起動時（とメニューの先頭項目）に、公開されている
+  ビルドと入れ替えるかを尋ねる。だからディスパッチの後は「リリースができた」と伝えれば
+  よく、zip の場所を毎回案内しなくてよい。**新旧はコミットではなくビルド ID（run id）で
+  比べる**——同じ sha から、同居させる PR を変えて何度もビルドされるため
+  （`plugin/src/UpdateParse.h`）。
 - **役目を終えたプローブは消す**（結論は `Findings/` に文章で残る。上記「調査のフロー」4）。
   `probes/runtime/example/` だけは雛形かつ煙試験として残す。
 - **プローブは undo イベントを自分では開かない**（[Findings「Undo」](Findings/Undo.md) の
@@ -150,7 +155,8 @@ Bash(run_in_background: true):
 最終行は必ず `ci-wait: done (conclusion=<結果> exit=<終了コード>)` で、
 `conclusion=success` 以外は exit 1（`no-checks` は「チェックが 1 件も登録されなかった」、
 `timed-out-waiting` / `api-error` は「待機側が見届けられなかった」——CI の失敗ではない）。
-このリポジトリの PR CI は `lint.yml`（shellcheck / actionlint / clang-format）と、
+このリポジトリの PR CI は `lint.yml`（shellcheck / actionlint / clang-format / 無 SDK の
+単体テスト）と、
 `plugin/src/**` や `probes/runtime/**`（ビルドに入るもの）を触ったときだけ走る
 `probe-build.yml`（mac / Windows の実ビルド）。出力に並ぶチェック名を読み、`debug`（ci-debug の run）だけを見て green と
 誤読しないこと。
