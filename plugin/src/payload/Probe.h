@@ -1,5 +1,5 @@
 //
-//	Probe.h
+//	payload/Probe.h
 //
 //	**調査コード（プローブ）が使う唯一のヘッダ。** 1 つのプローブは
 //	`probes/runtime/<slug>/probe.cpp` 1 ファイルで完結し、次の形で書く:
@@ -22,7 +22,12 @@
 //
 //	結果は戻り値ではなく `probe`（Report&）へ書く。**ログは 1 行書くたびにファイルへも
 //	流す**ので、プローブが VectorWorks ごと落としても、そこまでの行は残る（落とし方まで
-//	含めて知見になる調査があるため。書き出し先は Report::logPath()）。
+//	含めて知見になる調査があるため。書き出し先は Report::logPath()）。同じ 1 行は
+//	**殻（結果ダイアログ）へも即座に流れる**（Report::setSink。境界は PayloadAbi.h）。
+//
+//	【ここは本体（ペイロード）側である】このヘッダとレジストリ（Probe.cpp）、そして
+//	プローブ本体はすべて、Vectorworks が知らない外部モジュールへコンパイルされる
+//	——だから**Vectorworks を再起動せずに入れ替えられる**（plugin/README.md）。
 //
 //	【SDK 依存】このヘッダは VectorworksSDK.h を include する（TXString を直接 log できる
 //	ようにするため）。プローブ側は "Probe.h" だけを include すれば SDK も一緒に入る。
@@ -84,6 +89,11 @@ namespace vwprobe
 			return fLogPath;
 		}
 
+		// **1 行書くたびに呼ばれる外の受け口。** 殻（結果ダイアログ）へ流すために、
+		// プローブを走らせる直前に 1 度だけ設定する。sink は例外を投げてはならない
+		// （C の境界を越えて呼ばれる。PayloadAbi.h）。
+		void setSink(void* ctx, void (*sink)(void* ctx, const char* utf8Line));
+
 		// ログファイルを開く（プローブを走らせる直前に 1 度だけ呼ぶ）。開けなくても
 		// 黙って続ける——ログはメモリにも溜まっているので、ダイアログは変わらず読める。
 		void openLog(const std::string& path);
@@ -93,6 +103,8 @@ namespace vwprobe
 		std::string fFailure;
 		std::string fLogPath;
 		void* fFile = nullptr; // std::FILE*（このヘッダに <cstdio> を持ち込まないため）
+		void* fSinkCtx = nullptr;
+		void (*fSink)(void*, const char*) = nullptr;
 		bool fFailed = false;
 	};
 

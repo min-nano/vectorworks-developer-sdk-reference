@@ -1,7 +1,7 @@
 //
-//	Probe.cpp
+//	payload/Probe.cpp
 //
-//	プローブのレジストリ（Probe.h の実装）。
+//	プローブのレジストリ（Probe.h の実装）。**本体（ペイロード）側**にある。
 //
 //	【静的初期化の順序に依存しない】プローブの登録（VW_PROBE が作る静的オブジェクト）と
 //	出所表の登録（生成された ProbeProvenance.cpp の静的オブジェクト）は**別々の翻訳単位**の
@@ -137,10 +137,20 @@ namespace vwprobe
 		fLogPath = path;
 	}
 
+	void Report::setSink(void* ctx, void (*sink)(void*, const char*))
+	{
+		fSinkCtx = ctx;
+		fSink = sink;
+	}
+
 	void Report::log(const std::string& line)
 	{
 		fText += line;
 		fText += '\n';
+		// 殻（結果ダイアログ）へ即座に流す。境界は C の関数ポインタで、向こう側が
+		// 例外を出さないことになっている（PayloadAbi.h）。
+		if (fSink != nullptr)
+			fSink(fSinkCtx, line.c_str());
 		if (fFile != nullptr)
 		{
 			std::FILE* file = static_cast<std::FILE*>(fFile);

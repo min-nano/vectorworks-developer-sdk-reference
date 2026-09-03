@@ -84,6 +84,50 @@ int main()
 		check(!s.error.empty(), "不完全なら理由が付く");
 	}
 
+	// --- 「再起動が要るか」の判断 -------------------------------------------
+	// **本体（.vwpayload）だけが新しいなら再起動は要らない。** ここを取り違えると、
+	// 再起動を促さずに殻の古い版で動かす（＝境界が食い違ってプローブが 1 つも動かない）
+	// か、要らない再起動を毎回させることになる。どちらも静かに壊れる。
+	{
+		const std::string out = "installed=1\nlatest=2\n"
+								"installedShell=aaa\nlatestShell=aaa\n"
+								"url=u\npayloadUrl=p\n";
+		const Status s = Evaluate(out);
+		check(s.offerUpdate, "本体が新しければ勧める");
+		check(s.payloadOnly, "殻が同じなら本体だけで済む（再起動なし）");
+		checkEq(s.payloadUrl, "p", "payloadUrl");
+		checkEq(s.installedShell, "aaa", "installedShell");
+	}
+	{
+		// 殻まで変わった → まるごと入れ替え（再起動が要る）。
+		const Status s = Evaluate("installed=1\nlatest=2\ninstalledShell=aaa\nlatestShell=bbb\n"
+								  "url=u\npayloadUrl=p\n");
+		check(s.offerUpdate, "殻が変わっていれば勧める");
+		check(!s.payloadOnly, "殻が違うならまるごと入れ替える");
+	}
+	{
+		// 本体は同じだが殻だけ変わった（プラグインの作りを直したとき）。
+		const Status s = Evaluate("installed=1\nlatest=1\ninstalledShell=aaa\nlatestShell=bbb\n"
+								  "url=u\npayloadUrl=p\n");
+		check(s.offerUpdate, "殻だけ変わっていても勧める");
+		check(!s.payloadOnly, "殻が違うならまるごと入れ替える");
+	}
+	{
+		// 中身も殻も同じ → 何もしない。
+		const Status s = Evaluate("installed=1\nlatest=1\ninstalledShell=a\nlatestShell=a\n"
+								  "url=u\npayloadUrl=p\n");
+		check(!s.offerUpdate, "どちらも同じなら勧めない");
+	}
+	// **判断できないときは必ず「まるごと」へ倒す。**
+	check(!Evaluate("installed=1\nlatest=2\ninstalledShell=a\nurl=u\npayloadUrl=p\n").payloadOnly,
+		  "公開側が殻の ID を載せていなければ、まるごと入れ替える");
+	check(!Evaluate("installed=1\nlatest=2\ninstalledShell=none\nlatestShell=none\n"
+					"url=u\npayloadUrl=p\n")
+			   .payloadOnly,
+		  "殻の ID が分からなければ（none）、まるごと入れ替える");
+	check(!Evaluate("installed=1\nlatest=2\ninstalledShell=a\nlatestShell=a\nurl=u\n").payloadOnly,
+		  "本体だけの資産が無ければ、まるごと入れ替える");
+
 	// --- do-install の判定 --------------------------------------------------
 	check(InstallReportedOk("ok\n"), "ok は成功");
 	check(!InstallReportedOk("error=だめ\n"), "error= は成功ではない");

@@ -91,6 +91,7 @@ jobs:
           set -euo pipefail
           {
             echo "ビルド ID: \`$(cat build-probes/build-id.txt)\`"
+            echo "殻の ID: \`$(cat build-probes/shell-id.txt)\`"
             echo
             cat build-probes/summary.md
           } >> "$GITHUB_STEP_SUMMARY"
@@ -159,17 +160,15 @@ jobs:
       # Apple Silicon はすべての Mach-O に署名を要求する。証明書の要らない ad-hoc 署名
       # （"-"）で足りる（Developer ID 署名ではないので、VW の「不明なプラグイン」警告は出る）。
       # .vwr を固めた後に署名するので、リソースまで含めて封がかかる。
-      - name: Ad-hoc code-sign the bundle
+      - name: Ad-hoc code-sign the bundle and the payload
         run: |
           set -euo pipefail
-          # 外部モジュール（.vwpayload）は Resources に置いた Mach-O で、殻が自分で
-          # dlopen する。**--deep が確実に届く保証が無いので先に個別に署名する**
-          # （Apple Silicon は署名の無い Mach-O を読み込めない）。
-          for payload in build/VwSdkProbes.vwlibrary/Contents/Resources/*.vwpayload; do
-            [ -e "$payload" ] || continue
-            codesign --force --sign - "$payload"
-            codesign --verify --strict --verbose=2 "$payload"
-          done
+          # 本体（.vwpayload）はバンドルの**隣**に置いた Mach-O で、殻が自分で dlopen する。
+          # バンドルとは別に署名する（Apple Silicon は署名の無い Mach-O を読み込まない）。
+          # **中に入れないのは、差し替えるたびに殻の署名が壊れるから**（署名はリソースまで
+          # 封をする。plugin/src/PayloadHost.h）。
+          codesign --force --sign - build/VwSdkProbesPayload.vwpayload
+          codesign --verify --strict --verbose=2 build/VwSdkProbesPayload.vwpayload
           codesign --force --deep --sign - build/VwSdkProbes.vwlibrary
           codesign --verify --strict --verbose=2 build/VwSdkProbes.vwlibrary
 
@@ -188,19 +187,27 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :VWBuildId"     "$bundle/Contents/Info.plist"
           test -f "$bundle/Contents/Resources/vw-probes-update.sh" \
             || { echo "::error::vw-probes-update.sh がバンドルへ入っていません"; exit 1; }
-          # 外部モジュール（ホットリロードの検証。plugin/CMakeLists.txt の vw_add_payload）。
-          for variant in A B; do
-            test -f "$bundle/Contents/Resources/VwSdkProbesPayload-$variant.vwpayload" \
-              || { echo "::error::ペイロード($variant) がバンドルへ入っていません"; exit 1; }
-          done
-          file "$bundle/Contents/Resources/VwSdkProbesPayload-A.vwpayload"
+          # 自動アップデートが「再起動が要るか」を決める鍵。空だと必ず再起動を求めてしまう。
+          /usr/libexec/PlistBuddy -c "Print :VWShellId" "$bundle/Contents/Info.plist"
+          # 本体（プローブはこちらに入る）。バンドルの**隣**であることが肝。
+          test -f build/VwSdkProbesPayload.vwpayload \
+            || { echo "::error::本体 (VwSdkProbesPayload.vwpayload) が作られていません"; exit 1; }
+          test -f build/VwSdkProbesPayload.build-info.txt \
+            || { echo "::error::本体の build-info.txt がありません"; exit 1; }
+          lipo -info build/VwSdkProbesPayload.vwpayload
+          cat build/VwSdkProbesPayload.build-info.txt
 
       # "<name>.vwlibrary/" の階層を保ったまま zip する（展開してそのまま使えるように）。
-      - name: Package bundle
+      # 2 つ作る。**まるごと**（初回導入と、殻が変わったときの入れ替え用）と、
+      # **本体だけ**（日常の入れ替え用——これなら Vectorworks を動かしたまま置き換えられる）。
+      - name: Package
         run: |
           set -euo pipefail
           mkdir -p dist
-          ( cd build && zip -qry "$GITHUB_WORKSPACE/dist/VwSdkProbes.vwlibrary.zip" VwSdkProbes.vwlibrary )
+          ( cd build && zip -qry "$GITHUB_WORKSPACE/dist/VwSdkProbes.vwlibrary.zip" \
+              VwSdkProbes.vwlibrary VwSdkProbesPayload.vwpayload VwSdkProbesPayload.build-info.txt )
+          ( cd build && zip -qry "$GITHUB_WORKSPACE/dist/VwSdkProbesPayload-mac.zip" \
+              VwSdkProbesPayload.vwpayload VwSdkProbesPayload.build-info.txt )
           ls -l dist
 
       - name: Upload plug-in artifact
@@ -266,26 +273,32 @@ jobs:
           test -f "$d/VwSdkProbes.vwr" || { echo "::error::VwSdkProbes.vwr が作られていません"; exit 1; }
           test -f "$d/vw-probes-update.ps1" \
             || { echo "::error::vw-probes-update.ps1 が置かれていません"; exit 1; }
-          # 外部モジュール（ホットリロードの検証。plugin/CMakeLists.txt の vw_add_payload）。
-          for variant in A B; do
-            test -f "$d/VwSdkProbesPayload-$variant.vwpayload" \
-              || { echo "::error::ペイロード($variant) が置かれていません"; exit 1; }
-          done
+          # 本体（プローブはこちらに入る）。.vlb の隣に置く。
+          test -f "$d/VwSdkProbesPayload.vwpayload" \
+            || { echo "::error::本体 (VwSdkProbesPayload.vwpayload) が作られていません"; exit 1; }
+          test -f "$d/VwSdkProbesPayload.build-info.txt" \
+            || { echo "::error::本体の build-info.txt がありません"; exit 1; }
           cat "$d/VwSdkProbes.build-info.txt"
+          cat "$d/VwSdkProbesPayload.build-info.txt"
 
       - name: Package module
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
+          # 本体だけの zip（日常の入れ替え用。Vectorworks を動かしたまま置き換えられる）。
+          $payload = @(
+            'build/Release/VwSdkProbesPayload.vwpayload',
+            'build/Release/VwSdkProbesPayload.build-info.txt'
+          ) | Where-Object { Test-Path $_ }
+          Compress-Archive -Path $payload -DestinationPath 'dist/VwSdkProbesPayload-win.zip' -Force
+          # まるごとの zip（初回導入と、殻が変わったときの入れ替え用）。
           $files = @(
             'build/Release/VwSdkProbes.vlb',
             'build/Release/VwSdkProbes.vwr',
             'build/Release/VwSdkProbes.build-info.txt',
-            'build/Release/vw-probes-update.ps1',
-            'build/Release/VwSdkProbesPayload-A.vwpayload',
-            'build/Release/VwSdkProbesPayload-B.vwpayload'
-          ) | Where-Object { Test-Path $_ }
+            'build/Release/vw-probes-update.ps1'
+          ) + $payload | Where-Object { Test-Path $_ }
           Compress-Archive -Path $files -DestinationPath 'dist/VwSdkProbes.vlb.zip' -Force
           Get-ChildItem dist | Select-Object Name, Length
 
@@ -340,7 +353,9 @@ jobs:
             title="Probes (${short} + PR ${PRS})"
           fi
           # 隠しメタデータ。**自動アップデータ（plugin/scripts/vw-probes-update.*）が
-          # 読むのはここ**で、build= がビルドを一意に指す ID。値は集約が
+          # 読むのはここ**で、build= が**本体**のビルドを一意に指す ID、shell= が**殻**の
+          # ID。2 つあるのは「入れ替えに再起動が要るか」を決めるため——本体だけが新しければ
+          # Vectorworks を動かしたまま置き換えられる（plugin/src/UpdateParse.h の Evaluate）。値は集約が
           # 「main のコミット＋各 PR の head」から計算したもの（build-id.txt）で、
           # プラグインへ焼いた値と同じファイル由来だからずれようがない。
           # **実行ごとに変わる値（run id）にはしない**——同じ顔ぶれで作り直したときに
@@ -350,6 +365,7 @@ jobs:
           {
             echo "<!-- vw-probes"
             echo "build=$(cat build-probes/build-id.txt)"
+            echo "shell=$(cat build-probes/shell-id.txt)"
             echo "commit=${BUILD_SHA}"
             echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "probes=$(cat build-probes/summary-line.txt 2>/dev/null || true)"
@@ -367,9 +383,14 @@ jobs:
             echo "**すでに入れてある場合は何もしなくてよい**——次に Vectorworks を起動したときに"
             echo "プラグイン自身が「入れ替えますか？」と尋ねる（メニューの先頭項目からも確認できる）。"
             echo
+            echo "**プローブだけの入れ替えなら Vectorworks の再起動は要らない**"
+            echo "（新しい本体を読み込むのは、次にメニューを開いたとき）。"
+            echo "殻（プラグイン本体）まで変わったときだけ再起動を尋ねる。"
+            echo
             echo "初回だけ手で入れる:"
             echo
-            echo "1. 自分のプラットフォームの zip を展開し、Vectorworks の Plug-ins フォルダへ置く"
+            echo "1. \`VwSdkProbes.*.zip\` を展開し、**中身をすべて**"
+            echo "   Vectorworks の Plug-ins フォルダへ置く（プラグインと \`.vwpayload\` は隣同士）"
             echo "2. Vectorworks を起動し直す（ワークスペース編集でメニューへ追加する）"
             echo "3. メニュー「SDK 実機プローブ…」→ 一覧から選んで実行"
             echo
@@ -380,6 +401,8 @@ jobs:
           gh release create probes \
             "dist/VwSdkProbes.vwlibrary.zip" \
             "dist/VwSdkProbes.vlb.zip" \
+            "dist/VwSdkProbesPayload-mac.zip" \
+            "dist/VwSdkProbesPayload-win.zip" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$BUILD_SHA" \
             --title "$title" \
