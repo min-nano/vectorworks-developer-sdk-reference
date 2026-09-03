@@ -89,8 +89,11 @@ namespace
 			Log("  [payload] カレントレイヤが取れない（文書が開いていない？）");
 			return kVwPayloadOk; // SDK 呼び出し自体は通っている
 		}
-		Log("  [payload] カレントレイヤ: " +
-			std::string(static_cast<const char*>(gSDK->GetObjectName(current))));
+		// ISDK::GetObjectName は**戻り値ではなく出力引数**で返す
+		// （void GetObjectName(MCObjectHandle, TXString&)）。
+		TXString name;
+		gSDK->GetObjectName(current, name);
+		Log("  [payload] カレントレイヤ: " + std::string(static_cast<const char*>(name)));
 
 		// 例のプローブと同じ数え方（図面を変更しない）。
 		size_t design = 0;

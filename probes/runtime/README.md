@@ -34,7 +34,10 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
 		probe.fail("CreateLayer が nil を返した");
 		return;
 	}
-	probe.log(std::string("できた: ") + static_cast<const char*>(gSDK->GetObjectName(layer)));
+	// GetObjectName は**戻り値ではなく出力引数**で返す（void GetObjectName(h, TXString&)）。
+	TXString name;
+	gSDK->GetObjectName(layer, name);
+	probe.log(std::string("できた: ") + static_cast<const char*>(name));
 }
 ```
 
