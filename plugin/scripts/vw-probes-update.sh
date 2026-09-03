@@ -6,20 +6,32 @@
 # すべてプラグイン側が Vectorworks のネイティブダイアログで出すので、こちらは
 # 機械可読な行を標準出力へ出すだけで、自分では何も表示しない。
 #
-#   q                  いまの状況を key=value で出す:
-#                        installed=<ビルド ID|none>
-#                        latest=<ビルド ID>
-#                        url=<zip の URL>
-#                        title=<リリース名>
-#                        probes=<入っているプローブ>
-#                      取れなかったときは error=<理由>（終了コードは 0）。
-#   do-install <url>   その zip を落として入れ替える。"ok" か error=<理由>。
+#   q                        いまの状況を key=value で出す:
+#                              installed=<本体のビルド ID|none>
+#                              latest=<公開されている本体のビルド ID>
+#                              installedShell=<入っている殻の ID|none>
+#                              latestShell=<公開されている殻の ID>
+#                              url=<zip の URL>
+#                              title=<リリース名>
+#                              probes=<入っているプローブ>
+#                            取れなかったときは error=<理由>（終了コードは 0）。
+#   do-install <url>         まるごと入れ替える（殻＋本体）。"ok" か error=<理由>。
+#   do-install-payload <url> **本体だけ**入れ替える。"ok" か error=<理由>。
 #
-# 【新旧はビルド ID で比べる】コミットではない——このプラグインは同じ main の sha から、
-# 同居させる PR を変えて何度もビルドされるので、コミットで比べると取りこぼす。ビルド ID は
-# 「main のコミット＋各 PR の head」から計算した値で、**同じ顔ぶれで作り直しても変わらない**
-# （scripts/gather-probes.sh）。公開側はリリース本文の隠しメタデータ（<!-- vw-probes … -->）
-# の build=、入っている側はバンドルの Info.plist の VWBuildId。
+# **zip は 1 つしか無い**（殻＋本体）。本体だけの入れ替えも同じ zip を落として、中から
+# 本体のファイルだけを取り出して置く——配る zip を 2 つに分けると、人が手で入れるときの
+# 展開の手間が増えるだけで、得られるのは数百 KB の節約でしかない。
+#
+# 【なぜ 2 通りの入れ替えがあるか】このプラグインは「殻（Vectorworks が起動時に読み込む
+# モジュール）」と「本体（殻が自分で読み込む .vwpayload）」に割れている。**本体だけなら
+# Vectorworks を動かしたまま置き換えられ、次にメニューを開いたときから新しいプローブが
+# 動く**（再起動が要らない）。殻まで変わったときだけ、まるごと入れ替えて再起動する。
+# 判断はプラグイン側（plugin/src/UpdateParse.h の Evaluate）が 2 つの ID を見て行う。
+#
+# 【ID の出どころ】
+#   公開側   … リリース本文の隠しメタデータ（<!-- vw-probes … -->）の build= と shell=
+#   入っている側 … 本体は VwSdkProbesPayload.build-info.txt の build=
+#                  殻はバンドルの Info.plist の VWShellId
 #
 # 手で叩いて確かめることもできる:
 #   ./vw-probes-update.sh q
@@ -39,6 +51,7 @@ VW_PLUGINS_DIR="${VW_PLUGINS_DIR:-$HOME/Library/Application Support/Vectorworks/
 VW_API="https://api.github.com/repos/${VW_REPO}"
 VW_TAG="${VW_TAG:-probes}"
 VW_NAME="VwSdkProbes"
+VW_PAYLOAD="VwSdkProbesPayload"
 
 # ---------------------------------------------------------------------------
 # GitHub REST の下請け。JSON は plutil で読む（macOS に最初から入っていて JSON を解せる）。
@@ -87,14 +100,50 @@ download() {
 	curl -fL --retry 3 --max-time 300 "$1" -o "$2"
 }
 
-# installed_build -> 入っているビルドの ID（無ければ none）
+# installed_build -> 入っている**本体**のビルド ID（無ければ none）
 installed_build() {
+	local info="$VW_PLUGINS_DIR/$VW_PAYLOAD.build-info.txt"
+	if [ -f "$info" ]; then
+		local v
+		v="$(sed -n 's/^build=//p' "$info" | head -n 1)"
+		if [ -n "$v" ]; then
+			echo "$v"
+			return 0
+		fi
+	fi
+	echo "none"
+}
+
+# installed_shell -> 入っている**殻**の ID（無ければ none）
+installed_shell() {
 	local plist="$VW_PLUGINS_DIR/$VW_NAME.vwlibrary/Contents/Info.plist"
 	if [ -f "$plist" ]; then
-		/usr/libexec/PlistBuddy -c "Print :VWBuildId" "$plist" 2>/dev/null || echo "none"
+		/usr/libexec/PlistBuddy -c "Print :VWShellId" "$plist" 2>/dev/null || echo "none"
 	else
 		echo "none"
 	fi
+}
+
+# ダウンロードした Mach-O を読み込める形にする（隔離フラグを外し、アドホック署名を
+# かけ直す）。**Apple Silicon は署名の無い Mach-O を読み込まない**うえ、unzip すると
+# 署名が落ちる。バンドルには --deep、単体のファイルにはそのまま。
+sanitize() {
+	local path="$1"
+	xattr -dr com.apple.quarantine "$path" 2>/dev/null || true
+	if [ -d "$path" ]; then
+		codesign --force --deep --sign - "$path" >/dev/null 2>&1 || true
+	else
+		codesign --force --sign - "$path" >/dev/null 2>&1 || true
+	fi
+}
+
+# install_one <src> <dst>: まるごと置いてから入れ替える（途中で失敗しても古いほうが残る）。
+install_one() {
+	local src="$1" dst="$2"
+	rm -rf "$dst.new"
+	cp -R "$src" "$dst.new" || return 1
+	rm -rf "$dst"
+	mv "$dst.new" "$dst"
 }
 
 # ---------------------------------------------------------------------------
@@ -113,8 +162,9 @@ mode_q() {
 	url="$(asset_url "$f" "$VW_NAME.vwlibrary.zip" || true)"
 	rm -f "$f"
 
-	local latest probes
+	local latest latest_shell probes
 	latest="$(meta "$body" build)"
+	latest_shell="$(meta "$body" shell)"
 	probes="$(meta "$body" probes)"
 
 	if [ -z "$latest" ] || [ -z "$url" ]; then
@@ -122,15 +172,25 @@ mode_q() {
 		return 0
 	fi
 
+	# **`x && echo` で書かない。** set -e のもとでは、条件が偽になった時点で関数ごと
+	# 抜けてしまい、以降の行が出なくなる（値が空になりうる行が増えたので顕在化する）。
 	echo "installed=$(installed_build)"
 	echo "latest=${latest}"
+	echo "installedShell=$(installed_shell)"
+	if [ -n "$latest_shell" ]; then
+		echo "latestShell=${latest_shell}"
+	fi
 	echo "url=${url}"
-	[ -n "$name" ] && echo "title=${name}"
-	[ -n "$probes" ] && echo "probes=${probes}"
+	if [ -n "$name" ]; then
+		echo "title=${name}"
+	fi
+	if [ -n "$probes" ]; then
+		echo "probes=${probes}"
+	fi
 	return 0
 }
 
-# do-install <url>: 落として展開して、読み込まれているバンドルの隣へ入れ替える。
+# do-install <url>: まるごと（殻＋本体）落として、読み込まれているバンドルの隣へ入れ替える。
 mode_do_install() {
 	local url="$1"
 	if [ -z "$url" ]; then
@@ -141,12 +201,13 @@ mode_do_install() {
 	local tmp work
 	tmp="$(mktemp -d)"
 	work="$(mktemp -d)"
-	if ! download "$url" "$tmp/$VW_NAME.vwlibrary.zip"; then
+
+	if ! download "$url" "$tmp/bundle.zip"; then
 		rm -rf "$tmp" "$work"
 		echo "error=ダウンロードに失敗しました。"
 		return 0
 	fi
-	if ! unzip -q "$tmp/$VW_NAME.vwlibrary.zip" -d "$work" >/dev/null 2>&1; then
+	if ! unzip -q "$tmp/bundle.zip" -d "$work" >/dev/null 2>&1; then
 		rm -rf "$tmp" "$work"
 		echo "error=アーカイブの展開に失敗しました。"
 		return 0
@@ -158,22 +219,74 @@ mode_do_install() {
 		return 0
 	fi
 
-	# Gatekeeper: ダウンロードの隔離フラグを外し、アドホック署名をかけ直す
-	# （Apple Silicon は署名の無い Mach-O を読み込まない。unzip すると署名が落ちる）。
-	xattr -dr com.apple.quarantine "$src" 2>/dev/null || true
-	codesign --force --deep --sign - "$src" >/dev/null 2>&1 || true
+	sanitize "$src"
+	if [ -f "$work/$VW_PAYLOAD.vwpayload" ]; then
+		sanitize "$work/$VW_PAYLOAD.vwpayload"
+	fi
 
 	mkdir -p "$VW_PLUGINS_DIR"
-	local dst="$VW_PLUGINS_DIR/$VW_NAME.vwlibrary"
-	rm -rf "$dst.new"
-	if ! cp -R "$src" "$dst.new"; then
-		rm -rf "$tmp" "$work" "$dst.new"
+	if ! install_one "$src" "$VW_PLUGINS_DIR/$VW_NAME.vwlibrary"; then
+		rm -rf "$tmp" "$work"
 		echo "error=インストール先へのコピーに失敗しました。"
 		return 0
 	fi
-	# 差し替えは**まるごと置いてから入れ替える**（途中で失敗しても、古いほうが残る）。
-	rm -rf "$dst"
-	mv "$dst.new" "$dst"
+	# 本体と控えも一緒に（殻と本体の版は揃っていなければならない）。
+	local f
+	for f in "$VW_PAYLOAD.vwpayload" "$VW_PAYLOAD.build-info.txt"; do
+		if [ -e "$work/$f" ] && ! install_one "$work/$f" "$VW_PLUGINS_DIR/$f"; then
+			rm -rf "$tmp" "$work"
+			echo "error=本体（$f）のコピーに失敗しました。"
+			return 0
+		fi
+	done
+	rm -rf "$tmp" "$work"
+	echo "ok"
+	return 0
+}
+
+# do-install-payload <url>: **本体だけ**入れ替える（Vectorworks を動かしたままでよい）。
+# 落とすのは do-install と**同じ zip**で、中から本体のファイルだけを取り出して置く。
+# 殻は読み込まれたまま触らないので、次にメニューを開いた時点で新しい本体が読まれる。
+# **殻は置き換えるファイルを直接は読んでいない**（一時ディレクトリへ写した複製を読んで
+# いる。plugin/src/PayloadHost.h）ので、いつ置き換えても衝突しない。
+mode_do_install_payload() {
+	local url="$1"
+	if [ -z "$url" ]; then
+		echo "error=引数が不足しています。"
+		return 0
+	fi
+
+	local tmp work
+	tmp="$(mktemp -d)"
+	work="$(mktemp -d)"
+
+	if ! download "$url" "$tmp/bundle.zip"; then
+		rm -rf "$tmp" "$work"
+		echo "error=ダウンロードに失敗しました。"
+		return 0
+	fi
+	if ! unzip -q "$tmp/bundle.zip" -d "$work" >/dev/null 2>&1; then
+		rm -rf "$tmp" "$work"
+		echo "error=アーカイブの展開に失敗しました。"
+		return 0
+	fi
+	if [ ! -f "$work/$VW_PAYLOAD.vwpayload" ]; then
+		rm -rf "$tmp" "$work"
+		echo "error=$VW_PAYLOAD.vwpayload が zip 内に見つかりません。"
+		return 0
+	fi
+
+	sanitize "$work/$VW_PAYLOAD.vwpayload"
+
+	mkdir -p "$VW_PLUGINS_DIR"
+	local f
+	for f in "$VW_PAYLOAD.vwpayload" "$VW_PAYLOAD.build-info.txt"; do
+		if [ -e "$work/$f" ] && ! install_one "$work/$f" "$VW_PLUGINS_DIR/$f"; then
+			rm -rf "$tmp" "$work"
+			echo "error=本体（$f）のコピーに失敗しました。"
+			return 0
+		fi
+	done
 	rm -rf "$tmp" "$work"
 	echo "ok"
 	return 0
@@ -187,7 +300,8 @@ main() {
 	case "${1:-}" in
 		q) mode_q ;;
 		do-install) mode_do_install "${2:-}" ;;
-		*) echo "error=不明なモード: '${1:-}'（q / do-install）。" ;;
+		do-install-payload) mode_do_install_payload "${2:-}" ;;
+		*) echo "error=不明なモード: '${1:-}'（q / do-install / do-install-payload）。" ;;
 	esac
 }
 

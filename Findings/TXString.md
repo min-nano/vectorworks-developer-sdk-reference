@@ -56,7 +56,7 @@ void log(const TXString& line);
 void log(const char* line);   // ← これでリテラルの曖昧さが消える
 ```
 
-実装例は [`plugin/src/Probe.h`](../plugin/src/Probe.h) の `vwprobe::Report::log`。
+実装例は [`plugin/src/payload/Probe.h`](../plugin/src/payload/Probe.h) の `vwprobe::Report::log`。
 
 ## 出口: 文字列を取り出す
 

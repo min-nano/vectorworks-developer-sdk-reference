@@ -1,7 +1,7 @@
 # probes/runtime — 実機で走らせる調査（プローブ）
 
 **実機（ローカルの VectorWorks）でしか答えの出ない問い**を確かめるコード置き場。
-ここに置いたものは[実機確認プラグイン](../../plugin/README.md)（VwSdkProbes）へ
+ここに置いたものは[実機確認プラグイン](../../plugin/README.md)（VwSdkProbes）の**本体**へ
 まとめて入り、メニューコマンドのピッカーから選んで走らせられる。
 
 `probes/*.cpp`（1 階層上）との違い:
@@ -34,7 +34,10 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
 		probe.fail("CreateLayer が nil を返した");
 		return;
 	}
-	probe.log(std::string("できた: ") + static_cast<const char*>(gSDK->GetObjectName(layer)));
+	// GetObjectName は**戻り値ではなく出力引数**で返す（void GetObjectName(h, TXString&)）。
+	TXString name;
+	gSDK->GetObjectName(layer, name);
+	probe.log(std::string("できた: ") + static_cast<const char*>(name));
 }
 ```
 

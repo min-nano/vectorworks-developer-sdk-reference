@@ -39,6 +39,18 @@
 // 比べるのはこれ**——コミットではない（同じ sha から、同居させる PR を変えて何度も
 // ビルドされるため）。値は「main のコミット＋各 PR の head」から計算したもので、
 // **同じ顔ぶれで作り直しても変わらない**（scripts/gather-probes.sh。plugin/src/Update.h）。
+//
+// なお**いま動いている本体（ペイロード）の ID はこれではない**——本体は殻とは別に
+// 入れ替わるので、本体自身が名乗る（plugin/src/PayloadAbi.h の VwPayloadInfo）。
+// ここにあるのは「この殻を作ったときの ID」。
 #ifndef VW_BUILD_ID
 #	define VW_BUILD_ID "local"
+#endif
+
+// **殻（このモジュール）を一意に指す ID。** 自動アップデートはこれを見て「再起動が
+// 要るか」を決める——本体だけが新しいなら置き換えて読み直すだけで済み（再起動なし）、
+// 殻まで変わっていれば再起動が要る。値は殻に入るもののハッシュなので、境界
+// （PayloadAbi.h）を変えたときも必ず動く（scripts/gather-probes.sh）。
+#ifndef VW_SHELL_ID
+#	define VW_SHELL_ID "local"
 #endif

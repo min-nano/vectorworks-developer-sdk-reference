@@ -164,9 +164,10 @@ mode_compile() {
 	[ -f "$ARGS" ] || die "ソースが見つかりません: $ARGS"
 	echo "# clang++ -fsyntax-only $ARGS (against SDKLib/Include)"
 	echo
-	# plugin/src も -I に入れる。実機確認プラグイン（plugin/）のソースと、その API を
-	# include する実機プローブ（probes/runtime/<slug>/probe.cpp）を、ビルドを回さずに
-	# 構文チェックできるようにするため。
+	# plugin/src と plugin/src/payload を -I に入れる。実機確認プラグイン（plugin/）の
+	# ソースと、その API を include する実機プローブ（probes/runtime/<slug>/probe.cpp）を、
+	# ビルドを回さずに構文チェックできるようにするため。**プローブが include する
+	# "Probe.h" は本体（ペイロード）側にある**ので、2 つ目が要る。
 	clang++ -std=c++20 -stdlib=libc++ -x objective-c++ -fsyntax-only \
 		-I "$SDK/SDKLib/Include" \
 		-I "$SDK/SDKLib/Include/Kernel" \
@@ -174,6 +175,7 @@ mode_compile() {
 		-I "$SDK/SDKLib/Include/VWMM" \
 		-I "$SDK/SDKLib/Include/OnlyMac" \
 		-I plugin/src \
+		-I plugin/src/payload \
 		-DRELEASE_BLD=1 \
 		-Wno-deprecated-declarations \
 		"$ARGS" && echo "OK: syntax check passed"
