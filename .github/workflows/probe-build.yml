@@ -247,11 +247,25 @@ jobs:
           cp payload-status-mac.txt dist/
           ls -l dist
 
-      - name: Upload plug-in artifact
+      # 公開用（リリース資産の zip ＋ 群ごとのビルド結果）。**release ジョブだけが使う。**
+      - name: Upload the release asset
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vwlibrary-zip
           path: dist
+
+      # 人が手で入れる用。**中に zip を作らない**——GitHub の成果物はダウンロード時点で
+      # 1 度 zip になるので、その中がさらに zip だと「展開したら zip が出てきて、もう
+      # 一度展開して置き直す」ことになる。ここは素のファイルのまま上げて、展開したら
+      # そのまま Plug-Ins へ置ける形にしておく。
+      - name: Upload the plug-in files (for hand install)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: VwSdkProbes-mac
+          path: |
+            build/VwSdkProbes.vwlibrary
+            build/VwSdkProbes.probes.txt
+            build/VwSdkProbesPayload-*.vwpayload
 
   # -------------------------------------------------------------------------
   build-windows:
@@ -352,11 +366,25 @@ jobs:
           Copy-Item 'payload-status-win.txt' 'dist/'
           Get-ChildItem dist | Select-Object Name, Length
 
-      - name: Upload plug-in artifact
+      # 公開用（リリース資産の zip ＋ 群ごとのビルド結果）。**release ジョブだけが使う。**
+      - name: Upload the release asset
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vlb-zip
           path: dist
+
+      # 人が手で入れる用（mac 側と同じ理由で、中に zip を作らない）。
+      - name: Upload the plug-in files (for hand install)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: VwSdkProbes-windows
+          path: |
+            build/Release/VwSdkProbes.vlb
+            build/Release/VwSdkProbes.vwr
+            build/Release/VwSdkProbes.build-info.txt
+            build/Release/VwSdkProbes.probes.txt
+            build/Release/vw-probes-update.ps1
+            build/Release/VwSdkProbesPayload-*.vwpayload
 
   # -------------------------------------------------------------------------
   # 転がり続けるリリース（タグ probes）を作り直す。PR では公開しない
