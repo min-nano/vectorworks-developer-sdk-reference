@@ -108,17 +108,6 @@ if(NOT DEFINED VW_BUILD_TIME)
 	string(TIMESTAMP VW_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
 endif()
 
-# ビルドを一意に指す ID（CI ではワークフローの run id）。**自動アップデートが新旧を
-# 比べるのはこれ**——コミットではない。同じ main の sha から、同居させる PR を変えて
-# 何度もビルドされるので、コミットで比べると「中身は別物なのに最新扱い」になって
-# 取りこぼす（plugin/src/UpdateParse.h の Evaluate）。ローカルビルドは "local" で、
-# 公開されたビルド ID と一致しないので、常に「新しいものがある」と出る（それでよい）。
-if(NOT DEFINED VW_BUILD_ID)
-	set(VW_BUILD_ID
-		"local"
-		CACHE STRING "Unique id of this build (CI workflow run id)")
-endif()
-
 # --- どのプローブを同居させるか ------------------------------------------------
 # 正の入力は「マニフェスト」1 本:
 #
@@ -155,6 +144,26 @@ else()
 		endif()
 	endforeach()
 endif()
+
+# --- ビルド ID -----------------------------------------------------------------
+# **自動アップデートが新旧を比べる鍵**（plugin/src/Update.h）。コミットでは比べない
+# ——同じ main の sha から、同居させる PR を変えて何度もビルドされるため。
+#
+# 値は**集約が決める**（scripts/gather-probes.sh が「main のコミット＋各 PR の head」から
+# 計算し、マニフェストの VW_PROBE_BUILD_ID として渡す）。ビルドへ焼く値とリリースに書く
+# 値が同じファイル由来になるので、**ずれようがない**のが要点。
+#
+# 明示的に -DVW_BUILD_ID= を渡せばそちらが勝つ（逃げ道）。マニフェストの無いローカル
+# ビルドは "local" で、公開されている ID と一致しないので常に「新しいものがある」と
+# 出る（それでよい——手元のビルドを最新扱いするほうが危ない）。
+if(NOT DEFINED VW_BUILD_ID)
+	if(VW_PROBE_BUILD_ID)
+		set(VW_BUILD_ID "${VW_PROBE_BUILD_ID}")
+	else()
+		set(VW_BUILD_ID "local")
+	endif()
+endif()
+message(STATUS "ビルド ID: ${VW_BUILD_ID}")
 
 if(NOT VW_PROBE_SOURCES)
 	# 1 件も無いビルドは作れてしまうが、実機では「プローブが入っていません」と出るだけで

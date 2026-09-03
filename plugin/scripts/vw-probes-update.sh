@@ -17,8 +17,9 @@
 #
 # 【新旧はビルド ID で比べる】コミットではない——このプラグインは同じ main の sha から、
 # 同居させる PR を変えて何度もビルドされるので、コミットで比べると取りこぼす。ビルド ID は
-# ワークフローの run id で、リリース本文の隠しメタデータ（<!-- vw-probes … -->）に
-# build= として入っている。入っている側はバンドルの Info.plist の VWBuildId。
+# 「main のコミット＋各 PR の head」から計算した値で、**同じ顔ぶれで作り直しても変わらない**
+# （scripts/gather-probes.sh）。公開側はリリース本文の隠しメタデータ（<!-- vw-probes … -->）
+# の build=、入っている側はバンドルの Info.plist の VWBuildId。
 #
 # 手で叩いて確かめることもできる:
 #   ./vw-probes-update.sh q

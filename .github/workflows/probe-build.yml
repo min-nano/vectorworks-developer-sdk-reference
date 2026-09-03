@@ -87,7 +87,13 @@ jobs:
         run: scripts/gather-probes.sh --prs "$PRS"
 
       - name: Summary
-        run: cat build-probes/summary.md >> "$GITHUB_STEP_SUMMARY"
+        run: |
+          set -euo pipefail
+          {
+            echo "ビルド ID: \`$(cat build-probes/build-id.txt)\`"
+            echo
+            cat build-probes/summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload gathered probes
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -145,7 +151,6 @@ jobs:
             -DVW_SDK_DIR="$VW_SDK_DIR" \
             -DVW_BUILD_VERSION="${BUILD_SHA:0:7}" \
             -DVW_BUILD_BRANCH="$VW_BUILD_BRANCH" \
-            -DVW_BUILD_ID="$GITHUB_RUN_ID" \
             -DVW_PROBE_MANIFEST="$GITHUB_WORKSPACE/build-probes/manifest.cmake"
 
       - name: Build
@@ -232,7 +237,6 @@ jobs:
             -DVW_SDK_DIR="$VW_SDK_DIR" \
             -DVW_BUILD_VERSION="${BUILD_SHA:0:7}" \
             -DVW_BUILD_BRANCH="$VW_BUILD_BRANCH" \
-            -DVW_BUILD_ID="$GITHUB_RUN_ID" \
             -DVW_PROBE_MANIFEST="$GITHUB_WORKSPACE/build-probes/manifest.cmake"
 
       - name: Build
@@ -315,16 +319,20 @@ jobs:
             title="Probes (${short} + PR ${PRS})"
           fi
           # 隠しメタデータ。**自動アップデータ（plugin/scripts/vw-probes-update.*）が
-          # 読むのはここ**で、build= がビルドを一意に指す ID（この run の id）。
-          # コミットで比べないのは、同じ sha から同居させる PR を変えて何度もビルド
-          # されるため（plugin/src/UpdateParse.h の Evaluate）。HTML コメントなので
+          # 読むのはここ**で、build= がビルドを一意に指す ID。値は集約が
+          # 「main のコミット＋各 PR の head」から計算したもの（build-id.txt）で、
+          # プラグインへ焼いた値と同じファイル由来だからずれようがない。
+          # **実行ごとに変わる値（run id）にはしない**——同じ顔ぶれで作り直したときに
+          # 「新しいビルドがあります」と誘ってしまうため。inputs= はその材料
+          # （更新が来ない・来すぎるときに最初に見る行）。HTML コメントなので
           # リリースのページには出ないが、API の body には入る。
           {
             echo "<!-- vw-probes"
-            echo "build=${GITHUB_RUN_ID}"
+            echo "build=$(cat build-probes/build-id.txt)"
             echo "commit=${BUILD_SHA}"
             echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "probes=$(cat build-probes/summary-line.txt 2>/dev/null || true)"
+            echo "inputs=$(tr '\n' ' ' < build-probes/build-id-source.txt)"
             echo "-->"
             echo
             echo "実機確認プラグイン **VwSdkProbes**（${short} / $(date -u +%Y-%m-%dT%H:%M:%SZ)）。"

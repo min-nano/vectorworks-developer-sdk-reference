@@ -88,6 +88,27 @@ jobs:
             plugin/tests/UpdateParseTests.cpp -o /tmp/update-parse-tests
           /tmp/update-parse-tests
 
+      # ビルド ID は**同じ入力なら同じ値**でなければならない（そうでないと、同じ顔ぶれで
+      # 作り直すたびに「新しいビルドがあります」と誘ってしまう）。集約を 2 回走らせて
+      # 突き合わせるだけで確かめられるので、ここで見張る。
+      - name: Check that the build id is reproducible
+        run: |
+          set -euo pipefail
+          scripts/gather-probes.sh --out /tmp/g1 >/dev/null
+          scripts/gather-probes.sh --out /tmp/g2 >/dev/null
+          a="$(cat /tmp/g1/build-id.txt)"
+          b="$(cat /tmp/g2/build-id.txt)"
+          echo "build id: $a"
+          if [ "$a" != "$b" ]; then
+            echo "::error::同じ入力なのにビルド ID が変わりました（$a != $b）。"
+            diff /tmp/g1/build-id-source.txt /tmp/g2/build-id-source.txt || true
+            exit 1
+          fi
+          if [ -z "$a" ]; then
+            echo "::error::ビルド ID が空です。"
+            exit 1
+          fi
+
   actionlint:
     runs-on: ubuntu-latest
     steps:

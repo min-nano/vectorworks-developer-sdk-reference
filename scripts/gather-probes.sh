@@ -13,8 +13,23 @@
 #   + 指定された PR の probes/runtime/*  … まだ open な PR のプローブ
 #   ──────────────────────────────────────────
 #   = build-probes/sources/<slug>/  … 集めたソース
-#     build-probes/manifest.cmake   … CMake への入力（ソース一覧＋出所の表）
+#     build-probes/manifest.cmake   … CMake への入力（ソース一覧＋出所の表＋ビルド ID）
+#     build-probes/build-id.txt     … **ビルド ID**（下記）
 #     build-probes/summary.md       … リリースノート用（何が入っているか）
+#
+# ビルド ID —— 自動アップデートが新旧を比べる鍵（plugin/src/Update.h）:
+#
+#   **「何から作ったか」から計算する**（いつ作ったかではない）。材料は
+#   「チェックアウトしているコミット（＝main。プラグイン本体・CMake・ワークフロー・
+#   main のプローブが全部ここに乗る）」＋「同居させる各 PR の head コミット」だけで、
+#   これを並べた文字列のハッシュを ID にする。したがって:
+#
+#     * 同じ顔ぶれで作り直しても ID は変わらない → **中身が同じなら更新を勧めない**
+#       （run id のような「実行ごとに変わる値」だと、作り直すたびに誘ってしまう）。
+#     * main が動けば ID が変わる → ビルド設定の変更もちゃんと拾う。
+#     * PR を force push しても head が動くので ID が変わる。
+#
+#   PR の並び順は正規化する（"15,12" と "12,15" を同じ ID にするため）。
 #
 # 同居できる仕掛けは 2 つだけ:
 #   1. **1 プローブ 1 ディレクトリ**（probes/runtime/<slug>/）。集約はディレクトリ単位で、
@@ -179,6 +194,10 @@ add_probe() {
 
 # --- main（＝いまチェックアウトしている作業ツリー）のプローブ ------------------
 head_commit="$(git rev-parse --short HEAD 2>/dev/null || echo local)"
+head_full="$(git rev-parse HEAD 2>/dev/null || echo local)"
+
+# ビルド ID の材料。main の行が先頭で、PR の行は後で番号順に並べ替える（上記「ビルド ID」）。
+ID_PR_PARTS=()
 # ブランチ名は CI が知っている値を優先する。**Actions のチェックアウトは detached HEAD**
 # なので、git に訊くと "HEAD" が返ってしまう（GITHUB_HEAD_REF は PR の head ブランチ、
 # GITHUB_REF_NAME は push されたブランチ）。
@@ -222,6 +241,7 @@ for pr in ${PRS[@]+"${PRS[@]}"}; do
 	fi
 	pr_sha="$(git rev-parse "refs/remotes/probe-pr/$pr")"
 	pr_short="$(git rev-parse --short "refs/remotes/probe-pr/$pr")"
+	ID_PR_PARTS+=("pr=${pr}:${pr_sha}")
 
 	pr_branch=""
 	pr_title=""
@@ -252,11 +272,31 @@ for pr in ${PRS[@]+"${PRS[@]}"}; do
 	fi
 done
 
+# --- ビルド ID を決める -----------------------------------------------------------
+# 材料は「main のコミット」＋「各 PR の head コミット」。PR の行は**番号順に正規化**して
+# から並べる（引数の順序で ID が変わらないように）。ハッシュは git hash-object で取る
+# ——このスクリプトは常に git リポジトリの中で走るので、shasum / sha256sum の
+# プラットフォーム差を気にしなくてよい。
+buildid_source="$OUT/build-id-source.txt"
+{
+	echo "main=${head_full}"
+	if [ "${#ID_PR_PARTS[@]}" -gt 0 ]; then
+		printf '%s\n' "${ID_PR_PARTS[@]}" | sort -t= -k2 -V
+	fi
+} >"$buildid_source"
+
+# 12 桁に切る（人が読み比べられる長さで、衝突は実用上考えなくてよい）。
+build_id="$(git hash-object "$buildid_source" | cut -c1-12)"
+printf '%s' "$build_id" >"$OUT/build-id.txt"
+
 # --- マニフェストと要約を書く ---------------------------------------------------
 manifest="$OUT/manifest.cmake"
 {
 	echo "# 自動生成（scripts/gather-probes.sh）。編集しない。"
 	echo "# plugin/CMakeLists.txt が -DVW_PROBE_MANIFEST=... で読む。"
+	echo "# ビルド ID（自動アップデートが新旧を比べる鍵）。**ここから配るので、"
+	echo "# ビルドへ焼く値とリリースに書く値がずれようがない。**"
+	echo "set(VW_PROBE_BUILD_ID \"$build_id\")"
 	echo "set(VW_PROBE_SOURCES"
 } >"$manifest"
 
@@ -321,6 +361,8 @@ if [ "${#line_parts[@]}" -gt 0 ]; then
 fi
 
 echo
+echo "ビルド ID: $build_id"
+sed 's/^/  /' "$buildid_source"
 echo "集めたプローブ: ${#entries[@]} 件"
 cat "$summary_txt"
 echo "マニフェスト: $manifest"

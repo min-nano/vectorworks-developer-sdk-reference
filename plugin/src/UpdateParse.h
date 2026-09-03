@@ -249,8 +249,12 @@ namespace vwprobe::update
 
 	// **比べるのはコミットではなくビルド ID。** このプラグインは同じ main の sha から、
 	// 同居させる PR を変えて何度もビルドされるので、コミットで比べると「中身は別物なのに
-	// 最新扱い」になって取りこぼす。ビルド ID はワークフローの run id で、ビルドのたびに
-	// 必ず変わる（plugin/CMakeLists.txt の VW_BUILD_ID）。
+	// 最新扱い」になって取りこぼす。
+	//
+	// ビルド ID は**「何から作ったか」から計算した値**（main のコミット＋各 PR の head の
+	// ハッシュ。scripts/gather-probes.sh）。実行ごとに変わる値（ワークフローの run id 等）に
+	// しないのは、**同じ顔ぶれで作り直しただけのときに「新しいビルドがあります」と誘って
+	// しまう**から——入れ替えの手間は本物の変更のためだけに使わせる。
 	inline Status Evaluate(const std::string& out)
 	{
 		Status s;
