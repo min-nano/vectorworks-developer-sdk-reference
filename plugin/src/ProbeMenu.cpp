@@ -83,15 +83,18 @@ namespace vwprobe
 			if (origin == nullptr)
 				return "ローカル（出所の記録なし）";
 
-			// PR 番号があれば PR、無ければ取り込み元のブランチ（ふつうは main）。
+			// 見出しは PR 番号。無ければ取り込み元のブランチ（ふつうは main）を見出しに
+			// 使い、**そのときは末尾でブランチを繰り返さない**（実機のログで
+			// 「claude/… / 0a0fff2 / claude/…」と 2 度出ていた）。
 			std::string line;
-			if (!origin->pr.empty())
+			const bool hasPr = !origin->pr.empty();
+			if (hasPr)
 				line += "PR #" + origin->pr;
 			else
 				line += origin->branch.empty() ? std::string("main") : origin->branch;
 			if (!origin->commit.empty())
 				line += " / " + origin->commit;
-			if (!origin->branch.empty())
+			if (hasPr && !origin->branch.empty())
 				line += " / " + origin->branch;
 			if (!origin->title.empty())
 				line += " / " + origin->title;
