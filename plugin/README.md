@@ -181,6 +181,36 @@ pr=<番号>:<その PR の head の full sha>   … 同居させる PR のぶん
 - PR を作ったら、Actions の "Probe plug-in" をその PR 番号付きで叩いてビルドしてもらう。
   PR 自体でも**コンパイルが通るかの確認**は自動で走る（公開はしない）。
 
+## 本体の外部化とホットリロード（成り立つと実測。mac）
+
+**入れ替えのたびに Vectorworks を再起動するのをやめられる**（issue #15。macOS で実測）。
+コンパイル済みプラグインは起動時にしか読み込まれないが、**調査コードの側を Vectorworks が
+知らない別のモジュールへ出し、プラグイン自身が `dlopen` / `LoadLibrary` で読む**なら、
+その入れ替えに再起動は要らない。
+
+```
+Vectorworks ──読み込む──▶ 殻（メニュー・ダイアログ・更新）      … 起動時に 1 度きり
+                              │ dlopen / LoadLibrary
+                              ▼
+                          本体（調査コード）                     … 降ろして読み直せる
+```
+
+いまビルドに入っているのは**その足場と、それを測るプローブだけ**である
+（プローブ本体の移行はこれから）。同じソース
+（`src/payload/PayloadMain.cpp`）から**中身の違う 2 つ**を作って配り
+（`VwSdkProbesPayload-A.vwpayload` / `-B.vwpayload`。mac はバンドルの
+`Contents/Resources`、Windows は `.vlb` の隣）、`probes/runtime/hot-reload/` のプローブが
+それを順に読み込んで「読める・SDK が使える・降ろせる・入れ替わる」の 4 つを測る。
+**2 つ配るのは、「降ろして別のを読んだら本当に別のコードが動いたか」を見分けるため。**
+
+境界（`src/PayloadAbi.h`）を C にしてあるのは**降ろすため**で、例外・C++ のオブジェクト・
+vtable を跨がせない。返る `const char*` は呼び出し側がその場で写す。
+
+実測は [Findings「プラグインモジュールの読み込みと入れ替え」](../Findings/Plug-in%20Modules.md)。
+読み込み 0.3〜0.4 秒・アンロード 0.02 秒で、変種 A → B の入れ替えが**再起動なしで**起きた
+（Windows は未実測）。次は**プローブ本体をこちら側へ移す**改修——そのときは配るのも
+「殻」ではなく「本体」だけになり、入れ替えは再起動なしで済む。
+
 ## ローカルでビルドする
 
 ```bash
@@ -216,6 +246,9 @@ cmake -S plugin -B build -DVW_SDK_DIR=... \
 | `src/Update.{h,cpp}` | 自動アップデート（起動時・メニューからの確認、入れ替え、再起動） |
 | `src/UpdateParse.h` | その純粋な部分（`tests/UpdateParseTests.cpp` が確かめる） |
 | `scripts/vw-probes-update.{sh,ps1}` | 同梱の更新スクリプト（プラグインが非対話で叩く） |
+| `src/PayloadAbi.h` | **外部モジュール（ペイロード）との C の ABI**（下記「本体の外部化」） |
+| `src/PayloadHost.{h,cpp}` | その殻の側（読み込み・解決・アンロード・複製） |
+| `src/payload/PayloadMain.cpp` | その本体の側（自分で `GS_InitializeVCOM` を呼ぶ） |
 | `src/PluginPrefix.h` | SDK アンブレラヘッダ（プリコンパイル対象） |
 | `resources/VwSdkProbes.vwr/` | メニュー項目の表示名（UTF-16 の .vwstrings） |
 

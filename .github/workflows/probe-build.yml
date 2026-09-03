@@ -162,6 +162,14 @@ jobs:
       - name: Ad-hoc code-sign the bundle
         run: |
           set -euo pipefail
+          # 外部モジュール（.vwpayload）は Resources に置いた Mach-O で、殻が自分で
+          # dlopen する。**--deep が確実に届く保証が無いので先に個別に署名する**
+          # （Apple Silicon は署名の無い Mach-O を読み込めない）。
+          for payload in build/VwSdkProbes.vwlibrary/Contents/Resources/*.vwpayload; do
+            [ -e "$payload" ] || continue
+            codesign --force --sign - "$payload"
+            codesign --verify --strict --verbose=2 "$payload"
+          done
           codesign --force --deep --sign - build/VwSdkProbes.vwlibrary
           codesign --verify --strict --verbose=2 build/VwSdkProbes.vwlibrary
 
@@ -180,6 +188,12 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :VWBuildId"     "$bundle/Contents/Info.plist"
           test -f "$bundle/Contents/Resources/vw-probes-update.sh" \
             || { echo "::error::vw-probes-update.sh がバンドルへ入っていません"; exit 1; }
+          # 外部モジュール（ホットリロードの検証。plugin/CMakeLists.txt の vw_add_payload）。
+          for variant in A B; do
+            test -f "$bundle/Contents/Resources/VwSdkProbesPayload-$variant.vwpayload" \
+              || { echo "::error::ペイロード($variant) がバンドルへ入っていません"; exit 1; }
+          done
+          file "$bundle/Contents/Resources/VwSdkProbesPayload-A.vwpayload"
 
       # "<name>.vwlibrary/" の階層を保ったまま zip する（展開してそのまま使えるように）。
       - name: Package bundle
@@ -252,6 +266,11 @@ jobs:
           test -f "$d/VwSdkProbes.vwr" || { echo "::error::VwSdkProbes.vwr が作られていません"; exit 1; }
           test -f "$d/vw-probes-update.ps1" \
             || { echo "::error::vw-probes-update.ps1 が置かれていません"; exit 1; }
+          # 外部モジュール（ホットリロードの検証。plugin/CMakeLists.txt の vw_add_payload）。
+          for variant in A B; do
+            test -f "$d/VwSdkProbesPayload-$variant.vwpayload" \
+              || { echo "::error::ペイロード($variant) が置かれていません"; exit 1; }
+          done
           cat "$d/VwSdkProbes.build-info.txt"
 
       - name: Package module
@@ -263,7 +282,9 @@ jobs:
             'build/Release/VwSdkProbes.vlb',
             'build/Release/VwSdkProbes.vwr',
             'build/Release/VwSdkProbes.build-info.txt',
-            'build/Release/vw-probes-update.ps1'
+            'build/Release/vw-probes-update.ps1',
+            'build/Release/VwSdkProbesPayload-A.vwpayload',
+            'build/Release/VwSdkProbesPayload-B.vwpayload'
           ) | Where-Object { Test-Path $_ }
           Compress-Archive -Path $files -DestinationPath 'dist/VwSdkProbes.vlb.zip' -Force
           Get-ChildItem dist | Select-Object Name, Length
