@@ -33,7 +33,7 @@ namespace
 	{
 		kPromptID = 3,
 		kImagePopupID = 4, // VWImagePopupCtrl（作れないはずの方）
-		kThumbID = 5,      // VWThumbnailPopupCtrl（作れるはずの方）
+		kThumbID = 5,	   // VWThumbnailPopupCtrl（作れるはずの方）
 		kHintID = 6
 	};
 
@@ -74,8 +74,9 @@ namespace
 			// (A) 作れないはずの方。**ここで false になっても続ける**——それが分かって
 			// いる結論の裏取りであって、このダイアログの目的ではない。
 			fImagePopupCreated = fImagePopup.CreateControl(this);
-			fProbe.log(std::string("VWImagePopupCtrl::CreateControl -> ") +
-					   (fImagePopupCreated ? "true（ソースの読みと食い違う）" : "false（想定どおり）"));
+			fProbe.log(
+				std::string("VWImagePopupCtrl::CreateControl -> ") +
+				(fImagePopupCreated ? "true（ソースの読みと食い違う）" : "false（想定どおり）"));
 
 			// (B) 作れるはずの方。
 			fThumbCreated = fThumb.CreateControl(this, kStandardSize);
@@ -120,7 +121,8 @@ namespace
 					   " 件）");
 
 			// 未選択のときの戻り。ソース上は (size_t)-1。
-			fProbe.log("未選択の GetSelectedItemIndex() = " + Describe(fThumb.GetSelectedItemIndex()));
+			fProbe.log("未選択の GetSelectedItemIndex() = " +
+					   Describe(fThumb.GetSelectedItemIndex()));
 		}
 
 		void OnDefaultButtonEvent() override
@@ -146,6 +148,9 @@ namespace
 			fProbe.log("イベント:" + kinds);
 			ReadSelection("イベント");
 		}
+
+		// 値の結び付けは使わない（選択は自分で読む）が、純粋仮想なので要る。
+		void OnDDXInitialize() override {}
 
 		DEFINE_EVENT_DISPATH_MAP;
 
@@ -204,8 +209,8 @@ VW_PROBE("thumbnail-popup", "サムネイル付きのリソース選択を実機
 	// 1 つが消えるときに DisposeResourceList する＝ポップアップの参照先が消える）。
 	VWFC::Tools::VWResourceList list;
 	list.BuildList(kSymDefNode, true);
-	probe.log("シンボル定義の一覧: " + std::to_string(list.GetNumItems()) + " 件（listID=" +
-			  std::to_string(long(list.GetListID())) + "）");
+	probe.log("シンボル定義の一覧: " + std::to_string(list.GetNumItems()) +
+			  " 件（listID=" + std::to_string(long(list.GetListID())) + "）");
 	if (list.GetNumItems() == 0)
 	{
 		probe.fail("図面にシンボル定義が 1 つも無い（サムネイルの出方を確かめられない）");
