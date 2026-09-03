@@ -8,10 +8,12 @@ name: Lint
 #   * actionlint    — GitHub ワークフロー定義そのもの＋インライン run: スクリプト。
 #   * clang-format  — 実機確認プラグイン（plugin/）と実機プローブ（probes/）の C++。
 #                     整形の唯一の真実は .clang-format で、手で例外を作らない。
-#   * unit-tests    — 自動アップデートの純粋な部分（plugin/src/UpdateParse.h）。SDK にも
+#   * unit-tests    — 殻の純粋な部分（自動アップデートの判断＝plugin/src/UpdateParse.h、
+#                     本体のパスの組み立て＝plugin/src/PayloadHost.h、本体が殻から受け取った
+#                     ものを写しているか＝plugin/src/PayloadHostHolder.h）。SDK にも
 #                     プラットフォームにも依存しないので普通のコンパイラで走る。**壊れても
-#                     静かに壊れる**（更新が来ない／常に来る／再起動が空振りする）ので、
-#                     mac / Windows の実ビルドとは別に、ここで確かめる。
+#                     静かに壊れる**（更新が来ない／常に来る／再起動が空振りする／実機でだけ
+#                     落ちる）ので、mac / Windows の実ビルドとは別に、ここで確かめる。
 #
 # 完了待ちは `scripts/ci-wait.sh --pr <番号>` で行う（CLAUDE.md「CI の完了を待つ」）。
 # plugin/ や probes/runtime/ を触った PR ではこれに加えて probe-build.yml（mac / Windows の
@@ -90,6 +92,9 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
             plugin/tests/PayloadPathTests.cpp -o /tmp/payload-path-tests
           /tmp/payload-path-tests
+          g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
+            plugin/tests/PayloadHostHolderTests.cpp -o /tmp/payload-host-holder-tests
+          /tmp/payload-host-holder-tests
 
       # ビルド ID は**同じ入力なら同じ値**でなければならない（そうでないと、同じ顔ぶれで
       # 作り直すたびに「新しいビルドがあります」と誘ってしまう）。集約を 2 回走らせて

@@ -41,14 +41,14 @@ int main()
 {
 	// --- ファイル名 ---------------------------------------------------------
 	// 拡張子は .vwpayload（Vectorworks にプラグインとして拾わせない）。
-	checkEq(FileName("A"), "VwSdkProbesPayload-A.vwpayload", "変種 A のファイル名");
-	checkEq(FileName("B"), "VwSdkProbesPayload-B.vwpayload", "変種 B のファイル名");
+	checkEq(FileName(), "VwSdkProbesPayload.vwpayload", "本体のファイル名");
+	checkEq(BuildInfoFileName(), "VwSdkProbesPayload.build-info.txt", "素性の控えのファイル名");
 
-	// --- macOS: バンドルの Contents/Resources -------------------------------
+	// --- macOS: **バンドルの中ではなく隣** -----------------------------------
+	// 中に置くと、本体を差し替えるたびに殻の署名（リソースまで封をする）が壊れる。
 	checkEq(MacPayloadPathFromBinary("/U/Plug-Ins/VwSdkProbes.vwlibrary/Contents/MacOS/VwSdkProbes",
 									 "P.vwpayload"),
-			"/U/Plug-Ins/VwSdkProbes.vwlibrary/Contents/Resources/P.vwpayload",
-			"mac: 同梱ペイロードの位置");
+			"/U/Plug-Ins/P.vwpayload", "mac: 本体はバンドルの隣");
 	checkEq(MacPayloadPathFromBinary("/どこでもない/VwSdkProbes", "P.vwpayload"), "",
 			"mac: 形が違えば空を返す");
 

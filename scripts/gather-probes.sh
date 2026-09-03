@@ -35,7 +35,7 @@
 #   1. **1 プローブ 1 ディレクトリ**（probes/runtime/<slug>/）。集約はディレクトリ単位で、
 #      slug がそのまま一意な鍵になる。
 #   2. **プローブのシンボルはすべて内部リンケージ**（VW_PROBE マクロが static で展開する。
-#      plugin/src/Probe.h）。別々の PR が同じ名前を使っていてもリンクで衝突しない。
+#      plugin/src/payload/Probe.h）。別々の PR が同じ名前を使っていてもリンクで衝突しない。
 #
 # 同じ slug がぶつかったときの扱い（PR のブランチには main のプローブもそのまま載って
 # いるので、まず「中身が同じか」で引き継ぎと変更を分ける）:
@@ -289,6 +289,24 @@ buildid_source="$OUT/build-id-source.txt"
 build_id="$(git hash-object "$buildid_source" | cut -c1-12)"
 printf '%s' "$build_id" >"$OUT/build-id.txt"
 
+# --- 殻の ID を決める -------------------------------------------------------------
+# **「入れ替えに再起動が要るか」を決める鍵**（plugin/src/UpdateParse.h の Evaluate）。
+# プラグインは「殻（Vectorworks が起動時に読み込む）」と「本体（殻が自分で読み込む
+# .vwpayload）」に割れていて、**本体だけなら Vectorworks を動かしたまま置き換えられる**。
+# 殻まで変わったときだけ再起動が要る——それをこの ID の一致で見分ける。
+#
+# 材料は**殻に入るものだけ**（下のパスのツリーハッシュ）。だから:
+#   * プローブを足しても消しても動かない  → 日常の入れ替えで再起動を求めない
+#   * 境界（plugin/src/PayloadAbi.h）を変えれば必ず動く → 版の食い違いを持ち越さない
+# ツリーハッシュは git がすでに持っている値なので、内容が同じなら必ず同じになる。
+shellid_source="$OUT/shell-id-source.txt"
+: >"$shellid_source"
+for shell_path in plugin/src plugin/resources plugin/scripts plugin/CMakeLists.txt; do
+	echo "${shell_path}=$(git rev-parse "${head_full}:${shell_path}")" >>"$shellid_source"
+done
+shell_id="$(git hash-object "$shellid_source" | cut -c1-12)"
+printf '%s' "$shell_id" >"$OUT/shell-id.txt"
+
 # --- マニフェストと要約を書く ---------------------------------------------------
 manifest="$OUT/manifest.cmake"
 {
@@ -297,6 +315,8 @@ manifest="$OUT/manifest.cmake"
 	echo "# ビルド ID（自動アップデートが新旧を比べる鍵）。**ここから配るので、"
 	echo "# ビルドへ焼く値とリリースに書く値がずれようがない。**"
 	echo "set(VW_PROBE_BUILD_ID \"$build_id\")"
+	echo "# 殻の ID（入れ替えに再起動が要るかを決める鍵）。同上。"
+	echo "set(VW_PROBE_SHELL_ID \"$shell_id\")"
 	echo "set(VW_PROBE_SOURCES"
 } >"$manifest"
 
@@ -362,6 +382,7 @@ fi
 
 echo
 echo "ビルド ID: $build_id"
+echo "殻の ID: $shell_id"
 sed 's/^/  /' "$buildid_source"
 echo "集めたプローブ: ${#entries[@]} 件"
 cat "$summary_txt"

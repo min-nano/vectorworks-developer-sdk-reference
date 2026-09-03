@@ -24,8 +24,14 @@
 	<string>yes</string>
 	<!-- ビルドの素性（CMake / CI が埋める）。どのビルドを入れているかを、
 	     プラグインを起動しなくても確かめられるようにするため。 -->
-	<!-- VWBuildId は**自動アップデートが読む鍵**（入っているビルドの ID）。
-	     plugin/scripts/vw-probes-update.sh の installed_build と対。 -->
+	<!-- VWShellId は**この殻（プラグイン本体）の ID**。自動アップデートはこれを見て
+	     「再起動が要るか」を決める——本体（.vwpayload）だけが新しいなら再起動は要らず、
+	     殻まで変わっていれば要る。plugin/scripts/vw-probes-update.sh の
+	     installed_shell と対。 -->
+	<key>VWShellId</key>
+	<string>@VW_SHELL_ID@</string>
+	<!-- VWBuildId は**この殻を作ったときのビルド ID**。いま入っている本体の ID は
+	     隣の VwSdkProbesPayload.build-info.txt にある（入れ替えで動くのは本体だけ）。 -->
 	<key>VWBuildId</key>
 	<string>@VW_BUILD_ID@</string>
 	<key>VWBuildBranch</key>

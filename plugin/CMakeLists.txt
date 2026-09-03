@@ -165,6 +165,24 @@ if(NOT DEFINED VW_BUILD_ID)
 endif()
 message(STATUS "ビルド ID: ${VW_BUILD_ID}")
 
+# --- 殻の ID -------------------------------------------------------------------
+# **「再起動が要るか」を決める鍵**（plugin/src/UpdateParse.h の Evaluate）。本体
+# （.vwpayload）だけが新しいなら置き換えて読み直すだけで済み、殻まで変わっていれば
+# 再起動が要る。
+#
+# 値は**殻に入るものだけ**から計算する（plugin/src・plugin/resources・
+# plugin/CMakeLists.txt・plugin/scripts のツリー。scripts/gather-probes.sh）。
+# つまり**プローブが変わっても動かず、境界（plugin/src/PayloadAbi.h）を変えれば必ず動く**
+# ——後者が肝で、版の食い違ったまま動かさないための歯止めになっている。
+if(NOT DEFINED VW_SHELL_ID)
+	if(VW_PROBE_SHELL_ID)
+		set(VW_SHELL_ID "${VW_PROBE_SHELL_ID}")
+	else()
+		set(VW_SHELL_ID "local")
+	endif()
+endif()
+message(STATUS "殻の ID: ${VW_SHELL_ID}")
+
 if(NOT VW_PROBE_SOURCES)
 	# 1 件も無いビルドは作れてしまうが、実機では「プローブが入っていません」と出るだけで
 	# 何の役にも立たない。取り違え（マニフェストの指定ミス等）を早く気付けるよう警告する。
@@ -209,21 +227,17 @@ string(STRIP "${VW_PROBE_SUMMARY}" VW_PROBE_SUMMARY)
 message(STATUS "同居するプローブ: ${VW_PROBE_SUMMARY}")
 
 set(generated_provenance "${CMAKE_CURRENT_BINARY_DIR}/ProbeProvenance.cpp")
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/ProbeProvenance.cpp.in" "${generated_provenance}"
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/payload/ProbeProvenance.cpp.in" "${generated_provenance}"
 			   @ONLY)
 
 # --- プラグイン本体 -----------------------------------------------------------
 set(VW_PLUGIN_NAME "VwSdkProbes")
 set(VW_BUNDLE_ID "io.github.min-nano.VwSdkProbes")
 
-set(VW_PLUGIN_SOURCES
-	src/ModuleMain.cpp
-	src/Probe.cpp
-	src/ProbeMenu.cpp
-	src/Update.cpp
-	src/PayloadHost.cpp
-	"${generated_provenance}"
-	${VW_PROBE_SOURCES})
+# **殻にプローブは入らない。** プローブとレジストリは本体（ペイロード）側にあり、
+# 殻はそれを読み込んで呼ぶだけ（plugin/src/PayloadAbi.h）。ここが 2 つに割れているのが
+# 「Vectorworks を再起動せずに入れ替えられる」の全部である。
+set(VW_PLUGIN_SOURCES src/ModuleMain.cpp src/ProbeMenu.cpp src/Update.cpp src/PayloadHost.cpp)
 
 # MODULE: 実行時に読み込まれるプラグイン（リンク対象ではない）。macOS ではバンドル、
 # Windows では DLL（下で .vlb にリネームする）。
@@ -248,7 +262,7 @@ target_compile_definitions(
 	${VW_PLUGIN_NAME}
 	PRIVATE RELEASE_BLD=1 "VW_BUILD_VERSION=\"${VW_BUILD_VERSION}\""
 			"VW_BUILD_BRANCH=\"${VW_BUILD_BRANCH}\"" "VW_BUILD_TIME=\"${VW_BUILD_TIME}\""
-			"VW_BUILD_ID=\"${VW_BUILD_ID}\"")
+			"VW_BUILD_ID=\"${VW_BUILD_ID}\"" "VW_SHELL_ID=\"${VW_SHELL_ID}\"")
 
 # SDK アンブレラヘッダのプリコンパイル（コンパイル時間のいちばん大きな削減）。
 target_precompile_headers(${VW_PLUGIN_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/PluginPrefix.h")
@@ -315,107 +329,107 @@ else()
 													"${VW_SDK_LIB}/VWMM.lib" USP10.lib Rpcrt4.lib)
 endif()
 
-# --- 外部モジュール（ペイロード）------------------------------------------------
-# **プラグイン本体を外部化してホットリロードできるか**の検証（issue #15）のための足場。
-# Vectorworks が読み込むのは上のモジュールだけで、こちらは殻が自分で dlopen /
-# LoadLibrary する（＝ Vectorworks を再起動せずに降ろして読み直せる、はず）。
+# --- 本体（ペイロード）----------------------------------------------------------
+# **プローブはここに入る。** Vectorworks が読み込むのは上の殻だけで、こちらは殻が自分で
+# dlopen / LoadLibrary する——だから**Vectorworks を再起動せずに入れ替えられる**
+# （Findings「プラグインモジュールの読み込みと入れ替え」で実測済み。境界は
+# plugin/src/PayloadAbi.h）。
 #
-# **同じソースから中身の違う 2 つ（変種 A / B）を作る。** そうしないと「降ろして別のを
-# 読んだら本当に別のコードが動いたか」を実機で見分けられない（probes/runtime/hot-reload）。
-#
-# 拡張子 .vwpayload は Vectorworks にプラグインとして拾わせないため。SDK まわりの設定は
-# 上の本体と同じものを与える（本体側の記述は触らずに済むよう、あえて書き下している）。
-function(vw_add_payload variant)
-	set(tgt "VwSdkProbesPayload${variant}")
-	set(src "${CMAKE_CURRENT_SOURCE_DIR}/src/payload/PayloadMain.cpp")
+# 置き場所は**殻の隣**（mac もバンドルの中ではない）。mac のバンドルは署名がリソースまで
+# 封をするので、中のファイルを差し替えると署名が壊れる。隣に置けば、本体を何度置き換えても
+# 殻の署名に触れない。拡張子 .vwpayload は Vectorworks にプラグインとして拾わせないため。
+set(VW_PAYLOAD_NAME "VwSdkProbesPayload")
 
-	add_library(${tgt} MODULE "${src}")
+set(VW_PAYLOAD_SOURCES src/payload/PayloadMain.cpp src/payload/Probe.cpp "${generated_provenance}"
+					   ${VW_PROBE_SOURCES})
 
-	set_target_properties(
-		${tgt}
-		PROPERTIES CXX_STANDARD 20
-				   CXX_STANDARD_REQUIRED ON
-				   BUNDLE FALSE
-				   PREFIX ""
-				   SUFFIX ".vwpayload"
-				   OUTPUT_NAME "VwSdkProbesPayload-${variant}")
+add_library(${VW_PAYLOAD_NAME} MODULE ${VW_PAYLOAD_SOURCES})
 
-	target_include_directories(
-		${tgt}
-		PRIVATE "${VW_SDK_INCLUDE}"
-				"${VW_SDK_INCLUDE}/Kernel"
-				"${VW_SDK_INCLUDE}/Interfaces"
-				"${VW_SDK_INCLUDE}/VWMM"
-				"${CMAKE_CURRENT_SOURCE_DIR}/src")
+set_target_properties(
+	${VW_PAYLOAD_NAME}
+	PROPERTIES CXX_STANDARD 20
+			   CXX_STANDARD_REQUIRED ON
+			   BUNDLE FALSE
+			   PREFIX ""
+			   SUFFIX ".vwpayload"
+			   OUTPUT_NAME "${VW_PAYLOAD_NAME}")
 
+target_include_directories(
+	${VW_PAYLOAD_NAME}
+	PRIVATE "${VW_SDK_INCLUDE}"
+			"${VW_SDK_INCLUDE}/Kernel"
+			"${VW_SDK_INCLUDE}/Interfaces"
+			"${VW_SDK_INCLUDE}/VWMM"
+			"${CMAKE_CURRENT_SOURCE_DIR}/src"
+			"${CMAKE_CURRENT_SOURCE_DIR}/src/payload")
+
+# 本体は**自分の素性を自分で名乗る**（殻とは別に入れ替わるので、殻の値では言えない）。
+target_compile_definitions(
+	${VW_PAYLOAD_NAME}
+	PRIVATE RELEASE_BLD=1 "VW_PAYLOAD_BUILD_ID=\"${VW_BUILD_ID}\""
+			"VW_PAYLOAD_COMMIT=\"${VW_BUILD_VERSION}\"" "VW_PAYLOAD_BRANCH=\"${VW_BUILD_BRANCH}\""
+			"VW_PAYLOAD_BUILD_TIME=\"${VW_BUILD_TIME}\"")
+
+# SDK まわりの設定は殻と同じものを与える（本体も libVWSDK.a を自分でリンクし、
+# GS_InitializeVCOM を自分で呼ぶ）。殻の記述を触らずに済むよう、あえて書き下している。
+if(APPLE)
+	set_source_files_properties(${VW_PAYLOAD_SOURCES} TARGET_DIRECTORY ${VW_PAYLOAD_NAME}
+														PROPERTIES LANGUAGE OBJCXX)
+	set_target_properties(${VW_PAYLOAD_NAME} PROPERTIES OBJCXX_STANDARD 20
+													   OBJCXX_STANDARD_REQUIRED ON)
+	target_include_directories(${VW_PAYLOAD_NAME} PRIVATE "${VW_SDK_INCLUDE}/OnlyMac")
+	target_compile_options(${VW_PAYLOAD_NAME} PRIVATE -stdlib=libc++ -Wno-deprecated-declarations)
+	target_link_libraries(
+		${VW_PAYLOAD_NAME}
+		PRIVATE "${VW_SDK_LIB}/libVWSDK.a"
+				"-F${VW_SDK_LIB}"
+				"-framework VWMM"
+				"-framework Carbon"
+				"-framework Cocoa")
+else()
+	target_include_directories(${VW_PAYLOAD_NAME} PRIVATE "${VW_SDK_INCLUDE}/OnlyWin")
+	set_target_properties(${VW_PAYLOAD_NAME} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
 	target_compile_definitions(
-		${tgt} PRIVATE RELEASE_BLD=1 "VW_PAYLOAD_VARIANT=\"${variant}\""
-					   "VW_PAYLOAD_BUILD_TIME=\"${VW_BUILD_TIME}\"")
-
-	if(APPLE)
-		# 本体と同じく Objective-C++ として（SDK の mac ヘッダが CoreFoundation を #import する）。
-		set_source_files_properties("${src}" TARGET_DIRECTORY ${tgt} PROPERTIES LANGUAGE OBJCXX)
-		set_target_properties(${tgt} PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
-		target_include_directories(${tgt} PRIVATE "${VW_SDK_INCLUDE}/OnlyMac")
-		target_compile_options(${tgt} PRIVATE -stdlib=libc++ -Wno-deprecated-declarations)
-		target_link_libraries(
-			${tgt}
-			PRIVATE "${VW_SDK_LIB}/libVWSDK.a"
-					"-F${VW_SDK_LIB}"
-					"-framework VWMM"
-					"-framework Carbon"
-					"-framework Cocoa")
-	else()
-		target_include_directories(${tgt} PRIVATE "${VW_SDK_INCLUDE}/OnlyWin")
-		set_target_properties(${tgt} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
-		target_compile_definitions(
-			${tgt}
-			PRIVATE _WINDOWS
-					WIN32
-					_USRDLL
-					_WINDLL
-					_WIN_EXTERNAL_
-					UNICODE
-					_UNICODE
-					NDEBUG
-					_CRT_SECURE_NO_WARNINGS)
-		target_compile_options(${tgt} PRIVATE /EHsc /bigobj /wd4996)
-		if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-			target_compile_options(${tgt} PRIVATE /MP)
-		endif()
-		target_link_libraries(${tgt} PRIVATE "${VW_SDK_LIB}/VWSDK.lib" "${VW_SDK_LIB}/VWMM.lib"
-											 USP10.lib Rpcrt4.lib)
+		${VW_PAYLOAD_NAME}
+		PRIVATE _WINDOWS
+				WIN32
+				_USRDLL
+				_WINDLL
+				_WIN_EXTERNAL_
+				UNICODE
+				_UNICODE
+				NDEBUG
+				_CRT_SECURE_NO_WARNINGS)
+	target_compile_options(${VW_PAYLOAD_NAME} PRIVATE /EHsc /bigobj /wd4996)
+	if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+		target_compile_options(${VW_PAYLOAD_NAME} PRIVATE /MP)
 	endif()
-endfunction()
+	target_link_libraries(${VW_PAYLOAD_NAME} PRIVATE "${VW_SDK_LIB}/VWSDK.lib"
+													 "${VW_SDK_LIB}/VWMM.lib" USP10.lib Rpcrt4.lib)
+endif()
 
-set(VW_PAYLOAD_VARIANTS A B)
-foreach(variant IN LISTS VW_PAYLOAD_VARIANTS)
-	vw_add_payload(${variant})
-	# 配る形に置く（mac: バンドルの Contents/Resources、Windows: モジュールの隣）。
-	# **本体の POST_BUILD で写す**——本体を最後にビルドさせれば、置き場所は必ず出来ている。
-	add_dependencies(${VW_PLUGIN_NAME} "VwSdkProbesPayload${variant}")
-	if(APPLE)
-		add_custom_command(
-			TARGET ${VW_PLUGIN_NAME}
-			POST_BUILD
-			COMMAND "${CMAKE_COMMAND}" -E make_directory
-					"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources"
-			COMMAND
-				"${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:VwSdkProbesPayload${variant}>"
-				"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources/$<TARGET_FILE_NAME:VwSdkProbesPayload${variant}>"
-			VERBATIM
-			COMMENT "Bundling the payload (${variant}) into ${VW_PLUGIN_NAME}")
-	else()
-		add_custom_command(
-			TARGET ${VW_PLUGIN_NAME}
-			POST_BUILD
-			COMMAND
-				"${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:VwSdkProbesPayload${variant}>"
-				"$<TARGET_FILE_DIR:${VW_PLUGIN_NAME}>/$<TARGET_FILE_NAME:VwSdkProbesPayload${variant}>"
-			VERBATIM
-			COMMENT "Placing the payload (${variant}) next to ${VW_PLUGIN_NAME}")
-	endif()
-endforeach()
+# SDK アンブレラヘッダのプリコンパイル（本体も SDK を丸ごと引くので効く）。
+target_precompile_headers(${VW_PAYLOAD_NAME} PRIVATE
+						  "${CMAKE_CURRENT_SOURCE_DIR}/src/PluginPrefix.h")
+
+# 殻と一緒にビルドされるようにしておく（片方だけ作っても実機では動かない）。
+add_dependencies(${VW_PLUGIN_NAME} ${VW_PAYLOAD_NAME})
+
+# 本体の素性の控え。**入れ替えスクリプトが「いま入っている本体はどのビルドか」を
+# ここから読む**（プラグインを起動せずに分かる必要がある）。
+# plugin/src/PayloadHost.h の BuildInfoFileName と対。
+set(payload_stamp "${CMAKE_CURRENT_BINARY_DIR}/${VW_PAYLOAD_NAME}.build-info.txt")
+file(
+	WRITE "${payload_stamp}"
+	"build=${VW_BUILD_ID}\nbranch=${VW_BUILD_BRANCH}\ncommit=${VW_BUILD_VERSION}\nbuilt=${VW_BUILD_TIME}\nprobes=${VW_PROBE_SUMMARY}\n"
+)
+add_custom_command(
+	TARGET ${VW_PAYLOAD_NAME}
+	POST_BUILD
+	COMMAND "${CMAKE_COMMAND}" -E copy "${payload_stamp}"
+			"$<TARGET_FILE_DIR:${VW_PAYLOAD_NAME}>/${VW_PAYLOAD_NAME}.build-info.txt"
+	VERBATIM
+	COMMENT "Writing the payload build stamp next to ${VW_PAYLOAD_NAME}")
 
 # --- "<name>.vwr" のパッケージ --------------------------------------------------
 # SDK の BuildVWR が resources/<name>.vwr を無圧縮 zip に固める。macOS ではバンドルの
@@ -478,11 +492,13 @@ endif()
 # （どのビルドを入れたかを、プラグインを起動せずに確かめられるように）。
 if(NOT APPLE)
 	set(stamp_file "${CMAKE_CURRENT_BINARY_DIR}/${VW_PLUGIN_NAME}.build-info.txt")
-	# build= は**自動アップデートが読む行**（入っているビルドの ID。mac 側は Info.plist の
-	# VWBuildId）。plugin/scripts/vw-probes-update.ps1 の Get-InstalledBuild と対。
+	# shell= は**自動アップデートが読む行**（入っている殻の ID。mac 側は Info.plist の
+	# VWShellId）。plugin/scripts/vw-probes-update.ps1 の Get-InstalledShell と対で、
+	# 「再起動が要るか」がここで決まる。いま入っている**本体**の ID は隣の
+	# VwSdkProbesPayload.build-info.txt にある（入れ替えで動くのは本体だけ）。
 	file(
 		WRITE "${stamp_file}"
-		"build=${VW_BUILD_ID}\nbranch=${VW_BUILD_BRANCH}\ncommit=${VW_BUILD_VERSION}\nbuilt=${VW_BUILD_TIME}\nprobes=${VW_PROBE_SUMMARY}\n"
+		"shell=${VW_SHELL_ID}\nbuild=${VW_BUILD_ID}\nbranch=${VW_BUILD_BRANCH}\ncommit=${VW_BUILD_VERSION}\nbuilt=${VW_BUILD_TIME}\nprobes=${VW_PROBE_SUMMARY}\n"
 	)
 	add_custom_command(
 		TARGET ${VW_PLUGIN_NAME}

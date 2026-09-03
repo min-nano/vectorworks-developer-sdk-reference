@@ -25,15 +25,13 @@
 #include "PluginPrefix.h"
 #include "BuildConfig.h"
 #include "ProbeMenu.h"
-#include "Probe.h"
+#include "PayloadHost.h"
 #include "Update.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
-#include <exception>
 #include <string>
 #include <vector>
 
@@ -70,37 +68,48 @@ namespace vwprobe
 			return def;
 		}
 
-		// このビルドの素性（ピッカーと結果の見出しに出す 1 行）。**ビルド ID も出す**
-		// ——自動アップデートが新旧を比べるのはこれなので、「更新されない」を追うときに
-		// 最初に見たい値になる（Update.h）。
-		std::string buildStamp()
+		// **素性は 2 つある。** 殻（Vectorworks が起動時に読み込んだこのモジュール）と、
+		// 本体（メニューを開くたびに読み直す外部モジュール）。入れ替えで日常的に動くのは
+		// 本体だけなので、2 つ並べないと「何が新しくなったのか」が分からない。
+		// どちらもビルド ID を出す——更新の新旧を比べるのがこれで、「更新されない」を
+		// 追うときに最初に見たい値になる（Update.h）。
+		std::string shellStamp()
 		{
-			return std::string("ビルド: ") + VW_BUILD_BRANCH + " " + VW_BUILD_VERSION + " (" +
+			return std::string("殻: ") + VW_BUILD_BRANCH + " " + VW_BUILD_VERSION + " (" +
 				   VW_BUILD_TIME + ") id=" + VW_BUILD_ID;
 		}
 
-		// 出所を 1 行に畳む（無ければ「ローカル」）。
-		std::string provenanceLine(const std::string& id)
+		std::string payloadStamp(const Payload& payload)
 		{
-			const Provenance* origin = provenanceOf(id);
-			if (origin == nullptr)
+			if (!payload.isLoaded())
+				return "本体: 読み込めていません";
+			return "本体: " + payload.branch() + " " + payload.commit() + " (" +
+				   payload.buildTime() + ") id=" + payload.buildId();
+		}
+
+		// 出所を 1 行に畳む（無ければ「ローカル」）。**同じ形をペイロード側もログの見出し
+		// 用に持っている**（plugin/src/payload/PayloadMain.cpp）——境界を跨いで文字列を
+		// 組み立てさせるより、それぞれが自分の表示を組むほうが単純。
+		std::string provenanceLine(const PayloadProbeInfo& probe)
+		{
+			if (probe.commit.empty() && probe.pr.empty() && probe.branch.empty())
 				return "ローカル（出所の記録なし）";
 
 			// 見出しは PR 番号。無ければ取り込み元のブランチ（ふつうは main）を見出しに
 			// 使い、**そのときは末尾でブランチを繰り返さない**（実機のログで
 			// 「claude/… / 0a0fff2 / claude/…」と 2 度出ていた）。
 			std::string line;
-			const bool hasPr = !origin->pr.empty();
+			const bool hasPr = !probe.pr.empty();
 			if (hasPr)
-				line += "PR #" + origin->pr;
+				line += "PR #" + probe.pr;
 			else
-				line += origin->branch.empty() ? std::string("main") : origin->branch;
-			if (!origin->commit.empty())
-				line += " / " + origin->commit;
-			if (hasPr && !origin->branch.empty())
-				line += " / " + origin->branch;
-			if (!origin->title.empty())
-				line += " / " + origin->title;
+				line += probe.branch.empty() ? std::string("main") : probe.branch;
+			if (!probe.commit.empty())
+				line += " / " + probe.commit;
+			if (hasPr && !probe.branch.empty())
+				line += " / " + probe.branch;
+			if (!probe.prTitle.empty())
+				line += " / " + probe.prTitle;
 			return line;
 		}
 
@@ -115,45 +124,41 @@ namespace vwprobe
 
 		// ピッカーの 1 項目。「どの PR の・どのコミットの・何を調べるプローブか」を
 		// この 1 行だけで判断できるようにする（選ぶ前に見えるのはこれだけなので）。
-		std::string pickerItem(const Probe& probe)
+		std::string pickerItem(const PayloadProbeInfo& probe)
 		{
-			const Provenance* origin = provenanceOf(probe.id);
 			std::string head = "local";
-			if (origin != nullptr)
-			{
-				if (!origin->pr.empty())
-					head = "#" + origin->pr;
-				else
-					head = origin->branch.empty() ? std::string("main") : origin->branch;
-				if (!origin->commit.empty())
-					head += " " + origin->commit;
-			}
+			if (!probe.pr.empty())
+				head = "#" + probe.pr;
+			else if (!probe.branch.empty())
+				head = probe.branch;
+			else if (!probe.commit.empty())
+				head = "main";
+			if (!probe.commit.empty())
+				head += " " + probe.commit;
 			return head + "  " + probe.title + "  [" + probe.id + "]";
 		}
 
 		// PR 番号を数値で（無ければ -1）。**表示順を決めるためだけ**に使う。
-		long prNumberOf(const std::string& id)
+		long prNumberOf(const PayloadProbeInfo& probe)
 		{
-			const Provenance* origin = provenanceOf(id);
-			if (origin == nullptr || origin->pr.empty())
+			if (probe.pr.empty())
 				return -1;
-			return std::strtol(origin->pr.c_str(), nullptr, 10);
+			return std::strtol(probe.pr.c_str(), nullptr, 10);
 		}
 
 		// 表示順: **PR のものを新しい順に先頭へ**（いま確認したいのはたいてい最新の PR）、
-		// その後ろに main 由来を id 昇順で。probes() が id 昇順で決定的なので、この
+		// その後ろに main 由来を id 昇順で。本体が id 昇順で決定的に並べて渡すので、この
 		// 並べ替えも決定的になる。
-		std::vector<size_t> displayOrder()
+		std::vector<size_t> displayOrder(const std::vector<PayloadProbeInfo>& all)
 		{
-			const std::vector<Probe>& all = probes();
 			std::vector<size_t> order(all.size());
 			for (size_t i = 0; i < all.size(); ++i)
 				order[i] = i;
 			std::stable_sort(order.begin(), order.end(),
 							 [&all](size_t a, size_t b)
 							 {
-								 const long prA = prNumberOf(all[a].id);
-								 const long prB = prNumberOf(all[b].id);
+								 const long prA = prNumberOf(all[a]);
+								 const long prB = prNumberOf(all[b]);
 								 if (prA != prB)
 									 return prA > prB;
 								 return all[a].id < all[b].id;
@@ -171,10 +176,11 @@ namespace vwprobe
 		class CProbePickerDialog : public VWDialog
 		{
 		public:
-			CProbePickerDialog(const std::string& prompt, const std::vector<TXString>& items,
-							   short initialSelection)
+			CProbePickerDialog(const std::string& prompt, const std::string& stamp,
+							   const std::vector<TXString>& items, short initialSelection)
 				: fPrompt(kPromptID), fStamp(kStampID), fWarning(kWarningID), fPopup(kPopupID),
-				  fPromptText(prompt.c_str()), fItems(items), fSelection(initialSelection)
+				  fPromptText(prompt.c_str()), fStampText(stamp.c_str()), fItems(items),
+				  fSelection(initialSelection)
 			{
 			}
 			~CProbePickerDialog() override = default;
@@ -204,7 +210,7 @@ namespace vwprobe
 						this,
 						"※ プローブは図面を変更します。作業中の図面では実行しないでください。"))
 					return false;
-				if (!fStamp.CreateControl(this, buildStamp().c_str()))
+				if (!fStamp.CreateControl(this, fStampText))
 					return false;
 
 				this->AddFirstGroupControl(&fPrompt);
@@ -247,6 +253,7 @@ namespace vwprobe
 			VWStaticTextCtrl fWarning;
 			VWPullDownMenuCtrl fPopup;
 			TXString fPromptText;
+			TXString fStampText;
 			std::vector<TXString> fItems;
 			short fSelection;
 			bool fShown = false;
@@ -372,69 +379,60 @@ namespace vwprobe
 		}
 
 		// -------------------------------------------------------------------
-		// プローブ 1 件を走らせて、結果ダイアログの見出しを組み立てる。
-		//
-		// **例外はここで受け止める**（呼び出し元の DoInterface は SDK コールバック）。
-		// 落ちたところまでのログはファイルにも残っているので、例外の種類と併せて見せる。
-		std::vector<std::string> RunProbe(const Probe& probe, Report& report)
+		// プローブのログを溜める器。**本体から C の関数ポインタで呼ばれる**ので、
+		// 例外を絶対に外へ出さない（越えた先は本体で、巻き戻せない）。
+		struct LogCollector
 		{
-			report.openLog(defaultLogPath(probe.id));
-			report.log("=== " + probe.title + " [" + probe.id + "] ===");
-			report.log("出所: " + provenanceLine(probe.id));
-			report.log(buildStamp());
-			// undo イベントの状態は**プローブ自身の観測対象になりうる**ので、前後を記録する
-			// （Findings「Undo」——VW は処理の開始時にイベントを開かないが、SDK 内部が
-			// 途中で開くことがある）。
-			report.log(std::string("undo: before building=") +
-					   (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
-			report.log("--- ここからプローブ本体 ---");
+			std::string text;
+		};
 
-			const auto started = std::chrono::steady_clock::now();
-			std::string aborted;
+		void CollectLine(void* ctx, const char* line)
+		{
 			try
 			{
-				if (probe.run != nullptr)
-					probe.run(report);
-				else
-					report.fail("本体が登録されていない（VW_PROBE の書き方を確認）");
-			}
-			catch (const std::exception& error)
-			{
-				aborted = (error.what() != nullptr) ? error.what() : "std::exception";
+				if (ctx == nullptr)
+					return;
+				LogCollector* collector = static_cast<LogCollector*>(ctx);
+				collector->text += (line != nullptr) ? line : "";
+				collector->text += '\n';
 			}
 			catch (...)
 			{
-				aborted = "不明な例外（std::exception ではないもの）";
+				// 握り潰す（1 行落ちるだけ。境界を壊すよりよい）
 			}
-			const double seconds =
-				std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+		}
 
-			report.log("--- プローブ本体ここまで ---");
-			report.log(std::string("undo: after building=") +
-					   (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
-
-			std::string outcome = "成功";
-			if (!aborted.empty())
-				outcome = "例外で中断: " + aborted;
-			else if (report.failed())
-				outcome = "失敗: " + report.failure();
-			report.log("結果: " + outcome);
+		// -------------------------------------------------------------------
+		// プローブ 1 件を走らせて、結果ダイアログの見出しを組み立てる。
+		//
+		// **走らせるのは本体（ペイロード）側**（plugin/src/payload/PayloadMain.cpp）。
+		// 例外も undo の記録も所要時間もあちらが持っていて、こちらは結果を受け取って
+		// 見せるだけ。ログはこの呼び出しの間に collector へ 1 行ずつ流れてくる。
+		std::vector<std::string> RunProbe(Payload& payload, const PayloadProbeInfo& probe)
+		{
+			std::string outcome;
+			std::string logPath;
+			double seconds = 0.0;
+			std::string error;
+			if (!payload.run(probe.id, outcome, logPath, seconds, error))
+				outcome = "走らせられなかった: " + error;
 
 			char elapsed[64] = {0};
 			(void)std::snprintf(elapsed, sizeof(elapsed), "%.2f", seconds);
 
 			std::vector<std::string> body;
 			body.push_back("プローブ: " + probe.title);
-			body.push_back("出所: " + provenanceLine(probe.id));
+			body.push_back("出所: " + provenanceLine(probe));
 			if (!probe.summary.empty())
 				body.push_back("概要: " + probe.summary);
 			body.emplace_back("");
 			body.push_back("結果: " + outcome);
 			body.push_back(std::string("所要: ") + elapsed + " 秒");
-			if (!report.logPath().empty())
-				body.push_back("ログ: " + report.logPath());
+			if (!logPath.empty())
+				body.push_back("ログ: " + logPath);
 			body.emplace_back("");
-			body.push_back(buildStamp());
+			body.push_back(payloadStamp(payload));
+			body.push_back(shellStamp());
 			return body;
 		}
 	} // namespace
@@ -471,30 +469,40 @@ vwprobe::CProbeMenu_EventSink::~CProbeMenu_EventSink() = default;
 
 void vwprobe::CProbeMenu_EventSink::DoInterface()
 {
-	const std::vector<Probe>& all = probes();
+	// 0. **本体を読み込む。** メニューを開くたびに読み直すので、新しい本体が置かれて
+	//    いれば黙ってそれが動く（＝入れ替えに Vectorworks の再起動が要らない。
+	//    PayloadHost.h）。読み終わったら必ず降ろす——スコープを抜けるところで自動的に。
+	LogCollector collector;
+	Payload payload;
+	std::string loadError;
+	const bool loaded = payload.load((void*)gCBP, &collector, &CollectLine, loadError);
 
 	// 1. 選ばせる。**先頭は「新しいビルドに入れ替える」**で、その後ろにプローブが並ぶ
-	// （プローブが 1 つも入っていないビルドでも、入れ替えだけは選べる）。
-	const std::vector<size_t> order = displayOrder();
+	//    （本体を読めなかったときでも、入れ替えだけは選べる——たいていそれが直し方）。
+	const std::vector<PayloadProbeInfo>& all = payload.probes();
+	const std::vector<size_t> order = displayOrder(all);
 	std::vector<TXString> items;
 	items.reserve(order.size() + 1);
 	items.emplace_back(kUpdateItem);
 	for (const size_t index : order)
 		items.emplace_back(pickerItem(all[index]).c_str());
 
-	const std::string prompt =
-		all.empty() ? "このビルドにはプローブが入っていません。新しいビルドを取り込めます:"
-					: "実行するプローブを選んでください:";
+	std::string prompt = "実行するプローブを選んでください:";
+	if (!loaded)
+		prompt = "本体を読み込めませんでした。新しいビルドを取り込めます:";
+	else if (all.empty())
+		prompt = "この本体にはプローブが入っていません。新しいビルドを取り込めます:";
+
+	const std::string stamp = payloadStamp(payload) + "  /  " + shellStamp();
 
 	// 既定の選択は**先頭のプローブ**（あれば）。入れ替えは意識して選ぶものにする。
-	CProbePickerDialog picker(prompt, items, all.empty() ? 0 : 1);
+	CProbePickerDialog picker(prompt, stamp, items, all.empty() ? 0 : 1);
 	const bool accepted = (picker.RunDialogLayout("") == VWFC::VWUI::kDialogButton_Ok);
 	if (!picker.Shown())
 	{
 		// ダイアログを組めなかった。**黙って終わらない**——プローブは 1 件も走らない
 		// ので、なぜ何も起きなかったのかを伝える（Findings「Layout Dialogs」）。
-		gSDK->AlertInform("プローブの選択ダイアログを組めませんでした。", buildStamp().c_str(),
-						  false);
+		gSDK->AlertInform("プローブの選択ダイアログを組めませんでした。", stamp.c_str(), false);
 		return;
 	}
 	if (!accepted)
@@ -505,8 +513,17 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 	if (selection == 0)
 	{
 		// 先頭 = 入れ替え。確認・ダウンロード・再起動の案内はすべて Update.cpp が持つ
-		// （例外もあちらで受け止める）。
+		// （例外もあちらで受け止める）。**本体を先に降ろす**——入れ替えは本体のファイルを
+		// 置き換えるので、読み込んだままにしない（Windows では置き換えられない）。
+		payload.unload();
 		RunManualUpdateCheck();
+		return;
+	}
+
+	if (!loaded)
+	{
+		// プローブを選べる状態ではない（一覧が空なので、ここへは来ないはずだが念のため）。
+		gSDK->AlertInform("本体を読み込めませんでした。", loadError.c_str(), false);
 		return;
 	}
 
@@ -514,8 +531,13 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 	if (probeIndex >= order.size())
 		return;
 
-	// 2. 走らせる（例外は RunProbe が受け止める）＋ 3. 結果を見せる。
-	Report report;
-	const std::vector<std::string> body = RunProbe(all[order[probeIndex]], report);
-	ShowResult(body, report.text());
+	// 2. 走らせる（例外は本体側が受け止める）。
+	const std::vector<std::string> body = RunProbe(payload, all[order[probeIndex]]);
+
+	// 3. **本体を降ろしてから**結果を見せる。ダイアログを出している間に本体を抱えたまま
+	//    にしない（その間に入れ替えを試されると Windows で失敗する）。ログはこちらの
+	//    collector に写してあるので、降ろしても失わない。
+	const std::string logText = collector.text;
+	payload.unload();
+	ShowResult(body, logText);
 }

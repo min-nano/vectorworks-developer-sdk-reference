@@ -236,15 +236,24 @@ namespace vwprobe::update
 	// -----------------------------------------------------------------------
 
 	// `q` の出力を読んだ結果。
+	//
+	// **ID が 2 つある**のは、このプラグインが「殻」と「本体」に割れているから
+	// （plugin/src/PayloadAbi.h）。本体だけが新しいなら**再起動は要らない**
+	// ——置き換えれば次にメニューを開いたときに読まれる。殻まで変わっていれば要る。
 	struct Status
 	{
 		bool offerUpdate = false; // 別のビルドが公開されている → 勧める
-		std::string installed;	  // 入っているビルド ID（"none" / 空 = 不明）
-		std::string latest;		  // 公開されているビルド ID
-		std::string url;		  // 資産のダウンロード URL
-		std::string title;		  // リリースの名前（ダイアログに出す）
-		std::string probes;		  // 入っているプローブの一覧（同上）
-		std::string error;		  // スクリプトが返した理由（あれば）
+		bool payloadOnly = false; // **本体だけ入れ替えれば済む（再起動が要らない）**
+		std::string installed; // 入っている本体のビルド ID（"none" / 空 = 不明）
+		std::string latest;	   // 公開されている本体のビルド ID
+		std::string installedShell; // 入っている殻の ID
+		std::string latestShell;	// 公開されている殻の ID
+		// **zip は 1 つ**（殻＋本体）。本体だけの入れ替えも同じものを落として、中から
+		// 本体のファイルだけを取り出して置く（plugin/scripts/vw-probes-update.*）。
+		std::string url;
+		std::string title;	// リリースの名前（ダイアログに出す）
+		std::string probes; // 入っているプローブの一覧（同上）
+		std::string error;	// スクリプトが返した理由（あれば）
 	};
 
 	// **比べるのはコミットではなくビルド ID。** このプラグインは同じ main の sha から、
@@ -263,6 +272,8 @@ namespace vwprobe::update
 			return s; // オフライン等 → 黙って何もしない
 		s.installed = ValueOf(out, "installed");
 		s.latest = ValueOf(out, "latest");
+		s.installedShell = ValueOf(out, "installedShell");
+		s.latestShell = ValueOf(out, "latestShell");
 		s.url = ValueOf(out, "url");
 		s.title = ValueOf(out, "title");
 		s.probes = ValueOf(out, "probes");
@@ -271,9 +282,16 @@ namespace vwprobe::update
 			s.error = "リリースの情報が不完全です。";
 			return s;
 		}
-		if (s.installed == s.latest)
-			return s; // 同じビルド → 何もしない
+		if (s.installed == s.latest && s.installedShell == s.latestShell)
+			return s; // 中身も殻も同じ → 何もしない
 		s.offerUpdate = true;
+
+		// **本体だけで済むのは、殻の ID が確かに一致しているときだけ。** 公開側が殻の ID を
+		// 載せていない（古いリリース）か、入っている側が分からないなら、まるごと入れ替えて
+		// 再起動する側へ倒す——**再起動を惜しんで版の食い違ったまま動かすほうが危ない**
+		// （境界が変わっていれば本体を読み込んだ時点で弾かれ、プローブが 1 つも動かなくなる）。
+		s.payloadOnly = !s.latestShell.empty() && !s.installedShell.empty() &&
+						s.installedShell != "none" && s.installedShell == s.latestShell;
 		return s;
 	}
 

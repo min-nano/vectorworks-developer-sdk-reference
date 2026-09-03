@@ -181,12 +181,12 @@ namespace vwprobe
 #endif
 	}
 
-	std::string BundledPayloadPath(const std::string& variant)
+	std::string BundledPayloadPath()
 	{
 		const std::string self = OwnModulePath();
 		if (self.empty())
 			return "";
-		const std::string name = payload::FileName(variant);
+		const std::string name = payload::FileName();
 #if defined(_WIN32)
 		return payload::WinPayloadPathFromModule(self, name);
 #else
@@ -242,6 +242,209 @@ namespace vwprobe
 			return false;
 		}
 		return true;
+	}
+
+	// -----------------------------------------------------------------------
+	// Payload — 本体との付き合い 1 回ぶん（PayloadHost.h）。
+	// -----------------------------------------------------------------------
+	namespace
+	{
+		// 世代の通し番号。**複製先の名前を毎回変える**ためのもの（Windows は読み込み中の
+		// ファイルを置き換えられないので、使い回すと 2 回目が古いまま読まれる）。
+		unsigned NextGeneration()
+		{
+			static unsigned sGeneration = 0;
+			return ++sGeneration;
+		}
+	} // namespace
+
+	Payload::~Payload()
+	{
+		this->unload();
+	}
+
+	bool Payload::load(void* callbacks, void* logCtx, void (*log)(void*, const char*),
+					   std::string& error)
+	{
+		error.clear();
+		if (fLoaded)
+			return true;
+		if (callbacks == nullptr)
+		{
+			error = "SDK のコールバックが空です（殻の初期化が済んでいない）。";
+			return false;
+		}
+
+		fSourcePath = BundledPayloadPath();
+		if (fSourcePath.empty())
+		{
+			error = "本体（" + payload::FileName() + "）の置き場所を割り出せませんでした。";
+			return false;
+		}
+
+		const std::string tempDir = TempDirectory();
+		if (tempDir.empty())
+		{
+			error = "一時ディレクトリを取得できませんでした。";
+			return false;
+		}
+		const std::string tag = std::to_string(NextGeneration());
+		fTempPath = payload::TempCopyPath(tempDir, tag, payload::FileName(), PathSeparator());
+
+		// 複製してから読む（PayloadHost.h の「必ず複製してから読む」）。
+		std::string why;
+		if (!CopyFileTo(fSourcePath, fTempPath, why))
+		{
+			error = "本体を読み込めませんでした。\n" + fSourcePath +
+					" が殻（プラグイン）の隣にありますか？\n（" + why + "）";
+			fTempPath.clear();
+			return false;
+		}
+
+		if (!fModule.open(fTempPath, why))
+		{
+			error = "本体を読み込めませんでした。\n" + why;
+			this->unload();
+			return false;
+		}
+
+		auto abiFn = reinterpret_cast<VwPayloadAbiVersionFn>(fModule.symbol(VW_PAYLOAD_SYM_ABI));
+		auto initFn = reinterpret_cast<VwPayloadInitFn>(fModule.symbol(VW_PAYLOAD_SYM_INIT));
+		auto infoFn = reinterpret_cast<VwPayloadInfoFn>(fModule.symbol(VW_PAYLOAD_SYM_INFO));
+		auto probeAtFn =
+			reinterpret_cast<VwPayloadProbeAtFn>(fModule.symbol(VW_PAYLOAD_SYM_PROBE_AT));
+		fRunFn = reinterpret_cast<VwPayloadRunFn>(fModule.symbol(VW_PAYLOAD_SYM_RUN));
+		fShutdownFn =
+			reinterpret_cast<VwPayloadShutdownFn>(fModule.symbol(VW_PAYLOAD_SYM_SHUTDOWN));
+		if (abiFn == nullptr || initFn == nullptr || infoFn == nullptr || probeAtFn == nullptr ||
+			fRunFn == nullptr || fShutdownFn == nullptr)
+		{
+			error = "本体の形が違います（必要な関数が見つかりません）。\n"
+					"殻と本体の版が食い違っている可能性があります。";
+			this->unload();
+			return false;
+		}
+
+		// **版が違うなら呼ばない。** 殻と本体は独立に配られるので、ここでしか気付けない。
+		const unsigned int abi = abiFn();
+		if (abi != VW_PAYLOAD_ABI_VERSION)
+		{
+			error = "殻と本体の版が違います（本体=" + std::to_string(abi) +
+					" 殻=" + std::to_string(VW_PAYLOAD_ABI_VERSION) +
+					"）。\nプラグインごと入れ替えてください。";
+			this->unload();
+			return false;
+		}
+
+		// 素性は init の前でも取れる（読んだものが何かを先に言えるように）。
+		VwPayloadInfo info{};
+		info.size = static_cast<unsigned int>(sizeof(VwPayloadInfo));
+		if (infoFn(&info) != kVwPayloadOk)
+		{
+			error = "本体の素性を取得できませんでした。";
+			this->unload();
+			return false;
+		}
+		fBuildId = (info.buildId != nullptr) ? info.buildId : "";
+		fCommit = (info.commit != nullptr) ? info.commit : "";
+		fBranch = (info.branch != nullptr) ? info.branch : "";
+		fBuildTime = (info.buildTime != nullptr) ? info.buildTime : "";
+
+		// **これはメンバである（load のローカルではない）。** 古い本体は渡された
+		// VwPayloadHost のポインタを持ち続けることがあり、その先がローカルだと
+		// load から戻った時点で腐る——実際にそれで Vectorworks ごと落ちた
+		// （Findings「プラグインモジュールの読み込みと入れ替え」の「殻の記憶域を
+		//  本体に持たせない」）。**降ろすまで生かす**のが殻の側の歯止め。
+		fHost = VwPayloadHost{};
+		fHost.size = static_cast<unsigned int>(sizeof(VwPayloadHost));
+		fHost.abiVersion = VW_PAYLOAD_ABI_VERSION;
+		fHost.callbacks = callbacks;
+		fHost.logCtx = logCtx;
+		fHost.log = log;
+
+		const int status = initFn(&fHost);
+		if (status != kVwPayloadOk)
+		{
+			error = "本体を初期化できませんでした（コード " + std::to_string(status) + "）。";
+			this->unload();
+			return false;
+		}
+		fLoaded = true;
+
+		// 一覧を写し取る（向こうの const char* は次の呼び出しまでしか生きていない）。
+		fProbes.clear();
+		fProbes.reserve(info.probeCount);
+		for (unsigned int i = 0; i < info.probeCount; ++i)
+		{
+			VwPayloadProbe entry{};
+			entry.size = static_cast<unsigned int>(sizeof(VwPayloadProbe));
+			if (probeAtFn(i, &entry) != kVwPayloadOk)
+				continue;
+			PayloadProbeInfo copy;
+			copy.id = (entry.id != nullptr) ? entry.id : "";
+			copy.title = (entry.title != nullptr) ? entry.title : "";
+			copy.summary = (entry.summary != nullptr) ? entry.summary : "";
+			copy.pr = (entry.pr != nullptr) ? entry.pr : "";
+			copy.commit = (entry.commit != nullptr) ? entry.commit : "";
+			copy.branch = (entry.branch != nullptr) ? entry.branch : "";
+			copy.prTitle = (entry.prTitle != nullptr) ? entry.prTitle : "";
+			fProbes.push_back(copy);
+		}
+		return true;
+	}
+
+	bool Payload::run(const std::string& id, std::string& outcome, std::string& logPath,
+					  double& seconds, std::string& error)
+	{
+		error.clear();
+		outcome.clear();
+		logPath.clear();
+		seconds = 0.0;
+		if (!fLoaded || fRunFn == nullptr)
+		{
+			error = "本体が読み込まれていません。";
+			return false;
+		}
+
+		VwPayloadResult result{};
+		result.size = static_cast<unsigned int>(sizeof(VwPayloadResult));
+		const int status = fRunFn(id.c_str(), &result);
+		if (status != kVwPayloadOk)
+		{
+			error = "プローブを走らせられませんでした（コード " + std::to_string(status) + "）。";
+			return false;
+		}
+		// **その場で写す**（次の呼び出しで無効になる。PayloadAbi.h）。
+		outcome = (result.outcome != nullptr) ? result.outcome : "";
+		logPath = (result.logPath != nullptr) ? result.logPath : "";
+		seconds = result.seconds;
+		return true;
+	}
+
+	void Payload::unload()
+	{
+		// 順序が肝。① 本体に殻への参照を手放させる ② 降ろす ③ 複製を消す。
+		if (fLoaded && fShutdownFn != nullptr)
+			fShutdownFn();
+		fLoaded = false;
+		fRunFn = nullptr;
+		fShutdownFn = nullptr;
+		fProbes.clear();
+		// 本体は shutdown で手放したはず。殻の側も、渡していたものをここで捨てる
+		// （降ろした後に触られても、少なくとも「腐った値」ではなくなる）。
+		fHost = VwPayloadHost{};
+
+		std::string ignored;
+		(void)fModule.close(ignored);
+		if (!fTempPath.empty())
+		{
+			// **降りたことを別の目で確かめてから消す。** dlclose が 0 を返しても消えて
+			// いるとは限らない（参照が残っていれば残る）し、Windows では読み込み中の
+			// ファイルは消せない。残しても世代ごとに名前が違うので次回に響かない。
+			if (!IsModuleStillLoaded(fTempPath))
+				(void)RemoveFileAt(fTempPath, ignored);
+			fTempPath.clear();
+		}
 	}
 
 	bool IsModuleStillLoaded(const std::string& path)

@@ -326,11 +326,12 @@ namespace vwprobe
 			return r == 1;
 		}
 
-		// 同梱スクリプトで入れ替える。失敗したら errorOut に理由を入れて false。
-		bool Install(const std::string& url, std::string& errorOut)
+		// 同梱スクリプトで入れ替える。mode は "do-install"（まるごと）か
+		// "do-install-payload"（本体だけ）。失敗したら errorOut に理由を入れて false。
+		bool Install(const std::string& mode, const std::string& url, std::string& errorOut)
 		{
 			std::string out;
-			if (!RunBundledScript({"do-install", url}, out))
+			if (!RunBundledScript({mode, url}, out))
 			{
 				errorOut = "アップデータを起動できませんでした。";
 				return false;
@@ -378,6 +379,11 @@ namespace vwprobe
 				detail += "\n" + status.title;
 			if (!status.probes.empty())
 				detail += "\n入っているプローブ: " + status.probes;
+			// **再起動が要るかどうかは、押す前に言う。** 押した後で「再起動してください」と
+			// 言われるのと、要らないと分かって押すのとでは、この道具の使い勝手が変わる。
+			detail += status.payloadOnly
+						  ? "\n\n本体だけの入れ替えです（Vectorworks の再起動は要りません）。"
+						  : "\n\nプラグインごとの入れ替えです（Vectorworks の再起動が要ります）。";
 			return detail;
 		}
 
@@ -414,7 +420,22 @@ namespace vwprobe
 				return;
 
 			std::string err;
-			if (Install(status.url, err))
+			if (status.payloadOnly)
+			{
+				// **本体だけ。再起動しない。** 落とすのは同じ zip で、中から本体の
+				// ファイルだけを置き換える。殻は読み込まれたままで、置き換えたファイルは
+				// 殻が直接読んでいるものではない（複製を読む。PayloadHost.h）ので、
+				// 次にメニューを開いた時点で新しい本体が読まれる。
+				if (Install("do-install-payload", status.url, err))
+					Inform("プローブを入れ替えました。",
+						   "build: " + status.latest +
+							   "\n\n次にメニュー「SDK 実機プローブ…」を開いたときから、"
+							   "新しいプローブが動きます。\nVectorworks の再起動は要りません。");
+				else
+					Inform("入れ替えに失敗しました。", err);
+				return;
+			}
+			if (Install("do-install", status.url, err))
 				OfferRestart("プローブビルドを入れ替えました。", "build: " + status.latest);
 			else
 				Inform("入れ替えに失敗しました。", err);
