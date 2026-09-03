@@ -145,14 +145,14 @@ check_slug() {
 	# slug は「小文字英数字とハイフン」に限る。ディレクトリ名がそのままリリースノート・
 	# ログファイル名・grep のパターンになるので、変な文字を持ち込ませない。
 	if ! printf '%s' "$slug" | grep -qE '^[a-z0-9][a-z0-9-]*$'; then
-		echo "::error::プローブのディレクトリ名 '$slug'（$from）は小文字英数字とハイフンだけにしてください。" >&2
+		echo "::error::プローブのディレクトリ名 '$slug'（${from}）は小文字英数字とハイフンだけにしてください。" >&2
 		exit 1
 	fi
 
 	# **slug はディレクトリ名と一致させる。** プラグイン側は VW_PROBE の第 1 引数を
 	# 鍵に出所表と突き合わせるので、ここがずれると「出所不明」で表示される。
 	if ! grep -qE "VW_PROBE\(\"$slug\"" "$dir"/*.cpp 2>/dev/null; then
-		echo "::error::プローブ '$slug'（$from）の VW_PROBE(\"$slug\", …) が見つかりません。" \
+		echo "::error::プローブ '$slug'（${from}）の VW_PROBE(\"$slug\", …) が見つかりません。" \
 			"ディレクトリ名と VW_PROBE の第 1 引数を一致させてください。" >&2
 		exit 1
 	fi
@@ -195,7 +195,7 @@ if [ -z "$head_branch" ] || [ "$head_branch" = "HEAD" ]; then
 	head_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo local)"
 fi
 
-echo "作業ツリー（$head_branch $head_commit）のプローブ → 群 main:"
+echo "作業ツリー（$head_branch ${head_commit}）のプローブ → 群 main:"
 add_group "main" "" "$head_commit" "$head_branch" ""
 if [ -d probes/runtime ]; then
 	for dir in probes/runtime/*/; do
@@ -243,7 +243,7 @@ for pr in ${PRS[@]+"${PRS[@]}"}; do
 	# open な PR を一括で渡してくるので、プローブと無関係な PR も混ざる
 	# （scripts/probe-auto-update.sh）。
 	if ! git ls-tree -d --name-only "$pr_sha" probes/runtime | grep -q .; then
-		echo "  (note) PR #$pr（$pr_short）に probes/runtime/ がありません。飛ばします。"
+		echo "  (note) PR #${pr}（${pr_short}）に probes/runtime/ がありません。飛ばします。"
 		continue
 	fi
 
@@ -374,7 +374,7 @@ for group in ${PROBE_GROUPS[@]+"${PROBE_GROUPS[@]}"}; do
 
 	{
 		echo ""
-		echo "# 群 $group（$([ -n "$pr" ] && echo "PR #$pr" || echo "main") $commit）"
+		echo "# 群 ${group}（$([ -n "$pr" ] && echo "PR #$pr" || echo "main") ${commit}）"
 		echo "set(VW_PROBE_ORIGIN_$group \"$pr|$commit|$branch|$title\")"
 		echo "set(VW_PROBE_SOURCES_$group"
 	} >>"$manifest"

@@ -172,7 +172,7 @@ install_payloads() {
 		sanitize "$f"
 		name="$(basename "$f")"
 		if ! install_one "$f" "$VW_PLUGINS_DIR/$name"; then
-			echo "本体（$name）のコピーに失敗しました。"
+			echo "本体（${name}）のコピーに失敗しました。"
 			return 1
 		fi
 	done

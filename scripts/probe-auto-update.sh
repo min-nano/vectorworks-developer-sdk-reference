@@ -173,10 +173,10 @@ resp="$(workfile)"
 code="$(api -o "$resp" -w '%{http_code}' -X POST -d "$payload" \
 	"$VW_API/actions/workflows/$WORKFLOW_FILE/dispatches")"
 if [ "$code" = "403" ]; then
-	die "dispatch が権限で拒否されました（HTTP 403）。このトークンに actions: write がありません（fork の PR では付きません）。Actions の \"Probe plug-in\" を手で dispatch してください（inputs.prs=$PR）"
+	die "dispatch が権限で拒否されました（HTTP 403）。このトークンに actions: write がありません（fork の PR では付きません）。Actions の \"Probe plug-in\" を手で dispatch してください（inputs.prs=${PR}）"
 fi
 [ "$code" = "204" ] ||
-	die "dispatch に失敗しました（HTTP $code）: $(api_message "$resp")。probe-build.yml が $REF にあるか確認してください"
+	die "dispatch に失敗しました（HTTP ${code}）: $(api_message "$resp")。probe-build.yml が $REF にあるか確認してください"
 rm -f "$resp"
 
 echo "dispatched: $WORKFLOW_FILE (ref=$REF prs=$PRS_LIST)"
@@ -193,7 +193,7 @@ RESOLVE_RUN_WHAT="PR #$PR のビルド"
 run_id="$(resolve_run "$WORKFLOW_FILE" \
 	'(.id > ($last | tonumber)) and (.display_title | contains($t))' \
 	--arg last "$LAST_RUN_ID" --arg t "(PR $PRS_LIST + ")" ||
-	die "起動したビルドの run を特定できませんでした（PR #$PR）"
+	die "起動したビルドの run を特定できませんでした（PR #${PR}）"
 
 run_url="https://github.com/$VW_REPO/actions/runs/$run_id"
 echo "run: $run_url"
@@ -213,8 +213,8 @@ if [ "$conclusion" != "success" ]; then
 	# 分からない」を緑にすると、古いプラグインのまま実機で走らせてしまう。
 	case "$conclusion" in
 		timed-out-waiting | api-error)
-			echo "::error::プローブの自動更新: ビルドの結果を見届けられませんでした（$conclusion）。$run_url を見てください。"
-			summary "プローブの自動更新: **結果を見届けられませんでした**（$conclusion）。[run]($run_url)"
+			echo "::error::プローブの自動更新: ビルドの結果を見届けられませんでした（${conclusion}）。$run_url を見てください。"
+			summary "プローブの自動更新: **結果を見届けられませんでした**（${conclusion}）。[run]($run_url)"
 			;;
 		*)
 			echo "::error::プローブの自動更新: ビルドが $conclusion で終わりました。$run_url を見てください（プローブがコンパイルできていない可能性が高い）。"
@@ -281,8 +281,8 @@ exit_code=0
 if [ "$my_state" = "failed" ]; then
 	comment_head="**この PR のプローブはビルドできませんでした。**"
 	comment_note="この PR の本体（\`$my_group\`）だけが今回のビルドに入っていません。他の PR と main のプローブはそのまま公開されています。ビルドの run（下）でコンパイルエラーを直してください。"
-	echo "::error::この PR の本体（$my_group）をビルドできませんでした。$run_url を見てください。"
-	summary "プローブの自動更新: **この PR の本体（$my_group）がビルドできませんでした**。[run]($run_url)"
+	echo "::error::この PR の本体（${my_group}）をビルドできませんでした。$run_url を見てください。"
+	summary "プローブの自動更新: **この PR の本体（${my_group}）がビルドできませんでした**。[run]($run_url)"
 	exit_code=1
 elif [ -z "$my_state" ]; then
 	comment_head="**プローブを公開しました**（この PR のプローブはありません）。"
@@ -336,7 +336,7 @@ fi
 case "$code" in
 	200 | 201) echo "commented on PR #$PR" ;;
 	# コメントできなくても、公開の成否そのものは上で決めている（要約とログには残る）。
-	*) echo "::warning::PR #$PR へコメントできませんでした（HTTP $code）。" ;;
+	*) echo "::warning::PR #$PR へコメントできませんでした（HTTP ${code}）。" ;;
 esac
 
 exit "$exit_code"

@@ -51,7 +51,7 @@ case "$PARTS" in
 		fi
 		;;
 	*)
-		echo "::error::fetch-vw-sdk.sh: VW_SDK_PARTS は headers か plugin です（VW_SDK_PARTS=$PARTS）" >&2
+		echo "::error::fetch-vw-sdk.sh: VW_SDK_PARTS は headers か plugin です（VW_SDK_PARTS=${PARTS}）" >&2
 		exit 1
 		;;
 esac
@@ -135,7 +135,7 @@ echo "Trimmed SDK size:"
 du -sh "$SDK_DIR"
 
 if ! verify; then
-	echo "::error::fetch-vw-sdk.sh: SDK を用意しましたが必要なファイルが揃っていません（$SDK_DIR）" >&2
+	echo "::error::fetch-vw-sdk.sh: SDK を用意しましたが必要なファイルが揃っていません（${SDK_DIR}）" >&2
 	find "$SDK_DIR" -maxdepth 3 >&2 || true
 	exit 1
 fi

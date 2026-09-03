@@ -25,6 +25,12 @@
 #   scripts/build-payloads.sh --build <ビルドディレクトリ> --groups <groups.txt> \
 #       --status <出力ファイル> [--config Release] [--parallel 4]
 #
+# 【macOS の bash 3.2 で踏んだ落とし穴】**変数のすぐ後ろに日本語を書くときは
+# `${var}` と括る。** `"$label（…）"` のように書くと、macOS 既定の bash 3.2 は
+# 全角括弧の先頭バイトを変数名の一部として読み、`set -u` のもとで
+# 「label…: unbound variable」で落ちる（実際に mac のビルドだけが落ちた）。
+# ubuntu の bash 5 では起きないので、CI の mac ジョブでしか顕在化しない。
+#
 set -uo pipefail
 
 BUILD_DIR="build"
@@ -72,7 +78,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ ! -f "$GROUPS_FILE" ]; then
-	echo "::error::群の一覧がありません: $GROUPS_FILE（集約が走っていますか）" >&2
+	echo "::error::群の一覧がありません: ${GROUPS_FILE}（集約が走っていますか）" >&2
 	exit 2
 fi
 
@@ -85,12 +91,12 @@ while IFS='|' read -r group pr commit branch title; do
 	target="VwSdkProbesPayload-$group"
 	label="群 $group"
 	if [ -n "$pr" ]; then
-		label="$label（PR #$pr $commit${title:+ / $title}）"
+		label="${label}（PR #$pr $commit${title:+ / $title}）"
 	else
-		label="$label（$branch $commit）"
+		label="${label}（$branch ${commit}）"
 	fi
 
-	echo "::group::$target をビルド（$label）"
+	echo "::group::$target をビルド（${label}）"
 	args=(--build "$BUILD_DIR" --config "$CONFIG" --target "$target")
 	if [ -n "$PARALLEL" ]; then
 		args+=(--parallel "$PARALLEL")

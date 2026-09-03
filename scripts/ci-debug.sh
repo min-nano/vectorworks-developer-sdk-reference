@@ -153,13 +153,13 @@ fetch_payload() {
 	local id="$1" jobs job check url tmp ann tries
 	jobs="$(workfile)"
 	if [ "$(api_json "$VW_API/actions/runs/$id/jobs" "$jobs")" != "200" ]; then
-		echo "ci-debug: ジョブ一覧を取得できませんでした（run=$id）" >&2
+		echo "ci-debug: ジョブ一覧を取得できませんでした（run=${id}）" >&2
 		rm -f "$jobs"
 		return 1
 	fi
 	job="$(jq -r '.jobs[0].id // empty' "$jobs" 2>/dev/null)"
 	[ -n "$job" ] || {
-		echo "ci-debug: ジョブが見つかりませんでした（run=$id）" >&2
+		echo "ci-debug: ジョブが見つかりませんでした（run=${id}）" >&2
 		rm -f "$jobs"
 		return 1
 	}
@@ -287,16 +287,16 @@ case "$CMD" in
 		if [ "$code" = "403" ]; then
 			# リモートセッションのトークンは読み取り専用（actions: write が無い）。
 			# これは設定ミスではなく仕様なので、回避策を具体的に示す。
-			die "ディスパッチが権限で拒否されました（HTTP 403）。このトークンには actions: write がありません。GitHub MCP の actions_run_trigger（workflow_id=ci-debug.yml, ref=$REF, inputs.label=$LABEL）で起動し、'scripts/ci-debug.sh wait --label $LABEL' で待ってください"
+			die "ディスパッチが権限で拒否されました（HTTP 403）。このトークンには actions: write がありません。GitHub MCP の actions_run_trigger（workflow_id=ci-debug.yml, ref=$REF, inputs.label=${LABEL}）で起動し、'scripts/ci-debug.sh wait --label $LABEL' で待ってください"
 		fi
 		[ "$code" = "204" ] ||
-			die "ディスパッチに失敗しました（HTTP $code）。ci-debug.yml が main にマージ済みか、ref='$REF' が push 済みかを確認してください"
+			die "ディスパッチに失敗しました（HTTP ${code}）。ci-debug.yml が main にマージ済みか、ref='$REF' が push 済みかを確認してください"
 
 		# 待機プロセスが失われても後から合流できるよう、label は必ず先に出す。
 		echo "label=$LABEL"
 		echo "ref=$REF mode=$MODE platform=$PLATFORM"
 
-		run_id="$(resolve_debug_run "$LABEL")" || die "起動した run を特定できませんでした（label=$LABEL）"
+		run_id="$(resolve_debug_run "$LABEL")" || die "起動した run を特定できませんでした（label=${LABEL}）"
 		echo "run_id=$run_id"
 		echo "run_url=https://github.com/$VW_REPO/actions/runs/$run_id"
 

@@ -356,11 +356,11 @@ resolve_run() {
 				return 0
 			fi
 		elif fatal_http "$code"; then
-			echo "$CI_TOOL: run 一覧を取得できません（HTTP $code）: $(api_message "$body")" >&2
+			echo "$CI_TOOL: run 一覧を取得できません（HTTP ${code}）: $(api_message "$body")" >&2
 			rm -f "$body"
 			return 1
 		else
-			echo "$CI_TOOL: run 一覧の取得に失敗（HTTP $code）— 再試行します" >&2
+			echo "$CI_TOOL: run 一覧の取得に失敗（HTTP ${code}）— 再試行します" >&2
 		fi
 		sleep 3
 	done
