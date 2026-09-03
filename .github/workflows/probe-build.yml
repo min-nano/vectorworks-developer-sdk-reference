@@ -198,16 +198,15 @@ jobs:
           cat build/VwSdkProbesPayload.build-info.txt
 
       # "<name>.vwlibrary/" の階層を保ったまま zip する（展開してそのまま使えるように）。
-      # 2 つ作る。**まるごと**（初回導入と、殻が変わったときの入れ替え用）と、
-      # **本体だけ**（日常の入れ替え用——これなら Vectorworks を動かしたまま置き換えられる）。
+      # **zip は 1 つだけ。** 殻と本体を分けて配らないのは、展開の手間を増やさないため
+      # ——本体だけの入れ替えも、この zip から本体のファイルだけを取り出して置けば済む
+      # （plugin/scripts/vw-probes-update.sh の do-install-payload）。
       - name: Package
         run: |
           set -euo pipefail
           mkdir -p dist
           ( cd build && zip -qry "$GITHUB_WORKSPACE/dist/VwSdkProbes.vwlibrary.zip" \
               VwSdkProbes.vwlibrary VwSdkProbesPayload.vwpayload VwSdkProbesPayload.build-info.txt )
-          ( cd build && zip -qry "$GITHUB_WORKSPACE/dist/VwSdkProbesPayload-mac.zip" \
-              VwSdkProbesPayload.vwpayload VwSdkProbesPayload.build-info.txt )
           ls -l dist
 
       - name: Upload plug-in artifact
@@ -286,19 +285,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
-          # 本体だけの zip（日常の入れ替え用。Vectorworks を動かしたまま置き換えられる）。
-          $payload = @(
-            'build/Release/VwSdkProbesPayload.vwpayload',
-            'build/Release/VwSdkProbesPayload.build-info.txt'
-          ) | Where-Object { Test-Path $_ }
-          Compress-Archive -Path $payload -DestinationPath 'dist/VwSdkProbesPayload-win.zip' -Force
-          # まるごとの zip（初回導入と、殻が変わったときの入れ替え用）。
+          # **zip は 1 つだけ**（殻＋本体）。本体だけの入れ替えも、この zip から本体の
+          # ファイルだけを取り出して置く（vw-probes-update.ps1 の do-install-payload）。
           $files = @(
             'build/Release/VwSdkProbes.vlb',
             'build/Release/VwSdkProbes.vwr',
             'build/Release/VwSdkProbes.build-info.txt',
-            'build/Release/vw-probes-update.ps1'
-          ) + $payload | Where-Object { Test-Path $_ }
+            'build/Release/vw-probes-update.ps1',
+            'build/Release/VwSdkProbesPayload.vwpayload',
+            'build/Release/VwSdkProbesPayload.build-info.txt'
+          ) | Where-Object { Test-Path $_ }
           Compress-Archive -Path $files -DestinationPath 'dist/VwSdkProbes.vlb.zip' -Force
           Get-ChildItem dist | Select-Object Name, Length
 
@@ -386,6 +382,7 @@ jobs:
             echo "**プローブだけの入れ替えなら Vectorworks の再起動は要らない**"
             echo "（新しい本体を読み込むのは、次にメニューを開いたとき）。"
             echo "殻（プラグイン本体）まで変わったときだけ再起動を尋ねる。"
+            echo "どちらの場合も落とすのは下の zip 1 つで、必要なファイルだけが置き換わる。"
             echo
             echo "初回だけ手で入れる:"
             echo
@@ -401,8 +398,6 @@ jobs:
           gh release create probes \
             "dist/VwSdkProbes.vwlibrary.zip" \
             "dist/VwSdkProbes.vlb.zip" \
-            "dist/VwSdkProbesPayload-mac.zip" \
-            "dist/VwSdkProbesPayload-win.zip" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$BUILD_SHA" \
             --title "$title" \

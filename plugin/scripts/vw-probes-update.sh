@@ -11,13 +11,16 @@
 #                              latest=<公開されている本体のビルド ID>
 #                              installedShell=<入っている殻の ID|none>
 #                              latestShell=<公開されている殻の ID>
-#                              url=<まるごとの zip の URL>
-#                              payloadUrl=<本体だけの zip の URL>
+#                              url=<zip の URL>
 #                              title=<リリース名>
 #                              probes=<入っているプローブ>
 #                            取れなかったときは error=<理由>（終了コードは 0）。
 #   do-install <url>         まるごと入れ替える（殻＋本体）。"ok" か error=<理由>。
 #   do-install-payload <url> **本体だけ**入れ替える。"ok" か error=<理由>。
+#
+# **zip は 1 つしか無い**（殻＋本体）。本体だけの入れ替えも同じ zip を落として、中から
+# 本体のファイルだけを取り出して置く——配る zip を 2 つに分けると、人が手で入れるときの
+# 展開の手間が増えるだけで、得られるのは数百 KB の節約でしかない。
 #
 # 【なぜ 2 通りの入れ替えがあるか】このプラグインは「殻（Vectorworks が起動時に読み込む
 # モジュール）」と「本体（殻が自分で読み込む .vwpayload）」に割れている。**本体だけなら
@@ -49,7 +52,6 @@ VW_API="https://api.github.com/repos/${VW_REPO}"
 VW_TAG="${VW_TAG:-probes}"
 VW_NAME="VwSdkProbes"
 VW_PAYLOAD="VwSdkProbesPayload"
-VW_PAYLOAD_ASSET="${VW_PAYLOAD}-mac.zip"
 
 # ---------------------------------------------------------------------------
 # GitHub REST の下請け。JSON は plutil で読む（macOS に最初から入っていて JSON を解せる）。
@@ -154,11 +156,10 @@ mode_q() {
 		echo "error=リリース（${VW_TAG}）を取得できませんでした。ネットワークを確認してください。"
 		return 0
 	fi
-	local body name url payload_url
+	local body name url
 	body="$(jval "$f" body)"
 	name="$(jval "$f" name)"
 	url="$(asset_url "$f" "$VW_NAME.vwlibrary.zip" || true)"
-	payload_url="$(asset_url "$f" "$VW_PAYLOAD_ASSET" || true)"
 	rm -f "$f"
 
 	local latest latest_shell probes
@@ -180,9 +181,6 @@ mode_q() {
 		echo "latestShell=${latest_shell}"
 	fi
 	echo "url=${url}"
-	if [ -n "$payload_url" ]; then
-		echo "payloadUrl=${payload_url}"
-	fi
 	if [ -n "$name" ]; then
 		echo "title=${name}"
 	fi
@@ -247,9 +245,10 @@ mode_do_install() {
 }
 
 # do-install-payload <url>: **本体だけ**入れ替える（Vectorworks を動かしたままでよい）。
+# 落とすのは do-install と**同じ zip**で、中から本体のファイルだけを取り出して置く。
 # 殻は読み込まれたまま触らないので、次にメニューを開いた時点で新しい本体が読まれる。
-# **殻はこのファイルを直接は読んでいない**（一時ディレクトリへ写した複製を読んでいる。
-# plugin/src/PayloadHost.h）ので、いつ置き換えても衝突しない。
+# **殻は置き換えるファイルを直接は読んでいない**（一時ディレクトリへ写した複製を読んで
+# いる。plugin/src/PayloadHost.h）ので、いつ置き換えても衝突しない。
 mode_do_install_payload() {
 	local url="$1"
 	if [ -z "$url" ]; then
@@ -261,12 +260,12 @@ mode_do_install_payload() {
 	tmp="$(mktemp -d)"
 	work="$(mktemp -d)"
 
-	if ! download "$url" "$tmp/payload.zip"; then
+	if ! download "$url" "$tmp/bundle.zip"; then
 		rm -rf "$tmp" "$work"
 		echo "error=ダウンロードに失敗しました。"
 		return 0
 	fi
-	if ! unzip -q "$tmp/payload.zip" -d "$work" >/dev/null 2>&1; then
+	if ! unzip -q "$tmp/bundle.zip" -d "$work" >/dev/null 2>&1; then
 		rm -rf "$tmp" "$work"
 		echo "error=アーカイブの展開に失敗しました。"
 		return 0

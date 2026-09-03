@@ -422,10 +422,11 @@ namespace vwprobe
 			std::string err;
 			if (status.payloadOnly)
 			{
-				// **本体だけ。再起動しない。** 殻は読み込まれたままで、いま置き換えた
-				// ファイルは殻が直接読んでいるものではない（複製を読む。PayloadHost.h）
-				// ので、次にメニューを開いた時点で新しい本体が読まれる。
-				if (Install("do-install-payload", status.payloadUrl, err))
+				// **本体だけ。再起動しない。** 落とすのは同じ zip で、中から本体の
+				// ファイルだけを置き換える。殻は読み込まれたままで、置き換えたファイルは
+				// 殻が直接読んでいるものではない（複製を読む。PayloadHost.h）ので、
+				// 次にメニューを開いた時点で新しい本体が読まれる。
+				if (Install("do-install-payload", status.url, err))
 					Inform("プローブを入れ替えました。",
 						   "build: " + status.latest +
 							   "\n\n次にメニュー「SDK 実機プローブ…」を開いたときから、"

@@ -9,7 +9,7 @@
     すべてプラグイン側が出す。こちらは機械可読な行を標準出力へ出すだけ。
 
       q                        installed= / latest= / installedShell= / latestShell= /
-                               url= / payloadUrl= / title= / probes=（または error=）
+                               url= / title= / probes=（または error=）
       do-install <url>         まるごと入れ替える（殻＋本体）。"ok" か error=<理由>。
       do-install-payload <url> **本体だけ**入れ替える。"ok" か error=<理由>。
 
@@ -22,6 +22,10 @@
     Windows は読み込み中の DLL を消せないが、**本体は読み込まれていない**——殻は
     一時ディレクトリへ写した複製を読んでいる（plugin/src/PayloadHost.h）。だから本体の
     置き換えはいつでも通る。
+
+    **zip は 1 つしか無い**（殻＋本体）。本体だけの入れ替えも同じ zip を落として、中から
+    本体のファイルだけを取り出して置く——配る zip を分けると、人が手で入れるときの展開の
+    手間が増えるだけ。
 
     【新旧はビルド ID で比べる】コミットではない（同じ sha から、同居させる PR を変えて
     何度もビルドされるため）。公開側はリリース本文の隠しメタデータの build= と shell=、
@@ -50,7 +54,6 @@ $VW_API = "https://api.github.com/repos/$VW_REPO"
 $VW_TAG = if ($env:VW_TAG) { $env:VW_TAG } else { 'probes' }
 $VW_NAME = 'VwSdkProbes'
 $VW_PAYLOAD = 'VwSdkProbesPayload'
-$VW_PAYLOAD_ASSET = "$VW_PAYLOAD-win.zip"
 $VW_PLUGINS_DIR = if ($env:VW_PLUGINS_DIR) { $env:VW_PLUGINS_DIR } else { Join-Path $env:APPDATA 'Nemetschek\Vectorworks\2026\Plug-Ins' }
 
 $script:LastError = ''
@@ -156,14 +159,15 @@ function Install-Build([string] $url) {
     }
 }
 
-# **本体だけ**落として置き換える（Vectorworks を動かしたままでよい）。
+# **本体だけ**置き換える（Vectorworks を動かしたままでよい）。落とすのは Install-Build と
+# 同じ zip で、中から本体のファイルだけを取り出す。
 function Install-Payload([string] $url) {
     $script:LastError = ''
     if (-not $url) { $script:LastError = '引数が不足しています。'; return $false }
 
     $tmp = New-Item -ItemType Directory -Force -Path (Join-Path ([System.IO.Path]::GetTempPath()) ("vwprobes-" + [System.IO.Path]::GetRandomFileName()))
     try {
-        $zip = Join-Path $tmp.FullName "$VW_PAYLOAD.zip"
+        $zip = Join-Path $tmp.FullName "$VW_NAME.vlb.zip"
         try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 300 }
         catch { $script:LastError = 'ダウンロードに失敗しました。'; return $false }
 
@@ -198,7 +202,6 @@ function Invoke-Query {
     catch { Write-Output "error=リリース（$VW_TAG）を取得できませんでした。ネットワークを確認してください。"; return }
 
     $url = Get-AssetUrl $rel "$VW_NAME.vlb.zip"
-    $payloadUrl = Get-AssetUrl $rel $VW_PAYLOAD_ASSET
     $latest = Get-Meta $rel.body 'build'
     $latestShell = Get-Meta $rel.body 'shell'
     $probes = Get-Meta $rel.body 'probes'
@@ -212,7 +215,6 @@ function Invoke-Query {
     Write-Output ("installedShell=" + (Get-InstalledShell))
     if ($latestShell) { Write-Output ("latestShell=" + $latestShell) }
     Write-Output ("url=" + $url)
-    if ($payloadUrl) { Write-Output ("payloadUrl=" + $payloadUrl) }
     if ($rel.name) { Write-Output ("title=" + $rel.name) }
     if ($probes) { Write-Output ("probes=" + $probes) }
 }

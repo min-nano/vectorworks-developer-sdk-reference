@@ -248,11 +248,12 @@ namespace vwprobe::update
 		std::string latest;	   // 公開されている本体のビルド ID
 		std::string installedShell; // 入っている殻の ID
 		std::string latestShell;	// 公開されている殻の ID
-		std::string url;			// まるごとの zip（殻＋本体）
-		std::string payloadUrl;		// 本体だけの zip
-		std::string title;			// リリースの名前（ダイアログに出す）
-		std::string probes;			// 入っているプローブの一覧（同上）
-		std::string error;			// スクリプトが返した理由（あれば）
+		// **zip は 1 つ**（殻＋本体）。本体だけの入れ替えも同じものを落として、中から
+		// 本体のファイルだけを取り出して置く（plugin/scripts/vw-probes-update.*）。
+		std::string url;
+		std::string title;	// リリースの名前（ダイアログに出す）
+		std::string probes; // 入っているプローブの一覧（同上）
+		std::string error;	// スクリプトが返した理由（あれば）
 	};
 
 	// **比べるのはコミットではなくビルド ID。** このプラグインは同じ main の sha から、
@@ -274,7 +275,6 @@ namespace vwprobe::update
 		s.installedShell = ValueOf(out, "installedShell");
 		s.latestShell = ValueOf(out, "latestShell");
 		s.url = ValueOf(out, "url");
-		s.payloadUrl = ValueOf(out, "payloadUrl");
 		s.title = ValueOf(out, "title");
 		s.probes = ValueOf(out, "probes");
 		if (s.latest.empty() || s.url.empty())
@@ -287,13 +287,11 @@ namespace vwprobe::update
 		s.offerUpdate = true;
 
 		// **本体だけで済むのは、殻の ID が確かに一致しているときだけ。** 公開側が殻の ID を
-		// 載せていない（古いリリース）・入っている側が分からない・本体だけの資産が無い、の
-		// どれか 1 つでも当てはまるなら、まるごと入れ替えて再起動する側へ倒す
-		// ——**再起動を惜しんで版の食い違ったまま動かすほうが危ない**（境界が変わっていれば
-		// 本体を読み込んだ時点で弾かれ、プローブが 1 つも動かなくなる）。
+		// 載せていない（古いリリース）か、入っている側が分からないなら、まるごと入れ替えて
+		// 再起動する側へ倒す——**再起動を惜しんで版の食い違ったまま動かすほうが危ない**
+		// （境界が変わっていれば本体を読み込んだ時点で弾かれ、プローブが 1 つも動かなくなる）。
 		s.payloadOnly = !s.latestShell.empty() && !s.installedShell.empty() &&
-						s.installedShell != "none" && s.installedShell == s.latestShell &&
-						!s.payloadUrl.empty();
+						s.installedShell != "none" && s.installedShell == s.latestShell;
 		return s;
 	}
 
