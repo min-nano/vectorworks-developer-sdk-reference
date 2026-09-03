@@ -247,7 +247,10 @@ VW_PROBE("hot-reload", "外部モジュールを読み・使い・降ろし・�
 		 "プラグイン本体の外部化とホットリロードが成り立つかの検証（図面は読むだけ）")
 {
 	probe.log("殻（Vectorworks が読み込んだモジュール）: " + vwprobe::OwnModulePath());
-	probe.log("殻の gSDK=" + Hex(gSDK) + " gCBP=" + Hex((void*)gCBP));
+	// 値と、変数そのものの番地の両方。**比べるのは後者**——値が同じなのは当たり前で
+	// （VW 側の同じ実装を指すポインタなので）、複製かどうかは番地でしか分からない。
+	probe.log("殻の gSDK の値=" + Hex(gSDK) + " gCBP の値=" + Hex((void*)gCBP));
+	probe.log("殻の &gSDK=" + Hex((const void*)&gSDK) + " &gCBP=" + Hex((const void*)&gCBP));
 	probe.log("殻から見た undo: building=" +
 			  std::string(gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
 	probe.log("");

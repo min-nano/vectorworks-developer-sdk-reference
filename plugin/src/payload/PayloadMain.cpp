@@ -54,8 +54,11 @@ namespace
 			gPayloadHost->log(gPayloadHost->logCtx, line.c_str());
 	}
 
-	// 番地を 16 進で。**殻の側の gSDK と見比べる**ために出す（別のモジュールなら
-	// 別の番地になるはずで、それが「複製を持っている」ことの実測になる）。
+	// 番地を 16 進で。
+	//
+	// 【読み違えないこと】`gSDK` の**値**は殻と同じになる（VW 側の同じ ISDK 実装を指す
+	// ポインタなので当然）。それは「変数を共有している」ことを意味しない。**モジュール
+	// ごとに複製を持っている**ことを見るには `&gSDK`（変数そのものの番地）を比べる。
 	std::string Hex(const void* p)
 	{
 		char buf[32] = {0};
@@ -81,7 +84,10 @@ namespace
 			return kVwPayloadErrNotInit;
 
 		Log("  [payload] " + Description());
-		Log("  [payload] gSDK=" + Hex(gSDK) + " gCBP=" + Hex((void*)gCBP));
+		// 値（VW 側の実装を指す。殻と同じになる）と、変数そのものの番地（このモジュールの
+		// 複製なので殻とは違うはず）の両方を出す。
+		Log("  [payload] gSDK の値=" + Hex(gSDK) + " gCBP の値=" + Hex((void*)gCBP));
+		Log("  [payload] &gSDK=" + Hex((const void*)&gSDK) + " &gCBP=" + Hex((const void*)&gCBP));
 		Log("  [payload] このモジュール内の関数の番地=" + Hex((const void*)&SelfTest));
 
 		const MCObjectHandle current = gSDK->GetCurrentLayer();
