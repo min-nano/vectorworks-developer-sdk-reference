@@ -8,8 +8,9 @@
 > [実機確認プラグイン](../plugin/README.md)へ入る `probes/runtime/<slug>/probe.cpp`
 > として書き、実機の VectorWorks で走らせる。
 
-CI の `compile` モードが `-fsyntax-only` で構文チェックする（リンクはしない——この
-リポジトリの SDK はヘッダしか持たない。実際に動かす確認は実機で行う）。
+CI の `compile` モードが `-fsyntax-only` で構文チェックする（リンクはしない——CI が
+用意する SDK はヘッダと実装ソースだけで、リンク用のライブラリを持たない。実際に
+動かす確認は実機で行う）。
 
 ```
 1. スニペットを probes/<調査名>.cpp として作業ブランチへ push

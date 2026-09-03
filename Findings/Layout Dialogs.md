@@ -35,67 +35,146 @@
 - **出せなかったときの逃げ道を必ず持つ。** レイアウトを組めなければ `AlertInform` へ落とす
   ——結果を伝えられないまま黙って終わるのが最悪。
 
-## 打ち切った調査: サムネイル付きのリソース選択（`VWImagePopupCtrl`）
+## サムネイル付きのリソース選択（画像ポップアップ）
 
-自前のレイアウトダイアログ（`VWFC::VWUI::VWDialog` を継承し `CreateDialogLayout()` を
-自分で書く形）で、VectorWorks 本体の「鋼材断面を選択」のようなサムネイル付き
-ポップアップ（`VWFC::VWUI::VWImagePopupCtrl`）を使おうとしたが、**実機（VW 2026 /
-macOS）でコントロールを作れなかった**。
+VectorWorks 本体の「鋼材断面を選択」のような**サムネイル付きのリソース選択**を、自前の
+レイアウトダイアログ（`VWFC::VWUI::VWDialog` を継承し `CreateDialogLayout()` を自分で
+書く形）で出す話。**使うクラスを間違えると永久に作れない**——ここが最大の落とし穴。
 
-- **`VWImagePopupCtrl::CreateControl(this)` が false を返す。** `CreateDialogLayout()`
-  の中で、ダイアログの枠・静的テキスト・チェックボックスの生成に成功した後、行ごとに
-  コントロールを作る途中の**最初の 1 個で** false になる。**`AddItem` で項目を足す前**
-  の段階で失敗しており、項目数や中身は無関係。失敗すると `CreateDialogLayout()` も
-  false を返し、ダイアログ自体が出せなくなる。
-- **同じダイアログの中で他のコントロールは問題なく作れる。** `VWCheckButtonCtrl` /
-  `VWStaticTextCtrl` / `VWPullDownMenuCtrl` / `VWSymbolDisplayCtrl` は同じ
-  `CreateDialogLayout()` の中で生成に成功しており、レイアウトダイアログの組み方
-  自体が壊れているわけではない。`VWImagePopupCtrl` に固有の問題。
-- **失敗の原因はヘッダからは分からない。** `CreateControl` の実装は SDK ヘッダに無く
-  （ライブラリ側でコンパイル済み）、`ImagePopupCtrl.h` にも事前条件を示すコメントは
-  無い。作る前後の手順を変えれば false を避けられるのかは、**実機でしか確かめられない**。
+### `VWImagePopupCtrl` では作れない（SDK の実装が空のスタブ）
 
-### ヘッダから読み取れたこと（【ヘッダ根拠】・実機未検証）
+`VWFC::VWUI::VWImagePopupCtrl::CreateControl(VWDialog*)` は**実機（VW 2026 / macOS）で
+必ず false を返す**。理由は SDK に同梱された実装ソースにそのまま書いてあり、
+**生成の呼び出しがコメントアウトされたまま無条件に false を返すスタブ**である。
 
-- `VWFC::Tools::VWResourceListCategorized`（`VWResourceListCategorized.h`）は、画像
-  ポップアップの初期化・イベント処理・更新に **2 系統のオーバーロード**を持つ。
-  - `DialogImagePopup_Init(VWFC::VWUI::VWDialog* dialog, TControlID id)` /
-    `_Event(...)` / `_Update(...)` — **`VWFC::VWUI::VWDialog`（今回使っている方の
-    レイアウトダイアログ）向け**。
-  - `DialogImagePopup_Init(Sint32 dialogID, Sint32 imagePopupCtrlID)` /
-    `_Event(...)` / `_Update(...)` — ヘッダのコメントに **"direct event handler
-    from ISDK::RunLayoutDialog"** とあり、旧来の・リソースファイルで組む方の
-    レイアウトダイアログ向け（`vs.py` に対応する `InsertImagePopupResource` /
-    `GetImagePopupSelectedItem` / `GetNumImagePopupItems` などの VectorScript
-    関数があるのはこちら側）。
+```cpp
+// SDKLib/Source/VWSDK/VWFC/VWUI/ImagePopupCtrl.cpp
+bool VWImagePopupCtrl::CreateControl(VWDialog* pDlg)
+{
+	// gSDK->Create...
+	//return VWControl::CreateControl( pDlg );
+	pDlg;
+	return false;
+}
+```
 
-  `VWFC::VWUI::VWDialog` 向けのオーバーロードが別立てで存在すること自体は、
-  `VWImagePopupCtrl` が `VWDialog` 系のレイアウトダイアログでも使われる想定である
-  ことを示している。ただし、`VWResourceListCategorized::DialogImagePopup_Init` を
-  **`CreateControl` の前後どちらで呼ぶべきか、あるいはこれを呼ぶことで
-  `CreateControl` が false を返す状況が変わるのか**は、宣言だけからは判断できない
-  （試すには実機が要る）。
-- `VWFC::VWUI::DialogEventArgs.h` には「`IsImagePopupSelected()` /
-  `IsImagePopupBeforeOpen()` / `IsImagePopupCategoryChanged()` は `SetAdvanced` を
-  呼んで初めて効く」という趣旨のコメントがある
-  （`// image popup events support (call SetAdvanced to enable)`）。**ただしこれは
-  イベントの受け取り方についての注記で、`CreateControl` が false になることの説明
-  にはならない**——`SetAdvanced()` は `CreateControl` と独立した関数として宣言されて
-  おり、呼び順の制約はヘッダに書かれていない。
-- `VWFC::VWUI::Dialog.h` の `AddDDX_ImagePopup(TControlID, TXString*, const
-  TXString& key="")` は、`AddDDX_ChooseLayerPopup` などの他の DDX 関数と同じ並びで
-  宣言されているだけで、「`PullDownResourceLayout` 系専用」と読める記述はヘッダに
-  無い（実際に効くかどうかは未検証）。
+したがって**呼ぶ順序も `SetAdvanced()` も `VWResourceListCategorized::
+DialogImagePopup_Init(dialog, id)` も関係ない**。項目を足す前に落ちるのは当然で、
+条件出しをしても直らない。同じクラスの他のメソッド（`AddItems` /
+`GetSelectedItemIndex` …）自体は実装されているが、どれも `CreateControl` が覚える
+親ダイアログ（`fpParentDlg`）を使うため、生成に失敗したままでは呼べない。
 
-### 分からないまま残った点
+### 代わりに `VWThumbnailPopupCtrl` を使う（実機確認済み）
 
-`CreateControl` が false を返す段階で止まっているため、次の 3 点は**確かめようが
-無かった**（`ImagePopupCtrl.h` の宣言を読んだだけで、実機での挙動は未検証）。
+同じコンポーネント種別（`VWControlType::eCompThumbnailPopup`）を指す双子のクラス
+`VWFC::VWUI::VWThumbnailPopupCtrl`（`VWFC/VWUI/ThumbnailPopupCtrl.h`）は**実装が
+生きている**。作りは、実機で問題なく使えている `VWSymbolDisplayCtrl` と**同型**
+（`gSDK->Create…` でコントロールを作り、基底へ親を覚えさせて返す）。
 
-- `AddItem(const VWResourceList&, size_t)` / `AddItems(const VWResourceList&)` で
-  足した項目の添字が、`GetSelectedItemIndex()` の戻り値と追加順で対応するか。
-- `ShowImage(true)` で閉じた状態でも選択中の絵が出るか。
-- 選択の確定値を DDX（`AddDDX_ImagePopup`）で受けられるか。
+```cpp
+// SDKLib/Source/VWSDK/VWFC/VWUI/ThumbnailPopupCtrl.cpp
+bool VWThumbnailPopupCtrl::CreateControl(VWDialog* pDlg, ThumbnailSizeType sizeType /*= kStandardSize*/)
+{
+	gSDK->CreateCustomThumbnailPopup(pDlg->GetControlID(), fControlID, sizeType);
+	return VWControl::CreateControl( pDlg );	// 親を覚えて true を返すだけ
+}
+```
+
+`VWDialog` 側にも受け口があり（`GetThumbnailPopupCtrlByID(TControlID)`。未登録の ID なら
+ラッパを作って親を結び付けて返す）、レイアウトダイアログで使う想定のコントロールである
+ことが分かる。**実機（VW 2026 / macOS）で確認した**——この形でコントロールが作られ、
+シンボルのサムネイルが並ぶポップアップが実際に出る。最小の手順は次のとおり。
+
+```cpp
+// ダイアログのメンバ: VWThumbnailPopupCtrl fThumb{ kThumbID }; VWResourceList fList;
+bool CMyDialog::CreateDialogLayout()
+{
+	// 1) 図面のシンボル定義一覧（kSymDefNode = 16）を作る。
+	//    ★ このリストはダイアログが生きている間ずっと保持すること（後述）。
+	fList.BuildList(kSymDefNode, /*sort*/ true);
+
+	// 2) 生成 → 積む。他のコントロールと同じ扱い。
+	fThumb.CreateControl(this, kStandardSize);
+	this->AddBelowControl(&fCaption, &fThumb);
+
+	// 3) 項目を入れる。添字は 0 始まり（内部で +1 されて 1 始まりの API へ渡る）。
+	for (size_t i = 0, cnt = fList.GetNumItems(); i < cnt; ++i)
+		fThumb.AddImageFromResource(fList.GetListID(), i);
+
+	return true;
+}
+```
+
+- **項目は `AddImageFromResource` の順に並び、添字は一覧の添字と一致する。** 実測:
+  16 件のシンボル定義を足すと `GetItemsCount()` も 16 になり、2 番目を選んだときの
+  `GetSelectedItemIndex()` は 1、その名前は一覧の 1 番目と同じだった。
+- **選択は添字でもリソースそのものでも引ける。** `GetSelectedItemIndex()` は 0 始まりの
+  添字、`GetSelectedItem()` は**選ばれたリソースの `InternalIndex`** を返す。
+  `InternalIndex` からシンボル定義そのものへは `gSDK->InternalIndexToHandle(index)`、
+  名前だけなら `gSDK->InternalIndexToNameN(index, outName)`（`ISDK.h`）。添字は一致する
+  ものの、**一覧を作り直したり項目を出し入れする作りなら `InternalIndex` 側で持つ**ほうが
+  崩れない（`GetItemObject(i)` / `GetObjectItemIndex(item)` で相互に引ける）。
+- **「未選択」は読み取れない——項目を足した時点で先頭が選ばれている。** 実測で、
+  `AddImageFromResource` を済ませた直後の `GetSelectedItemIndex()` は **0**（＝先頭）
+  だった。ソースは `GS_GetImagePopupSelectedItem` の戻りから 1 を引くので「本当に何も
+  選ばれていなければ `(size_t)-1`」になるはずだが、**実機ではそうならない**。
+  したがって**「まだ選んでいない」を添字で判別することはできない**——必要なら
+  「ユーザが選択イベントを起こしたか」を自分で覚えておく。
+- **選択イベントは `selected` として届く。** `VWDialogEventArgs::IsImagePopupSelected()`
+  の実体は `!fbNegativeControlID`——**そのコントロール ID への通常のディスパッチイベント**
+  が「選ばれた」を意味する。`gSDK->SetImagePopupResourceAdvanced(dialogID, controlID)`
+  を立てると、これに加えて `IsImagePopupBeforeOpen()`（ポップアップを開く直前。負の
+  コントロール ID で来る advanced イベント。`SImagePopupAdvancedMsgData` を伴う）も
+  届く。実機のログ例（1 回開いて 2 番目を選んだとき）:
+
+  ```
+  イベント: before-open   → GetSelectedItemIndex() = 0（先頭が選ばれている状態）
+  イベント: selected      → GetSelectedItemIndex() = 1 / 'アンカーボルト_M16'
+  ```
+
+  選んだ値はこの `selected` で読んでもよいし、OK のときにまとめて読んでもよい
+  （どちらでも同じ値が返る）。
+- **DDX では受けられない。** `VWDialog::AddDDX_ImagePopup` の実装は
+  `VWImagePopupCtrl::PullDownResourceLayout{Set,Get}SelectedResourceName` を呼ぶだけで、
+  **`PullDownResourceLayout` 系（リソース名の文字列でやり取りする経路）専用**。この
+  ポップアップの選択は自分で読む（イベントで読むか、OK のときに読む）。
+- **大きさの指定は 2 種類だけ。** `ThumbnailSizeType` は `short` の別名で、定数は
+  `kStandardSize = 0` と `kLineTypeSize = 1`（`Kernel/API/MiniCadCallBacks.h`）。
+  サムネイルの描画モード・視点は `VWSymbolDisplayCtrl` と違って**指定できない**。
+- **リソース一覧はダイアログより長生きさせる。** `VWResourceList` は参照カウント式で、
+  最後の 1 つが消えるときに `gSDK->DisposeResourceList(listID)` を呼ぶ。
+  `CreateDialogLayout()` のローカル変数にすると、抜けた時点でポップアップが参照している
+  リスト ID が無効になる。**ダイアログのメンバに置く。**
+
+### `VWImagePopupCtrl` の機能（カテゴリ・区切り）がどうしても要るとき【推定】
+
+カテゴリ切り替え（`SetCategories`）・区切り（`AddItemSeparator`）・`ShowImage` は
+`VWImagePopupCtrl` にしかない。`VWControl::CreateControl(VWDialog*)` は
+**public かつ非 virtual**（`VWImagePopupCtrl::CreateControl` は override ではなく
+名前の隠蔽）なので、**コントロールの生成は `gSDK` で行い、親の記憶だけを基底へ明示的に
+呼んで任せる**という抜け道は文法上成立する（`compile` で確認済み。実機未確認）。
+
+```cpp
+gSDK->CreateCustomThumbnailPopup(this->GetControlID(), kPopupID, kStandardSize);
+popup.VWFC::VWUI::VWControl::CreateControl(this);	// ← 基底を明示呼び出し
+popup.AddItems(fList);
+```
+
+両クラスとも中身は `(dialogID, controlID)` を使う `GS_*ImagePopup*` の薄い包みなので、
+**同じコントロールをどちらのクラスからでも触れる**道理だが、実挙動は未確認。まず
+`VWThumbnailPopupCtrl` で足りるかを確かめ、足りないときだけこの道を試すこと。
+
+### 一覧には「ユーザが置くシンボル」以外も混ざる
+
+`VWResourceList::BuildList(kSymDefNode, true)` は**図面にあるシンボル定義を全部**返す。
+実測（16 件）の内訳には、ユーザが置く部品（`アンカーボルト_M12` / `床束` / `仕口` …）に
+混じって、**VectorWorks 自身がプラグインオブジェクトのスタイルとして持っている
+シンボル定義**が並んでいた——`図面ラベル - 図番`・`断面寸法`・`立断面指示線`・
+`グリッド線`・`遠山信夫アトリエ一級建築士事務所`（図面枠）など。
+
+**切り分けは `gSDK->GetSymbolDefSubType(hSymDef)`**（0 なら普通のシンボル定義、
+0 以外ならプラグインオブジェクトのスタイル）。実測の対応表と、絞り込むと添字がずれる
+点は [`Symbols.md`](Symbols.md) の「一覧には『ユーザが置く部品』以外も混ざる」を参照。
 
 ### 代わりの道（実機で確認済み）
 
@@ -104,7 +183,3 @@ macOS）でコントロールを作れなかった**。
 後にしか出ず、VectorWorks 本体のポップアップとは見た目が異なる二段構えになる点だけ
 違う）。シンボル定義一覧の採り方と `VWSymbolDisplayCtrl` の使い方は
 [`Symbols.md`](Symbols.md) の「シンボル定義のサムネイル・一覧を UI に出す」を参照。
-
-`VWResourceListCategorized` 経由の道（`CreateControl` の前後で
-`DialogImagePopup_Init(dialog, id)` を呼んでみる、など）を実機で試すのは今回は
-行っていない——次に踏み込むならここから。

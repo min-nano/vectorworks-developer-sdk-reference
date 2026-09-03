@@ -7,7 +7,7 @@
 
 Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https://github.com/Vectorworks/developer-sdk)）の
 フォークに、**実測知見（`Findings/`）と調査用 CI** を足したものです。公式リファレンスは
-実際の開発には情報が足りないため、実機（ローカルの VectorWorks）と CI（SDK ヘッダ検索・
+実際の開発には情報が足りないため、実機（ローカルの VectorWorks）と CI（SDK の検索・
 コンパイル確認）で調査した結果をここへ蓄積し、**プラグイン開発（現在は
 [vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)）
 から参照する唯一の置き場**にします。
@@ -33,8 +33,10 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
    読む。**打ち切った調査に書いてあることは再調査しない**（状況——VW のバージョン・SDK の
    版——が変わらない限り）。
 3. **作業ブランチで調査する。** 問いの水準で道具が決まる:
-   - 「この API は SDK にあるか」「宣言はどうなっているか」→ `ci-debug` の `sdk-grep` /
-     `sdk-ls`（下記「CI デバッグ」）。
+   - 「この API は SDK にあるか」「宣言はどうなっているか」「**なぜこの関数は失敗するか**」
+     → `ci-debug` の `sdk-grep` / `sdk-ls`（下記「CI デバッグ」）。**ヘッダだけでなく
+     `SDKLib/Source` の VWFC 実装 `.cpp` も検索範囲に入っている**ので、理由はたいてい
+     そこに書いてある。
    - 「この呼び出しはコンパイルが通るか」→ `probes/` にスニペットを置いて `compile`。
    - **「呼んだら何が起きるか」→ `probes/runtime/<slug>/probe.cpp` にプローブを書き、
      実機確認プラグインで実機の VectorWorks で走らせる**（下記「実機確認プラグイン」）。
@@ -194,13 +196,19 @@ Bash(run_in_background: true):
 
 | mode | 用途 | `--args` |
 | --- | --- | --- |
-| `sdk-grep` | SDK ヘッダを拡張正規表現で検索（**調査の主力**） | 検索パターン |
-| `sdk-ls` | ヘッダの全文表示 / パス部分一致の一覧 | ヘッダのパスまたは部分文字列 |
+| `sdk-grep` | SDK（`SDKLib` のヘッダ＋同梱の実装ソース）を拡張正規表現で検索（**調査の主力**） | 検索パターン |
+| `sdk-ls` | ファイルの全文表示 / パス部分一致の一覧 | `SDKLib` からの相対パス（`Include/…` は省略可）または部分文字列 |
 | `compile` | `probes/` のスニペット 1 ファイルを SDK ヘッダに対して構文チェック（mac 専用。リンクはしない） | ソースのパス（例 `probes/example.cpp`） |
 | `shell` | 任意の bash（`--script`）。逃げ道 | — |
 
 `--platform` は `mac`（既定）/ `windows` / `linux`。`windows` は Windows 版 SDK ヘッダを
 引きたいときだけ。`linux` は SDK を用意しないので `shell` 専用。
+
+**SDK は VWFC の実装ソースを同梱している。** `SDKLib/Source/VWSDK/VWFC/…` に
+`VWFC::VWUI` / `VWFC::Tools` の `.cpp` が丸ごと入っており、`sdk-grep` / `sdk-ls` の
+検索範囲はそこを含む。「ヘッダには宣言しか無いので理由が分からない」で打ち切る前に、
+必ず実装を読むこと（実例: `VWImagePopupCtrl::CreateControl` が `return false` の
+スタブだと分かり、実機での条件出しが不要になった）。
 
 **`compile` が通っても「動く」とは限らない**——構文チェック（`-fsyntax-only`）であって、
 リンクも実行もしていない。実挙動の確認は実機（または実プラグイン側のビルド）で行い、
@@ -225,6 +233,11 @@ Findings に書くときの確認水準の印もそれに合わせる。
 全文ログは run のアーティファクト（`ci-debug-<label>`）に残るが、**AI はアーティファクトを
 取得できない**ので、必要な情報は必ずログ側に出すこと（モードを足すときの原則）。
 
+**注釈経路の 4096 文字（おおむね 100 行）が実質の読める上限**なので、長いファイルは
+`sdk-ls` で丸ごと出しても頭しか読めない。`mode=shell` で `sed -n '<開始>,<終了>p'` と
+範囲を切るか、`sdk-grep` を絞る。なお `mode=shell` と `compile` の出力は**ダイジェスト
+（診断行＋末尾 80 行）**なので、`shell` で読みたいものは 80 行以内に収めること。
+
 ### 制約
 
 - `workflow_dispatch` は**デフォルトブランチに存在するワークフロー**しか起動できない。
@@ -232,7 +245,7 @@ Findings に書くときの確認水準の印もそれに合わせる。
 - **モードの追加・修正は `scripts/ci-debug-job.sh`（ランナー側）で行う。** ワークフロー
   本体は薄く保ってあるので、作業ブランチに push するだけで新しいモードを試せる
   （`ref` がそのブランチのため）。ワークフロー本体を変えると main へのマージが要る。
-- SDK ヘッダはキャッシュされる（初回だけ〜140MB のダウンロードが走る）。
+- SDK（ヘッダ＋実装ソース）はキャッシュされる（初回だけ〜140MB のダウンロードが走る）。
 
 ## 関連リポジトリ
 
