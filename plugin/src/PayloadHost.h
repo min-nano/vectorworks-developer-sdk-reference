@@ -205,6 +205,10 @@ namespace vwprobe
 				 std::string& error);
 
 	private:
+		// **本体へ渡した VwPayloadHost の実体。** load のローカルにしてはならない——
+		// 本体はこのポインタを持ち続けてよい約束（PayloadAbi.h の「寿命」）なので、
+		// **降ろすまで生かす**必要がある。ここに置くのがその保証。
+		VwPayloadHost fHost{};
 		PayloadModule fModule;
 		std::string fTempPath;
 		std::string fSourcePath;

@@ -247,6 +247,12 @@ Vectorworks ──読み込む──▶ 殻（メニュー・ダイアログ・�
   置き換えられないので、直接読むと**入れ替えられなくなる**＝この仕組みが死ぬ。
 - **本体はバンドルの中に置かない**（mac も殻の隣）。バンドルの署名はリソースまで封を
   するので、中のファイルを差し替えると署名が壊れる。
+- **殻の記憶域を本体に持たせない。** 境界を越えて渡した構造体（`VwPayloadHost`）は
+  **受け取った側がその場で写す**（[`src/PayloadHostHolder.h`](src/PayloadHostHolder.h)）。
+  ここを落として**実機で Vectorworks ごと落とした**——殻がそれを `load()` のローカルに
+  置いていたので、戻った時点で番地が使い回され、プローブの最初の 1 行で「ログの受け口」
+  としてスタックのゴミを呼んだ。**コンパイルもリンクも CI のビルドも通る壊れ方**なので、
+  写しているかだけは単体テストで押さえてある（`tests/PayloadHostHolderTests.cpp`）。
 - **SDK をリンクするモジュールは `plugin_module_ver()` と `DefaultPluginVWRIdentifier()` を
   定義する。** 本体も libVWSDK.a を自分でリンクするので必要（Findings に理由と実際の
   リンクエラー）。
@@ -289,6 +295,7 @@ cmake -S plugin -B build -DVW_SDK_DIR=... \
 | `scripts/vw-probes-update.{sh,ps1}` | 同梱の更新スクリプト（プラグインが非対話で叩く） |
 | `src/PayloadAbi.h` | **殻と本体の間の C の ABI**（下記「殻と本体」） |
 | `src/PayloadHost.{h,cpp}` | 殻の側（本体の読み込み・解決・アンロード・複製） |
+| `src/PayloadHostHolder.h` | 本体の側。**殻から渡されたものを写して持つ**（`tests/PayloadHostHolderTests.cpp` が確かめる） |
 | `src/PluginPrefix.h` | SDK アンブレラヘッダ（プリコンパイル対象） |
 | `resources/VwSdkProbes.vwr/` | メニュー項目の表示名（UTF-16 の .vwstrings） |
 

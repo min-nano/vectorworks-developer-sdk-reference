@@ -23,6 +23,7 @@
 
 #include "BuildConfig.h"
 #include "PayloadAbi.h"
+#include "PayloadHostHolder.h"
 #include "Probe.h"
 
 #include <chrono>
@@ -49,7 +50,10 @@ namespace
 {
 	using namespace vwprobe;
 
-	const VwPayloadHost* gPayloadHost = nullptr;
+	// **殻から渡されたものは、ポインタで持たずに写す。** そうしないと、殻の load から
+	// 戻った時点で腐ったポインタを持つことになる——実際にそれで Vectorworks ごと
+	// 落とした（理由と落ち方は PayloadHostHolder.h）。
+	payload::HostHolder gHost;
 	bool gPayloadReady = false;
 
 	// **殻へ返す文字列の置き場。** 返した const char* は「次にペイロードを呼ぶまで」
@@ -71,8 +75,7 @@ namespace
 	void SinkLine(void* ctx, const char* line)
 	{
 		(void)ctx;
-		if (gPayloadHost != nullptr && gPayloadHost->log != nullptr)
-			gPayloadHost->log(gPayloadHost->logCtx, (line != nullptr) ? line : "");
+		gHost.log(line);
 	}
 
 	void Log(const std::string& line)
@@ -202,28 +205,24 @@ VW_PAYLOAD_EXPORT int vw_payload_init(const VwPayloadHost* host)
 {
 	try
 	{
-		if (host == nullptr)
-			return kVwPayloadErrHost;
-		// 版と大きさの二重の歯止め（殻と本体は別々にビルドされ、別々に配られる）。
-		if (host->abiVersion != VW_PAYLOAD_ABI_VERSION || host->size < sizeof(VwPayloadHost))
-			return kVwPayloadErrAbi;
-		if (host->callbacks == nullptr)
-			return kVwPayloadErrHost;
-
-		gPayloadHost = host;
+		// **受け取ってその場で写す**（版と大きさの確認も入れ物の側でやる）。以降、殻から
+		// 渡された記憶域には二度と触らない。
+		const int adopted = gHost.adopt(host);
+		if (adopted != kVwPayloadOk)
+			return adopted;
 
 		// **ここが要（かなめ）。** 自分の側の gSDK / gCBP / gVWMM を埋める。
-		const VCOMError err = ::GS_InitializeVCOM(host->callbacks);
+		const VCOMError err = ::GS_InitializeVCOM(gHost.callbacks());
 		if (err != kVCOMError_NoError)
 		{
 			Log("[payload] GS_InitializeVCOM が失敗: " + std::to_string((long)err));
-			gPayloadHost = nullptr;
+			gHost.forget();
 			return kVwPayloadErrVcom;
 		}
 		if (gSDK == nil)
 		{
 			Log("[payload] GS_InitializeVCOM は通ったが gSDK が nil のまま");
-			gPayloadHost = nullptr;
+			gHost.forget();
 			return kVwPayloadErrVcom;
 		}
 
@@ -232,7 +231,7 @@ VW_PAYLOAD_EXPORT int vw_payload_init(const VwPayloadHost* host)
 	}
 	catch (...)
 	{
-		gPayloadHost = nullptr;
+		gHost.forget();
 		gPayloadReady = false;
 		return kVwPayloadErrException;
 	}
@@ -324,5 +323,5 @@ VW_PAYLOAD_EXPORT void vw_payload_shutdown()
 	// 降ろす直前に殻が呼ぶ。**殻へ渡したものを手放す**のがここの仕事——このモジュールの
 	// 番地を持たれたまま降ろすと、次に触った瞬間に落ちる。
 	gPayloadReady = false;
-	gPayloadHost = nullptr;
+	gHost.forget();
 }

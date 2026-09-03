@@ -350,14 +350,19 @@ namespace vwprobe
 		fBranch = (info.branch != nullptr) ? info.branch : "";
 		fBuildTime = (info.buildTime != nullptr) ? info.buildTime : "";
 
-		VwPayloadHost host{};
-		host.size = static_cast<unsigned int>(sizeof(VwPayloadHost));
-		host.abiVersion = VW_PAYLOAD_ABI_VERSION;
-		host.callbacks = callbacks;
-		host.logCtx = logCtx;
-		host.log = log;
+		// **これはメンバである（load のローカルではない）。** 古い本体は渡された
+		// VwPayloadHost のポインタを持ち続けることがあり、その先がローカルだと
+		// load から戻った時点で腐る——実際にそれで Vectorworks ごと落ちた
+		// （Findings「プラグインモジュールの読み込みと入れ替え」の「殻の記憶域を
+		//  本体に持たせない」）。**降ろすまで生かす**のが殻の側の歯止め。
+		fHost = VwPayloadHost{};
+		fHost.size = static_cast<unsigned int>(sizeof(VwPayloadHost));
+		fHost.abiVersion = VW_PAYLOAD_ABI_VERSION;
+		fHost.callbacks = callbacks;
+		fHost.logCtx = logCtx;
+		fHost.log = log;
 
-		const int status = initFn(&host);
+		const int status = initFn(&fHost);
 		if (status != kVwPayloadOk)
 		{
 			error = "本体を初期化できませんでした（コード " + std::to_string(status) + "）。";
@@ -425,6 +430,9 @@ namespace vwprobe
 		fRunFn = nullptr;
 		fShutdownFn = nullptr;
 		fProbes.clear();
+		// 本体は shutdown で手放したはず。殻の側も、渡していたものをここで捨てる
+		// （降ろした後に触られても、少なくとも「腐った値」ではなくなる）。
+		fHost = VwPayloadHost{};
 
 		std::string ignored;
 		(void)fModule.close(ignored);
