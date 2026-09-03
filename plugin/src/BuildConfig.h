@@ -34,3 +34,11 @@
 #ifndef VW_BUILD_TIME
 #	define VW_BUILD_TIME "unknown"
 #endif
+
+// ビルドを一意に指す ID（ローカルビルドでは "local"）。**自動アップデートが新旧を
+// 比べるのはこれ**——コミットではない（同じ sha から、同居させる PR を変えて何度も
+// ビルドされるため）。値は「main のコミット＋各 PR の head」から計算したもので、
+// **同じ顔ぶれで作り直しても変わらない**（scripts/gather-probes.sh。plugin/src/Update.h）。
+#ifndef VW_BUILD_ID
+#	define VW_BUILD_ID "local"
+#endif

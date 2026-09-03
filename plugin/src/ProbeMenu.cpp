@@ -26,6 +26,7 @@
 #include "BuildConfig.h"
 #include "ProbeMenu.h"
 #include "Probe.h"
+#include "Update.h"
 
 #include <algorithm>
 #include <chrono>
@@ -69,11 +70,13 @@ namespace vwprobe
 			return def;
 		}
 
-		// このビルドの素性（ピッカーと結果の見出しに出す 1 行）。
+		// このビルドの素性（ピッカーと結果の見出しに出す 1 行）。**ビルド ID も出す**
+		// ——自動アップデートが新旧を比べるのはこれなので、「更新されない」を追うときに
+		// 最初に見たい値になる（Update.h）。
 		std::string buildStamp()
 		{
 			return std::string("ビルド: ") + VW_BUILD_BRANCH + " " + VW_BUILD_VERSION + " (" +
-				   VW_BUILD_TIME + ")";
+				   VW_BUILD_TIME + ") id=" + VW_BUILD_ID;
 		}
 
 		// 出所を 1 行に畳む（無ければ「ローカル」）。
@@ -100,6 +103,15 @@ namespace vwprobe
 				line += " / " + origin->title;
 			return line;
 		}
+
+		// ピッカーの**先頭に置く項目**。プローブではなく「新しいビルドを取り込む」を選ぶ。
+		//
+		// **なぜメニューの中に置くか**: 入れ替えは起動時にも尋ねる（Update.h）が、それだけ
+		// だと Vectorworks を動かしたままビルドを頼んだとき、気付くのに 1 回・反映に 1 回で
+		// **再起動が 2 回**要る。ここから確認できれば 1 回で済む。メニュー項目を増やさない
+		// のは、増やすたびにワークスペースへの登録が要るため（このプラグインの
+		// メニューコマンドは 1 つ、という設計。plugin/README.md）。
+		constexpr const char* kUpdateItem = "＊ 新しいプローブビルドを確認して入れ替える…";
 
 		// ピッカーの 1 項目。「どの PR の・どのコミットの・何を調べるプローブか」を
 		// この 1 行だけで判断できるようにする（選ぶ前に見えるのはこれだけなので）。
@@ -159,9 +171,10 @@ namespace vwprobe
 		class CProbePickerDialog : public VWDialog
 		{
 		public:
-			CProbePickerDialog(const std::vector<TXString>& items, short initialSelection)
+			CProbePickerDialog(const std::string& prompt, const std::vector<TXString>& items,
+							   short initialSelection)
 				: fPrompt(kPromptID), fStamp(kStampID), fWarning(kWarningID), fPopup(kPopupID),
-				  fItems(items), fSelection(initialSelection)
+				  fPromptText(prompt.c_str()), fItems(items), fSelection(initialSelection)
 			{
 			}
 			~CProbePickerDialog() override = default;
@@ -183,7 +196,7 @@ namespace vwprobe
 			{
 				if (!this->CreateDialog("SDK 実機プローブ", "実行", "キャンセル", false))
 					return false;
-				if (!fPrompt.CreateControl(this, "実行するプローブを選んでください:"))
+				if (!fPrompt.CreateControl(this, fPromptText))
 					return false;
 				if (!fPopup.CreateControl(this, 72 /* width in standard chars */))
 					return false;
@@ -233,6 +246,7 @@ namespace vwprobe
 			VWStaticTextCtrl fStamp;
 			VWStaticTextCtrl fWarning;
 			VWPullDownMenuCtrl fPopup;
+			TXString fPromptText;
 			std::vector<TXString> fItems;
 			short fSelection;
 			bool fShown = false;
@@ -458,21 +472,22 @@ vwprobe::CProbeMenu_EventSink::~CProbeMenu_EventSink() = default;
 void vwprobe::CProbeMenu_EventSink::DoInterface()
 {
 	const std::vector<Probe>& all = probes();
-	if (all.empty())
-	{
-		// プローブが 1 つも入っていないビルド（main に何も無い状態で作った等）。
-		gSDK->AlertInform("このビルドにはプローブが入っていません。", buildStamp().c_str(), false);
-		return;
-	}
 
-	// 1. 選ばせる。
+	// 1. 選ばせる。**先頭は「新しいビルドに入れ替える」**で、その後ろにプローブが並ぶ
+	// （プローブが 1 つも入っていないビルドでも、入れ替えだけは選べる）。
 	const std::vector<size_t> order = displayOrder();
 	std::vector<TXString> items;
-	items.reserve(order.size());
+	items.reserve(order.size() + 1);
+	items.emplace_back(kUpdateItem);
 	for (const size_t index : order)
 		items.emplace_back(pickerItem(all[index]).c_str());
 
-	CProbePickerDialog picker(items, 0);
+	const std::string prompt =
+		all.empty() ? "このビルドにはプローブが入っていません。新しいビルドを取り込めます:"
+					: "実行するプローブを選んでください:";
+
+	// 既定の選択は**先頭のプローブ**（あれば）。入れ替えは意識して選ぶものにする。
+	CProbePickerDialog picker(prompt, items, all.empty() ? 0 : 1);
 	const bool accepted = (picker.RunDialogLayout("") == VWFC::VWUI::kDialogButton_Ok);
 	if (!picker.Shown())
 	{
@@ -485,11 +500,22 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 	if (!accepted)
 		return; // キャンセルなら静かに終える
 	const short selection = picker.GetSelection();
-	if (selection < 0 || size_t(selection) >= order.size())
+	if (selection < 0)
+		return;
+	if (selection == 0)
+	{
+		// 先頭 = 入れ替え。確認・ダウンロード・再起動の案内はすべて Update.cpp が持つ
+		// （例外もあちらで受け止める）。
+		RunManualUpdateCheck();
+		return;
+	}
+
+	const size_t probeIndex = size_t(selection) - 1; // 先頭の 1 項目ぶんずらす
+	if (probeIndex >= order.size())
 		return;
 
 	// 2. 走らせる（例外は RunProbe が受け止める）＋ 3. 結果を見せる。
 	Report report;
-	const std::vector<std::string> body = RunProbe(all[order[size_t(selection)]], report);
+	const std::vector<std::string> body = RunProbe(all[order[probeIndex]], report);
 	ShowResult(body, report.text());
 }

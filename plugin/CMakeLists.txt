@@ -145,6 +145,26 @@ else()
 	endforeach()
 endif()
 
+# --- ビルド ID -----------------------------------------------------------------
+# **自動アップデートが新旧を比べる鍵**（plugin/src/Update.h）。コミットでは比べない
+# ——同じ main の sha から、同居させる PR を変えて何度もビルドされるため。
+#
+# 値は**集約が決める**（scripts/gather-probes.sh が「main のコミット＋各 PR の head」から
+# 計算し、マニフェストの VW_PROBE_BUILD_ID として渡す）。ビルドへ焼く値とリリースに書く
+# 値が同じファイル由来になるので、**ずれようがない**のが要点。
+#
+# 明示的に -DVW_BUILD_ID= を渡せばそちらが勝つ（逃げ道）。マニフェストの無いローカル
+# ビルドは "local" で、公開されている ID と一致しないので常に「新しいものがある」と
+# 出る（それでよい——手元のビルドを最新扱いするほうが危ない）。
+if(NOT DEFINED VW_BUILD_ID)
+	if(VW_PROBE_BUILD_ID)
+		set(VW_BUILD_ID "${VW_PROBE_BUILD_ID}")
+	else()
+		set(VW_BUILD_ID "local")
+	endif()
+endif()
+message(STATUS "ビルド ID: ${VW_BUILD_ID}")
+
 if(NOT VW_PROBE_SOURCES)
 	# 1 件も無いビルドは作れてしまうが、実機では「プローブが入っていません」と出るだけで
 	# 何の役にも立たない。取り違え（マニフェストの指定ミス等）を早く気付けるよう警告する。
@@ -200,6 +220,7 @@ set(VW_PLUGIN_SOURCES
 	src/ModuleMain.cpp
 	src/Probe.cpp
 	src/ProbeMenu.cpp
+	src/Update.cpp
 	"${generated_provenance}"
 	${VW_PROBE_SOURCES})
 
@@ -225,7 +246,8 @@ target_include_directories(
 target_compile_definitions(
 	${VW_PLUGIN_NAME}
 	PRIVATE RELEASE_BLD=1 "VW_BUILD_VERSION=\"${VW_BUILD_VERSION}\""
-			"VW_BUILD_BRANCH=\"${VW_BUILD_BRANCH}\"" "VW_BUILD_TIME=\"${VW_BUILD_TIME}\"")
+			"VW_BUILD_BRANCH=\"${VW_BUILD_BRANCH}\"" "VW_BUILD_TIME=\"${VW_BUILD_TIME}\""
+			"VW_BUILD_ID=\"${VW_BUILD_ID}\"")
 
 # SDK アンブレラヘッダのプリコンパイル（コンパイル時間のいちばん大きな削減）。
 target_precompile_headers(${VW_PLUGIN_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/PluginPrefix.h")
@@ -322,13 +344,42 @@ if(EXISTS "${VW_BUILDVWR}")
 	endif()
 endif()
 
+# --- 自動アップデータ（同梱スクリプト）を一緒に配る --------------------------------
+# プラグイン本体（src/Update.cpp）がこれを非対話で叩いて、リリースの確認と入れ替えを行う。
+# macOS はバンドルの Contents/Resources、Windows は .vlb の隣（SDK の作法と同じ置き方）。
+if(APPLE)
+	add_custom_command(
+		TARGET ${VW_PLUGIN_NAME}
+		POST_BUILD
+		COMMAND "${CMAKE_COMMAND}" -E make_directory
+				"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources"
+		COMMAND
+			"${CMAKE_COMMAND}" -E copy
+			"${CMAKE_CURRENT_SOURCE_DIR}/scripts/vw-probes-update.sh"
+			"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources/vw-probes-update.sh"
+		VERBATIM
+		COMMENT "Bundling vw-probes-update.sh into ${VW_PLUGIN_NAME}")
+else()
+	add_custom_command(
+		TARGET ${VW_PLUGIN_NAME}
+		POST_BUILD
+		COMMAND
+			"${CMAKE_COMMAND}" -E copy
+			"${CMAKE_CURRENT_SOURCE_DIR}/scripts/vw-probes-update.ps1"
+			"$<TARGET_FILE_DIR:${VW_PLUGIN_NAME}>/vw-probes-update.ps1"
+		VERBATIM
+		COMMENT "Bundling vw-probes-update.ps1 next to ${VW_PLUGIN_NAME}")
+endif()
+
 # Windows には Info.plist が無いので、ビルドの素性は隣のテキストへ書き出す
 # （どのビルドを入れたかを、プラグインを起動せずに確かめられるように）。
 if(NOT APPLE)
 	set(stamp_file "${CMAKE_CURRENT_BINARY_DIR}/${VW_PLUGIN_NAME}.build-info.txt")
+	# build= は**自動アップデートが読む行**（入っているビルドの ID。mac 側は Info.plist の
+	# VWBuildId）。plugin/scripts/vw-probes-update.ps1 の Get-InstalledBuild と対。
 	file(
 		WRITE "${stamp_file}"
-		"branch=${VW_BUILD_BRANCH}\ncommit=${VW_BUILD_VERSION}\nbuilt=${VW_BUILD_TIME}\nprobes=${VW_PROBE_SUMMARY}\n"
+		"build=${VW_BUILD_ID}\nbranch=${VW_BUILD_BRANCH}\ncommit=${VW_BUILD_VERSION}\nbuilt=${VW_BUILD_TIME}\nprobes=${VW_PROBE_SUMMARY}\n"
 	)
 	add_custom_command(
 		TARGET ${VW_PLUGIN_NAME}
