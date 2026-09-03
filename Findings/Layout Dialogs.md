@@ -148,11 +148,17 @@ popup.AddItems(fList);
 
 ### 実機で確かめるべきこと（未確認）
 
+次の 4 点はソースからは決まらない。1〜3 は実機プローブ
+`probes/runtime/thumbnail-popup/`（[実機確認プラグイン](../plugin/README.md)）で
+1 周で測れるようにしてある——ダイアログを実際に出し、コントロールの生成結果・項目数・
+未選択の戻り・届いたイベント・選択から引いた名前をログへ出す。
+
 - `VWThumbnailPopupCtrl::CreateControl` が実機でコントロールを作れるか（サムネイルが
   実際に出るか。シンボル定義の絵が期待どおりに描かれるか）。
 - 未選択のときの `GetSelectedItemIndex()` の実際の戻り（ソース上は `(size_t)-1`）。
 - `SetImagePopupResourceAdvanced` を立てたときの advanced イベントの届き方。
-- 上の「基底の `CreateControl` を明示呼び出し」が実機で通るか。
+- 上の「基底の `CreateControl` を明示呼び出し」が実機で通るか（上の 3 つで足りるなら
+  試す必要は無いので、プローブには入れていない）。
 
 ### 代わりの道（実機で確認済み）
 
