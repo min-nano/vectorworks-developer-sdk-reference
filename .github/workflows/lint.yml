@@ -87,6 +87,9 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
             plugin/tests/UpdateParseTests.cpp -o /tmp/update-parse-tests
           /tmp/update-parse-tests
+          g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
+            plugin/tests/PayloadPathTests.cpp -o /tmp/payload-path-tests
+          /tmp/payload-path-tests
 
       # ビルド ID は**同じ入力なら同じ値**でなければならない（そうでないと、同じ顔ぶれで
       # 作り直すたびに「新しいビルドがあります」と誘ってしまう）。集約を 2 回走らせて

@@ -221,6 +221,7 @@ set(VW_PLUGIN_SOURCES
 	src/Probe.cpp
 	src/ProbeMenu.cpp
 	src/Update.cpp
+	src/PayloadHost.cpp
 	"${generated_provenance}"
 	${VW_PROBE_SOURCES})
 
@@ -313,6 +314,108 @@ else()
 	target_link_libraries(${VW_PLUGIN_NAME} PRIVATE "${VW_SDK_LIB}/VWSDK.lib"
 													"${VW_SDK_LIB}/VWMM.lib" USP10.lib Rpcrt4.lib)
 endif()
+
+# --- 外部モジュール（ペイロード）------------------------------------------------
+# **プラグイン本体を外部化してホットリロードできるか**の検証（issue #15）のための足場。
+# Vectorworks が読み込むのは上のモジュールだけで、こちらは殻が自分で dlopen /
+# LoadLibrary する（＝ Vectorworks を再起動せずに降ろして読み直せる、はず）。
+#
+# **同じソースから中身の違う 2 つ（変種 A / B）を作る。** そうしないと「降ろして別のを
+# 読んだら本当に別のコードが動いたか」を実機で見分けられない（probes/runtime/hot-reload）。
+#
+# 拡張子 .vwpayload は Vectorworks にプラグインとして拾わせないため。SDK まわりの設定は
+# 上の本体と同じものを与える（本体側の記述は触らずに済むよう、あえて書き下している）。
+function(vw_add_payload variant)
+	set(tgt "VwSdkProbesPayload${variant}")
+	set(src "${CMAKE_CURRENT_SOURCE_DIR}/src/payload/PayloadMain.cpp")
+
+	add_library(${tgt} MODULE "${src}")
+
+	set_target_properties(
+		${tgt}
+		PROPERTIES CXX_STANDARD 20
+				   CXX_STANDARD_REQUIRED ON
+				   BUNDLE FALSE
+				   PREFIX ""
+				   SUFFIX ".vwpayload"
+				   OUTPUT_NAME "VwSdkProbesPayload-${variant}")
+
+	target_include_directories(
+		${tgt}
+		PRIVATE "${VW_SDK_INCLUDE}"
+				"${VW_SDK_INCLUDE}/Kernel"
+				"${VW_SDK_INCLUDE}/Interfaces"
+				"${VW_SDK_INCLUDE}/VWMM"
+				"${CMAKE_CURRENT_SOURCE_DIR}/src")
+
+	target_compile_definitions(
+		${tgt} PRIVATE RELEASE_BLD=1 "VW_PAYLOAD_VARIANT=\"${variant}\""
+					   "VW_PAYLOAD_BUILD_TIME=\"${VW_BUILD_TIME}\"")
+
+	if(APPLE)
+		# 本体と同じく Objective-C++ として（SDK の mac ヘッダが CoreFoundation を #import する）。
+		set_source_files_properties("${src}" TARGET_DIRECTORY ${tgt} PROPERTIES LANGUAGE OBJCXX)
+		set_target_properties(${tgt} PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
+		target_include_directories(${tgt} PRIVATE "${VW_SDK_INCLUDE}/OnlyMac")
+		target_compile_options(${tgt} PRIVATE -stdlib=libc++ -Wno-deprecated-declarations)
+		target_link_libraries(
+			${tgt}
+			PRIVATE "${VW_SDK_LIB}/libVWSDK.a"
+					"-F${VW_SDK_LIB}"
+					"-framework VWMM"
+					"-framework Carbon"
+					"-framework Cocoa")
+	else()
+		target_include_directories(${tgt} PRIVATE "${VW_SDK_INCLUDE}/OnlyWin")
+		set_target_properties(${tgt} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+		target_compile_definitions(
+			${tgt}
+			PRIVATE _WINDOWS
+					WIN32
+					_USRDLL
+					_WINDLL
+					_WIN_EXTERNAL_
+					UNICODE
+					_UNICODE
+					NDEBUG
+					_CRT_SECURE_NO_WARNINGS)
+		target_compile_options(${tgt} PRIVATE /EHsc /bigobj /wd4996)
+		if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+			target_compile_options(${tgt} PRIVATE /MP)
+		endif()
+		target_link_libraries(${tgt} PRIVATE "${VW_SDK_LIB}/VWSDK.lib" "${VW_SDK_LIB}/VWMM.lib"
+											 USP10.lib Rpcrt4.lib)
+	endif()
+endfunction()
+
+set(VW_PAYLOAD_VARIANTS A B)
+foreach(variant IN LISTS VW_PAYLOAD_VARIANTS)
+	vw_add_payload(${variant})
+	# 配る形に置く（mac: バンドルの Contents/Resources、Windows: モジュールの隣）。
+	# **本体の POST_BUILD で写す**——本体を最後にビルドさせれば、置き場所は必ず出来ている。
+	add_dependencies(${VW_PLUGIN_NAME} "VwSdkProbesPayload${variant}")
+	if(APPLE)
+		add_custom_command(
+			TARGET ${VW_PLUGIN_NAME}
+			POST_BUILD
+			COMMAND "${CMAKE_COMMAND}" -E make_directory
+					"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources"
+			COMMAND
+				"${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:VwSdkProbesPayload${variant}>"
+				"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources/$<TARGET_FILE_NAME:VwSdkProbesPayload${variant}>"
+			VERBATIM
+			COMMENT "Bundling the payload (${variant}) into ${VW_PLUGIN_NAME}")
+	else()
+		add_custom_command(
+			TARGET ${VW_PLUGIN_NAME}
+			POST_BUILD
+			COMMAND
+				"${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:VwSdkProbesPayload${variant}>"
+				"$<TARGET_FILE_DIR:${VW_PLUGIN_NAME}>/$<TARGET_FILE_NAME:VwSdkProbesPayload${variant}>"
+			VERBATIM
+			COMMENT "Placing the payload (${variant}) next to ${VW_PLUGIN_NAME}")
+	endif()
+endforeach()
 
 # --- "<name>.vwr" のパッケージ --------------------------------------------------
 # SDK の BuildVWR が resources/<name>.vwr を無圧縮 zip に固める。macOS ではバンドルの
