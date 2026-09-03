@@ -160,7 +160,7 @@ resolve_head() {
 	if [ -n "$PR" ]; then
 		code="$(api_json "$VW_API/pulls/$PR" "$body")"
 		if [ "$code" != "200" ]; then
-			echo "ci-wait: PR #$PR を取得できません（HTTP $code）: $(api_message "$body")" >&2
+			echo "ci-wait: PR #$PR を取得できません（HTTP ${code}）: $(api_message "$body")" >&2
 			rm -f "$body"
 			return 1
 		fi
@@ -169,7 +169,7 @@ resolve_head() {
 	elif [ -n "$REF" ]; then
 		code="$(api_json "$VW_API/commits/$REF" "$body")"
 		if [ "$code" != "200" ]; then
-			echo "ci-wait: ref '$REF' を解決できません（HTTP $code）: $(api_message "$body")" >&2
+			echo "ci-wait: ref '$REF' を解決できません（HTTP ${code}）: $(api_message "$body")" >&2
 			echo "ci-wait: ブランチを push 済みか確認してください（ローカルにしか無い ref は解決できません）" >&2
 			rm -f "$body"
 			return 1
@@ -178,7 +178,7 @@ resolve_head() {
 	else
 		code="$(api_json "$VW_API/commits/$SHA" "$body")"
 		if [ "$code" != "200" ]; then
-			echo "ci-wait: コミット '$SHA' を取得できません（HTTP $code）: $(api_message "$body")" >&2
+			echo "ci-wait: コミット '$SHA' を取得できません（HTTP ${code}）: $(api_message "$body")" >&2
 			rm -f "$body"
 			return 1
 		fi

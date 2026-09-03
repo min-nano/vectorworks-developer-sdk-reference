@@ -316,3 +316,109 @@ poll_until() {
 		sleep "$POLL"
 	done
 }
+
+# ---------------------------------------------------------------------------
+# run の特定と完了待ち（poll_until の上に載る probe は**ここだけ**）
+# ---------------------------------------------------------------------------
+#
+# workflow_dispatch で起動した run を「特定して」「完了まで待つ」道具。待機の作法
+# （締切・ウォッチドッグ・API 連続失敗の打ち切り）を各スクリプトへ散らさないため、
+# ここに 1 つだけ置く（ヘッダの「待機ループを手書きしないこと」）。利用者は
+# ci-debug.sh（SDK 調査）と probe-auto-update.sh（プローブの自動公開。**CI の中でも
+# 走る**——歯止めが要るのは実行場所によらない）。
+
+# resolve_run <ワークフローのファイル名> <jq の選択式> [jq への引数…]:
+# 起動した run の id を stdout へ出す。**dispatch API は run の id を返さない**ので、
+# run 一覧との突き合わせが唯一の手掛かり。GitHub が run を作るまで数秒かかるので
+# 少し粘るが、粘る時間は有限（120 秒）で、諦めるときは必ず理由を stderr に出す。
+#
+#   RESOLVE_RUN_WHAT="label=[$LABEL]"   # 見付からなかったときの表示（任意）
+#   resolve_run "ci-debug.yml" '.display_title | contains($l)' --arg l "[$LABEL]"
+#
+# 選択式は「新しい順の workflow_runs」の 1 件に対して評価される。**自分が起動した
+# run だけを掴む条件**（run 名に埋めた label、あるいは起動前に控えた id より大きいこと）
+# を必ず入れること——さもないと、たまたま並んでいた他人の run を待ってしまう。
+RESOLVE_RUN_WHAT=""
+
+resolve_run() {
+	local wf="$1" filter="$2"
+	shift 2
+	local tries=0 id code body
+	body="$(workfile)"
+	while [ "$tries" -lt 40 ]; do
+		tries=$((tries + 1))
+		code="$(api_json "$VW_API/actions/workflows/$wf/runs?event=workflow_dispatch&per_page=50" "$body")"
+		if [ "$code" = "200" ]; then
+			id="$(jq -r "$@" "first(.workflow_runs[] | select($filter) | .id) // empty" "$body" 2>/dev/null)"
+			if [ -n "$id" ]; then
+				rm -f "$body"
+				printf '%s\n' "$id"
+				return 0
+			fi
+		elif fatal_http "$code"; then
+			echo "$CI_TOOL: run 一覧を取得できません（HTTP ${code}）: $(api_message "$body")" >&2
+			rm -f "$body"
+			return 1
+		else
+			echo "$CI_TOOL: run 一覧の取得に失敗（HTTP ${code}）— 再試行します" >&2
+		fi
+		sleep 3
+	done
+	echo "$CI_TOOL: ${RESOLVE_RUN_WHAT:-$wf} の run が 120 秒たっても現れませんでした" >&2
+	rm -f "$body"
+	return 1
+}
+
+# probe_run: run の状態を 1 回調べる（poll_until 用の probe）。締切・生存出力・
+# API 連続失敗の打ち切りは poll_until が持つので、ここは「今どうなっているか」だけを見る。
+# 完了したら conclusion を PROBE_CONCLUSION へ入れて 0 を返す。
+PROBE_RUN_ID=""
+PROBE_BODY=""
+PROBE_CONCLUSION=""
+
+probe_run() {
+	local code status
+	code="$(api_json "$VW_API/actions/runs/$PROBE_RUN_ID" "$PROBE_BODY")"
+	if [ "$code" != "200" ]; then
+		echo "$CI_TOOL: run の状態取得に失敗（HTTP $code, ${POLL_ELAPSED}s）" >&2
+		if fatal_http "$code"; then
+			echo "$CI_TOOL: 回復しないエラーなので待機を打ち切ります: $(api_message "$PROBE_BODY")" >&2
+			return 2
+		fi
+		return 3
+	fi
+	status="$(jq -r '.status // empty' "$PROBE_BODY" 2>/dev/null)"
+	POLL_STATUS="status=${status:-unknown}"
+	if [ "$status" = "completed" ]; then
+		PROBE_CONCLUSION="$(jq -r '.conclusion // empty' "$PROBE_BODY" 2>/dev/null)"
+		return 0
+	fi
+	return 1
+}
+
+# wait_run <run-id>: completed になるまで待ち、conclusion を echo する。
+#
+# 終了経路は 3 つだけで、**どれも有限時間で必ず返る**:
+#   * completed を観測 → conclusion（成功経路）
+#   * 締切（TIMEOUT）超過 → timed-out-waiting
+#   * API の連続失敗が上限に達した / 回復しないエラー → api-error
+wait_run() {
+	PROBE_RUN_ID="$1"
+	PROBE_BODY="$(workfile)"
+	PROBE_CONCLUSION=""
+	poll_until probe_run
+	case "$?" in
+		0)
+			printf '%s\n' "${PROBE_CONCLUSION:-unknown}"
+			return 0
+			;;
+		1)
+			printf '%s\n' "timed-out-waiting"
+			return 1
+			;;
+		*)
+			printf '%s\n' "api-error"
+			return 1
+			;;
+	esac
+}

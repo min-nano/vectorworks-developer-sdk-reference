@@ -20,7 +20,7 @@ Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https
 | `plugin/` | **実機確認プラグイン**（VwSdkProbes）。メニュー 1 つから、複数の PR の調査コードを同居させて実機で走らせる（[説明](plugin/README.md)） | 仕組みを変えるときだけ |
 | `probes/` | 調査用のコンパイルスニペット（[規約](probes/README.md)） | 調査中だけ。役目を終えたら消す |
 | `probes/runtime/` | **実機で走らせる調査（プローブ）**。1 調査 1 ディレクトリ（[規約](probes/runtime/README.md)） | 調査中だけ。役目を終えたら消す |
-| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`） | — |
+| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`）・プローブの自動公開（`probe-auto-update`） | — |
 | `CLAUDE.md`（本ファイル） | 作業時の規約。調査のフロー・PR とマージ・CI の待ち方 | — |
 
 ## 調査のフロー
@@ -116,13 +116,35 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
   作り直しても、マージ後に main のものになっても、コードは変えなくてよい**。
 - **ビルドは main のワークフロー**（Actions の "Probe plug-in"）。`workflow_dispatch` の
   入力 `prs` に**確かめたい PR 番号をカンマ区切り**で入れると、その PR たちのプローブが
-  main のものと同居した 1 本のプラグインになる。公開先は転がりタグ `probes`
+  main のものと同居した 1 つのプラグインになる。公開先は転がりタグ `probes`
   （プレリリース）で、**リリースノートに何が入っているかの表が必ず載る**。
-- **PR では公開せず、ビルドが通るかだけを見る**（ビルドに入るもの——`plugin/src/**` /
-  `plugin/resources/**` / `plugin/CMakeLists.txt` / `probes/runtime/**`——を触った PR で
-  自動的に走る）。「ディスパッチしたらコンパイルエラーだった」を防ぐ門。
-- **実機で走らせるのはユーザー。** AI はビルドをディスパッチし、リリースができたことを
-  伝えるところまで。結果（ログ）を受け取ってから `Findings/` へ反映する。
+- **同居は「群（main / PR ごと）に 1 本の本体」で行う。** プローブは
+  `VwSdkProbesPayload-<群>.vwpayload` に分かれ、殻はカタログ（`VwSdkProbes.probes.txt`）
+  で一覧を出し、**ダイアログで選ばれた 1 本だけ**を読み込む。だから**1 つの PR が
+  コンパイルできなくても、他の PR のプローブは配れる・選べる**（落ちた群は
+  「※本体なし」と出る）。仕組みは [`plugin/README.md`](plugin/README.md)。
+- **`probes/runtime/` を触った PR では、そのディスパッチが自動で行われる**
+  （`.github/workflows/probe-auto-update.yml` / [`scripts/probe-auto-update.sh`](scripts/probe-auto-update.sh)）。
+  push するたびに「main のプローブ＋その PR のプローブ」でビルドし直し、公開まで進む
+  ので、**AI が手でディスパッチする必要はない**——プローブを push したら、あとは
+  「リリースができた（自動更新が走った）」と伝えればよい。
+  - **その完了待ちがそのまま PR のチェックになる**（`Probe auto update / publish`）。
+    プローブがコンパイルできなければ PR が赤くなるので、`probes/runtime/` だけの PR
+    では probe-build.yml の PR ビルドは走らせない（同じものを二度ビルドしないため）。
+  - **載るのは「main ＋ その時点で open な PR 全部」**（群ごとに分かれるので、
+    他人の PR がコンパイルできなくても巻き込まれない）。載せる顔ぶれを絞りたいときだけ、
+    手で "Probe plug-in" をディスパッチする。
+  - **自分の群がコンパイルできなければ、その PR のチェックが赤くなる**（公開そのものは
+    成功していても）。判断はリリース本文の `payloads=` を読んで行う。
+  - 転がりタグ `probes` は**最後に公開したビルド**を指す。プローブを持つ PR が複数
+    動いていると、後から push した方で置き換わる（何が入っているかはリリースノートと
+    ピッカーの出所欄に出る）。
+- **PR では公開せず、ビルドが通るかだけを見る**（プラグイン本体——`plugin/src/**` /
+  `plugin/resources/**` / `plugin/CMakeLists.txt`——を触った PR で自動的に走る）。
+  「ディスパッチしたらコンパイルエラーだった」を防ぐ門。
+- **実機で走らせるのはユーザー。** AI はビルドが公開されたことを伝えるところまで
+  （自動更新に任せる／必要ならディスパッチする）。結果（ログ）を受け取ってから
+  `Findings/` へ反映する。
 - **入れ替えは自動で、ふつうは Vectorworks の再起動も要らない。** プラグインは
   「殻（VW が起動時に読み込む）」と「本体（殻が自分で読み込む `.vwpayload`）」に割れて
   いて、**プローブは本体に入っている**。プローブだけの入れ替えなら本体を置き換えるだけで
@@ -163,11 +185,14 @@ Bash(run_in_background: true):
 `timed-out-waiting` / `api-error` は「待機側が見届けられなかった」——CI の失敗ではない）。
 このリポジトリの PR CI は `lint.yml`（shellcheck / actionlint / clang-format / 無 SDK の
 単体テスト）と、
-`plugin/src/**` や `probes/runtime/**`（ビルドに入るもの）を触ったときだけ走る
-`probe-build.yml`（mac / Windows の実ビルド）。出力に並ぶチェック名を読み、`debug`（ci-debug の run）だけを見て green と
+`plugin/src/**` など**プラグイン本体**を触ったときだけ走る
+`probe-build.yml`（mac / Windows の実ビルド）、そして `probes/runtime/**` を触ったときだけ
+走る `probe-auto-update.yml`（main のビルドを起動して**完了まで待つ**ので、mac /
+Windows の実ビルドと同じだけ時間がかかる）。出力に並ぶチェック名を読み、`debug`（ci-debug の run）だけを見て green と
 誤読しないこと。
 
-待機の土台は `scripts/ci-common.sh`（`ci-wait.sh` と `ci-debug.sh` が共有）。
+待機の土台は `scripts/ci-common.sh`（`ci-wait.sh` / `ci-debug.sh` と、CI の中で走る
+`probe-auto-update.sh` が共有）。
 **どんな異常でも必ず有限時間で exit する**ことが唯一にして最大の要件で、HTTP の時間上限・
 締切判定・ウォッチドッグの三重の歯止めを持つ。新しく「何かの完了を待つ」道具が要るときは
 `poll_until` の上に probe を 1 つ書く。**待機ループを増やさない。**

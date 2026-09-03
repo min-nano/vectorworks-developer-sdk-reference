@@ -41,8 +41,11 @@ int main()
 {
 	// --- ファイル名 ---------------------------------------------------------
 	// 拡張子は .vwpayload（Vectorworks にプラグインとして拾わせない）。
-	checkEq(FileName(), "VwSdkProbesPayload.vwpayload", "本体のファイル名");
-	checkEq(BuildInfoFileName(), "VwSdkProbesPayload.build-info.txt", "素性の控えのファイル名");
+	// **本体は群ごとに 1 本**なので、名前に群が入る（plugin/CMakeLists.txt の
+	// vw_add_payload が同じ綴りで出力する。ここがずれると実機で「本体なし」になる）。
+	checkEq(FileNameFor("main"), "VwSdkProbesPayload-main.vwpayload", "本体のファイル名（main）");
+	checkEq(FileNameFor("pr12"), "VwSdkProbesPayload-pr12.vwpayload", "本体のファイル名（PR）");
+	checkEq(CatalogFileName(), "VwSdkProbes.probes.txt", "カタログのファイル名");
 
 	// --- macOS: **バンドルの中ではなく隣** -----------------------------------
 	// 中に置くと、本体を差し替えるたびに殻の署名（リソースまで封をする）が壊れる。

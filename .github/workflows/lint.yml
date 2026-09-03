@@ -16,8 +16,9 @@ name: Lint
 #                     落ちる）ので、mac / Windows の実ビルドとは別に、ここで確かめる。
 #
 # 完了待ちは `scripts/ci-wait.sh --pr <番号>` で行う（CLAUDE.md「CI の完了を待つ」）。
-# plugin/ や probes/runtime/ を触った PR ではこれに加えて probe-build.yml（mac / Windows の
-# 実ビルド）も走る。
+# plugin/ を触った PR ではこれに加えて probe-build.yml（mac / Windows の実ビルド）が、
+# probes/runtime/ を触った PR では probe-auto-update.yml（main のビルドを起動して
+# 完了まで待ち、リリースを更新する）が走る。
 
 on:
   push:
@@ -95,6 +96,15 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
             plugin/tests/PayloadHostHolderTests.cpp -o /tmp/payload-host-holder-tests
           /tmp/payload-host-holder-tests
+          g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
+            plugin/tests/PayloadCatalogTests.cpp -o /tmp/payload-catalog-tests
+          /tmp/payload-catalog-tests
+
+      # カタログを**書く**側（CMake）の試験。SDK もコンパイラも要らない（純粋な文字列
+      # 処理なので cmake -P でそのまま走る）。読む側（PayloadCatalogTests）と対で、
+      # 「ビルドが書いた索引を殻が読める」を両側から押さえる。
+      - name: Check the catalog generator
+        run: cmake -P plugin/tests/probe-catalog-test.cmake
 
       # ビルド ID は**同じ入力なら同じ値**でなければならない（そうでないと、同じ顔ぶれで
       # 作り直すたびに「新しいビルドがあります」と誘ってしまう）。集約を 2 回走らせて

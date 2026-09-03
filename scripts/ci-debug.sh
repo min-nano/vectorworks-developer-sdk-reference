@@ -132,90 +132,13 @@ done
 # run の特定・待機・ログ取得
 # ---------------------------------------------------------------------------
 
-# resolve_run <label>: label を run 名に埋め込んであるので、それで自分の run を探す。
-# dispatch API は run の id を返さないため、この突き合わせが唯一の手掛かり。GitHub が
-# run を作るまで数秒かかるので少し粘るが、粘る時間は有限（120 秒）で、諦めるときは
-# 必ず理由を stderr に出す。
-resolve_run() {
-	local label="$1" tries=0 id code body
-	body="$(workfile)"
-	while [ "$tries" -lt 40 ]; do
-		tries=$((tries + 1))
-		code="$(api_json "$VW_API/actions/workflows/$WORKFLOW_FILE/runs?event=workflow_dispatch&per_page=50" "$body")"
-		if [ "$code" = "200" ]; then
-			id="$(jq -r --arg l "[$label]" \
-				'first(.workflow_runs[] | select(.display_title | contains($l)) | .id) // empty' "$body" 2>/dev/null)"
-			if [ -n "$id" ]; then
-				rm -f "$body"
-				printf '%s\n' "$id"
-				return 0
-			fi
-		elif fatal_http "$code"; then
-			echo "ci-debug: run 一覧を取得できません（HTTP $code）: $(api_message "$body")" >&2
-			rm -f "$body"
-			return 1
-		else
-			echo "ci-debug: run 一覧の取得に失敗（HTTP $code）— 再試行します" >&2
-		fi
-		sleep 3
-	done
-	echo "ci-debug: label=[$label] の run が 120 秒たっても現れませんでした" >&2
-	rm -f "$body"
-	return 1
-}
-
-# probe_run: run の状態を 1 回調べる（poll_until 用の probe）。締切・生存出力・
-# API 連続失敗の打ち切りは poll_until が持つので、ここは「今どうなっているか」だけを見る。
-# 完了したら conclusion を PROBE_CONCLUSION へ入れて 0 を返す。
-PROBE_RUN_ID=""
-PROBE_BODY=""
-PROBE_CONCLUSION=""
-
-probe_run() {
-	local code status
-	code="$(api_json "$VW_API/actions/runs/$PROBE_RUN_ID" "$PROBE_BODY")"
-	if [ "$code" != "200" ]; then
-		echo "ci-debug: run の状態取得に失敗（HTTP $code, ${POLL_ELAPSED}s）" >&2
-		if fatal_http "$code"; then
-			echo "ci-debug: 回復しないエラーなので待機を打ち切ります: $(api_message "$PROBE_BODY")" >&2
-			return 2
-		fi
-		return 3
-	fi
-	status="$(jq -r '.status // empty' "$PROBE_BODY" 2>/dev/null)"
-	POLL_STATUS="status=${status:-unknown}"
-	if [ "$status" = "completed" ]; then
-		PROBE_CONCLUSION="$(jq -r '.conclusion // empty' "$PROBE_BODY" 2>/dev/null)"
-		return 0
-	fi
-	return 1
-}
-
-# wait_run <run-id>: completed になるまで待ち、conclusion を echo する。
-#
-# 終了経路は 3 つだけで、**どれも有限時間で必ず返る**（歯止めは ci-common.sh）:
-#   * completed を観測 → conclusion（成功経路）
-#   * 締切（TIMEOUT）超過 → timed-out-waiting
-#   * API の連続失敗が上限に達した / 回復しないエラー → api-error
-wait_run() {
-	PROBE_RUN_ID="$1"
-	PROBE_BODY="$(workfile)"
-	PROBE_CONCLUSION=""
-	poll_until probe_run
-	case "$?" in
-		0)
-			printf '%s\n' "${PROBE_CONCLUSION:-unknown}"
-			return 0
-			;;
-		1)
-			printf '%s\n' "timed-out-waiting"
-			return 1
-			;;
-		*)
-			printf '%s\n' "api-error"
-			return 1
-			;;
-	esac
+# resolve_debug_run <label>: label を run 名に埋め込んであるので、それで自分の run を
+# 探す。特定の作法（dispatch API が id を返さないこと・粘る時間の上限）と完了待ち
+# （probe_run / wait_run）は ci-common.sh が持つ。ここは「何で突き合わせるか」だけ。
+resolve_debug_run() {
+	RESOLVE_RUN_WHAT="label=[$1]"
+	# shellcheck disable=SC2016 # $l は jq の変数（--arg で渡す）。シェルに展開させない。
+	resolve_run "$WORKFLOW_FILE" '.display_title | contains($l)' --arg l "[$1]"
 }
 
 # fetch_payload <run-id>: ペイロードを取り出す。経路は 2 つあり、順に試す。
@@ -230,13 +153,13 @@ fetch_payload() {
 	local id="$1" jobs job check url tmp ann tries
 	jobs="$(workfile)"
 	if [ "$(api_json "$VW_API/actions/runs/$id/jobs" "$jobs")" != "200" ]; then
-		echo "ci-debug: ジョブ一覧を取得できませんでした（run=$id）" >&2
+		echo "ci-debug: ジョブ一覧を取得できませんでした（run=${id}）" >&2
 		rm -f "$jobs"
 		return 1
 	fi
 	job="$(jq -r '.jobs[0].id // empty' "$jobs" 2>/dev/null)"
 	[ -n "$job" ] || {
-		echo "ci-debug: ジョブが見つかりませんでした（run=$id）" >&2
+		echo "ci-debug: ジョブが見つかりませんでした（run=${id}）" >&2
 		rm -f "$jobs"
 		return 1
 	}
@@ -364,16 +287,16 @@ case "$CMD" in
 		if [ "$code" = "403" ]; then
 			# リモートセッションのトークンは読み取り専用（actions: write が無い）。
 			# これは設定ミスではなく仕様なので、回避策を具体的に示す。
-			die "ディスパッチが権限で拒否されました（HTTP 403）。このトークンには actions: write がありません。GitHub MCP の actions_run_trigger（workflow_id=ci-debug.yml, ref=$REF, inputs.label=$LABEL）で起動し、'scripts/ci-debug.sh wait --label $LABEL' で待ってください"
+			die "ディスパッチが権限で拒否されました（HTTP 403）。このトークンには actions: write がありません。GitHub MCP の actions_run_trigger（workflow_id=ci-debug.yml, ref=$REF, inputs.label=${LABEL}）で起動し、'scripts/ci-debug.sh wait --label $LABEL' で待ってください"
 		fi
 		[ "$code" = "204" ] ||
-			die "ディスパッチに失敗しました（HTTP $code）。ci-debug.yml が main にマージ済みか、ref='$REF' が push 済みかを確認してください"
+			die "ディスパッチに失敗しました（HTTP ${code}）。ci-debug.yml が main にマージ済みか、ref='$REF' が push 済みかを確認してください"
 
 		# 待機プロセスが失われても後から合流できるよう、label は必ず先に出す。
 		echo "label=$LABEL"
 		echo "ref=$REF mode=$MODE platform=$PLATFORM"
 
-		run_id="$(resolve_run "$LABEL")" || die "起動した run を特定できませんでした（label=$LABEL）"
+		run_id="$(resolve_debug_run "$LABEL")" || die "起動した run を特定できませんでした（label=${LABEL}）"
 		echo "run_id=$run_id"
 		echo "run_url=https://github.com/$VW_REPO/actions/runs/$run_id"
 
@@ -392,7 +315,7 @@ case "$CMD" in
 		start_watchdog "$((TIMEOUT + 300))"
 		if [ -z "$RUN_ID" ]; then
 			[ -n "$LABEL" ] || die "--run-id か --label が必要です"
-			RUN_ID="$(resolve_run "$LABEL")" || die "label=$LABEL の run が見つかりません"
+			RUN_ID="$(resolve_debug_run "$LABEL")" || die "label=$LABEL の run が見つかりません"
 			echo "run_id=$RUN_ID"
 		fi
 		conclusion="$(wait_run "$RUN_ID")"
@@ -405,7 +328,7 @@ case "$CMD" in
 		start_watchdog 600
 		if [ -z "$RUN_ID" ]; then
 			[ -n "$LABEL" ] || die "--run-id か --label が必要です"
-			RUN_ID="$(resolve_run "$LABEL")" || die "label=$LABEL の run が見つかりません"
+			RUN_ID="$(resolve_debug_run "$LABEL")" || die "label=$LABEL の run が見つかりません"
 		fi
 		fetch_payload "$RUN_ID"
 		;;

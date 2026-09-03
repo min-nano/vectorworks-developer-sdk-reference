@@ -9,13 +9,26 @@
 # main のワークフローが行う。つまり**まだマージされていない複数の PR の調査コードを、
 # 1 本のプラグインへ同居させて**配る必要がある。それをやるのがこのスクリプト。
 #
-#   main の probes/runtime/*        … 既に取り込まれているプローブ
-#   + 指定された PR の probes/runtime/*  … まだ open な PR のプローブ
-#   ──────────────────────────────────────────
-#   = build-probes/sources/<slug>/  … 集めたソース
-#     build-probes/manifest.cmake   … CMake への入力（ソース一覧＋出所の表＋ビルド ID）
-#     build-probes/build-id.txt     … **ビルド ID**（下記）
-#     build-probes/summary.md       … リリースノート用（何が入っているか）
+# **同居は「群（group）ごとに 1 本の本体（ペイロード）」で行う。** main のプローブが
+# 1 本、PR のプローブが PR ごとに 1 本ずつ、別々の .vwpayload になる。
+#
+#   main の probes/runtime/*             → 群 main    → VwSdkProbesPayload-main.vwpayload
+#   PR #12 の probes/runtime/*（main と違うものだけ） → 群 pr12 → …-pr12.vwpayload
+#   PR #15 の probes/runtime/*                        → 群 pr15 → …-pr15.vwpayload
+#
+# **1 本にまとめない理由が 2 つある。**
+#   1. **1 つの PR がコンパイルできなくても、他の PR は配れる。** まとめて 1 本に
+#      していたときは、誰か 1 人のプローブが通らないだけで**全員のビルドが落ちた**。
+#   2. **選んでから読み込めばよい。** 殻はダイアログで選ばれた群の本体だけを読む
+#      （plugin/src/PayloadCatalog.h / ProbeMenu.cpp）。メニューを開くたびに全部を
+#      読み込む必要が無くなる。
+#
+# 出力（既定 build-probes/）:
+#   sources/<group>/<slug>/  … 集めたソース（群ごと）
+#   manifest.cmake           … CMake への入力（群ごとのソース一覧・出所の表・ID）
+#   groups.txt               … 群の一覧（1 行 1 群。ワークフローがこれを回してビルドする）
+#   build-id.txt / shell-id.txt … **ビルド ID / 殻の ID**（下記）
+#   summary.md / summary.txt / summary-line.txt … リリースノートと控え用
 #
 # ビルド ID —— 自動アップデートが新旧を比べる鍵（plugin/src/Update.h）:
 #
@@ -31,18 +44,19 @@
 #
 #   PR の並び順は正規化する（"15,12" と "12,15" を同じ ID にするため）。
 #
-# 同居できる仕掛けは 2 つだけ:
+# 同居できる仕掛け:
 #   1. **1 プローブ 1 ディレクトリ**（probes/runtime/<slug>/）。集約はディレクトリ単位で、
-#      slug がそのまま一意な鍵になる。
-#   2. **プローブのシンボルはすべて内部リンケージ**（VW_PROBE マクロが static で展開する。
-#      plugin/src/payload/Probe.h）。別々の PR が同じ名前を使っていてもリンクで衝突しない。
+#      slug が群の中での一意な鍵になる。
+#   2. **群ごとに別のモジュール**。別々の PR が同じ slug を使っていても、別の本体に入る
+#      ので衝突しない（ピッカーには出所付きで 2 行並ぶ——**それが見たい**）。
+#   3. **プローブのシンボルはすべて内部リンケージ**（VW_PROBE マクロが static で展開する。
+#      plugin/src/payload/Probe.h）。同じ群の中で名前がぶつかってもリンクで衝突しない。
 #
-# 同じ slug がぶつかったときの扱い（PR のブランチには main のプローブもそのまま載って
-# いるので、まず「中身が同じか」で引き継ぎと変更を分ける）:
-#   * 中身が同じ            → 黙って飛ばす（その PR は main の版を引き継いでいるだけ）。
-#   * main と PR で中身が違う → **PR 側で上書き**（マージ前の版を確かめるのが目的。ログに出す）。
-#   * PR どうしで中身が違う   → **エラーで止める**（どちらを載せるべきか機械には決められない。
-#     どちらかの slug を変えてから出し直す）。
+# **PR のブランチには main のプローブもそのまま載っている**ので、そのままだと同じものが
+# 2 度出る。中身（ファイル名と内容の指紋）が main と同じものは PR の群から落とす:
+#   * main と中身が同じ   → 黙って飛ばす（その PR は main の版を引き継いでいるだけ）
+#   * main と中身が違う   → **PR の群へ入れる**（main の版と並んで出る。マージ前の版と
+#                            いまの版を実機で見比べられる）
 #
 # 使い方:
 #   scripts/gather-probes.sh                    # 作業ツリーのプローブだけ
@@ -61,7 +75,7 @@ OUT="build-probes"
 PRS=()
 
 usage() {
-	sed -n '2,40p' "$0"
+	sed -n '2,60p' "$0"
 	exit "${1:-0}"
 }
 
@@ -95,29 +109,28 @@ done
 rm -rf "$OUT"
 mkdir -p "$OUT/sources"
 
-# 集めた slug → 出所（"pr|commit|branch|title"）。bash 3.2（macOS 既定）でも動くよう、
-# 連想配列ではなく 2 本の平行配列で持つ。
-SLUGS=()
-ORIGINS=()
-DIGESTS=()
+# 群の一覧と、群ごとの控え。**連想配列を使わない**（macOS 既定の bash 3.2 でも動くように）。
+# 群ごとの情報はファイルへ書く——群が増減しても書き方が変わらず、後段（CMake・
+# ワークフロー）からも同じものを読める。
+# **変数名に GROUPS を使わない。** bash の特殊変数（実行者の所属グループの配列）で、
+# 代入しても数値へ潰され、追加した文字列は 0 になる（set -e のもとでは関数がそこで
+# 終わる）。実際にそれで「群 0 は空です」と言い出した。
+PROBE_GROUPS=()
+: >"$OUT/groups.txt"
 
-slug_index() {
-	local needle="$1" i
-	[ "${#SLUGS[@]}" -gt 0 ] || return 1
-	for i in "${!SLUGS[@]}"; do
-		if [ "${SLUGS[$i]}" = "$needle" ]; then
-			echo "$i"
-			return 0
-		fi
-	done
-	return 1
+# main の指紋表（slug<TAB>digest）。PR の側で「引き継いだだけ」を落とすのに使う。
+MAIN_DIGESTS="$OUT/.main-digests.txt"
+: >"$MAIN_DIGESTS"
+
+# 1 行に畳めない文字を落とす。PR タイトルは外から来る文字列なので、マニフェスト
+# （CMake のリスト）・カタログ・生成される C++ を壊さないよう、ここで必ず通す。
+sanitize() {
+	printf '%s' "$1" | tr -d '\n\r' | sed 's/[|;"\\]/ /g; s/  */ /g; s/^ //; s/ $//'
 }
 
 # dir_digest <ディレクトリ>: プローブ 1 件の中身を表す指紋（ファイル名と内容）。
 # **PR のブランチには main のプローブもそのまま載っている**ので、「その PR が実際に
 # 足した／変えたプローブ」と「main から引き継いだだけのプローブ」を区別する必要がある。
-# 内容が同じなら後者と見なして黙って飛ばす（そうしないと、2 つの PR を同居させた
-# 途端に、両方が持っている main のプローブが「重複」として衝突してしまう）。
 dir_digest() {
 	local dir="$1" file
 	find "$dir" -maxdepth 1 -type f \( -name '*.cpp' -o -name '*.h' \) | sort | while read -r file; do
@@ -125,71 +138,44 @@ dir_digest() {
 	done
 }
 
-# 1 行に畳めない文字を落とす。PR タイトルは外から来る文字列なので、マニフェスト
-# （CMake のリスト）と生成される C++ を壊さないよう、ここで必ず通す。
-sanitize() {
-	printf '%s' "$1" | tr -d '\n\r' | sed 's/[|;"\\]/ /g; s/  */ /g; s/^ //; s/ $//'
-}
-
-# add_probe <ソースのディレクトリ> <slug> <pr> <commit> <branch> <title> <出どころの説明>
-add_probe() {
-	local dir="$1" slug="$2" pr="$3" commit="$4" branch="$5" title="$6" from="$7"
+# check_slug <slug> <ディレクトリ> <出どころの説明>: 名前と VW_PROBE の突き合わせ。
+check_slug() {
+	local slug="$1" dir="$2" from="$3"
 
 	# slug は「小文字英数字とハイフン」に限る。ディレクトリ名がそのままリリースノート・
 	# ログファイル名・grep のパターンになるので、変な文字を持ち込ませない。
 	if ! printf '%s' "$slug" | grep -qE '^[a-z0-9][a-z0-9-]*$'; then
-		echo "::error::プローブのディレクトリ名 '$slug'（$from）は小文字英数字とハイフンだけにしてください。" >&2
+		echo "::error::プローブのディレクトリ名 '$slug'（${from}）は小文字英数字とハイフンだけにしてください。" >&2
 		exit 1
 	fi
 
 	# **slug はディレクトリ名と一致させる。** プラグイン側は VW_PROBE の第 1 引数を
 	# 鍵に出所表と突き合わせるので、ここがずれると「出所不明」で表示される。
 	if ! grep -qE "VW_PROBE\(\"$slug\"" "$dir"/*.cpp 2>/dev/null; then
-		echo "::error::プローブ '$slug'（$from）の VW_PROBE(\"$slug\", …) が見つかりません。" \
+		echo "::error::プローブ '$slug'（${from}）の VW_PROBE(\"$slug\", …) が見つかりません。" \
 			"ディレクトリ名と VW_PROBE の第 1 引数を一致させてください。" >&2
 		exit 1
 	fi
+}
 
-	local digest
-	digest="$(dir_digest "$dir")"
+# add_group <group> <pr> <commit> <branch> <title>: 群を 1 つ開く。
+add_group() {
+	local group="$1"
+	PROBE_GROUPS+=("$group")
+	mkdir -p "$OUT/sources/$group"
+	: >"$OUT/entries-$group.txt"
+	printf '%s|%s|%s|%s|%s\n' "$group" "$2" "$3" "$4" "$(sanitize "$5")" >>"$OUT/groups.txt"
+}
 
-	local existing
-	if existing="$(slug_index "$slug")"; then
-		# 同じ中身なら「その PR が main から引き継いだだけ」。黙って飛ばす。
-		if [ "$digest" = "${DIGESTS[$existing]}" ]; then
-			return 0
-		fi
-		local previous="${ORIGINS[$existing]}"
-		local previous_pr="${previous%%|*}"
-		if [ -n "$previous_pr" ] && [ -n "$pr" ]; then
-			echo "::error::プローブ '$slug' を PR #$previous_pr と PR #$pr が別々に変えています。" \
-				"どちらを載せるかは機械には決められません。どちらかの slug" \
-				"（ディレクトリ名と VW_PROBE の第 1 引数）を変えてください。" >&2
-			exit 1
-		fi
-		# main 由来と PR 由来がぶつかった場合。**PR 側を採る**——マージ前の版を実機で
-		# 確かめるのがこの仕組みの目的だから。PR が main より古いときも PR 側になるので、
-		# 意図しない巻き戻しに気付けるよう必ずログへ出す。
-		if [ -n "$pr" ]; then
-			echo "  (note) '$slug' は main にもありますが、PR #$pr の版で上書きします。"
-			rm -rf "${OUT:?}/sources/$slug"
-		else
-			echo "  (note) '$slug' は PR 側の版を採用済みです。main の版は使いません。"
-			return 0
-		fi
-		SLUGS[existing]=""
-		ORIGINS[existing]=""
-		DIGESTS[existing]=""
-	fi
-
-	mkdir -p "$OUT/sources/$slug"
+# add_probe <ソースのディレクトリ> <slug> <group>: 群へプローブを 1 件入れる。
+add_probe() {
+	local dir="$1" slug="$2" group="$3"
+	mkdir -p "$OUT/sources/$group/$slug"
 	# コンパイル対象は *.cpp / *.h だけ（README や試験データは持ち込まない）。
-	find "$dir" -maxdepth 1 -type f \( -name '*.cpp' -o -name '*.h' \) -exec cp {} "$OUT/sources/$slug/" \;
-
-	SLUGS+=("$slug")
-	ORIGINS+=("$pr|$commit|$branch|$(sanitize "$title")")
-	DIGESTS+=("$digest")
-	echo "  + $slug  ($from)"
+	find "$dir" -maxdepth 1 -type f \( -name '*.cpp' -o -name '*.h' \) \
+		-exec cp {} "$OUT/sources/$group/$slug/" \;
+	echo "$slug" >>"$OUT/entries-$group.txt"
+	echo "  + $slug  ($group)"
 }
 
 # --- main（＝いまチェックアウトしている作業ツリー）のプローブ ------------------
@@ -209,12 +195,15 @@ if [ -z "$head_branch" ] || [ "$head_branch" = "HEAD" ]; then
 	head_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo local)"
 fi
 
-echo "作業ツリー（$head_branch $head_commit）のプローブ:"
+echo "作業ツリー（$head_branch ${head_commit}）のプローブ → 群 main:"
+add_group "main" "" "$head_commit" "$head_branch" ""
 if [ -d probes/runtime ]; then
 	for dir in probes/runtime/*/; do
 		[ -d "$dir" ] || continue
 		slug="$(basename "$dir")"
-		add_probe "$dir" "$slug" "" "$head_commit" "$head_branch" "" "$head_branch"
+		check_slug "$slug" "$dir" "$head_branch"
+		add_probe "$dir" "$slug" "main"
+		printf '%s\t%s\n' "$slug" "$(dir_digest "$dir")" >>"$MAIN_DIGESTS"
 	done
 fi
 
@@ -222,7 +211,7 @@ fi
 # PR の head を fetch し、その木から probes/runtime だけを取り出す（作業ツリーは
 # 汚さない。git archive → tar で一時ディレクトリへ展開する）。
 for pr in ${PRS[@]+"${PRS[@]}"}; do
-	echo "PR #$pr のプローブ:"
+	echo "PR #$pr のプローブ → 群 pr$pr:"
 	# 浅いクローン（CI の actions/checkout は既定で fetch-depth 1）では、PR の head を
 	# 普通に fetch すると履歴を深く引きに行く。木さえ取れればよいので、浅いときだけ
 	# --depth=1 を足す（手元の完全なクローンを浅くしてしまわないよう、条件付きにする）。
@@ -241,7 +230,6 @@ for pr in ${PRS[@]+"${PRS[@]}"}; do
 	fi
 	pr_sha="$(git rev-parse "refs/remotes/probe-pr/$pr")"
 	pr_short="$(git rev-parse --short "refs/remotes/probe-pr/$pr")"
-	ID_PR_PARTS+=("pr=${pr}:${pr_sha}")
 
 	pr_branch=""
 	pr_title=""
@@ -251,26 +239,60 @@ for pr in ${PRS[@]+"${PRS[@]}"}; do
 		pr_title="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq .title 2>/dev/null || true)"
 	fi
 
+	# probes/runtime/ が無い PR は**黙って飛ばす**（エラーにしない）。自動公開は
+	# open な PR を一括で渡してくるので、プローブと無関係な PR も混ざる
+	# （scripts/probe-auto-update.sh）。
 	if ! git ls-tree -d --name-only "$pr_sha" probes/runtime | grep -q .; then
-		echo "::error::PR #$pr（$pr_short）に probes/runtime/ がありません。" >&2
-		exit 1
+		echo "  (note) PR #${pr}（${pr_short}）に probes/runtime/ がありません。飛ばします。"
+		continue
 	fi
 
 	work="$(mktemp -d)"
 	git archive "$pr_sha" probes/runtime | tar -x -C "$work"
+	group="pr$pr"
+	add_group "$group" "$pr" "$pr_short" "$pr_branch" "$pr_title"
 	found=0
 	for dir in "$work"/probes/runtime/*/; do
 		[ -d "$dir" ] || continue
 		slug="$(basename "$dir")"
-		add_probe "$dir" "$slug" "$pr" "$pr_short" "$pr_branch" "$pr_title" "PR #$pr $pr_short"
+		check_slug "$slug" "$dir" "PR #$pr $pr_short"
+		# main と中身が同じなら「引き継いだだけ」。**群には入れない**（同じものが
+		# ピッカーに 2 度並ぶのを避ける。上記「PR のブランチには main のプローブも…」）。
+		digest="$(dir_digest "$dir")"
+		main_digest="$(awk -F'\t' -v s="$slug" '$1 == s { $1 = ""; sub(/^\t/, ""); print }' \
+			"$MAIN_DIGESTS")"
+		if [ -n "$main_digest" ] && [ "$digest" = "$main_digest" ]; then
+			continue
+		fi
+		add_probe "$dir" "$slug" "$group"
 		found=1
 	done
 	rm -rf "$work"
 	if [ "$found" -eq 0 ]; then
-		echo "::error::PR #$pr（$pr_short）の probes/runtime/ にプローブがありません。" >&2
-		exit 1
+		# **エラーにしない。** main と同じものしか無い（プローブを消した PR・プローブ以外
+		# を直した PR）は普通に起こる。空の群は下で落とす。
+		echo "  (note) PR #$pr に main と違うプローブはありませんでした。"
+		continue
+	fi
+	# **ビルド ID の材料に入れるのは、実際にプローブを載せた PR だけ。** 自動公開は
+	# open な PR を一括で渡してくるので、無関係な PR の push まで材料に入れると、
+	# 中身が同じなのに ID が動いて「新しいビルドがあります」と誘ってしまう。
+	ID_PR_PARTS+=("pr=${pr}:${pr_sha}")
+done
+
+# 空の群は落とす（中身の無い本体を作っても、ピッカーに空の行が出るだけ）。
+kept_groups=()
+for group in ${PROBE_GROUPS[@]+"${PROBE_GROUPS[@]}"}; do
+	if [ -s "$OUT/entries-$group.txt" ]; then
+		kept_groups+=("$group")
+	else
+		echo "  (note) 群 $group は空なので落とします。"
+		rm -rf "${OUT:?}/sources/$group"
+		grep -v "^$group|" "$OUT/groups.txt" >"$OUT/groups.txt.tmp" || true
+		mv "$OUT/groups.txt.tmp" "$OUT/groups.txt"
 	fi
 done
+PROBE_GROUPS=(${kept_groups[@]+"${kept_groups[@]}"})
 
 # --- ビルド ID を決める -----------------------------------------------------------
 # 材料は「main のコミット」＋「各 PR の head コミット」。PR の行は**番号順に正規化**して
@@ -308,6 +330,11 @@ shell_id="$(git hash-object "$shellid_source" | cut -c1-12)"
 printf '%s' "$shell_id" >"$OUT/shell-id.txt"
 
 # --- マニフェストと要約を書く ---------------------------------------------------
+# マニフェストは CMake が include する（-DVW_PROBE_MANIFEST=…）。**群ごとに**
+#   VW_PROBE_SOURCES_<group>  … コンパイルするソース
+#   VW_PROBE_ENTRIES_<group>  … 出所の表（slug|PR|commit|branch|PRタイトル）
+#   VW_PROBE_ORIGIN_<group>   … その群自体の出所（PR|commit|branch|PRタイトル）
+# を渡す。
 manifest="$OUT/manifest.cmake"
 {
 	echo "# 自動生成（scripts/gather-probes.sh）。編集しない。"
@@ -317,7 +344,11 @@ manifest="$OUT/manifest.cmake"
 	echo "set(VW_PROBE_BUILD_ID \"$build_id\")"
 	echo "# 殻の ID（入れ替えに再起動が要るかを決める鍵）。同上。"
 	echo "set(VW_PROBE_SHELL_ID \"$shell_id\")"
-	echo "set(VW_PROBE_SOURCES"
+	printf 'set(VW_PROBE_GROUPS'
+	for group in ${PROBE_GROUPS[@]+"${PROBE_GROUPS[@]}"}; do
+		printf ' "%s"' "$group"
+	done
+	echo ")"
 } >"$manifest"
 
 summary_md="$OUT/summary.md"
@@ -325,52 +356,62 @@ summary_txt="$OUT/summary.txt"
 # 1 行版。リリース本文の隠しメタデータ（probes=）と、更新ダイアログの
 # 「入っているプローブ」に出す（plugin/src/Update.cpp）。
 summary_line="$OUT/summary-line.txt"
-: >"$summary_md"
 {
 	echo "| プローブ | 出所 | コミット | ブランチ | PR タイトル |"
 	echo "| --- | --- | --- | --- | --- |"
-} >>"$summary_md"
+} >"$summary_md"
 : >"$summary_txt"
 : >"$summary_line"
 line_parts=()
+total=0
 
-entries=()
-for i in ${SLUGS[@]+"${!SLUGS[@]}"}; do
-	slug="${SLUGS[$i]}"
-	[ -n "$slug" ] || continue
-	origin="${ORIGINS[$i]}"
-	pr="$(echo "$origin" | cut -d'|' -f1)"
-	commit="$(echo "$origin" | cut -d'|' -f2)"
-	branch="$(echo "$origin" | cut -d'|' -f3)"
-	title="$(echo "$origin" | cut -d'|' -f4-)"
+for group in ${PROBE_GROUPS[@]+"${PROBE_GROUPS[@]}"}; do
+	origin="$(grep "^$group|" "$OUT/groups.txt")"
+	pr="$(echo "$origin" | cut -d'|' -f2)"
+	commit="$(echo "$origin" | cut -d'|' -f3)"
+	branch="$(echo "$origin" | cut -d'|' -f4)"
+	title="$(echo "$origin" | cut -d'|' -f5-)"
 
-	for src in "$OUT/sources/$slug"/*.cpp; do
-		[ -f "$src" ] || continue
-		# マニフェストからの相対で書く（集約したランナーと、ビルドするランナーが
-		# 別でもよいように。CMake の CMAKE_CURRENT_LIST_DIR はこの .cmake の場所）。
-		echo "	\"\${CMAKE_CURRENT_LIST_DIR}/sources/$slug/$(basename "$src")\"" >>"$manifest"
-	done
+	{
+		echo ""
+		echo "# 群 ${group}（$([ -n "$pr" ] && echo "PR #$pr" || echo "main") ${commit}）"
+		echo "set(VW_PROBE_ORIGIN_$group \"$pr|$commit|$branch|$title\")"
+		echo "set(VW_PROBE_SOURCES_$group"
+	} >>"$manifest"
 
-	entries+=("$slug|$pr|$commit|$branch|$title")
-	if [ -n "$pr" ]; then
-		echo "| \`$slug\` | PR #$pr | \`$commit\` | $branch | $title |" >>"$summary_md"
-		echo "$slug <- PR #$pr ($commit)" >>"$summary_txt"
-		line_parts+=("$slug(#$pr)")
-	else
-		echo "| \`$slug\` | ${branch:-main} | \`$commit\` | $branch | |" >>"$summary_md"
-		echo "$slug <- ${branch:-main} ($commit)" >>"$summary_txt"
-		line_parts+=("$slug")
-	fi
+	while read -r slug; do
+		[ -n "$slug" ] || continue
+		for src in "$OUT/sources/$group/$slug"/*.cpp; do
+			[ -f "$src" ] || continue
+			# マニフェストからの相対で書く（集約したランナーと、ビルドするランナーが
+			# 別でもよいように。CMake の CMAKE_CURRENT_LIST_DIR はこの .cmake の場所）。
+			echo "	\"\${CMAKE_CURRENT_LIST_DIR}/sources/$group/$slug/$(basename "$src")\"" \
+				>>"$manifest"
+		done
+	done <"$OUT/entries-$group.txt"
+
+	{
+		echo ")"
+		echo "set(VW_PROBE_ENTRIES_$group"
+	} >>"$manifest"
+
+	while read -r slug; do
+		[ -n "$slug" ] || continue
+		echo "	\"$slug|$pr|$commit|$branch|$title\"" >>"$manifest"
+		total=$((total + 1))
+		if [ -n "$pr" ]; then
+			echo "| \`$slug\` | PR #$pr | \`$commit\` | $branch | $title |" >>"$summary_md"
+			echo "$slug <- PR #$pr ($commit)" >>"$summary_txt"
+			line_parts+=("$slug(#$pr)")
+		else
+			echo "| \`$slug\` | ${branch:-main} | \`$commit\` | $branch | |" >>"$summary_md"
+			echo "$slug <- ${branch:-main} ($commit)" >>"$summary_txt"
+			line_parts+=("$slug")
+		fi
+	done <"$OUT/entries-$group.txt"
+
+	echo ")" >>"$manifest"
 done
-
-{
-	echo ")"
-	echo "set(VW_PROBE_ENTRIES"
-	for entry in ${entries[@]+"${entries[@]}"}; do
-		echo "	\"$entry\""
-	done
-	echo ")"
-} >>"$manifest"
 
 # 1 行版（", " 区切り）。空なら空ファイルのまま。
 if [ "${#line_parts[@]}" -gt 0 ]; then
@@ -380,10 +421,13 @@ if [ "${#line_parts[@]}" -gt 0 ]; then
 	)" >"$summary_line"
 fi
 
+rm -f "$MAIN_DIGESTS"
+
 echo
 echo "ビルド ID: $build_id"
 echo "殻の ID: $shell_id"
 sed 's/^/  /' "$buildid_source"
-echo "集めたプローブ: ${#entries[@]} 件"
+echo "群: ${PROBE_GROUPS[*]-（なし）}"
+echo "集めたプローブ: $total 件"
 cat "$summary_txt"
 echo "マニフェスト: $manifest"

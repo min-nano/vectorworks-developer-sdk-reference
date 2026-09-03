@@ -21,6 +21,11 @@
 //	    Vectorworks を動かしたまま入れ替えられなくなる（＝この仕組みの意味が無くなる）。
 //	  * 同じパスを使い回すと、OS のキャッシュで「置き換えたのに古いまま」を見逃しうる。
 //
+//	【どの本体を読むか】**群ごとに 1 本**ある（main のプローブが 1 本、PR のプローブが
+//	PR ごとに 1 本）。殻はメニューを開いた時点ではどれも読み込まず、カタログ
+//	（plugin/src/PayloadCatalog.h）で一覧を出し、**選ばれた群の 1 本だけ**を読む。
+//	1 つの群が壊れていても、他の群は選べる。
+//
 //	【SDK に依存しない】この 2 ファイルは SDK の型を使わない（プリコンパイルヘッダ経由で
 //	宣言は入るが触らない）。パスの組み立ては純粋な関数に切ってあり、plugin/tests から
 //	SDK 抜きで確かめられる（自動アップデートの UpdateParse.h と同じ作法）。
@@ -40,20 +45,23 @@ namespace vwprobe
 	// そのまま単体テストできる（plugin/tests/PayloadPathTests.cpp）。
 	namespace payload
 	{
-		// 配られる本体のファイル名。拡張子を .vwpayload にしてあるのは、
-		// **Vectorworks にプラグインとして拾わせないため**（.vlb / .vwlibrary だと
-		// Plug-Ins フォルダの走査に引っかかる）。
-		inline std::string FileName()
+		// 配られる本体のファイル名。**群（main / PR ごと）に 1 本**あり、名前に群が入る
+		// （plugin/CMakeLists.txt の vw_add_payload と対）。拡張子を .vwpayload にして
+		// あるのは、**Vectorworks にプラグインとして拾わせないため**（.vlb / .vwlibrary
+		// だと Plug-Ins フォルダの走査に引っかかる）。
+		inline std::string FileNameFor(const std::string& group)
 		{
-			return "VwSdkProbesPayload.vwpayload";
+			return "VwSdkProbesPayload-" + group + ".vwpayload";
 		}
 
-		// 本体の素性を**プラグインを起動せずに**読むための控え。入れ替えスクリプト
-		// （plugin/scripts/vw-probes-update.*）が「いま入っている本体はどのビルドか」を
-		// ここから読む。中身は build= / commit= / branch= / built= / probes= の 5 行。
-		inline std::string BuildInfoFileName()
+		// 本体をどれも読み込まずに「何がどこに入っているか」を知るための索引。
+		// **殻はまずこれを読み、選ばれた群の本体だけを読み込む**（plugin/src/ProbeMenu.cpp。
+		// 中身の形と読み手は plugin/src/PayloadCatalog.h）。入れ替えスクリプト
+		// （plugin/scripts/vw-probes-update.*）も「いま入っているビルド」をここから読む
+		// ——プラグインを起動せずに分かる必要があるため。
+		inline std::string CatalogFileName()
 		{
-			return "VwSdkProbesPayload.build-info.txt";
+			return "VwSdkProbes.probes.txt";
 		}
 
 		// macOS: .../<Plug-Ins>/VwSdkProbes.vwlibrary/Contents/MacOS/VwSdkProbes
@@ -158,10 +166,12 @@ namespace vwprobe
 		Payload(const Payload&) = delete;
 		Payload& operator=(const Payload&) = delete;
 
-		// 読み込んで使える状態にする。logCtx/log はプローブのログの受け口
-		// （**例外を投げてはならない**）。失敗したら false ＋ 人に見せる理由。
-		bool load(void* callbacks, void* logCtx, void (*log)(void*, const char*),
-				  std::string& error);
+		// 読み込んで使える状態にする。**どの本体を読むかは呼び出し側が決める**
+		// （path は殻の隣に置かれた .vwpayload。群はカタログが教える）。
+		// logCtx/log はプローブのログの受け口（**例外を投げてはならない**）。
+		// 失敗したら false ＋ 人に見せる理由。
+		bool load(const std::string& path, void* callbacks, void* logCtx,
+				  void (*log)(void*, const char*), std::string& error);
 
 		// 降ろして複製を消す（何度呼んでもよい）。
 		void unload();
@@ -228,12 +238,20 @@ namespace vwprobe
 	// 自分（Vectorworks が読み込んだ殻）のバイナリの絶対パス。
 	std::string OwnModulePath();
 
-	// 同梱されている本体の絶対パス（殻の隣）。見つからなければ空。
-	std::string BundledPayloadPath();
+	// 殻の隣に置かれたファイルの絶対パス（本体・カタログ）。見つからなければ空。
+	// **本体もカタログも殻の隣**にある（バンドルの中ではない。上記）。
+	std::string SiblingFilePath(const std::string& fileName);
 
 	// 一時ディレクトリと、このプラットフォームのパス区切り。
 	std::string TempDirectory();
 	char PathSeparator();
+
+	// テキストファイルを丸ごと読む（カタログ）。失敗したら false ＋ 理由。
+	bool ReadTextFile(const std::string& path, std::string& text, std::string& error);
+
+	// そのパスにファイルがあるか。**群の本体が配られているか**の確認に使う
+	// （ビルドできなかった群は .vwpayload が配られない。plugin/cmake/ProbeCatalog.cmake）。
+	bool FileExists(const std::string& path);
 
 	// ファイルの複製と削除（失敗したら false ＋ 理由）。
 	bool CopyFileTo(const std::string& from, const std::string& to, std::string& error);

@@ -1,0 +1,88 @@
+name: Probe auto update
+
+# ---------------------------------------------------------------------------
+# **PR の probes/runtime/ にコードを置いたら、実機で走らせられる形（リリース）まで
+# 自動で進める。**
+#
+# なぜ必要か: 実機確認は PR をマージする**前**に要る（CLAUDE.md「PR とマージ」）。
+# これまではプローブを書いたあとに人（か AI）が Actions の "Probe plug-in" を手で
+# dispatch する必要があり、叩き忘れれば実機のプラグインは古いまま——「プローブを
+# 書いた」と「実機で走らせられる」の間に手作業が 1 つ挟まっていた。ここを自動にする。
+#
+# 何が起きるか（実体は scripts/probe-auto-update.sh。ここは薄く保つ）:
+#
+#   1. main の "Probe plug-in"（probe-build.yml）を dispatch する（prs= には**その時点で
+#      open な PR を全部**）。**ビルドと公開は人が手で叩くときとまったく同じ道**を通る
+#      （このワークフローは何もビルドしないし、リリースも作らない）。
+#   2. その run の完了を待ち、結果をこのジョブの成否にする。つまり**プローブが
+#      コンパイルできないと PR のチェックが赤くなる**——probe-build.yml の
+#      pull_request ビルド（確認だけの門）が probes/runtime/ を見なくてよくなったのは
+#      このため。二重にビルドしない。**赤くなるのは自分の群が落ちたときだけ**で、
+#      他の PR の群が落ちてもこの PR は緑のまま（判断はリリース本文の payloads=）。
+#   3. 成功したら PR へコメントを 1 つ置く（2 回目以降は同じコメントを書き換える）。
+#
+# **載るのは main ＋ open な PR 全部。** 本体（.vwpayload）は群（main / PR ごと）に
+# 分かれていて、コンパイルできなかった群だけが外れる（scripts/build-payloads.sh）ので、
+# 全部載せても他人の PR に巻き込まれない。載せる顔ぶれを絞りたいときだけ、
+# "Probe plug-in" を手で dispatch する（inputs.prs にカンマ区切り）。
+#
+# NOTE: fork からの PR では GITHUB_TOKEN が読み取り専用になる（GitHub の仕様）ので、
+# dispatch もコメントもできない。そのときはこのジョブを走らせず（下の if）、
+# maintainer が手で "Probe plug-in" を dispatch する。**この if は権限の話であると同時に
+# 信頼境界でもある**——pull_request のジョブは PR 側のツリーを checkout して
+# scripts/probe-auto-update.sh を走らせるので（この仕組み自体を変える PR を、
+# マージ前に試せるようにするため）、走らせてよいのは同じリポジトリのブランチだけ。
+# ビルドと公開そのものは main のワークフロー定義で行われる（PR からはすり替えられない）。
+#
+# NOTE: 転がりタグ probes は**最後に公開したビルド**を指す。プローブを持つ PR が
+# 複数同時に動いているときは、後から push した PR のビルドで置き換わる——が、
+# **どのビルドにも open な PR のプローブが全部入っている**ので、どれを取っても
+# 顔ぶれは同じになる（違うのは、まだ push されていない直近の変更だけ）。
+# ---------------------------------------------------------------------------
+
+run-name: "probe auto update (PR ${{ github.event.pull_request.number }})"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      # 「指定のフォルダ」＝実機で走らせるプローブの置き場。
+      - "probes/runtime/**"
+      # この仕組み自体を変える PR でも一度は通しておきたい（マージしてから壊れて
+      # いたと分かるのが一番たちが悪い）。
+      - ".github/workflows/probe-auto-update.yml"
+      - "scripts/probe-auto-update.sh"
+
+# 1 つの PR につき 1 本。新しい push が入ったら待機は打ち切ってよい（古いコミットの
+# 公開を見届ける意味は無い）。**打ち切っても走り出したビルドは止まらない**が、main の
+# ビルドは probe-build.yml 側の concurrency で 1 本ずつ順に走るので、最後に dispatch
+# したものが最後に公開される。
+concurrency:
+  group: probe-auto-update-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # main の probe-build.yml を dispatch する。
+  actions: write
+  # 「公開しました」のコメントを 1 つ置く（2 回目以降は書き換える）。
+  pull-requests: write
+
+jobs:
+  publish:
+    # fork の PR では権限が無いので走らせない（上の NOTE）。
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # スクリプト側の締切（既定 70 分）＋ run の特定とコメントぶんの余裕。ここは
+    # 最後の歯止めで、通常はスクリプトが自分で締め切る。
+    timeout-minutes: 80
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Dispatch the plug-in build and wait for it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: scripts/probe-auto-update.sh --pr "$PR_NUMBER"

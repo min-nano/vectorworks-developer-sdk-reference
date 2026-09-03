@@ -16,6 +16,8 @@
 #include "PayloadHost.h"
 
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <system_error>
 
@@ -181,16 +183,15 @@ namespace vwprobe
 #endif
 	}
 
-	std::string BundledPayloadPath()
+	std::string SiblingFilePath(const std::string& fileName)
 	{
 		const std::string self = OwnModulePath();
 		if (self.empty())
 			return "";
-		const std::string name = payload::FileName();
 #if defined(_WIN32)
-		return payload::WinPayloadPathFromModule(self, name);
+		return payload::WinPayloadPathFromModule(self, fileName);
 #else
-		return payload::MacPayloadPathFromBinary(self, name);
+		return payload::MacPayloadPathFromBinary(self, fileName);
 #endif
 	}
 
@@ -210,6 +211,28 @@ namespace vwprobe
 #else
 		return '/';
 #endif
+	}
+
+	bool ReadTextFile(const std::string& path, std::string& text, std::string& error)
+	{
+		error.clear();
+		text.clear();
+		std::ifstream in(path.c_str(), std::ios::binary);
+		if (!in)
+		{
+			error = "開けませんでした（" + path + "）。";
+			return false;
+		}
+		std::ostringstream buffer;
+		buffer << in.rdbuf();
+		text = buffer.str();
+		return true;
+	}
+
+	bool FileExists(const std::string& path)
+	{
+		std::error_code ec;
+		return !path.empty() && std::filesystem::exists(path, ec) && !ec;
 	}
 
 	bool CopyFileTo(const std::string& from, const std::string& to, std::string& error)
@@ -263,8 +286,8 @@ namespace vwprobe
 		this->unload();
 	}
 
-	bool Payload::load(void* callbacks, void* logCtx, void (*log)(void*, const char*),
-					   std::string& error)
+	bool Payload::load(const std::string& path, void* callbacks, void* logCtx,
+					   void (*log)(void*, const char*), std::string& error)
 	{
 		error.clear();
 		if (fLoaded)
@@ -274,13 +297,13 @@ namespace vwprobe
 			error = "SDK のコールバックが空です（殻の初期化が済んでいない）。";
 			return false;
 		}
-
-		fSourcePath = BundledPayloadPath();
-		if (fSourcePath.empty())
+		if (path.empty())
 		{
-			error = "本体（" + payload::FileName() + "）の置き場所を割り出せませんでした。";
+			error = "読み込む本体の場所が分かりません（カタログの group 行が空です）。";
 			return false;
 		}
+
+		fSourcePath = path;
 
 		const std::string tempDir = TempDirectory();
 		if (tempDir.empty())
@@ -289,7 +312,12 @@ namespace vwprobe
 			return false;
 		}
 		const std::string tag = std::to_string(NextGeneration());
-		fTempPath = payload::TempCopyPath(tempDir, tag, payload::FileName(), PathSeparator());
+		// 複製先の名前には**その本体のファイル名**を使う（群が名前に入っているので、
+		// 別の群の複製と混ざらない）。
+		const std::string::size_type slash = fSourcePath.find_last_of("/\\");
+		const std::string leaf =
+			(slash == std::string::npos) ? fSourcePath : fSourcePath.substr(slash + 1);
+		fTempPath = payload::TempCopyPath(tempDir, tag, leaf, PathSeparator());
 
 		// 複製してから読む（PayloadHost.h の「必ず複製してから読む」）。
 		std::string why;

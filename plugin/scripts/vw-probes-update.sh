@@ -18,9 +18,17 @@
 #   do-install <url>         まるごと入れ替える（殻＋本体）。"ok" か error=<理由>。
 #   do-install-payload <url> **本体だけ**入れ替える。"ok" か error=<理由>。
 #
-# **zip は 1 つしか無い**（殻＋本体）。本体だけの入れ替えも同じ zip を落として、中から
+# **zip は 1 つしか無い**（殻＋本体一式）。本体だけの入れ替えも同じ zip を落として、中から
 # 本体のファイルだけを取り出して置く——配る zip を 2 つに分けると、人が手で入れるときの
 # 展開の手間が増えるだけで、得られるのは数百 KB の節約でしかない。
+#
+# **本体は 1 本ではなく「群ごとに 1 本」**（main のプローブが 1 本、PR のプローブが PR
+# ごとに 1 本。VwSdkProbesPayload-<群>.vwpayload）。入れ替えでは
+#   * zip に入っている .vwpayload を**全部**置き、
+#   * 前の版にあって今度の版に無い .vwpayload を**消す**（消さないと、ビルドが落ちた
+#     PR のプローブが古いまま残り、カタログに無いのにファイルだけある状態になる）、
+#   * カタログ（VwSdkProbes.probes.txt）を置き換える
+# の 3 つを行う。カタログが「いま入っているビルド」の真実（build= を読む）。
 #
 # 【なぜ 2 通りの入れ替えがあるか】このプラグインは「殻（Vectorworks が起動時に読み込む
 # モジュール）」と「本体（殻が自分で読み込む .vwpayload）」に割れている。**本体だけなら
@@ -30,7 +38,7 @@
 #
 # 【ID の出どころ】
 #   公開側   … リリース本文の隠しメタデータ（<!-- vw-probes … -->）の build= と shell=
-#   入っている側 … 本体は VwSdkProbesPayload.build-info.txt の build=
+#   入っている側 … 本体はカタログ VwSdkProbes.probes.txt の build=
 #                  殻はバンドルの Info.plist の VWShellId
 #
 # 手で叩いて確かめることもできる:
@@ -51,7 +59,10 @@ VW_PLUGINS_DIR="${VW_PLUGINS_DIR:-$HOME/Library/Application Support/Vectorworks/
 VW_API="https://api.github.com/repos/${VW_REPO}"
 VW_TAG="${VW_TAG:-probes}"
 VW_NAME="VwSdkProbes"
-VW_PAYLOAD="VwSdkProbesPayload"
+# 本体のファイル名の頭（実体は "<この頭>-<群>.vwpayload"）と、殻が読む索引。
+# plugin/src/PayloadHost.h の payload::FileNameFor / CatalogFileName と対。
+VW_PAYLOAD_PREFIX="VwSdkProbesPayload-"
+VW_CATALOG="VwSdkProbes.probes.txt"
 
 # ---------------------------------------------------------------------------
 # GitHub REST の下請け。JSON は plutil で読む（macOS に最初から入っていて JSON を解せる）。
@@ -100,9 +111,11 @@ download() {
 	curl -fL --retry 3 --max-time 300 "$1" -o "$2"
 }
 
-# installed_build -> 入っている**本体**のビルド ID（無ければ none）
+# installed_build -> 入っている**本体一式**のビルド ID（無ければ none）。
+# 出どころはカタログ 1 枚——本体は群ごとに分かれているが、**どれも同じビルドから出る**
+# ので、ビルド ID はカタログが持っていれば足りる（plugin/cmake/ProbeCatalog.cmake）。
 installed_build() {
-	local info="$VW_PLUGINS_DIR/$VW_PAYLOAD.build-info.txt"
+	local info="$VW_PLUGINS_DIR/$VW_CATALOG"
 	if [ -f "$info" ]; then
 		local v
 		v="$(sed -n 's/^build=//p' "$info" | head -n 1)"
@@ -144,6 +157,46 @@ install_one() {
 	cp -R "$src" "$dst.new" || return 1
 	rm -rf "$dst"
 	mv "$dst.new" "$dst"
+}
+
+# install_payloads <展開先>: **本体一式**（群ごとの .vwpayload）とカタログを入れ替える。
+# 新しい版に無い本体は消す——残すと、カタログに載っていないファイルだけが古いまま
+# 居座る（実機で「消したはずの PR のプローブが動く」の元になる）。
+install_payloads() {
+	local work="$1" f name
+	mkdir -p "$VW_PLUGINS_DIR"
+
+	# まず新しいものを置く（1 本でも失敗したら、そこで止めて理由を返す）。
+	for f in "$work/$VW_PAYLOAD_PREFIX"*.vwpayload; do
+		[ -e "$f" ] || continue
+		sanitize "$f"
+		name="$(basename "$f")"
+		if ! install_one "$f" "$VW_PLUGINS_DIR/$name"; then
+			echo "本体（${name}）のコピーに失敗しました。"
+			return 1
+		fi
+	done
+
+	# **カタログは本体の後**。先に置くと、本体のコピーが途中で落ちたときに
+	# 「カタログには載っているのにファイルが無い」状態が残る。
+	if [ -e "$work/$VW_CATALOG" ] && ! install_one "$work/$VW_CATALOG" "$VW_PLUGINS_DIR/$VW_CATALOG"; then
+		echo "カタログのコピーに失敗しました。"
+		return 1
+	fi
+
+	# 今度の版に無い本体を消す。
+	for f in "$VW_PLUGINS_DIR/$VW_PAYLOAD_PREFIX"*.vwpayload; do
+		[ -e "$f" ] || continue
+		name="$(basename "$f")"
+		if [ ! -e "$work/$name" ]; then
+			rm -rf "$f"
+		fi
+	done
+
+	# 旧版（本体が 1 本だった頃）の置き土産も片付ける。
+	rm -f "$VW_PLUGINS_DIR/VwSdkProbesPayload.vwpayload" \
+		"$VW_PLUGINS_DIR/VwSdkProbesPayload.build-info.txt"
+	return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -220,9 +273,6 @@ mode_do_install() {
 	fi
 
 	sanitize "$src"
-	if [ -f "$work/$VW_PAYLOAD.vwpayload" ]; then
-		sanitize "$work/$VW_PAYLOAD.vwpayload"
-	fi
 
 	mkdir -p "$VW_PLUGINS_DIR"
 	if ! install_one "$src" "$VW_PLUGINS_DIR/$VW_NAME.vwlibrary"; then
@@ -230,21 +280,19 @@ mode_do_install() {
 		echo "error=インストール先へのコピーに失敗しました。"
 		return 0
 	fi
-	# 本体と控えも一緒に（殻と本体の版は揃っていなければならない）。
-	local f
-	for f in "$VW_PAYLOAD.vwpayload" "$VW_PAYLOAD.build-info.txt"; do
-		if [ -e "$work/$f" ] && ! install_one "$work/$f" "$VW_PLUGINS_DIR/$f"; then
-			rm -rf "$tmp" "$work"
-			echo "error=本体（$f）のコピーに失敗しました。"
-			return 0
-		fi
-	done
+	# 本体一式とカタログも一緒に（殻と本体の版は揃っていなければならない）。
+	local why
+	if ! why="$(install_payloads "$work")"; then
+		rm -rf "$tmp" "$work"
+		echo "error=${why:-本体のコピーに失敗しました。}"
+		return 0
+	fi
 	rm -rf "$tmp" "$work"
 	echo "ok"
 	return 0
 }
 
-# do-install-payload <url>: **本体だけ**入れ替える（Vectorworks を動かしたままでよい）。
+# do-install-payload <url>: **本体一式だけ**入れ替える（Vectorworks を動かしたままでよい）。
 # 落とすのは do-install と**同じ zip**で、中から本体のファイルだけを取り出して置く。
 # 殻は読み込まれたまま触らないので、次にメニューを開いた時点で新しい本体が読まれる。
 # **殻は置き換えるファイルを直接は読んでいない**（一時ディレクトリへ写した複製を読んで
@@ -270,23 +318,18 @@ mode_do_install_payload() {
 		echo "error=アーカイブの展開に失敗しました。"
 		return 0
 	fi
-	if [ ! -f "$work/$VW_PAYLOAD.vwpayload" ]; then
+	if [ ! -e "$work/$VW_CATALOG" ]; then
 		rm -rf "$tmp" "$work"
-		echo "error=$VW_PAYLOAD.vwpayload が zip 内に見つかりません。"
+		echo "error=$VW_CATALOG が zip 内に見つかりません。"
 		return 0
 	fi
 
-	sanitize "$work/$VW_PAYLOAD.vwpayload"
-
-	mkdir -p "$VW_PLUGINS_DIR"
-	local f
-	for f in "$VW_PAYLOAD.vwpayload" "$VW_PAYLOAD.build-info.txt"; do
-		if [ -e "$work/$f" ] && ! install_one "$work/$f" "$VW_PLUGINS_DIR/$f"; then
-			rm -rf "$tmp" "$work"
-			echo "error=本体（$f）のコピーに失敗しました。"
-			return 0
-		fi
-	done
+	local why
+	if ! why="$(install_payloads "$work")"; then
+		rm -rf "$tmp" "$work"
+		echo "error=${why:-本体のコピーに失敗しました。}"
+		return 0
+	fi
 	rm -rf "$tmp" "$work"
 	echo "ok"
 	return 0

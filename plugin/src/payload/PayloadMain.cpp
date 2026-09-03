@@ -45,6 +45,11 @@
 #ifndef VW_PAYLOAD_BUILD_TIME
 #	define VW_PAYLOAD_BUILD_TIME "unknown"
 #endif
+// どの群（main / PR ごと）の本体か。**実機のログで「どれが動いたか」を人が確かめる**
+// ためのもので、機械の判断には使わない（それはカタログと殻の仕事）。
+#ifndef VW_PAYLOAD_GROUP
+#	define VW_PAYLOAD_GROUP "local"
+#endif
 
 namespace
 {
@@ -86,8 +91,8 @@ namespace
 	// このビルドの素性（プローブのログの見出しに出す 1 行）。
 	std::string buildStamp()
 	{
-		return std::string("本体: ") + VW_PAYLOAD_BRANCH + " " + VW_PAYLOAD_COMMIT + " (" +
-			   VW_PAYLOAD_BUILD_TIME + ") id=" + VW_PAYLOAD_BUILD_ID;
+		return std::string("本体: [") + VW_PAYLOAD_GROUP + "] " + VW_PAYLOAD_BRANCH + " " +
+			   VW_PAYLOAD_COMMIT + " (" + VW_PAYLOAD_BUILD_TIME + ") id=" + VW_PAYLOAD_BUILD_ID;
 	}
 
 	// 出所を 1 行に畳む（無ければ「ローカル」）。
