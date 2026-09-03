@@ -22,6 +22,8 @@
 
 #include "Probe.h"
 
+#include "VWFC/VWObjects/VWSymbolDefObj.h"
+
 #include <string>
 
 namespace
@@ -215,6 +217,47 @@ VW_PROBE("thumbnail-popup", "サムネイル付きのリソース選択を実機
 	{
 		probe.fail("図面にシンボル定義が 1 つも無い（サムネイルの出方を確かめられない）");
 		return;
+	}
+
+	// 一覧の内訳。**シンボル定義には、ユーザが置く部品のほかに VectorWorks 自身が
+	// 使うもの（プラグインオブジェクトのスタイルなど）が混ざる**（実機で確認済み）。
+	// 何で切り分けられるかを測る: GetSymbolDefSubType() は 0 より大きければ
+	// 「プラグインオブジェクトのスタイル」（VWSymbolDefObj::HasPluginStyleSupport の
+	// 実体）。あわせてリソースマネージャのフォルダ名と 2D/3D/ハイブリッドの別も出す。
+	probe.log("--- 一覧の内訳（添字: 名前 / subType / 種別 / フォルダ）---");
+	for (size_t i = 0, cnt = list.GetNumItems(); i < cnt; ++i)
+	{
+		TXString name;
+		list.GetResourceName(i, name);
+		TXString folder;
+		list.GetParentFolderNameFromResourceList(i, folder);
+
+		const MCObjectHandle handle = list.GetResource(i);
+		std::string subType = "?";
+		std::string kind = "?";
+		if (handle != nil)
+		{
+			subType = std::to_string(long(gSDK->GetSymbolDefSubType(handle)));
+			VWFC::VWObjects::VWSymbolDefObj symDef(handle);
+			switch (symDef.GetType())
+			{
+			case VWFC::VWObjects::kSymbolDefType_2D:
+				kind = "2D";
+				break;
+			case VWFC::VWObjects::kSymbolDefType_3D:
+				kind = "3D";
+				break;
+			case VWFC::VWObjects::kSymbolDefType_Hybrid:
+				kind = "ハイブリッド";
+				break;
+			default:
+				kind = "その他";
+				break;
+			}
+		}
+		probe.log("  [" + std::to_string(i) + "] '" + std::string(static_cast<const char*>(name)) +
+				  "' / subType=" + subType + " / " + kind + " / フォルダ='" +
+				  std::string(static_cast<const char*>(folder)) + "'");
 	}
 
 	CThumbnailPopupDialog dialog(probe, list);
