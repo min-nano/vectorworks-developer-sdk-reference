@@ -24,6 +24,7 @@
 
 #include "PluginPrefix.h"
 
+#include "BuildConfig.h"
 #include "PayloadAbi.h"
 
 #include "VWFC/VWObjects/VWDocument.h"
@@ -116,11 +117,22 @@ namespace
 } // namespace
 
 // ---------------------------------------------------------------------------
-// SDK の作法: GS_InitializeVCOM がこの関数を呼ぶので、**プラグインでなくてもモジュール側に
-// 定義が要る**（Include/VectorworksSDK.h の注記どおり。無いとリンクで未解決になる）。
+// **SDK の静的ライブラリをリンクするモジュールが必ず定義しなければならない 2 つ。**
+// どちらも libVWSDK.a / VWSDK.lib の中から参照されるので、Vectorworks にプラグインとして
+// 登録されないこのモジュールでも要る（無いとリンクで未解決になる。実ビルドで確認）。
+
+// ① GS_InitializeVCOM が呼ぶ（Include/VectorworksSDK.h:56-61 の注記どおり）。
 extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_ver()
 {
 	return SDK_VERSION;
+}
+
+// ② リソース（.vwr）の識別子。TXResStr / TXLegacyResource / GS_GetLayoutFromRsrc から
+//    参照される。**このモジュールは .vwr を持たず、リソースを引きもしない**が、
+//    リンクを通すために定義だけ要る。値は殻と同じものにしておく（引かれないので害は無い）。
+const char* DefaultPluginVWRIdentifier()
+{
+	return PLUGIN_VWR_ID;
 }
 
 // ---------------------------------------------------------------------------

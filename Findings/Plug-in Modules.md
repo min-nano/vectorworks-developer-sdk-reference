@@ -46,13 +46,32 @@ Source/VWSDK/Kernel/API/MiniCadCallBacks.cpp:54   VectorWorks::ISDK* gSDK = NULL
 - **同じプロセスに SDK の複製を持つモジュールが 2 つあってよい**（はず）。片方が
   受け取った `CallBackPtr` をもう片方へ渡して `GS_InitializeVCOM` を呼べば、
   そちらの `gSDK` も埋まる。【推定】実機での確認は下記。
-- `GS_InitializeVCOM` は内部で `plugin_module_ver()` を呼ぶので、**プラグインとして
-  登録されないモジュールでもこの関数の定義が要る**（無いとリンクで未解決になる。
-  `Include/VectorworksSDK.h:56-61` の注記どおり）。
+
+### SDK の静的ライブラリをリンクするモジュールは、この 2 つを定義しなければならない
+
+**Vectorworks にプラグインとして登録されないモジュールでも要る**（CI の実ビルドで確認。
+無いとリンクが通らない）。
 
 ```cpp
+// ① GS_InitializeVCOM がこれを呼ぶ（Include/VectorworksSDK.h:56-61 の注記どおり）。
 extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_ver() { return SDK_VERSION; }
+
+// ② リソース（.vwr）の識別子。**リソースを 1 つも持たず、引きもしないモジュールでも要る。**
+const char* DefaultPluginVWRIdentifier() { return "<vwr の基底名>"; }
 ```
+
+② を落とすと出るのはこの形の未解決で、**呼んでいる覚えのない場所から参照される**ので
+理由が分かりにくい（`TXString` を使えば `TXResStr` 経由で入ってくる）。
+
+```
+mac : Undefined symbols: "DefaultPluginVWRIdentifier()", referenced from:
+        _GS_GetLayoutFromRsrc in libVWSDK.a(APIBase.Legacy.Defs.o)
+        TXResStr::TXResStr(char const*, char const*, EEmptyHandling) in libVWSDK.a(TypesString.o)
+win : VWSDK.lib(TypesString.obj) : error LNK2019: unresolved external symbol
+        "char const * __cdecl DefaultPluginVWRIdentifier(void)"
+```
+
+`DefaultPluginVWRIdentifier` は **C++ リンケージ**（`extern "C"` を付けない）。
 
 ## 本体を外部モジュールへ出す（検証中）
 
