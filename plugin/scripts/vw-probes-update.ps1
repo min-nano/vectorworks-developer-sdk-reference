@@ -11,7 +11,7 @@
       q                        installed= / latest= / installedShell= / latestShell= /
                                url= / title= / probes=（または error=）
       do-install <url>         まるごと入れ替える（殻＋本体）。"ok" か error=<理由>。
-      do-install-payload <url> **本体だけ**入れ替える。"ok" か error=<理由>。
+      do-install-payload <url> **本体一式だけ**入れ替える。"ok" か error=<理由>。
 
     【なぜ 2 通りあるか】このプラグインは「殻（Vectorworks が起動時に読み込む .vlb）」と
     「本体（殻が自分で読み込む .vwpayload）」に割れている。**本体だけなら Vectorworks を
@@ -29,7 +29,7 @@
 
     【新旧はビルド ID で比べる】コミットではない（同じ sha から、同居させる PR を変えて
     何度もビルドされるため）。公開側はリリース本文の隠しメタデータの build= と shell=、
-    入っている側は本体が "VwSdkProbesPayload.build-info.txt" の build=、殻が
+    入っている側は本体がカタログ "VwSdkProbes.probes.txt" の build=、殻が
     "<name>.build-info.txt" の shell=。
 
     必要なもの: Windows PowerShell 5.1 以上（Windows に最初から入っている）。
@@ -53,7 +53,11 @@ $VW_REPO = if ($env:VW_REPO) { $env:VW_REPO } else { 'min-nano/vectorworks-devel
 $VW_API = "https://api.github.com/repos/$VW_REPO"
 $VW_TAG = if ($env:VW_TAG) { $env:VW_TAG } else { 'probes' }
 $VW_NAME = 'VwSdkProbes'
-$VW_PAYLOAD = 'VwSdkProbesPayload'
+# 本体のファイル名の頭（実体は "<この頭>-<群>.vwpayload"）と、殻が読む索引。
+# **本体は群ごとに 1 本**（main のプローブが 1 本、PR のプローブが PR ごとに 1 本）。
+# plugin/src/PayloadHost.h の payload::FileNameFor / CatalogFileName と対。
+$VW_PAYLOAD_PREFIX = 'VwSdkProbesPayload-'
+$VW_CATALOG = 'VwSdkProbes.probes.txt'
 $VW_PLUGINS_DIR = if ($env:VW_PLUGINS_DIR) { $env:VW_PLUGINS_DIR } else { Join-Path $env:APPDATA 'Nemetschek\Vectorworks\2026\Plug-Ins' }
 
 $script:LastError = ''
@@ -94,9 +98,11 @@ function Get-StampValue([string] $file, [string] $key) {
     return 'none'
 }
 
-# 入っている**本体**のビルド ID（"VwSdkProbesPayload.build-info.txt" の build=）。
+# 入っている**本体一式**のビルド ID（カタログ "VwSdkProbes.probes.txt" の build=）。
+# 本体は群ごとに分かれているが、**どれも同じビルドから出る**ので、ビルド ID は
+# カタログが持っていれば足りる（plugin/cmake/ProbeCatalog.cmake）。
 function Get-InstalledBuild {
-    return Get-StampValue "$VW_PAYLOAD.build-info.txt" 'build'
+    return Get-StampValue $VW_CATALOG 'build'
 }
 
 # 入っている**殻**の ID（"VwSdkProbes.build-info.txt" の shell=）。
@@ -115,6 +121,38 @@ function Install-File([string] $src, [string] $dst) {
         catch { try { Remove-Item -LiteralPath $dst -Force -ErrorAction Stop } catch {} }
     }
     Copy-Item -LiteralPath $src -Destination $dst -Force
+}
+
+# **本体一式**（群ごとの .vwpayload）とカタログを入れ替える。新しい版に無い本体は消す
+# ——残すと、カタログに載っていないファイルだけが古いまま居座る（実機で「消したはずの
+# PR のプローブが動く」の元になる）。失敗したら $false（理由は $script:LastError）。
+function Install-Payloads([string] $work) {
+    foreach ($f in Get-ChildItem -LiteralPath $work -Filter "$VW_PAYLOAD_PREFIX*.vwpayload" -ErrorAction SilentlyContinue) {
+        try { Install-File $f.FullName (Join-Path $VW_PLUGINS_DIR $f.Name) }
+        catch { $script:LastError = "本体（$($f.Name)）のコピーに失敗しました。"; return $false }
+    }
+
+    # **カタログは本体の後**。先に置くと、本体のコピーが途中で落ちたときに
+    # 「カタログには載っているのにファイルが無い」状態が残る。
+    $cat = Join-Path $work $VW_CATALOG
+    if (Test-Path -LiteralPath $cat) {
+        try { Install-File $cat (Join-Path $VW_PLUGINS_DIR $VW_CATALOG) }
+        catch { $script:LastError = 'カタログのコピーに失敗しました。'; return $false }
+    }
+
+    # 今度の版に無い本体を消す。
+    foreach ($f in Get-ChildItem -LiteralPath $VW_PLUGINS_DIR -Filter "$VW_PAYLOAD_PREFIX*.vwpayload" -ErrorAction SilentlyContinue) {
+        if (-not (Test-Path -LiteralPath (Join-Path $work $f.Name))) {
+            try { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop } catch {}
+        }
+    }
+
+    # 旧版（本体が 1 本だった頃）の置き土産も片付ける。
+    foreach ($f in @('VwSdkProbesPayload.vwpayload', 'VwSdkProbesPayload.build-info.txt')) {
+        $old = Join-Path $VW_PLUGINS_DIR $f
+        if (Test-Path -LiteralPath $old) { try { Remove-Item -LiteralPath $old -Force -ErrorAction Stop } catch {} }
+    }
+    return $true
 }
 
 # zip を落として展開し、Plug-Ins フォルダへ入れ替える。成功なら $true。
@@ -144,23 +182,23 @@ function Install-Build([string] $url) {
         Get-ChildItem -LiteralPath $VW_PLUGINS_DIR -Filter '*.old-*' -ErrorAction SilentlyContinue |
             ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop } catch {} }
 
-        foreach ($f in @("$VW_NAME.vlb", "$VW_NAME.vwr", "$VW_NAME.build-info.txt", 'vw-probes-update.ps1',
-                "$VW_PAYLOAD.vwpayload", "$VW_PAYLOAD.build-info.txt")) {
+        foreach ($f in @("$VW_NAME.vlb", "$VW_NAME.vwr", "$VW_NAME.build-info.txt", 'vw-probes-update.ps1')) {
             $s = Join-Path $work $f
             if (Test-Path -LiteralPath $s) {
                 try { Install-File $s (Join-Path $VW_PLUGINS_DIR $f) }
                 catch { $script:LastError = 'インストール先へのコピーに失敗しました。'; return $false }
             }
         }
-        return $true
+        # 本体一式とカタログも一緒に（殻と本体の版は揃っていなければならない）。
+        return (Install-Payloads $work)
     }
     finally {
         try { Remove-Item -LiteralPath $tmp.FullName -Recurse -Force -ErrorAction SilentlyContinue } catch {}
     }
 }
 
-# **本体だけ**置き換える（Vectorworks を動かしたままでよい）。落とすのは Install-Build と
-# 同じ zip で、中から本体のファイルだけを取り出す。
+# **本体一式だけ**置き換える（Vectorworks を動かしたままでよい）。落とすのは Install-Build
+# と同じ zip で、中から本体とカタログだけを取り出す。
 function Install-Payload([string] $url) {
     $script:LastError = ''
     if (-not $url) { $script:LastError = '引数が不足しています。'; return $false }
@@ -175,22 +213,15 @@ function Install-Payload([string] $url) {
         try { Expand-Archive -LiteralPath $zip -DestinationPath $work -Force }
         catch { $script:LastError = 'アーカイブの展開に失敗しました。'; return $false }
 
-        if (-not (Test-Path -LiteralPath (Join-Path $work "$VW_PAYLOAD.vwpayload"))) {
-            $script:LastError = "$VW_PAYLOAD.vwpayload が zip 内に見つかりません。"; return $false
+        if (-not (Test-Path -LiteralPath (Join-Path $work $VW_CATALOG))) {
+            $script:LastError = "$VW_CATALOG が zip 内に見つかりません。"; return $false
         }
 
         if (-not (Test-Path -LiteralPath $VW_PLUGINS_DIR)) {
             New-Item -ItemType Directory -Force -Path $VW_PLUGINS_DIR | Out-Null
         }
 
-        foreach ($f in @("$VW_PAYLOAD.vwpayload", "$VW_PAYLOAD.build-info.txt")) {
-            $s = Join-Path $work $f
-            if (Test-Path -LiteralPath $s) {
-                try { Install-File $s (Join-Path $VW_PLUGINS_DIR $f) }
-                catch { $script:LastError = '本体のコピーに失敗しました。'; return $false }
-            }
-        }
-        return $true
+        return (Install-Payloads $work)
     }
     finally {
         try { Remove-Item -LiteralPath $tmp.FullName -Recurse -Force -ErrorAction SilentlyContinue } catch {}

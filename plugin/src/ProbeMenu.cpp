@@ -25,6 +25,7 @@
 #include "PluginPrefix.h"
 #include "BuildConfig.h"
 #include "ProbeMenu.h"
+#include "PayloadCatalog.h"
 #include "PayloadHost.h"
 #include "Update.h"
 
@@ -87,29 +88,50 @@ namespace vwprobe
 				   payload.buildTime() + ") id=" + payload.buildId();
 		}
 
+		// カタログの見出し（メニューを開いた時点で言えるのはここまで——**本体はまだ
+		// 1 つも読み込んでいない**）。
+		std::string catalogStamp(const catalog::Catalog& cat)
+		{
+			if (cat.empty())
+				return "カタログ: 読めていません";
+			return "カタログ: " + cat.branch + " " + cat.commit + " (" + cat.buildTime +
+				   ") id=" + cat.buildId;
+		}
+
+		// -------------------------------------------------------------------
+		// ピッカーの 1 行ぶん。**カタログから作る**（プローブの素性と、それが入っている
+		// 本体の在り処）。選ばれて初めて、その本体を読み込む。
+		struct Choice
+		{
+			catalog::Probe probe;
+			catalog::Group group;
+			std::string payloadPath; // 殻の隣の .vwpayload（空なら在り処が割り出せない）
+			bool available = false; // その本体が実際に置かれているか
+		};
+
 		// 出所を 1 行に畳む（無ければ「ローカル」）。**同じ形をペイロード側もログの見出し
 		// 用に持っている**（plugin/src/payload/PayloadMain.cpp）——境界を跨いで文字列を
 		// 組み立てさせるより、それぞれが自分の表示を組むほうが単純。
-		std::string provenanceLine(const PayloadProbeInfo& probe)
+		std::string provenanceLine(const catalog::Group& group)
 		{
-			if (probe.commit.empty() && probe.pr.empty() && probe.branch.empty())
+			if (group.commit.empty() && group.pr.empty() && group.branch.empty())
 				return "ローカル（出所の記録なし）";
 
 			// 見出しは PR 番号。無ければ取り込み元のブランチ（ふつうは main）を見出しに
 			// 使い、**そのときは末尾でブランチを繰り返さない**（実機のログで
 			// 「claude/… / 0a0fff2 / claude/…」と 2 度出ていた）。
 			std::string line;
-			const bool hasPr = !probe.pr.empty();
+			const bool hasPr = !group.pr.empty();
 			if (hasPr)
-				line += "PR #" + probe.pr;
+				line += "PR #" + group.pr;
 			else
-				line += probe.branch.empty() ? std::string("main") : probe.branch;
-			if (!probe.commit.empty())
-				line += " / " + probe.commit;
-			if (hasPr && !probe.branch.empty())
-				line += " / " + probe.branch;
-			if (!probe.prTitle.empty())
-				line += " / " + probe.prTitle;
+				line += group.branch.empty() ? std::string("main") : group.branch;
+			if (!group.commit.empty())
+				line += " / " + group.commit;
+			if (hasPr && !group.branch.empty())
+				line += " / " + group.branch;
+			if (!group.prTitle.empty())
+				line += " / " + group.prTitle;
 			return line;
 		}
 
@@ -124,32 +146,39 @@ namespace vwprobe
 
 		// ピッカーの 1 項目。「どの PR の・どのコミットの・何を調べるプローブか」を
 		// この 1 行だけで判断できるようにする（選ぶ前に見えるのはこれだけなので）。
-		std::string pickerItem(const PayloadProbeInfo& probe)
+		//
+		// **入っていない本体も隠さずに出す。** 群のビルドが落ちれば、その .vwpayload だけが
+		// 配られない（他の群は配られる。plugin/CMakeLists.txt）。黙って消すと「なぜ自分の
+		// プローブが無いのか」が実機からは分からないので、印を付けて残す。
+		std::string pickerItem(const Choice& choice)
 		{
 			std::string head = "local";
-			if (!probe.pr.empty())
-				head = "#" + probe.pr;
-			else if (!probe.branch.empty())
-				head = probe.branch;
-			else if (!probe.commit.empty())
+			if (!choice.group.pr.empty())
+				head = "#" + choice.group.pr;
+			else if (!choice.group.branch.empty())
+				head = choice.group.branch;
+			else if (!choice.group.commit.empty())
 				head = "main";
-			if (!probe.commit.empty())
-				head += " " + probe.commit;
-			return head + "  " + probe.title + "  [" + probe.id + "]";
+			if (!choice.group.commit.empty())
+				head += " " + choice.group.commit;
+			std::string line = head + "  " + choice.probe.title + "  [" + choice.probe.id + "]";
+			if (!choice.available)
+				line += "  ※本体なし";
+			return line;
 		}
 
 		// PR 番号を数値で（無ければ -1）。**表示順を決めるためだけ**に使う。
-		long prNumberOf(const PayloadProbeInfo& probe)
+		long prNumberOf(const Choice& choice)
 		{
-			if (probe.pr.empty())
+			if (choice.group.pr.empty())
 				return -1;
-			return std::strtol(probe.pr.c_str(), nullptr, 10);
+			return std::strtol(choice.group.pr.c_str(), nullptr, 10);
 		}
 
 		// 表示順: **PR のものを新しい順に先頭へ**（いま確認したいのはたいてい最新の PR）、
-		// その後ろに main 由来を id 昇順で。本体が id 昇順で決定的に並べて渡すので、この
-		// 並べ替えも決定的になる。
-		std::vector<size_t> displayOrder(const std::vector<PayloadProbeInfo>& all)
+		// その後ろに main 由来を id 昇順で。カタログの並びは決定的なので、この並べ替えも
+		// 決定的になる。
+		std::vector<size_t> displayOrder(const std::vector<Choice>& all)
 		{
 			std::vector<size_t> order(all.size());
 			for (size_t i = 0; i < all.size(); ++i)
@@ -161,9 +190,47 @@ namespace vwprobe
 								 const long prB = prNumberOf(all[b]);
 								 if (prA != prB)
 									 return prA > prB;
-								 return all[a].id < all[b].id;
+								 return all[a].probe.id < all[b].probe.id;
 							 });
 			return order;
+		}
+
+		// カタログを読んで、選べるものを並べる。**ここでは本体を 1 つも読み込まない。**
+		std::vector<Choice> ReadChoices(catalog::Catalog& cat, std::string& error)
+		{
+			std::vector<Choice> out;
+			const std::string catalogPath = SiblingFilePath(payload::CatalogFileName());
+			if (catalogPath.empty())
+			{
+				error = "カタログ（" + payload::CatalogFileName() +
+						"）の置き場所を割り出せませんでした。";
+				return out;
+			}
+			std::string text;
+			std::string why;
+			if (!ReadTextFile(catalogPath, text, why))
+			{
+				error = "カタログを読めませんでした。\n" + catalogPath +
+						" が殻（プラグイン）の隣にありますか？\n（" + why + "）";
+				return out;
+			}
+			cat = catalog::Parse(text);
+
+			for (const catalog::Probe& probe : cat.probes)
+			{
+				const catalog::Group* group = cat.groupOf(probe.group);
+				if (group == nullptr)
+					continue; // 群の行が無い（カタログが壊れている）。飛ばす。
+				Choice choice;
+				choice.probe = probe;
+				choice.group = *group;
+				choice.payloadPath = SiblingFilePath(group->file);
+				choice.available = FileExists(choice.payloadPath);
+				out.push_back(choice);
+			}
+			if (out.empty() && error.empty())
+				error = "カタログにプローブがありません。";
+			return out;
 		}
 
 		// -------------------------------------------------------------------
@@ -408,33 +475,36 @@ namespace vwprobe
 		// **走らせるのは本体（ペイロード）側**（plugin/src/payload/PayloadMain.cpp）。
 		// 例外も undo の記録も所要時間もあちらが持っていて、こちらは結果を受け取って
 		// 見せるだけ。ログはこの呼び出しの間に collector へ 1 行ずつ流れてくる。
-		std::vector<std::string> RunProbe(Payload& payload, const PayloadProbeInfo& probe)
+		std::vector<std::string> RunProbe(Payload& payload, const Choice& choice,
+										  const catalog::Catalog& cat)
 		{
 			std::string outcome;
 			std::string logPath;
 			double seconds = 0.0;
 			std::string error;
-			if (!payload.run(probe.id, outcome, logPath, seconds, error))
+			if (!payload.run(choice.probe.id, outcome, logPath, seconds, error))
 				outcome = "走らせられなかった: " + error;
 
 			char elapsed[64] = {0};
 			(void)std::snprintf(elapsed, sizeof(elapsed), "%.2f", seconds);
 
 			std::vector<std::string> body;
-			body.push_back("プローブ: " + probe.title);
-			body.push_back("出所: " + provenanceLine(probe));
-			if (!probe.summary.empty())
-				body.push_back("概要: " + probe.summary);
+			body.push_back("プローブ: " + choice.probe.title);
+			body.push_back("出所: " + provenanceLine(choice.group));
+			if (!choice.probe.summary.empty())
+				body.push_back("概要: " + choice.probe.summary);
 			body.emplace_back("");
 			body.push_back("結果: " + outcome);
 			body.push_back(std::string("所要: ") + elapsed + " 秒");
 			if (!logPath.empty())
 				body.push_back("ログ: " + logPath);
 			body.emplace_back("");
-			body.push_back(payloadStamp(payload));
+			body.push_back(payloadStamp(payload) + "  [群 " + choice.group.id + "]");
+			body.push_back(catalogStamp(cat));
 			body.push_back(shellStamp());
 			return body;
 		}
+
 	} // namespace
 } // namespace vwprobe
 
@@ -469,18 +539,17 @@ vwprobe::CProbeMenu_EventSink::~CProbeMenu_EventSink() = default;
 
 void vwprobe::CProbeMenu_EventSink::DoInterface()
 {
-	// 0. **本体を読み込む。** メニューを開くたびに読み直すので、新しい本体が置かれて
-	//    いれば黙ってそれが動く（＝入れ替えに Vectorworks の再起動が要らない。
-	//    PayloadHost.h）。読み終わったら必ず降ろす——スコープを抜けるところで自動的に。
-	LogCollector collector;
-	Payload payload;
-	std::string loadError;
-	const bool loaded = payload.load((void*)gCBP, &collector, &CollectLine, loadError);
+	// 0. **カタログを読む（本体はまだ 1 つも読み込まない）。** どの本体に何が入って
+	//    いるかは、ビルドが並べて置いたテキスト 1 枚に書いてある
+	//    （plugin/src/PayloadCatalog.h）。読み込むのは**選ばれた 1 本だけ**——群の
+	//    どれかが壊れていても、他の群は選んで走らせられる。
+	catalog::Catalog cat;
+	std::string catalogError;
+	const std::vector<Choice> all = ReadChoices(cat, catalogError);
+	const std::vector<size_t> order = displayOrder(all);
 
 	// 1. 選ばせる。**先頭は「新しいビルドに入れ替える」**で、その後ろにプローブが並ぶ
-	//    （本体を読めなかったときでも、入れ替えだけは選べる——たいていそれが直し方）。
-	const std::vector<PayloadProbeInfo>& all = payload.probes();
-	const std::vector<size_t> order = displayOrder(all);
+	//    （カタログを読めなかったときでも、入れ替えだけは選べる——たいていそれが直し方）。
 	std::vector<TXString> items;
 	items.reserve(order.size() + 1);
 	items.emplace_back(kUpdateItem);
@@ -488,12 +557,12 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 		items.emplace_back(pickerItem(all[index]).c_str());
 
 	std::string prompt = "実行するプローブを選んでください:";
-	if (!loaded)
-		prompt = "本体を読み込めませんでした。新しいビルドを取り込めます:";
-	else if (all.empty())
-		prompt = "この本体にはプローブが入っていません。新しいビルドを取り込めます:";
+	if (all.empty())
+		prompt = "プローブがありません。新しいビルドを取り込めます:";
 
-	const std::string stamp = payloadStamp(payload) + "  /  " + shellStamp();
+	std::string stamp = catalogStamp(cat) + "  /  " + shellStamp();
+	if (cat.skippedLines > 0)
+		stamp += "  ※カタログに読めない行が " + std::to_string(cat.skippedLines) + " 行";
 
 	// 既定の選択は**先頭のプローブ**（あれば）。入れ替えは意識して選ぶものにする。
 	CProbePickerDialog picker(prompt, stamp, items, all.empty() ? 0 : 1);
@@ -513,28 +582,72 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 	if (selection == 0)
 	{
 		// 先頭 = 入れ替え。確認・ダウンロード・再起動の案内はすべて Update.cpp が持つ
-		// （例外もあちらで受け止める）。**本体を先に降ろす**——入れ替えは本体のファイルを
-		// 置き換えるので、読み込んだままにしない（Windows では置き換えられない）。
-		payload.unload();
+		// （例外もあちらで受け止める）。**本体は読み込んでいない**ので、ここで降ろす
+		// ものは無い（Windows でも入れ替えが必ず通る）。
 		RunManualUpdateCheck();
 		return;
 	}
 
-	if (!loaded)
+	if (all.empty())
 	{
 		// プローブを選べる状態ではない（一覧が空なので、ここへは来ないはずだが念のため）。
+		gSDK->AlertInform("プローブの一覧を読めませんでした。", catalogError.c_str(), false);
+		return;
+	}
+
+	const size_t choiceIndex = size_t(selection) - 1; // 先頭の 1 項目ぶんずらす
+	if (choiceIndex >= order.size())
+		return;
+	const Choice& choice = all[order[choiceIndex]];
+
+	if (!choice.available)
+	{
+		// その群の本体が配られていない（たいていはその PR のビルドが落ちた）。
+		// **何が起きているかを言う**——黙って何も起きないのが一番たちが悪い。
+		const std::string why = "この本体は入っていません（" + choice.group.file +
+								"）。\nその群のビルドが通らなかったか、入れ替えが途中で"
+								"止まっています。\n他の群のプローブはそのまま選べます。";
+		gSDK->AlertInform(why.c_str(), provenanceLine(choice.group).c_str(), false);
+		return;
+	}
+
+	// 2. **選ばれた群の本体だけ**を読み込む。読み終わったら必ず降ろす。
+	LogCollector collector;
+	Payload payload;
+	std::string loadError;
+	if (!payload.load(choice.payloadPath, (void*)gCBP, &collector, &CollectLine, loadError))
+	{
 		gSDK->AlertInform("本体を読み込めませんでした。", loadError.c_str(), false);
 		return;
 	}
 
-	const size_t probeIndex = size_t(selection) - 1; // 先頭の 1 項目ぶんずらす
-	if (probeIndex >= order.size())
+	// **カタログと本体が食い違っていないか。** 入れ替えが半端に済んだ（カタログだけ
+	// 新しい・本体だけ古い）と、選んだプローブがその本体に無いことがある。走らせて
+	// 「知らない id」と言われる前に、何が起きているかを言う。
+	bool inPayload = false;
+	for (const PayloadProbeInfo& entry : payload.probes())
+	{
+		if (entry.id == choice.probe.id)
+		{
+			inPayload = true;
+			break;
+		}
+	}
+	if (!inPayload)
+	{
+		const std::string why = "カタログと本体が食い違っています（" + choice.probe.id +
+								" がこの本体にありません）。\n新しいビルドに入れ替えてください。";
+		// **降ろす前に**素性を控える（降ろした後だと「読み込めていません」しか言えない）。
+		const std::string stampNow = payloadStamp(payload);
+		payload.unload();
+		gSDK->AlertInform(why.c_str(), stampNow.c_str(), false);
 		return;
+	}
 
-	// 2. 走らせる（例外は本体側が受け止める）。
-	const std::vector<std::string> body = RunProbe(payload, all[order[probeIndex]]);
+	// 3. 走らせる（例外は本体側が受け止める）。
+	const std::vector<std::string> body = RunProbe(payload, choice, cat);
 
-	// 3. **本体を降ろしてから**結果を見せる。ダイアログを出している間に本体を抱えたまま
+	// 4. **本体を降ろしてから**結果を見せる。ダイアログを出している間に本体を抱えたまま
 	//    にしない（その間に入れ替えを試されると Windows で失敗する）。ログはこちらの
 	//    collector に写してあるので、降ろしても失わない。
 	const std::string logText = collector.text;

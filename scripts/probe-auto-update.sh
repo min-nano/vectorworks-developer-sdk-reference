@@ -26,10 +26,19 @@
 #
 # 何を同居させるか
 # ----------------
-# **main のプローブ＋この PR のプローブだけ**。open な PR を全部集めることはしない
-# ——他人の PR の都合（slug の衝突・巻き戻し）でこの PR のチェックが赤くなるのは
-# 理不尽だから。複数の PR を 1 本に載せたいときは、これまで通り "Probe plug-in" を
-# 手で dispatch する（inputs.prs にカンマ区切り）。
+# **open な PR を全部**（＋main）。以前はこの PR だけにしていた——1 本の本体に全員の
+# プローブを詰めていたころは、誰か 1 人のプローブがコンパイルできないだけで全員の
+# ビルドが落ちたからである。いまは**本体が群（PR ごと）に分かれていて、落ちた群だけが
+# 外れる**（plugin/CMakeLists.txt / scripts/build-payloads.sh）ので、その理由は消えた。
+# 全部載せるほうが、実機で「いま open な調査を端から試す」ができて都合がよい。
+#
+# プローブを持たない PR は集約が黙って落とす（群が空になるので、本体も作られず、
+# ビルド ID の材料にも入らない。scripts/gather-probes.sh）。
+#
+# **この PR の群が落ちたら、このチェックを赤くする。** 公開そのものは成功していても、
+# この PR のプローブは実機で選べない——それを緑で見過ごすと、ユーザーが「入れ替えた
+# のに出てこない」と気付くまで誰も知らないままになる。判断はリリース本文の
+# payloads=（scripts/probe-release-notes.sh が書く）で行う。
 #
 # 使い方
 # ------
@@ -121,6 +130,31 @@ summary() {
 }
 
 # ---------------------------------------------------------------------------
+# 0. 同居させる PR を決める（open な PR を全部）
+# ---------------------------------------------------------------------------
+#
+# 番号は**昇順に正規化**する。ビルド ID は順序に依存しない作りだが、run 名の突き合わせ
+# （下記 2）と、人が読むリリース名が安定するので揃えておく。
+prs_body="$(workfile)"
+PRS_LIST="$PR"
+if [ "$(api_json "$VW_API/pulls?state=open&per_page=100" "$prs_body")" = "200" ]; then
+	list="$(jq -r '[.[].number] | sort | map(tostring) | join(",")' "$prs_body" 2>/dev/null || true)"
+	if [ -n "$list" ]; then
+		PRS_LIST="$list"
+	fi
+else
+	# 取れなくても止めない（この PR だけで作る。**公開が止まるほうが困る**）。
+	echo "::warning::open な PR の一覧を取得できませんでした。PR #$PR だけで作ります。"
+fi
+rm -f "$prs_body"
+# 自分が入っていなければ足す（一覧の取得が古い・失敗したときの保険）。
+case ",$PRS_LIST," in
+	*",$PR,"*) ;;
+	*) PRS_LIST="$(printf '%s\n%s\n' "${PRS_LIST//,/$'\n'}" "$PR" | sort -n -u | tr '\n' ',' | sed 's/^,//; s/,$//')" ;;
+esac
+echo "同居させる PR: $PRS_LIST"
+
+# ---------------------------------------------------------------------------
 # 1. main の "Probe plug-in" を dispatch する
 # ---------------------------------------------------------------------------
 #
@@ -134,7 +168,7 @@ if [ "$(api_json "$VW_API/actions/workflows/$WORKFLOW_FILE/runs?event=workflow_d
 fi
 rm -f "$last_body"
 
-payload="$(jq -n --arg ref "$REF" --arg prs "$PR" '{ref: $ref, inputs: {prs: $prs}}')"
+payload="$(jq -n --arg ref "$REF" --arg prs "$PRS_LIST" '{ref: $ref, inputs: {prs: $prs}}')"
 resp="$(workfile)"
 code="$(api -o "$resp" -w '%{http_code}' -X POST -d "$payload" \
 	"$VW_API/actions/workflows/$WORKFLOW_FILE/dispatches")"
@@ -145,7 +179,7 @@ fi
 	die "dispatch に失敗しました（HTTP $code）: $(api_message "$resp")。probe-build.yml が $REF にあるか確認してください"
 rm -f "$resp"
 
-echo "dispatched: $WORKFLOW_FILE (ref=$REF prs=$PR)"
+echo "dispatched: $WORKFLOW_FILE (ref=$REF prs=$PRS_LIST)"
 
 # ---------------------------------------------------------------------------
 # 2. その run を特定して完了まで待つ
@@ -158,7 +192,7 @@ RESOLVE_RUN_WHAT="PR #$PR のビルド"
 # shellcheck disable=SC2016 # $last / $t は jq の変数（--arg で渡す）。シェルに展開させない。
 run_id="$(resolve_run "$WORKFLOW_FILE" \
 	'(.id > ($last | tonumber)) and (.display_title | contains($t))' \
-	--arg last "$LAST_RUN_ID" --arg t "(PR $PR + ")" ||
+	--arg last "$LAST_RUN_ID" --arg t "(PR $PRS_LIST + ")" ||
 	die "起動したビルドの run を特定できませんでした（PR #$PR）"
 
 run_url="https://github.com/$VW_REPO/actions/runs/$run_id"
@@ -199,36 +233,79 @@ fi
 # 同じ行を読む）。ここで作り直さない。
 build_id=""
 probes_line=""
+payloads_line=""
 rel="$(workfile)"
 if [ "$(api_json "$VW_API/releases/tags/$RELEASE_TAG" "$rel")" = "200" ]; then
 	body="$(jq -r '.body // empty' "$rel" 2>/dev/null)"
 	build_id="$(printf '%s\n' "$body" | sed -n 's/^build=//p' | head -n 1 | tr -d '\r')"
 	probes_line="$(printf '%s\n' "$body" | sed -n 's/^probes=//p' | head -n 1 | tr -d '\r')"
+	payloads_line="$(printf '%s\n' "$body" | sed -n 's/^payloads=//p' | head -n 1 | tr -d '\r')"
 fi
 rm -f "$rel"
 
+# **この PR の群はビルドできたか。** 本体は群ごとに分かれていて、落ちた群だけが外れる
+# ——つまり「公開は成功したが、この PR のプローブは入っていない」が起こりうる。
+# それをこのチェックの赤で伝える（緑にすると、ユーザーが実機で「出てこない」と気付く
+# まで誰も知らないままになる）。
+#
+#   payloads=main:ok,pr14:failed   … scripts/probe-release-notes.sh が書く
+#
+# 群が**そもそも無い**のは正常（この PR に main と違うプローブが無い＝集約が落とした）。
+my_group="pr$PR"
+my_state=""
+case ",$payloads_line," in
+	*",$my_group:ok,"*) my_state="ok" ;;
+	*",$my_group:failed,"*) my_state="failed" ;;
+	*)
+		# 先頭・末尾の 1 件だけのときのために、区切りを補って一致を見る。
+		case "$payloads_line" in
+			"$my_group:ok" | "$my_group:ok,"* | *",$my_group:ok") my_state="ok" ;;
+			"$my_group:failed" | "$my_group:failed,"* | *",$my_group:failed") my_state="failed" ;;
+		esac
+		;;
+esac
+
 release_url="https://github.com/$VW_REPO/releases/tag/$RELEASE_TAG"
 echo "published: build=${build_id:-unknown} probes=${probes_line:-?}"
+echo "payloads: ${payloads_line:-（記録なし）}（この PR の群 $my_group: ${my_state:-なし}）"
 summary \
 	"プローブの自動更新: 公開しました（ビルド ID \`${build_id:-unknown}\`）。" \
 	"" \
 	"- 入っているプローブ: ${probes_line:-（不明）}" \
 	"- [ビルドの run]($run_url) / [リリース]($release_url)"
 
-[ "$COMMENT" -eq 1 ] || exit 0
+# 群の状態に応じて、コメントの見出しと終了ステータスを決める。
+comment_head="**実機プローブを公開しました。**"
+comment_note=""
+exit_code=0
+if [ "$my_state" = "failed" ]; then
+	comment_head="**この PR のプローブはビルドできませんでした。**"
+	comment_note="この PR の本体（\`$my_group\`）だけが今回のビルドに入っていません。他の PR と main のプローブはそのまま公開されています。ビルドの run（下）でコンパイルエラーを直してください。"
+	echo "::error::この PR の本体（$my_group）をビルドできませんでした。$run_url を見てください。"
+	summary "プローブの自動更新: **この PR の本体（$my_group）がビルドできませんでした**。[run]($run_url)"
+	exit_code=1
+elif [ -z "$my_state" ]; then
+	comment_head="**プローブを公開しました**（この PR のプローブはありません）。"
+	comment_note="この PR には main と違うプローブが無いので、この PR 由来の本体はありません。"
+fi
+
+[ "$COMMENT" -eq 1 ] || exit "$exit_code"
 
 comment_body="$(
 	cat <<EOF
 $COMMENT_MARKER
-**実機プローブを公開しました。** この PR のプローブを main のものと同居させた
-ビルドが、リリース（タグ [\`$RELEASE_TAG\`]($release_url)）に載っています。
+$comment_head open な PR のプローブを群ごとの本体に分けて
+ビルドし、リリース（タグ [\`$RELEASE_TAG\`]($release_url)）に載せています。
 
 | | |
 | --- | --- |
 | ビルド ID | \`${build_id:-unknown}\` |
 | 入っているプローブ | ${probes_line:-（不明）} |
+| 本体ごとの結果 | ${payloads_line:-（不明）} |
 | ビルド | [run]($run_url) |
-
+${comment_note:+
+$comment_note
+}
 **すでにプラグインを入れてあるなら何もしなくてよい**——次に Vectorworks を起動した
 ときにプラグイン自身が「入れ替えますか？」と尋ねます（メニューの先頭項目からも
 確認できます）。初回だけの入れ方は
@@ -258,8 +335,8 @@ else
 fi
 case "$code" in
 	200 | 201) echo "commented on PR #$PR" ;;
-	# 公開そのものは済んでいるので、コメントできなくても成功にする（要約とログには残る）。
-	*) echo "::warning::PR #$PR へコメントできませんでした（HTTP $code）。公開そのものは成功しています。" ;;
+	# コメントできなくても、公開の成否そのものは上で決めている（要約とログには残る）。
+	*) echo "::warning::PR #$PR へコメントできませんでした（HTTP $code）。" ;;
 esac
 
-exit 0
+exit "$exit_code"

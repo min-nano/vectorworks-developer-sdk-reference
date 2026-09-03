@@ -15,6 +15,14 @@ Findings に**無印（＝実機確認済み）**で書ける知見は、ロー�
 入っている。**だからプローブの入れ替えに Vectorworks の再起動が要らない**（下記
 「殻と本体」）。
 
+さらに**本体は群（main と、PR ごと）に分かれている**。殻はメニューを開いた時点では
+**どれも読み込まず**、カタログ（索引のテキスト 1 枚）で一覧を出し、**選ばれた 1 本だけ**を
+読む。こうしてあるので:
+
+- **1 つの PR がコンパイルできなくても、他の PR のプローブは配れる・選べる。**
+- 一覧を出すのに本体を読み込まないので、メニューを開くのが速い。
+- 版の食い違いや読み込みの失敗も、**その 1 本の中に閉じる**。
+
 ```
 メニュー「SDK 実機プローブ…」
    │
@@ -34,51 +42,60 @@ Findings に**無印（＝実機確認済み）**で書ける知見は、ロー�
 （下記「自動アップデート」）。zip を落として展開して隔離フラグを外して……を毎回手でやる
 必要は無い——このプラグインは**入れ替えが日常**なので、そこが手作業だと続かない。
 
-## 複数の PR のコマンドを 1 本のプラグインへ同居させる仕組み
+## 複数の PR のコマンドを 1 つのプラグインへ同居させる仕組み
 
 実機確認は「PR をマージする**前**」に要る（CLAUDE.md「PR とマージ」2）。一方でビルドは
-main のワークフローが行う。つまり**まだ open な複数の PR の調査コードを、1 本の
-プラグインへ同居させて**配れなければならない。仕掛けは 3 つだけ。
+main のワークフローが行う。つまり**まだ open な複数の PR の調査コードを、1 つの
+プラグインへ同居させて**配れなければならない。仕掛けは 4 つ。
 
 1. **1 プローブ 1 ディレクトリ。** 調査コードは `probes/runtime/<slug>/probe.cpp` に置く。
-   集約はディレクトリ単位で行い、`<slug>` がそのまま一意な鍵になる。
+   集約はディレクトリ単位で行い、`<slug>` が群の中での一意な鍵になる。
 
-2. **プローブのシンボルはすべて内部リンケージ。** `VW_PROBE` マクロが展開するのは
-   「本体関数 1 つ＋自己登録する静的オブジェクト 1 つ」で、どちらも `static`
-   （[`src/payload/Probe.h`](src/payload/Probe.h)）。**別々の PR が同じ名前を使っていてもリンクで衝突
-   しない**ので、ソースを 1 つのターゲットへ並べるだけで同居できる。登録は静的
-   初期化で行われ、レジストリ側は関数ローカル static なので初期化順序にも依存しない
-   （[`src/payload/Probe.cpp`](src/payload/Probe.cpp) 冒頭）。
+2. **本体は群ごとに 1 本。** main のプローブが 1 本、PR のプローブが PR ごとに 1 本の
+   `.vwpayload` になる（`VwSdkProbesPayload-main.vwpayload` /
+   `VwSdkProbesPayload-pr12.vwpayload`）。ワークフローは**本体を 1 本ずつビルドし、
+   落ちた群だけを外して**公開する（[`scripts/build-payloads.sh`](../scripts/build-payloads.sh)）。
+   **誰か 1 人のプローブがコンパイルできないだけで全員のビルドが落ちる**、という
+   一番の詰まりがこれで無くなる。別々の PR が同じ slug を使っていても、別の本体に
+   入るので衝突しない（ピッカーには出所付きで 2 行並ぶ——**それが見たい**）。
 
-3. **出所（どの PR の・どのコミットか）はコードに書かない。** それはビルドのときに
+3. **カタログ（索引）で一覧を出す。** 「どの本体に何が入っているか」は
+   `VwSdkProbes.probes.txt`（殻の隣のテキスト）に書いてある。殻はこれだけを読んで
+   ピッカーを組み、**選ばれた群の本体だけ**を読み込む
+   （[`src/PayloadCatalog.h`](src/PayloadCatalog.h) が読み手、
+   [`cmake/ProbeCatalog.cmake`](cmake/ProbeCatalog.cmake) が書き手）。
+   表示名と概要は `VW_PROBE` の引数から**ビルドのときに**読み出して載せる。
+
+4. **出所（どの PR の・どのコミットか）はコードに書かない。** それはビルドのときに
    しか決まらない（同じ調査が PR 中に何度も作り直され、マージ後は main のものになる）。
    [`scripts/gather-probes.sh`](../scripts/gather-probes.sh) が main と指定 PR から
-   プローブを集め、「slug → PR / コミット / ブランチ / PR タイトル」の表を
-   `ProbeProvenance.cpp` として生成し、CMake がそれをビルドへ入れる。ピッカーの 1 行は
-   この表から作られる。
+   プローブを群に分けて集め、群ごとに「slug → PR / コミット / ブランチ / PR タイトル」の
+   表を `ProbeProvenance-<群>.cpp` として生成し、CMake がそれをその群の本体へ入れる。
 
-同じ slug がぶつかったときの扱い。**PR のブランチには main のプローブもそのまま載って
-いる**ので、まず「中身が同じか」で〈引き継いだだけ〉と〈その PR が変えた〉を分ける
-（これをしないと、2 つの PR を同居させた途端に、両方が持っている main のプローブが
-「重複」として衝突してしまう）。
+**PR のブランチには main のプローブもそのまま載っている**ので、そのままだと同じものが
+2 度出る。中身（ファイル名と内容の指紋）で分ける:
 
 | 状況 | 扱い |
 | --- | --- |
-| 中身が同じ | **黙って飛ばす**（その PR は main の版を引き継いでいるだけ） |
-| main と PR で中身が違う | **PR 側で上書き**（マージ前の版を確かめたいので）。ログに出す |
-| PR どうしで中身が違う | **エラーで停止**。どちらかの slug を変えてから出し直す |
+| main と中身が同じ | **PR の群に入れない**（その PR は main の版を引き継いでいるだけ） |
+| main と中身が違う | **PR の群に入れる**（main の版と並んで出る。マージ前の版と見比べられる） |
+| 別々の PR が同じ slug | **どちらも出る**（別の本体なので衝突しない。出所で見分ける） |
 | ディレクトリ名と `VW_PROBE` の第 1 引数が違う | **エラーで停止**（出所と突き合わなくなるため） |
+| その群のビルドが落ちた | **カタログには残り、ピッカーに「※本体なし」と出る**（黙って消さない） |
 
 ## 使い方（実機で確かめる人）
 
 1. **ビルドを頼む——たいていは何もしなくてよい。** PR の `probes/runtime/` に
    プローブが push されると、[`probe-auto-update.yml`](../.github/workflows/probe-auto-update.yml)
-   が **"Probe plug-in" を自動で叩き**（`prs=<その PR>`）、完了まで見届けて PR へ
-   「公開しました」と 1 つコメントする。つまり**プローブを書いて push した時点で、
-   実機で走らせられるビルドが出来上がる**。
-   - **手で叩くのは「複数の PR を 1 本に同居させたいとき」だけ。** Actions の
-     "Probe plug-in" を `workflow_dispatch` で叩き、入力 `prs` に PR 番号を
-     カンマ区切りで入れる（例 `12,15`）。空なら main に入っているプローブだけ。
+   が **"Probe plug-in" を自動で叩き**（`prs=` に**その時点で open な PR を全部**）、
+   完了まで見届けて PR へ「公開しました」と 1 つコメントする。つまり**プローブを書いて
+   push した時点で、実機で走らせられるビルドが出来上がる**。
+   - **open な PR は全部載る。** 本体が群ごとに分かれていて、コンパイルできない群だけ
+     外れるので、他人の PR に巻き込まれない（入らなかった群はリリースノートの表と
+     ピッカーの「※本体なし」で分かる）。
+   - **手で叩くのは、載せる顔ぶれを絞りたいときだけ。** Actions の "Probe plug-in" を
+     `workflow_dispatch` で叩き、入力 `prs` に PR 番号をカンマ区切りで入れる
+     （例 `12,15`）。空なら main に入っているプローブだけ。
    - `workflow_dispatch` は**デフォルトブランチにあるワークフローしか起動できない**
      （GitHub の仕様）。このワークフロー自体を変える PR の間は使えないので、そのときは
      **PR の Actions 実行ページから成果物（`vwlibrary-zip` / `vlb-zip`）を直接
@@ -96,16 +113,19 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
    **zip の中身はすべて同じフォルダへ置く**——プラグインと本体（`.vwpayload`）は
    隣同士でなければならない（下記「殻と本体」）。
    - **macOS**: `VwSdkProbes.vwlibrary` バンドルと、その隣に
-     `VwSdkProbesPayload.vwpayload` ＋ `VwSdkProbesPayload.build-info.txt`。
-     ローカルディスクへ置き（iCloud Drive は不可）、隔離フラグを外す:
-     `xattr -dr com.apple.quarantine VwSdkProbes.vwlibrary VwSdkProbesPayload.vwpayload`。
+     `VwSdkProbesPayload-<群>.vwpayload`（**群の数だけある**）＋ カタログ
+     `VwSdkProbes.probes.txt`。ローカルディスクへ置き（iCloud Drive は不可）、
+     隔離フラグを外す:
+     `xattr -dr com.apple.quarantine VwSdkProbes.vwlibrary VwSdkProbesPayload-*.vwpayload`。
      CI ビルドは**アドホック署名済み**（Apple Silicon がロードするのに必須。Developer ID
      署名ではない）だが、「壊れている」と言われたら
      `codesign --force --deep --sign - VwSdkProbes.vwlibrary` と
-     `codesign --force --sign - VwSdkProbesPayload.vwpayload` で署名し直す。
-   - **Windows**: `VwSdkProbes.vlb` / `VwSdkProbes.vwr` /
-     `VwSdkProbesPayload.vwpayload` を**同じフォルダへ一緒に**置く
-     （`*.build-info.txt` は素性の控えで、自動アップデートが読む）。
+     `codesign --force --sign - VwSdkProbesPayload-<群>.vwpayload` で署名し直す。
+   - **Windows**: `VwSdkProbes.vlb` / `VwSdkProbes.vwr` / `VwSdkProbes.probes.txt` /
+     `VwSdkProbesPayload-<群>.vwpayload` を**同じフォルダへ一緒に**置く
+     （`VwSdkProbes.build-info.txt` は殻の素性の控えで、自動アップデートが読む）。
+   - **カタログ（`VwSdkProbes.probes.txt`）を忘れない。** これが無いとピッカーが空に
+     なる（殻はこれを見て一覧を出す）。
    - **殻を入れ替えるときは Vectorworks を終了してから**（読み込み済みのモジュールは
      差し替えられない）。**本体だけなら動かしたままでよい**——それが下記の自動
      アップデートの通常の道。
@@ -115,6 +135,9 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
      編集 ▸ *メニュー*。**ツール** カテゴリの中に **SDK 実機プローブ…** があるので、
      メニューへドラッグする。
 4. **走らせる。** メニュー「SDK 実機プローブ…」→ 一覧から選んで「実行」。
+   **選んだ時点でその群の本体が読み込まれる**（一覧を出すだけなら何も読み込まない）。
+   - 行末に `※本体なし` と出ているものは、**その群のビルドが落ちている**（あるいは
+     入れ替えが途中で止まっている）。選ぶと理由が出る。他の行はそのまま使える。
    - **プローブは図面を変更することがある。作業中の図面では実行しない**
      （新規の空図面で走らせる）。取り消しは保証しない——プローブは undo イベントを
      自分では開かない（[Findings「Undo」](../Findings/Undo.md) の半端な記録を避けるため）。
@@ -210,9 +233,10 @@ pr=<番号>:<その PR の head の full sha>   … 同居させる PR のぶん
   第 1 引数を**ディレクトリ名と同じ slug**にする。
 - 使える API は `probe.log(...)` と `probe.fail(...)` の 2 つだけ（[`src/payload/Probe.h`](src/payload/Probe.h)）。
 - PR を作れば**ビルドと公開は自動**（`probe-auto-update.yml` が "Probe plug-in" を
-  その PR 番号付きで叩き、完了まで待つ）。**その待機がそのまま PR のチェック**なので、
-  プローブがコンパイルできなければ PR が赤くなる。実機で走らせるのは、リリースが
-  更新されたあと（プラグインが次にメニューを開いたときから新しい本体で動く）。
+  叩き、完了まで待つ）。**その待機がそのまま PR のチェック**で、**自分の群の本体が
+  コンパイルできなければ、その PR だけが赤くなる**（他の PR のビルドは止めない）。
+  実機で走らせるのは、リリースが更新されたあと（次にそのプローブを選んだときから
+  新しい本体で動く）。
 
 ## 殻と本体（＝入れ替えに再起動が要らない理由）
 
@@ -224,16 +248,24 @@ pr=<番号>:<その PR の head の full sha>   … 同居させる PR のぶん
 
 ```
 Vectorworks ──読み込む──▶ 殻（メニュー・ダイアログ・更新）      … 起動時に 1 度きり
-   VwSdkProbes.vwlibrary      │ dlopen / LoadLibrary
-   VwSdkProbes.vlb            ▼
-                          本体（プローブ）                     … メニューを開くたびに読み直す
-                          VwSdkProbesPayload.vwpayload
+   VwSdkProbes.vwlibrary      │
+   VwSdkProbes.vlb            ├─ 読む ─▶ カタログ VwSdkProbes.probes.txt  … メニューを開くたび
+                              │            （どの本体に何が入っているかの索引）
+                              │
+                              └─ dlopen / LoadLibrary ─▶ 本体（プローブ）  … **選ばれた 1 本だけ**
+                                   VwSdkProbesPayload-main.vwpayload
+                                   VwSdkProbesPayload-pr12.vwpayload
+                                   VwSdkProbesPayload-pr15.vwpayload
 ```
 
 **Vectorworks は本体（`.vwpayload`）の存在を知らない。** 読み込むのは殻で、しかも
-メニューコマンドが走るたびに読んで、終わったら降ろす。だから**本体のファイルを置き換えて
-おけば、次にメニューを開いたときから新しいプローブが動く**（macOS で実測済み。
+**ダイアログで選ばれてから**読んで、終わったら降ろす。だから**本体のファイルを置き換えて
+おけば、次にそのプローブを選んだときから新しいものが動く**（macOS で実測済み。
 [Findings「プラグインモジュールの読み込みと入れ替え」](../Findings/Plug-in%20Modules.md)）。
+
+**本体が群ごとに分かれているので、失敗はその 1 本の中に閉じる。** ビルドできなかった群は
+配られず、ピッカーに「※本体なし」と出るだけ。版が違う・壊れているといった読み込みの
+失敗も、選んだその 1 本の話で終わる。
 
 | どこを変えたか | 何が要るか |
 | --- | --- |
@@ -255,6 +287,14 @@ Vectorworks ──読み込む──▶ 殻（メニュー・ダイアログ・�
 - **本体は必ず複製してから読む。** 一時ディレクトリへ世代ごとの名前で写し、その複製を
   読む（[`src/PayloadHost.h`](src/PayloadHost.h)）。Windows は読み込み中の DLL を
   置き換えられないので、直接読むと**入れ替えられなくなる**＝この仕組みが死ぬ。
+- **カタログと本体は同じビルドから出す。** 索引（`VwSdkProbes.probes.txt`）だけ新しい・
+  本体だけ古い、が起こると「選んだプローブがその本体に無い」になる。入れ替えは
+  **本体 → カタログの順**に置き（途中で落ちても索引が先走らない）、殻は走らせる前に
+  「選んだ id がその本体にあるか」を確かめてから呼ぶ。
+- **群の名前はファイル名になる**（`VwSdkProbesPayload-<群>.vwpayload`）。書き手
+  （[`cmake/ProbeCatalog.cmake`](cmake/ProbeCatalog.cmake)）と読み手
+  （[`src/PayloadHost.h`](src/PayloadHost.h) の `payload::FileNameFor`）で綴りが
+  ずれると、実機では「※本体なし」としか出ない。単体テストで両側から押さえてある。
 - **本体はバンドルの中に置かない**（mac も殻の隣）。バンドルの署名はリソースまで封を
   するので、中のファイルを差し替えると署名が壊れる。
 - **殻の記憶域を本体に持たせない。** 境界を越えて渡した構造体（`VwPayloadHost`）は
@@ -280,8 +320,8 @@ cmake --build build --config Release
 ```
 
 `VW_SDK_DIR` は `SDKLib` を**含む**フォルダ。マニフェストを渡さないローカルビルドでは、
-作業ツリーの `probes/runtime/*/` をそのまま拾う（出所は "local"）。特定の PR を混ぜて
-ローカルで作るなら、先に集約してからマニフェストを渡す:
+作業ツリーの `probes/runtime/*/` を群 `main` としてそのまま拾う（出所は "local"）。
+特定の PR を混ぜてローカルで作るなら、先に集約してからマニフェストを渡す:
 
 ```bash
 scripts/gather-probes.sh --prs 12,15
@@ -304,6 +344,8 @@ cmake -S plugin -B build -DVW_SDK_DIR=... \
 | `src/UpdateParse.h` | その純粋な部分（`tests/UpdateParseTests.cpp` が確かめる） |
 | `scripts/vw-probes-update.{sh,ps1}` | 同梱の更新スクリプト（プラグインが非対話で叩く） |
 | `src/PayloadAbi.h` | **殻と本体の間の C の ABI**（下記「殻と本体」） |
+| `src/PayloadCatalog.h` | **カタログの読み手**（どの本体に何が入っているか。`tests/PayloadCatalogTests.cpp`） |
+| `cmake/ProbeCatalog.cmake` | その書き手（`tests/probe-catalog-test.cmake` が `cmake -P` で確かめる） |
 | `src/PayloadHost.{h,cpp}` | 殻の側（本体の読み込み・解決・アンロード・複製） |
 | `src/PayloadHostHolder.h` | 本体の側。**殻から渡されたものを写して持つ**（`tests/PayloadHostHolderTests.cpp` が確かめる） |
 | `src/PluginPrefix.h` | SDK アンブレラヘッダ（プリコンパイル対象） |

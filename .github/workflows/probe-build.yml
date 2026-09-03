@@ -7,6 +7,11 @@ name: Probe plug-in
 # VectorWorks でしか取れない。その実機で動かす道具がこのプラグインで、中身は
 # 「メニューコマンド 1 つ＋そこから選んで走らせるプローブ（PR ごとの調査コード）」。
 #
+# **本体（プローブ）は群ごとに 1 本**（main のプローブが 1 本、PR のプローブが PR ごとに
+# 1 本）。ビルドは殻 → 本体を 1 本ずつの順に行い、**PR の群が落ちてもその群だけ外して
+# 先へ進む**（scripts/build-payloads.sh。main の群が落ちたときだけ全体を失敗にする）。
+# 落ちた群はリリースノートの表と、隠しメタデータ payloads= に出る。
+#
 # 3 つの入口があり、publish するのは push / workflow_dispatch だけ:
 #
 #   workflow_dispatch  main で叩く**主たる入口**。inputs.prs に PR 番号を並べると、
@@ -162,21 +167,33 @@ jobs:
             -DVW_BUILD_BRANCH="$VW_BUILD_BRANCH" \
             -DVW_PROBE_MANIFEST="$GITHUB_WORKSPACE/build-probes/manifest.cmake"
 
-      - name: Build
-        run: cmake --build build --config Release --parallel "$(sysctl -n hw.ncpu)"
+      # 殻は**必ず**通らなければならない（メニューもダイアログも更新もここに入っている）。
+      - name: Build the shell
+        run: cmake --build build --config Release --target VwSdkProbes --parallel "$(sysctl -n hw.ncpu)"
+
+      # 本体は**群ごとに 1 本ずつ**。PR の群が 1 つ通らなくても、他の群は配る
+      # （scripts/build-payloads.sh。main の群が通らないときだけ落とす）。
+      - name: Build each payload
+        run: |
+          scripts/build-payloads.sh \
+            --build build --groups build-probes/groups.txt \
+            --status payload-status-mac.txt --parallel "$(sysctl -n hw.ncpu)"
 
       # Apple Silicon はすべての Mach-O に署名を要求する。証明書の要らない ad-hoc 署名
       # （"-"）で足りる（Developer ID 署名ではないので、VW の「不明なプラグイン」警告は出る）。
       # .vwr を固めた後に署名するので、リソースまで含めて封がかかる。
-      - name: Ad-hoc code-sign the bundle and the payload
+      - name: Ad-hoc code-sign the bundle and the payloads
         run: |
           set -euo pipefail
           # 本体（.vwpayload）はバンドルの**隣**に置いた Mach-O で、殻が自分で dlopen する。
           # バンドルとは別に署名する（Apple Silicon は署名の無い Mach-O を読み込まない）。
           # **中に入れないのは、差し替えるたびに殻の署名が壊れるから**（署名はリソースまで
-          # 封をする。plugin/src/PayloadHost.h）。
-          codesign --force --sign - build/VwSdkProbesPayload.vwpayload
-          codesign --verify --strict --verbose=2 build/VwSdkProbesPayload.vwpayload
+          # 封をする。plugin/src/PayloadHost.h）。作れた群のぶんだけ回す。
+          for payload in build/VwSdkProbesPayload-*.vwpayload; do
+            [ -e "$payload" ] || continue
+            codesign --force --sign - "$payload"
+            codesign --verify --strict --verbose=2 "$payload"
+          done
           codesign --force --deep --sign - build/VwSdkProbes.vwlibrary
           codesign --verify --strict --verbose=2 build/VwSdkProbes.vwlibrary
 
@@ -197,13 +214,17 @@ jobs:
             || { echo "::error::vw-probes-update.sh がバンドルへ入っていません"; exit 1; }
           # 自動アップデートが「再起動が要るか」を決める鍵。空だと必ず再起動を求めてしまう。
           /usr/libexec/PlistBuddy -c "Print :VWShellId" "$bundle/Contents/Info.plist"
-          # 本体（プローブはこちらに入る）。バンドルの**隣**であることが肝。
-          test -f build/VwSdkProbesPayload.vwpayload \
-            || { echo "::error::本体 (VwSdkProbesPayload.vwpayload) が作られていません"; exit 1; }
-          test -f build/VwSdkProbesPayload.build-info.txt \
-            || { echo "::error::本体の build-info.txt がありません"; exit 1; }
-          lipo -info build/VwSdkProbesPayload.vwpayload
-          cat build/VwSdkProbesPayload.build-info.txt
+          # カタログ（殻が本体を読み込まずに一覧を出すための索引）。**これが無いと
+          # ピッカーが空になる**ので、必ず作られていることを確かめる。
+          test -f build/VwSdkProbes.probes.txt \
+            || { echo "::error::カタログ (VwSdkProbes.probes.txt) が作られていません"; exit 1; }
+          cat build/VwSdkProbes.probes.txt
+          # 本体（プローブはこちらに入る）。バンドルの**隣**であることが肝。群ごとに 1 本。
+          ls -l build/VwSdkProbesPayload-*.vwpayload
+          for payload in build/VwSdkProbesPayload-*.vwpayload; do lipo -info "$payload"; done
+          # main の群は必ず要る（PR の群は落ちていることがある）。
+          test -f build/VwSdkProbesPayload-main.vwpayload \
+            || { echo "::error::main の本体が作られていません"; exit 1; }
 
       # "<name>.vwlibrary/" の階層を保ったまま zip する（展開してそのまま使えるように）。
       # **zip は 1 つだけ。** 殻と本体を分けて配らないのは、展開の手間を増やさないため
@@ -213,8 +234,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          # 作れた本体だけを入れる（落ちた群のぶんは無い＝配られない。カタログには
+          # 残るので、殻が「※本体なし」と出す）。
+          payloads=()
+          for payload in build/VwSdkProbesPayload-*.vwpayload; do
+            [ -e "$payload" ] || continue
+            payloads+=("$(basename "$payload")")
+          done
           ( cd build && zip -qry "$GITHUB_WORKSPACE/dist/VwSdkProbes.vwlibrary.zip" \
-              VwSdkProbes.vwlibrary VwSdkProbesPayload.vwpayload VwSdkProbesPayload.build-info.txt )
+              VwSdkProbes.vwlibrary VwSdkProbes.probes.txt "${payloads[@]}" )
+          # 群ごとのビルド結果はリリースノートと PR のチェックが読む。
+          cp payload-status-mac.txt dist/
           ls -l dist
 
       - name: Upload plug-in artifact
@@ -267,9 +297,18 @@ jobs:
             -DVW_BUILD_BRANCH="$VW_BUILD_BRANCH" \
             -DVW_PROBE_MANIFEST="$GITHUB_WORKSPACE/build-probes/manifest.cmake"
 
-      - name: Build
+      # 殻は**必ず**通らなければならない。
+      - name: Build the shell
         shell: bash
-        run: cmake --build build --config Release --parallel "$(nproc)"
+        run: cmake --build build --config Release --target VwSdkProbes --parallel "$(nproc)"
+
+      # 本体は**群ごとに 1 本ずつ**（mac 側と同じ理由・同じスクリプト）。
+      - name: Build each payload
+        shell: bash
+        run: |
+          scripts/build-payloads.sh \
+            --build build --groups build-probes/groups.txt \
+            --status payload-status-win.txt --parallel "$(nproc)"
 
       - name: Inspect built plug-in
         shell: bash
@@ -280,13 +319,15 @@ jobs:
           test -f "$d/VwSdkProbes.vwr" || { echo "::error::VwSdkProbes.vwr が作られていません"; exit 1; }
           test -f "$d/vw-probes-update.ps1" \
             || { echo "::error::vw-probes-update.ps1 が置かれていません"; exit 1; }
-          # 本体（プローブはこちらに入る）。.vlb の隣に置く。
-          test -f "$d/VwSdkProbesPayload.vwpayload" \
-            || { echo "::error::本体 (VwSdkProbesPayload.vwpayload) が作られていません"; exit 1; }
-          test -f "$d/VwSdkProbesPayload.build-info.txt" \
-            || { echo "::error::本体の build-info.txt がありません"; exit 1; }
+          # カタログ（殻が本体を読み込まずに一覧を出すための索引）。
+          test -f "$d/VwSdkProbes.probes.txt" \
+            || { echo "::error::カタログ (VwSdkProbes.probes.txt) が作られていません"; exit 1; }
+          # 本体（プローブはこちらに入る）。.vlb の隣に、群ごとに 1 本。
+          ls -l "$d"/VwSdkProbesPayload-*.vwpayload
+          test -f "$d/VwSdkProbesPayload-main.vwpayload" \
+            || { echo "::error::main の本体が作られていません"; exit 1; }
           cat "$d/VwSdkProbes.build-info.txt"
-          cat "$d/VwSdkProbesPayload.build-info.txt"
+          cat "$d/VwSdkProbes.probes.txt"
 
       - name: Package module
         shell: pwsh
@@ -295,15 +336,20 @@ jobs:
           New-Item -ItemType Directory -Force -Path 'dist' | Out-Null
           # **zip は 1 つだけ**（殻＋本体）。本体だけの入れ替えも、この zip から本体の
           # ファイルだけを取り出して置く（vw-probes-update.ps1 の do-install-payload）。
+          # 作れた本体だけを入れる（落ちた群のぶんは無い＝配られない。カタログには
+          # 残るので、殻が「※本体なし」と出す）。
           $files = @(
             'build/Release/VwSdkProbes.vlb',
             'build/Release/VwSdkProbes.vwr',
             'build/Release/VwSdkProbes.build-info.txt',
-            'build/Release/vw-probes-update.ps1',
-            'build/Release/VwSdkProbesPayload.vwpayload',
-            'build/Release/VwSdkProbesPayload.build-info.txt'
-          ) | Where-Object { Test-Path $_ }
+            'build/Release/VwSdkProbes.probes.txt',
+            'build/Release/vw-probes-update.ps1'
+          ) + (Get-ChildItem 'build/Release' -Filter 'VwSdkProbesPayload-*.vwpayload' |
+                 ForEach-Object { $_.FullName })
+          $files = $files | Where-Object { Test-Path $_ }
           Compress-Archive -Path $files -DestinationPath 'dist/VwSdkProbes.vlb.zip' -Force
+          # 群ごとのビルド結果はリリースノートと PR のチェックが読む。
+          Copy-Item 'payload-status-win.txt' 'dist/'
           Get-ChildItem dist | Select-Object Name, Length
 
       - name: Upload plug-in artifact
@@ -328,6 +374,11 @@ jobs:
       PRS: ${{ inputs.prs }}
 
     steps:
+      # 本文を組むスクリプト（scripts/probe-release-notes.sh）を使うので、ここでも
+      # チェックアウトが要る（成果物だけでは足りない）。
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Download gathered probes
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -356,51 +407,11 @@ jobs:
           if [ -n "$PRS" ]; then
             title="Probes (${short} + PR ${PRS})"
           fi
-          # 隠しメタデータ。**自動アップデータ（plugin/scripts/vw-probes-update.*）が
-          # 読むのはここ**で、build= が**本体**のビルドを一意に指す ID、shell= が**殻**の
-          # ID。2 つあるのは「入れ替えに再起動が要るか」を決めるため——本体だけが新しければ
-          # Vectorworks を動かしたまま置き換えられる（plugin/src/UpdateParse.h の Evaluate）。値は集約が
-          # 「main のコミット＋各 PR の head」から計算したもの（build-id.txt）で、
-          # プラグインへ焼いた値と同じファイル由来だからずれようがない。
-          # **実行ごとに変わる値（run id）にはしない**——同じ顔ぶれで作り直したときに
-          # 「新しいビルドがあります」と誘ってしまうため。inputs= はその材料
-          # （更新が来ない・来すぎるときに最初に見る行）。HTML コメントなので
-          # リリースのページには出ないが、API の body には入る。
-          {
-            echo "<!-- vw-probes"
-            echo "build=$(cat build-probes/build-id.txt)"
-            echo "shell=$(cat build-probes/shell-id.txt)"
-            echo "commit=${BUILD_SHA}"
-            echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-            echo "probes=$(cat build-probes/summary-line.txt 2>/dev/null || true)"
-            echo "inputs=$(tr '\n' ' ' < build-probes/build-id-source.txt)"
-            echo "-->"
-            echo
-            echo "実機確認プラグイン **VwSdkProbes**（${short} / $(date -u +%Y-%m-%dT%H:%M:%SZ)）。"
-            echo
-            echo "## 入っているプローブ"
-            echo
-            cat build-probes/summary.md
-            echo
-            echo "## 使い方"
-            echo
-            echo "**すでに入れてある場合は何もしなくてよい**——次に Vectorworks を起動したときに"
-            echo "プラグイン自身が「入れ替えますか？」と尋ねる（メニューの先頭項目からも確認できる）。"
-            echo
-            echo "**プローブだけの入れ替えなら Vectorworks の再起動は要らない**"
-            echo "（新しい本体を読み込むのは、次にメニューを開いたとき）。"
-            echo "殻（プラグイン本体）まで変わったときだけ再起動を尋ねる。"
-            echo "どちらの場合も落とすのは下の zip 1 つで、必要なファイルだけが置き換わる。"
-            echo
-            echo "初回だけ手で入れる:"
-            echo
-            echo "1. \`VwSdkProbes.*.zip\` を展開し、**中身をすべて**"
-            echo "   Vectorworks の Plug-ins フォルダへ置く（プラグインと \`.vwpayload\` は隣同士）"
-            echo "2. Vectorworks を起動し直す（ワークスペース編集でメニューへ追加する）"
-            echo "3. メニュー「SDK 実機プローブ…」→ 一覧から選んで実行"
-            echo
-            echo "詳細は [plugin/README.md](https://github.com/${GITHUB_REPOSITORY}/blob/main/plugin/README.md)。"
-          } > notes.md
+          # 本文（隠しメタデータ＋人が読む表）は scripts/probe-release-notes.sh が組む。
+          # **機械が読む行がここに入る**ので、ワークフローへ埋め込まずスクリプトにして
+          # ある（shellcheck も掛かるし、手元で確かめられる）。
+          scripts/probe-release-notes.sh --commit "$BUILD_SHA" > notes.md
+          cat notes.md
           # 転がりタグなので、毎回消して作り直す（常にこのビルドを指すように）。
           gh release delete probes --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
           gh release create probes \

@@ -7,12 +7,15 @@ cmake_minimum_required(VERSION 3.20)
 # 書ける知見は実機（ローカルの VectorWorks）でしか取れない。そのための道具がこれで、
 # 中身は**メニューコマンド 1 つ＋そこから選んで走らせるプローブ（調査コード）の束**。
 # プローブは probes/runtime/<slug>/ に 1 ディレクトリ 1 件で置き、**複数の PR のものを
-# 1 本のプラグインへ同居させる**（集め方は scripts/gather-probes.sh、全体像は
-# plugin/README.md）。
+# 1 つのプラグインへ同居させる**（集め方は scripts/gather-probes.sh、全体像は
+# plugin/README.md）。同居は**群（main / PR ごと）に 1 本の本体**で行う——1 つの PR が
+# コンパイルできなくても他の PR は配れるように。
 #
 # 成果物（実プラグイン vectorworks-plugin-import-ifc-homeskz と同じ形）:
 #   * macOS   -> "VwSdkProbes.vwlibrary" バンドル（.vwr は Contents/Resources の中）
 #   * Windows -> "VwSdkProbes.vlb"（DLL）＋ 隣に "VwSdkProbes.vwr"
+#   * 両方    -> 隣に "VwSdkProbesPayload-<群>.vwpayload"（本体）と
+#                "VwSdkProbes.probes.txt"（カタログ＝殻が読む索引）
 #
 # ビルド:
 #   macOS:   cmake -S plugin -B build -DVW_SDK_DIR=/path/to/2026-NNA-eng-mac-SDK
@@ -108,15 +111,23 @@ if(NOT DEFINED VW_BUILD_TIME)
 	string(TIMESTAMP VW_BUILD_TIME "%Y-%m-%dT%H:%M:%SZ" UTC)
 endif()
 
-# --- どのプローブを同居させるか ------------------------------------------------
-# 正の入力は「マニフェスト」1 本:
+# --- どのプローブを同居させるか（群ごと）--------------------------------------
+# 正の入力は「マニフェスト」1 本。**群（group）ごとに**次の 3 つを受け取る:
 #
-#   VW_PROBE_SOURCES  … コンパイルするプローブのソース（絶対パス）
-#   VW_PROBE_ENTRIES  … 出所の表。1 件 "slug|PR番号|短縮sha|ブランチ|PRタイトル"
+#   VW_PROBE_GROUPS             … 群の一覧（"main" "pr12" …）
+#   VW_PROBE_SOURCES_<group>    … その群でコンパイルするプローブのソース（絶対パス）
+#   VW_PROBE_ENTRIES_<group>    … 出所の表。1 件 "slug|PR番号|短縮sha|ブランチ|PRタイトル"
+#   VW_PROBE_ORIGIN_<group>     … 群そのものの出所 "PR番号|短縮sha|ブランチ|PRタイトル"
 #
-# CI では scripts/gather-probes.sh が main と指定 PR からプローブを集めて、この 2 つを
-# set する .cmake を書く（-DVW_PROBE_MANIFEST=... で読ませる）。マニフェストが無い
-# ローカルビルドでは、作業ツリーの probes/runtime/ をそのまま拾う（出所は "local"）。
+# **群 1 つにつき本体（.vwpayload）が 1 本できる。** main のプローブが 1 本、PR の
+# プローブが PR ごとに 1 本。こう割るのは、
+#   * **1 つの PR がコンパイルできなくても他の PR は配れる**ようにするため
+#     （1 本にまとめていたときは、誰か 1 人が通らないだけで全員のビルドが落ちた）、
+#   * **選ばれた群の本体だけを読み込めば済む**ようにするため（plugin/src/ProbeMenu.cpp）。
+#
+# CI では scripts/gather-probes.sh が main と指定 PR から集めてこの .cmake を書く
+# （-DVW_PROBE_MANIFEST=... で読ませる）。マニフェストが無いローカルビルドでは、
+# 作業ツリーの probes/runtime/ を群 "main" として拾う（出所は "local"）。
 if(VW_PROBE_MANIFEST)
 	if(NOT EXISTS "${VW_PROBE_MANIFEST}")
 		message(FATAL_ERROR "VW_PROBE_MANIFEST が指すファイルがありません: ${VW_PROBE_MANIFEST}")
@@ -124,8 +135,10 @@ if(VW_PROBE_MANIFEST)
 	include("${VW_PROBE_MANIFEST}")
 	message(STATUS "プローブのマニフェスト: ${VW_PROBE_MANIFEST}")
 else()
-	set(VW_PROBE_SOURCES "")
-	set(VW_PROBE_ENTRIES "")
+	set(VW_PROBE_GROUPS "main")
+	set(VW_PROBE_ORIGIN_main "|local|local|")
+	set(VW_PROBE_SOURCES_main "")
+	set(VW_PROBE_ENTRIES_main "")
 	file(
 		GLOB probe_dirs
 		LIST_DIRECTORIES true
@@ -138,8 +151,8 @@ else()
 			file(GLOB probe_sources "${dir}/*.cpp")
 			list(SORT probe_sources)
 			if(probe_sources)
-				list(APPEND VW_PROBE_SOURCES ${probe_sources})
-				list(APPEND VW_PROBE_ENTRIES "${slug}||local|local|")
+				list(APPEND VW_PROBE_SOURCES_main ${probe_sources})
+				list(APPEND VW_PROBE_ENTRIES_main "${slug}||local|local|")
 			endif()
 		endif()
 	endforeach()
@@ -183,52 +196,66 @@ if(NOT DEFINED VW_SHELL_ID)
 endif()
 message(STATUS "殻の ID: ${VW_SHELL_ID}")
 
-if(NOT VW_PROBE_SOURCES)
+# --- 名前 ---------------------------------------------------------------------
+# 本体のファイル名は "<basename>-<group>.vwpayload"。**群ごとに 1 本**なので、名前に
+# 群が入る（plugin/src/PayloadHost.h の payload::FileNameFor と対）。
+set(VW_PAYLOAD_BASENAME "VwSdkProbesPayload")
+# 殻が読む索引。**本体を読み込まずに一覧を出すため**のテキスト（plugin/src/PayloadCatalog.h）。
+set(VW_CATALOG_FILENAME "VwSdkProbes.probes.txt")
+
+# --- 群ごとの下ごしらえ（出所表・カタログの材料）--------------------------------
+# 群 1 つにつき本体（.vwpayload）を 1 本作る。ここではその材料を作る:
+#
+#   * 出所表 ProbeProvenance-<group>.cpp … その群のプローブの PR / コミット / ブランチ
+#     （本体へコンパイルされ、ピッカーと結果ダイアログの「出所」になる）
+#   * カタログの行                       … **殻が本体を読み込まずに一覧を出すため**の索引
+#
+# カタログの組み立ては cmake/ProbeCatalog.cmake（SDK にもプラットフォームにも依存しない
+# ので、plugin/tests/probe-catalog-test.cmake が `cmake -P` で確かめている）。
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/ProbeCatalog.cmake")
+
+vw_probe_catalog_lines("${VW_PROBE_GROUPS}" "${VW_PAYLOAD_BASENAME}" VW_CATALOG_GROUP_LINES
+					   VW_CATALOG_PROBE_LINES VW_PROBE_SUMMARY VW_PROBE_TOTAL)
+
+foreach(group IN LISTS VW_PROBE_GROUPS)
+	# 出所表（この群のぶん）。C++ の文字列リテラルへ入るので、外から来る文字は
+	# 必ずエスケープする。
+	set(VW_PROBE_PROVENANCE_ENTRIES "")
+	foreach(entry IN LISTS VW_PROBE_ENTRIES_${group})
+		if(NOT entry MATCHES "^([^|]*)\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|(.*)$")
+			message(FATAL_ERROR "VW_PROBE_ENTRIES_${group} の形式が違います"
+								"（slug|PR|commit|branch|title の 5 項目）: ${entry}")
+		endif()
+		set(e_slug "${CMAKE_MATCH_1}")
+		set(e_pr "${CMAKE_MATCH_2}")
+		set(e_commit "${CMAKE_MATCH_3}")
+		set(e_branch "${CMAKE_MATCH_4}")
+		set(e_title "${CMAKE_MATCH_5}")
+
+		set(escaped "")
+		foreach(field IN ITEMS e_slug e_pr e_commit e_branch e_title)
+			set(value "${${field}}")
+			string(REPLACE "\\" "\\\\" value "${value}")
+			string(REPLACE "\"" "\\\"" value "${value}")
+			list(APPEND escaped "\"${value}\"")
+		endforeach()
+		string(REPLACE ";" ", " escaped "${escaped}")
+		string(APPEND VW_PROBE_PROVENANCE_ENTRIES "\t\t{${escaped}},\n")
+	endforeach()
+
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/payload/ProbeProvenance.cpp.in"
+				   "${CMAKE_CURRENT_BINARY_DIR}/ProbeProvenance-${group}.cpp" @ONLY)
+endforeach()
+
+message(STATUS "群: ${VW_PROBE_GROUPS}")
+message(STATUS "同居するプローブ: ${VW_PROBE_SUMMARY}")
+
+if(VW_PROBE_TOTAL EQUAL 0)
 	# 1 件も無いビルドは作れてしまうが、実機では「プローブが入っていません」と出るだけで
 	# 何の役にも立たない。取り違え（マニフェストの指定ミス等）を早く気付けるよう警告する。
 	message(WARNING "プローブが 1 件もありません（probes/runtime/ が空、"
 					"またはマニフェストが空）。")
 endif()
-
-# 出所表（ProbeProvenance.cpp）を生成する。C++ の文字列リテラルへ入るので、
-# PR タイトルのような外から来る文字は必ずエスケープする。
-set(VW_PROBE_PROVENANCE_ENTRIES "")
-set(VW_PROBE_SUMMARY "")
-foreach(entry IN LISTS VW_PROBE_ENTRIES)
-	# 5 項目を正規表現で切り出す。list(GET) を使わないのは、**空の項目**（main 由来の
-	# プローブは PR 番号が空）がリスト分割で落ちうるため（CMP0007）。
-	if(NOT entry MATCHES "^([^|]*)\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|(.*)$")
-		message(FATAL_ERROR "VW_PROBE_ENTRIES の形式が違います"
-							"（slug|PR|commit|branch|title の 5 項目）: ${entry}")
-	endif()
-	set(e_slug "${CMAKE_MATCH_1}")
-	set(e_pr "${CMAKE_MATCH_2}")
-	set(e_commit "${CMAKE_MATCH_3}")
-	set(e_branch "${CMAKE_MATCH_4}")
-	set(e_title "${CMAKE_MATCH_5}")
-
-	# C++ の文字列リテラルへ入れる前にエスケープする（PR タイトルは外から来る文字列）。
-	set(escaped "")
-	foreach(field IN ITEMS e_slug e_pr e_commit e_branch e_title)
-		set(value "${${field}}")
-		string(REPLACE "\\" "\\\\" value "${value}")
-		string(REPLACE "\"" "\\\"" value "${value}")
-		list(APPEND escaped "\"${value}\"")
-	endforeach()
-	string(REPLACE ";" ", " escaped "${escaped}")
-	string(APPEND VW_PROBE_PROVENANCE_ENTRIES "\t\t{${escaped}},\n")
-	if(e_pr)
-		string(APPEND VW_PROBE_SUMMARY "${e_slug}(#${e_pr}) ")
-	else()
-		string(APPEND VW_PROBE_SUMMARY "${e_slug} ")
-	endif()
-endforeach()
-string(STRIP "${VW_PROBE_SUMMARY}" VW_PROBE_SUMMARY)
-message(STATUS "同居するプローブ: ${VW_PROBE_SUMMARY}")
-
-set(generated_provenance "${CMAKE_CURRENT_BINARY_DIR}/ProbeProvenance.cpp")
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/payload/ProbeProvenance.cpp.in" "${generated_provenance}"
-			   @ONLY)
 
 # --- プラグイン本体 -----------------------------------------------------------
 set(VW_PLUGIN_NAME "VwSdkProbes")
@@ -329,107 +356,135 @@ else()
 													"${VW_SDK_LIB}/VWMM.lib" USP10.lib Rpcrt4.lib)
 endif()
 
-# --- 本体（ペイロード）----------------------------------------------------------
-# **プローブはここに入る。** Vectorworks が読み込むのは上の殻だけで、こちらは殻が自分で
+# --- 本体（ペイロード）: 群ごとに 1 本 --------------------------------------------
+# **プローブはここに入る。** Vectorworks が読み込むのは殻だけで、こちらは殻が自分で
 # dlopen / LoadLibrary する——だから**Vectorworks を再起動せずに入れ替えられる**
 # （Findings「プラグインモジュールの読み込みと入れ替え」で実測済み。境界は
 # plugin/src/PayloadAbi.h）。
 #
+# **群ごとに分けるのが肝。** main のプローブが 1 本、PR のプローブが PR ごとに 1 本。
+#   * 1 つの PR がコンパイルできなくても、**他の PR は配れる**（ワークフローは本体を
+#     1 本ずつビルドし、落ちた群だけを外して公開する。.github/workflows/probe-build.yml）。
+#   * 殻は**選ばれた群の本体だけ**を読む（メニューを開くたびに全部読む必要が無い）。
+#
 # 置き場所は**殻の隣**（mac もバンドルの中ではない）。mac のバンドルは署名がリソースまで
 # 封をするので、中のファイルを差し替えると署名が壊れる。隣に置けば、本体を何度置き換えても
 # 殻の署名に触れない。拡張子 .vwpayload は Vectorworks にプラグインとして拾わせないため。
-set(VW_PAYLOAD_NAME "VwSdkProbesPayload")
 
-set(VW_PAYLOAD_SOURCES src/payload/PayloadMain.cpp src/payload/Probe.cpp "${generated_provenance}"
-					   ${VW_PROBE_SOURCES})
+# vw_add_payload(<group>): その群の本体ターゲットを 1 つ作る。
+# **殻とは独立にビルドできる**ようにしておく（add_dependencies で結ばない）——結ぶと、
+# 1 つの群が通らないだけで殻まで作られなくなり、「他の PR は配れる」が成り立たない。
+function(vw_add_payload group)
+	set(target "${VW_PAYLOAD_BASENAME}-${group}")
+	set(sources src/payload/PayloadMain.cpp src/payload/Probe.cpp
+				"${CMAKE_CURRENT_BINARY_DIR}/ProbeProvenance-${group}.cpp"
+				${VW_PROBE_SOURCES_${group}})
 
-add_library(${VW_PAYLOAD_NAME} MODULE ${VW_PAYLOAD_SOURCES})
+	add_library(${target} MODULE ${sources})
 
-set_target_properties(
-	${VW_PAYLOAD_NAME}
-	PROPERTIES CXX_STANDARD 20
-			   CXX_STANDARD_REQUIRED ON
-			   BUNDLE FALSE
-			   PREFIX ""
-			   SUFFIX ".vwpayload"
-			   OUTPUT_NAME "${VW_PAYLOAD_NAME}")
+	set_target_properties(
+		${target}
+		PROPERTIES CXX_STANDARD 20
+				   CXX_STANDARD_REQUIRED ON
+				   BUNDLE FALSE
+				   PREFIX ""
+				   SUFFIX ".vwpayload"
+				   OUTPUT_NAME "${target}")
 
-target_include_directories(
-	${VW_PAYLOAD_NAME}
-	PRIVATE "${VW_SDK_INCLUDE}"
-			"${VW_SDK_INCLUDE}/Kernel"
-			"${VW_SDK_INCLUDE}/Interfaces"
-			"${VW_SDK_INCLUDE}/VWMM"
-			"${CMAKE_CURRENT_SOURCE_DIR}/src"
-			"${CMAKE_CURRENT_SOURCE_DIR}/src/payload")
+	target_include_directories(
+		${target}
+		PRIVATE "${VW_SDK_INCLUDE}"
+				"${VW_SDK_INCLUDE}/Kernel"
+				"${VW_SDK_INCLUDE}/Interfaces"
+				"${VW_SDK_INCLUDE}/VWMM"
+				"${CMAKE_CURRENT_SOURCE_DIR}/src"
+				"${CMAKE_CURRENT_SOURCE_DIR}/src/payload")
 
-# 本体は**自分の素性を自分で名乗る**（殻とは別に入れ替わるので、殻の値では言えない）。
-target_compile_definitions(
-	${VW_PAYLOAD_NAME}
-	PRIVATE RELEASE_BLD=1 "VW_PAYLOAD_BUILD_ID=\"${VW_BUILD_ID}\""
-			"VW_PAYLOAD_COMMIT=\"${VW_BUILD_VERSION}\"" "VW_PAYLOAD_BRANCH=\"${VW_BUILD_BRANCH}\""
-			"VW_PAYLOAD_BUILD_TIME=\"${VW_BUILD_TIME}\"")
-
-# SDK まわりの設定は殻と同じものを与える（本体も libVWSDK.a を自分でリンクし、
-# GS_InitializeVCOM を自分で呼ぶ）。殻の記述を触らずに済むよう、あえて書き下している。
-if(APPLE)
-	set_source_files_properties(${VW_PAYLOAD_SOURCES} TARGET_DIRECTORY ${VW_PAYLOAD_NAME}
-														PROPERTIES LANGUAGE OBJCXX)
-	set_target_properties(${VW_PAYLOAD_NAME} PROPERTIES OBJCXX_STANDARD 20
-													   OBJCXX_STANDARD_REQUIRED ON)
-	target_include_directories(${VW_PAYLOAD_NAME} PRIVATE "${VW_SDK_INCLUDE}/OnlyMac")
-	target_compile_options(${VW_PAYLOAD_NAME} PRIVATE -stdlib=libc++ -Wno-deprecated-declarations)
-	target_link_libraries(
-		${VW_PAYLOAD_NAME}
-		PRIVATE "${VW_SDK_LIB}/libVWSDK.a"
-				"-F${VW_SDK_LIB}"
-				"-framework VWMM"
-				"-framework Carbon"
-				"-framework Cocoa")
-else()
-	target_include_directories(${VW_PAYLOAD_NAME} PRIVATE "${VW_SDK_INCLUDE}/OnlyWin")
-	set_target_properties(${VW_PAYLOAD_NAME} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+	# 本体は**自分の素性を自分で名乗る**（殻とは別に入れ替わるので、殻の値では言えない）。
+	# 群の名前も焼く——実機のログで「どの本体が動いたか」を人が確かめられるように。
 	target_compile_definitions(
-		${VW_PAYLOAD_NAME}
-		PRIVATE _WINDOWS
-				WIN32
-				_USRDLL
-				_WINDLL
-				_WIN_EXTERNAL_
-				UNICODE
-				_UNICODE
-				NDEBUG
-				_CRT_SECURE_NO_WARNINGS)
-	target_compile_options(${VW_PAYLOAD_NAME} PRIVATE /EHsc /bigobj /wd4996)
-	if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-		target_compile_options(${VW_PAYLOAD_NAME} PRIVATE /MP)
+		${target}
+		PRIVATE RELEASE_BLD=1
+				"VW_PAYLOAD_BUILD_ID=\"${VW_BUILD_ID}\""
+				"VW_PAYLOAD_GROUP=\"${group}\""
+				"VW_PAYLOAD_COMMIT=\"${VW_BUILD_VERSION}\""
+				"VW_PAYLOAD_BRANCH=\"${VW_BUILD_BRANCH}\""
+				"VW_PAYLOAD_BUILD_TIME=\"${VW_BUILD_TIME}\"")
+
+	# SDK まわりの設定は殻と同じものを与える（本体も libVWSDK.a を自分でリンクし、
+	# GS_InitializeVCOM を自分で呼ぶ）。
+	if(APPLE)
+		set_source_files_properties(${sources} TARGET_DIRECTORY ${target}
+									PROPERTIES LANGUAGE OBJCXX)
+		set_target_properties(${target} PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
+		target_include_directories(${target} PRIVATE "${VW_SDK_INCLUDE}/OnlyMac")
+		target_compile_options(${target} PRIVATE -stdlib=libc++ -Wno-deprecated-declarations)
+		target_link_libraries(
+			${target}
+			PRIVATE "${VW_SDK_LIB}/libVWSDK.a"
+					"-F${VW_SDK_LIB}"
+					"-framework VWMM"
+					"-framework Carbon"
+					"-framework Cocoa")
+	else()
+		target_include_directories(${target} PRIVATE "${VW_SDK_INCLUDE}/OnlyWin")
+		set_target_properties(${target} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+		target_compile_definitions(
+			${target}
+			PRIVATE _WINDOWS
+					WIN32
+					_USRDLL
+					_WINDLL
+					_WIN_EXTERNAL_
+					UNICODE
+					_UNICODE
+					NDEBUG
+					_CRT_SECURE_NO_WARNINGS)
+		target_compile_options(${target} PRIVATE /EHsc /bigobj /wd4996)
+		if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+			target_compile_options(${target} PRIVATE /MP)
+		endif()
+		target_link_libraries(${target} PRIVATE "${VW_SDK_LIB}/VWSDK.lib" "${VW_SDK_LIB}/VWMM.lib"
+												USP10.lib Rpcrt4.lib)
 	endif()
-	target_link_libraries(${VW_PAYLOAD_NAME} PRIVATE "${VW_SDK_LIB}/VWSDK.lib"
-													 "${VW_SDK_LIB}/VWMM.lib" USP10.lib Rpcrt4.lib)
+
+	# SDK アンブレラヘッダのプリコンパイル（本体も SDK を丸ごと引くので効く）。
+	target_precompile_headers(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/PluginPrefix.h")
+endfunction()
+
+foreach(group IN LISTS VW_PROBE_GROUPS)
+	vw_add_payload("${group}")
+endforeach()
+
+# --- カタログ（殻が本体を読み込まずに一覧を出すための索引）-------------------------
+# **これが無いと、メニューを開くたびに全部の本体を読み込むことになる。** 中身は
+# 「どの群がどのファイルか」と「どの群にどのプローブが入っているか」だけ。読み手は
+# plugin/src/PayloadCatalog.h（純粋な部分なので plugin/tests から SDK 抜きで確かめられる）。
+#
+# **列挙にファイルの存在は書かない。** 群の本体がビルドできなかったときは、その
+# .vwpayload が配られないだけで、カタログには残る——殻は隣にファイルが無いことを見て
+# 「（本体が入っていません）」と出す。こうすると「なぜこの PR のプローブが無いのか」が
+# 実機で分かる（黙って消えるのが一番たちが悪い）。
+set(catalog_file "${CMAKE_CURRENT_BINARY_DIR}/${VW_CATALOG_FILENAME}")
+file(
+	WRITE "${catalog_file}"
+	"# VwSdkProbes probe catalog — 自動生成（plugin/CMakeLists.txt）。編集しない。\nversion=1\nbuild=${VW_BUILD_ID}\nshell=${VW_SHELL_ID}\nbranch=${VW_BUILD_BRANCH}\ncommit=${VW_BUILD_VERSION}\nbuilt=${VW_BUILD_TIME}\nprobes=${VW_PROBE_SUMMARY}\n${VW_CATALOG_GROUP_LINES}${VW_CATALOG_PROBE_LINES}"
+)
+
+# 出力先（本体とカタログが並ぶ場所＝殻の隣）。mac はバンドルの親、Windows は .vlb の隣
+# （多構成ジェネレータでは Release/ の中）。
+if(APPLE)
+	set(VW_OUTPUT_DIR "$<TARGET_BUNDLE_DIR:${VW_PLUGIN_NAME}>/..")
+else()
+	set(VW_OUTPUT_DIR "$<TARGET_FILE_DIR:${VW_PLUGIN_NAME}>")
 endif()
 
-# SDK アンブレラヘッダのプリコンパイル（本体も SDK を丸ごと引くので効く）。
-target_precompile_headers(${VW_PAYLOAD_NAME} PRIVATE
-						  "${CMAKE_CURRENT_SOURCE_DIR}/src/PluginPrefix.h")
-
-# 殻と一緒にビルドされるようにしておく（片方だけ作っても実機では動かない）。
-add_dependencies(${VW_PLUGIN_NAME} ${VW_PAYLOAD_NAME})
-
-# 本体の素性の控え。**入れ替えスクリプトが「いま入っている本体はどのビルドか」を
-# ここから読む**（プラグインを起動せずに分かる必要がある）。
-# plugin/src/PayloadHost.h の BuildInfoFileName と対。
-set(payload_stamp "${CMAKE_CURRENT_BINARY_DIR}/${VW_PAYLOAD_NAME}.build-info.txt")
-file(
-	WRITE "${payload_stamp}"
-	"build=${VW_BUILD_ID}\nbranch=${VW_BUILD_BRANCH}\ncommit=${VW_BUILD_VERSION}\nbuilt=${VW_BUILD_TIME}\nprobes=${VW_PROBE_SUMMARY}\n"
-)
 add_custom_command(
-	TARGET ${VW_PAYLOAD_NAME}
+	TARGET ${VW_PLUGIN_NAME}
 	POST_BUILD
-	COMMAND "${CMAKE_COMMAND}" -E copy "${payload_stamp}"
-			"$<TARGET_FILE_DIR:${VW_PAYLOAD_NAME}>/${VW_PAYLOAD_NAME}.build-info.txt"
+	COMMAND "${CMAKE_COMMAND}" -E copy "${catalog_file}" "${VW_OUTPUT_DIR}/${VW_CATALOG_FILENAME}"
 	VERBATIM
-	COMMENT "Writing the payload build stamp next to ${VW_PAYLOAD_NAME}")
+	COMMENT "Writing the probe catalog next to ${VW_PLUGIN_NAME}")
 
 # --- "<name>.vwr" のパッケージ --------------------------------------------------
 # SDK の BuildVWR が resources/<name>.vwr を無圧縮 zip に固める。macOS ではバンドルの
@@ -494,8 +549,8 @@ if(NOT APPLE)
 	set(stamp_file "${CMAKE_CURRENT_BINARY_DIR}/${VW_PLUGIN_NAME}.build-info.txt")
 	# shell= は**自動アップデートが読む行**（入っている殻の ID。mac 側は Info.plist の
 	# VWShellId）。plugin/scripts/vw-probes-update.ps1 の Get-InstalledShell と対で、
-	# 「再起動が要るか」がここで決まる。いま入っている**本体**の ID は隣の
-	# VwSdkProbesPayload.build-info.txt にある（入れ替えで動くのは本体だけ）。
+	# 「再起動が要るか」がここで決まる。いま入っている**本体**のほうは、隣の
+	# カタログ（VwSdkProbes.probes.txt）の build= が真実（入れ替えで動くのは本体だけ）。
 	file(
 		WRITE "${stamp_file}"
 		"shell=${VW_SHELL_ID}\nbuild=${VW_BUILD_ID}\nbranch=${VW_BUILD_BRANCH}\ncommit=${VW_BUILD_VERSION}\nbuilt=${VW_BUILD_TIME}\nprobes=${VW_PROBE_SUMMARY}\n"
