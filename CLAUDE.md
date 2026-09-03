@@ -17,7 +17,9 @@ Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https
 | `README.md` | 公式リファレンスの入口＋このフォークの追加分への導線 | 追加分の節だけ触る |
 | `Info/` / `Versions/` | **上流（公式）由来のリファレンス** | **原則書き換えない**（上流の更新を取り込めるように保つ。誤りを見つけたら Findings 側に注記を書く） |
 | `Findings/` | **実測知見**。トピック別のファイル＋[索引と規約](Findings/README.md) | ここが本体。知見はここへ足す |
+| `plugin/` | **実機確認プラグイン**（VwSdkProbes）。メニュー 1 つから、複数の PR の調査コードを同居させて実機で走らせる（[説明](plugin/README.md)） | 仕組みを変えるときだけ |
 | `probes/` | 調査用のコンパイルスニペット（[規約](probes/README.md)） | 調査中だけ。役目を終えたら消す |
+| `probes/runtime/` | **実機で走らせる調査（プローブ）**。1 調査 1 ディレクトリ（[規約](probes/runtime/README.md)） | 調査中だけ。役目を終えたら消す |
 | `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`） | — |
 | `CLAUDE.md`（本ファイル） | 作業時の規約。調査のフロー・PR とマージ・CI の待ち方 | — |
 
@@ -30,9 +32,13 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
 2. **既に答えが無いか確かめる。** `Findings/` の該当トピックと「打ち切った調査」を先に
    読む。**打ち切った調査に書いてあることは再調査しない**（状況——VW のバージョン・SDK の
    版——が変わらない限り）。
-3. **作業ブランチで調査する。** ヘッダで答えが出る問いは `ci-debug` の `sdk-grep` /
-   `sdk-ls`、「この呼び出しはコンパイルが通るか」は `probes/` にスニペットを置いて
-   `compile`（下記「CI デバッグ」）。
+3. **作業ブランチで調査する。** 問いの水準で道具が決まる:
+   - 「この API は SDK にあるか」「宣言はどうなっているか」→ `ci-debug` の `sdk-grep` /
+     `sdk-ls`（下記「CI デバッグ」）。
+   - 「この呼び出しはコンパイルが通るか」→ `probes/` にスニペットを置いて `compile`。
+   - **「呼んだら何が起きるか」→ `probes/runtime/<slug>/probe.cpp` にプローブを書き、
+     実機確認プラグインで実機の VectorWorks で走らせる**（下記「実機確認プラグイン」）。
+     ヘッダと構文チェックで答えが出る問いを、わざわざ実機へ持っていかない。
 4. **Findings へ反映する PR を作る。** 確認水準の印（無印＝実機確認済み・【推定】・
    【ヘッダ根拠】）を正直に付ける（[`Findings/README.md`](Findings/README.md)）。
    調査に使ったスニペット・一時計装は PR をマージする前に消す（結論は文章で残る）。
@@ -83,8 +89,42 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
 3. **実機確認の要らない変更は CI green で自動マージしてよい。** 【推定】【ヘッダ根拠】の
    印付きの追記、`sdk-grep` の結果の転記、目次・体裁・スクリプト・CI 設定など。
    判断に迷うなら 2 に倒す。
-4. **コミットメッセージ**には Claude セッション URL を入れる
+4. **`plugin/` を触る PR は、実機で動いたと聞いてからマージする。** CI が確かめられるのは
+   「コンパイルとリンクが通る」ことまでで、**ダイアログが出るか・プローブが走るか・
+   結果が読めるかは実機でしか分からない**（実プラグイン側の規約と同じ理由）。ビルドを
+   ディスパッチして、ユーザーが入れて動かし「確認できた」と伝えるまで open で待つ。
+   プローブを足すだけの PR（`probes/runtime/` だけの変更）はこれに当たらない——そちらは
+   2 の対象（プローブで確かめた結果を Findings に書く PR）として扱う。
+5. **コミットメッセージ**には Claude セッション URL を入れる
    （`https://claude.ai/code/session_<SESSION_ID>` の形式）。
+
+## 実機確認プラグイン（`plugin/` — 実機で走らせて確かめる）
+
+「呼んだら何が起きるか」はヘッダにも構文チェックにも答えが無い。それを実機で確かめる
+ための小さなプラグインが `plugin/`（VwSdkProbes）で、**メニューコマンド 1 つ**から
+**プローブ**（PR ごとの調査コード）を選んで走らせる。仕組みと使い方の全体像は
+[`plugin/README.md`](plugin/README.md)。ここには作業時の規約だけを書く。
+
+- **調査コードは `probes/runtime/<slug>/probe.cpp` に置く。** 1 調査 1 ディレクトリ・
+  1 ファイル 1 `VW_PROBE`。**slug（ディレクトリ名）と `VW_PROBE` の第 1 引数は
+  必ず一致させる**（集約がそこで突き合わせる）。作法は
+  [`probes/runtime/README.md`](probes/runtime/README.md)。
+- **PR 番号・コミットをコードに書かない。** 出所はビルドのときに決まり、
+  `scripts/gather-probes.sh` が表を生成する。だから**同じプローブを PR 中に何度
+  作り直しても、マージ後に main のものになっても、コードは変えなくてよい**。
+- **ビルドは main のワークフロー**（Actions の "Probe plug-in"）。`workflow_dispatch` の
+  入力 `prs` に**確かめたい PR 番号をカンマ区切り**で入れると、その PR たちのプローブが
+  main のものと同居した 1 本のプラグインになる。公開先は転がりタグ `probes`
+  （プレリリース）で、**リリースノートに何が入っているかの表が必ず載る**。
+- **PR では公開せず、ビルドが通るかだけを見る**（ビルドに入るもの——`plugin/src/**` /
+  `plugin/resources/**` / `plugin/CMakeLists.txt` / `probes/runtime/**`——を触った PR で
+  自動的に走る）。「ディスパッチしたらコンパイルエラーだった」を防ぐ門。
+- **実機で走らせるのはユーザー。** AI はビルドをディスパッチし、リリースができたことを
+  伝えるところまで。結果（ログ）を受け取ってから `Findings/` へ反映する。
+- **役目を終えたプローブは消す**（結論は `Findings/` に文章で残る。上記「調査のフロー」4）。
+  `probes/runtime/example/` だけは雛形かつ煙試験として残す。
+- **プローブは undo イベントを自分では開かない**（[Findings「Undo」](Findings/Undo.md) の
+  半端な記録を避けるため）。図面が戻らない前提で、新規の空図面で走らせる。
 
 ## CI の完了を待つ（待機は必ず `ci-wait` / `ci-debug` で行う）
 
@@ -110,8 +150,10 @@ Bash(run_in_background: true):
 最終行は必ず `ci-wait: done (conclusion=<結果> exit=<終了コード>)` で、
 `conclusion=success` 以外は exit 1（`no-checks` は「チェックが 1 件も登録されなかった」、
 `timed-out-waiting` / `api-error` は「待機側が見届けられなかった」——CI の失敗ではない）。
-このリポジトリの PR CI は `lint.yml`（shellcheck / actionlint）だけなので、出力に並ぶ
-チェック名を読み、`debug`（ci-debug の run）だけを見て green と誤読しないこと。
+このリポジトリの PR CI は `lint.yml`（shellcheck / actionlint / clang-format）と、
+`plugin/src/**` や `probes/runtime/**`（ビルドに入るもの）を触ったときだけ走る
+`probe-build.yml`（mac / Windows の実ビルド）。出力に並ぶチェック名を読み、`debug`（ci-debug の run）だけを見て green と
+誤読しないこと。
 
 待機の土台は `scripts/ci-common.sh`（`ci-wait.sh` と `ci-debug.sh` が共有）。
 **どんな異常でも必ず有限時間で exit する**ことが唯一にして最大の要件で、HTTP の時間上限・
