@@ -164,12 +164,16 @@ mode_compile() {
 	[ -f "$ARGS" ] || die "ソースが見つかりません: $ARGS"
 	echo "# clang++ -fsyntax-only $ARGS (against SDKLib/Include)"
 	echo
+	# plugin/src も -I に入れる。実機確認プラグイン（plugin/）のソースと、その API を
+	# include する実機プローブ（probes/runtime/<slug>/probe.cpp）を、ビルドを回さずに
+	# 構文チェックできるようにするため。
 	clang++ -std=c++20 -stdlib=libc++ -x objective-c++ -fsyntax-only \
 		-I "$SDK/SDKLib/Include" \
 		-I "$SDK/SDKLib/Include/Kernel" \
 		-I "$SDK/SDKLib/Include/Interfaces" \
 		-I "$SDK/SDKLib/Include/VWMM" \
 		-I "$SDK/SDKLib/Include/OnlyMac" \
+		-I plugin/src \
 		-DRELEASE_BLD=1 \
 		-Wno-deprecated-declarations \
 		"$ARGS" && echo "OK: syntax check passed"
