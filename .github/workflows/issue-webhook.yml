@@ -16,6 +16,14 @@ name: Issue webhook
 #                                         既定 Authorization
 #   CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME   （variable・任意）トークンの接頭辞。既定 Bearer。
 #                                         `none` にすると素のトークンを載せる
+#   CLAUDE_ROUTINE_WEBHOOK_HEADERS        （variable・任意。値が秘密ならシークレット）
+#                                         追加のヘッダ。1 行 1 つ、`名前: 値`
+#
+# 送り先が api.anthropic.com のときは、必須の `anthropic-version` を明示が無ければ
+# 自動で足す（無いと 400 で `anthropic-version: header is required` が返る）。
+# ルーティンを起こす口（`/v1/claude_code/routines/<id>/fire`）宛てなら `anthropic-beta`
+# も足し、送る中身も `{"text": ...}` だけに絞る（余計な鍵を足すと 400）。だから
+# **設定するのは URL とトークンの 2 つだけでよい**。
 #
 # **URL が設定されていなければ何もしない**（run は成功で終わる）ので、シークレットを
 # 入れる前にこのワークフローをマージしても支障は無い。手動実行（workflow_dispatch）の
@@ -69,6 +77,7 @@ jobs:
           WEBHOOK_TOKEN: ${{ secrets.CLAUDE_ROUTINE_WEBHOOK_TOKEN }}
           WEBHOOK_TOKEN_HEADER: ${{ vars.CLAUDE_ROUTINE_WEBHOOK_TOKEN_HEADER }}
           WEBHOOK_TOKEN_SCHEME: ${{ vars.CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME }}
+          WEBHOOK_HEADERS: ${{ secrets.CLAUDE_ROUTINE_WEBHOOK_HEADERS || vars.CLAUDE_ROUTINE_WEBHOOK_HEADERS }}
           ISSUE_NUMBER: ${{ inputs.issue }}
           REQUIRE_URL: ${{ github.event_name == 'workflow_dispatch' && 'yes' || 'no' }}
           DRY_RUN: ${{ inputs.dry_run && 'yes' || 'no' }}
