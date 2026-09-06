@@ -1,0 +1,76 @@
+name: Issue webhook
+
+# ---------------------------------------------------------------------------
+# issue が立ったら、その内容を外部の webhook（Claude のルーティンの入口）へ POST する。
+#
+# なぜ必要か: 調査は issue 単位で回す（CLAUDE.md「調査のフロー」）。「issue を立てた」から
+# 「調査が始まる」までを人が繋いでいると、繋ぎ忘れた分だけ調査が止まる。立った瞬間に
+# ルーティンを起こすところまでを CI にやらせる。
+#
+# 送り先と認証は**コードに書かない**。次のシークレット / variables から受け取る。
+#
+#   CLAUDE_ROUTINE_WEBHOOK_URL            送り先（https://）。シークレット推奨。
+#                                         シークレットが無ければ同名の variable を見る
+#   CLAUDE_ROUTINE_WEBHOOK_TOKEN          認証トークン。**シークレットのみ**
+#   CLAUDE_ROUTINE_WEBHOOK_TOKEN_HEADER   （variable・任意）トークンを載せるヘッダ名。
+#                                         既定 Authorization
+#   CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME   （variable・任意）トークンの接頭辞。既定 Bearer。
+#                                         `none` にすると素のトークンを載せる
+#
+# **URL が設定されていなければ何もしない**（run は成功で終わる）ので、シークレットを
+# 入れる前にこのワークフローをマージしても支障は無い。手動実行（workflow_dispatch）の
+# ときだけは、設定漏れを取りこぼさないように失敗させる。
+#
+# 実体は scripts/issue-webhook.sh（ここは薄く保つ。ci-debug.yml / upstream-sync.yml と
+# 同じ方針）。送る中身・環境変数はそちらのヘッダを参照。
+#
+# NOTE: issues イベントは**デフォルトブランチにあるワークフロー定義**でしか走らない。
+# このファイルが main にマージされて初めて動き出す（作業ブランチでの動作確認は
+# workflow_dispatch で行う）。
+# ---------------------------------------------------------------------------
+
+on:
+  issues:
+    types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: "送る issue の番号（動作確認用）"
+        required: true
+        type: string
+      dry_run:
+        description: "POST せず、送る中身だけ出す"
+        required: false
+        default: false
+        type: boolean
+
+# 同じ issue について 2 本走らせない（手動実行と自動が重なったときに二重で起こさない）。
+concurrency:
+  group: issue-webhook-${{ github.event.issue.number || inputs.issue }}
+  cancel-in-progress: false
+
+# スクリプトの checkout（contents）と、番号指定で issue を引くとき（issues）にだけ使う。
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Post the issue to the webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.CLAUDE_ROUTINE_WEBHOOK_URL || vars.CLAUDE_ROUTINE_WEBHOOK_URL }}
+          WEBHOOK_TOKEN: ${{ secrets.CLAUDE_ROUTINE_WEBHOOK_TOKEN }}
+          WEBHOOK_TOKEN_HEADER: ${{ vars.CLAUDE_ROUTINE_WEBHOOK_TOKEN_HEADER }}
+          WEBHOOK_TOKEN_SCHEME: ${{ vars.CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME }}
+          ISSUE_NUMBER: ${{ inputs.issue }}
+          REQUIRE_URL: ${{ github.event_name == 'workflow_dispatch' && 'yes' || 'no' }}
+          DRY_RUN: ${{ inputs.dry_run && 'yes' || 'no' }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/issue-webhook.sh
