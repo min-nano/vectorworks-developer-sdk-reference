@@ -183,3 +183,126 @@ popup.AddItems(fList);
 後にしか出ず、VectorWorks 本体のポップアップとは見た目が異なる二段構えになる点だけ
 違う）。シンボル定義一覧の採り方と `VWSymbolDisplayCtrl` の使い方は
 [`Symbols.md`](Symbols.md) の「シンボル定義のサムネイル・一覧を UI に出す」を参照。
+
+## モードレス（非モーダル）なパレット（`IExtensionWebPalette`）
+
+（issue [#19](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/19)）
+「図面を操作したまま開いていられるウィンドウを出せるか」の調査。**口はある。**
+`VWFC::VWUI::VWDialog::RunDialogLayout` はモーダル（閉じるまで戻らない）だが、それとは
+別に SDK には **`IExtensionWebPalette`（SDK 側の基底クラスは
+`VWFC::PluginSupport::VWExtensionWebPalette`）という、モードレスのパレットを出すための
+拡張種別がもう 1 つある**。
+
+**この節は全体が【ヘッダ根拠】＋ CI の `compile`（構文チェックのみ）までで、
+実機（VectorWorks 本体）では未確認。** 実機で開閉・入力・イベント到達を確かめてから
+この注記を外すこと。
+
+### 見つかった場所
+
+- `Include/VWFC/PluginSupport/VWExtensionWebPalette.h` — SDK 基底クラス
+  `VWExtensionWebPalette`（パレット本体）／`VWExtensionPaletteJSProvider`（JS からの
+  呼び出しを受ける側）と、ディスパッチマクロ一式
+  （`DEFINE_WebPalette_DISPATCH_MAP` / `BEGIN_WebPalette_DISPATCH_MAP` /
+  `ADD_WebPalette_FUNCTION` / `END_WebPalette_DISPATCH_MAP(2)`）。
+- `Include/Interfaces/VectorWorks/Extension/IExtensionWebPalette.h` — VCOM
+  インターフェース `IExtensionWebPalette` / `IWebPaletteFrame` /
+  `IWebCallbacksProvider`、グループ ID `GROUPID_ExtensionWebPalettes`。
+- `Include/Interfaces/VectorWorks/ISDK.h` — `gSDK` に生えている
+  `GetWebPaletteVisibility` / `SetWebPaletteVisibility` / `GetWebPaletteFrame`
+  （`ISDK.h:3543-3544, 3800`）。
+
+**公式リファレンス（[Plug-in Module](../Info/Plug-in%20Module.md#Extensions)）が挙げる
+拡張は Menu / Parametric / Tool / VS Functions の 4 つだけ**だが、
+`GROUPID_ExtensionWebPalettes` は `GROUPID_ExtensionMenu` /
+`GROUPID_ExtensionParametric` / `GROUPID_ExtensionTool` /
+`GROUPID_ExtensionVSFunctions`（と `Animation` / `WSFunctionOptions`）と**まったく
+同じ並びで定義されている**（`grep -rnIE 'GROUPID_Extension[A-Za-z]*\s*='` で一括して
+出てくる）。つまり Web Palette は**公式リファレンス未掲載なだけで、同じ
+`REGISTER_Extension<T>(groupID, action, moduleInfo, iid, ioInterface, cbp, reply)` の
+枠組みで `plugin_main` から登録する、5 つ目の拡張種別**である。登録の書き方は
+[Menu General Info](../Info/Menu%20General%20Info.md#Register%20Menu%20Extension) の
+`REGISTER_Extension<TesterModule::CExtMenu>(GROUPID_ExtensionMenu, action, pInfo, ioData, cbp, reply)`
+と同型で、`GROUPID_ExtensionMenu` を `GROUPID_ExtensionWebPalettes` に、
+`CExtMenu` を `VWExtensionWebPalette` を継承したクラスに差し替えるだけのはずである
+（この置き換え自体は未確認）。
+
+### 1. モードレスに出す口はある
+
+`gSDK->SetWebPaletteVisibility(iid, true)` で表示・非表示を切り替える。これは
+`RunDialogLayout` と違って**呼び出しをブロックしない**単純な `bool` の setter で、
+「開いたまま制御を返す」設計そのものである。**中身は HTML/JS**
+（`GetInitialURL()` が返す URL を埋め込みブラウザで表示する。既定の URL は
+`VWFC::PluginSupport::GetStandardURL(htmlFolderName = "html", htmlFile = "index.html")`
+が組み立てる）ので、`VWDialog` のようにネイティブコントロール
+（`VWEditTextCtrl` 等）を並べる作りではない。
+
+### 2. 入力は JS 経由で受け取る
+
+パレットの中身は HTML（既定でプラグインの `.vwr` の `html/index.html`）なので、
+**複数行の入力欄やボタンは HTML 側に置く**。JS から C++ 側へは
+`VWExtensionPaletteJSProvider::OnFunctionCall(objName, functionName, args, context)`
+（`args` は `std::vector<nlohmann::json>`）で届く。受け口の組み立ては
+`DEFINE_WebPalette_DISPATCH_MAP` 系のマクロで行う——書き味は
+`EVENT_DISPATCH_MAP`（上記「レイアウトダイアログ」）に似るが、**コントロール ID
+ではなく JS 側が呼んだ関数名の文字列で分岐する**点が異なる。入力された文字列は
+JS 側が `args`（JSON）に載せて渡す想定である。
+
+### 3. `DoInterface` が戻った後も生きるはず【推定】
+
+`SetWebPaletteVisibility` / `GetWebPaletteFrame` は特定の `DoInterface` 呼び出しに
+閉じていない `gSDK` の生の関数で、**別のメニューコマンドの `DoInterface` からでも
+同じ `iid` で同じパレットに触れる**はずである。拡張の登録が Menu / Parametric / Tool
+と同じ枠組みだからで、それらは `plugin_main` で 1 度登録すれば以後 Vectorworks が
+持ち続ける（[Plug-in Module#Extensions](../Info/Plug-in%20Module.md#Extensions)）。
+ただし「開いたまま図面を操作できるか」「戻った後も本当にイベントが届くか」は
+実機でしか確かめられない。
+
+### 4. 殻と本体の割り方【推定・要実機確認】——おそらく PIO と同じ制約
+
+**登録した拡張オブジェクトの寿命は VW 側が握る。** `REGISTER_Extension` で VCOM の
+参照を Vectorworks に渡した後の状態は、[Plug-in Modules「PIO のイベントも殻から
+本体へ取り次げる」](Plug-in%20Modules.md)で確認した PIO の登録と同じ形——
+**「VW に番地を握られる」側**である。したがって:
+
+- **拡張の登録そのもの（`VWExtensionWebPalette` を継承したクラス、
+  `IWebCallbacksProvider` シンクの実装）は殻に置くべき**。降ろせる本体に置くと、
+  本体を降ろした瞬間に VW が握っている vtable が消え、次にユーザーが JS 側の
+  ボタンを押した（`OnFunctionCall` が呼ばれた）ときに落ちる——PIO の
+  `Recalculate()` を本体に出したときと同じ理屈（[Plug-in Modules
+  「落とし穴: 殻の記憶域を本体に持たせると落ちる」](Plug-in%20Modules.md)）。
+- **HTML/JS の中身（front-end）は `.vwr` のリソースフォルダから読む**のが既定
+  （`GetStandardURL`）。`.vwr` は殻にしか置けないと既に確認済み（[Plug-in Modules
+  「本体側からダイアログを開ける」](Plug-in%20Modules.md)の「`.vwr` は殻の側にしか
+  無くてよい」）。パレットの見た目・入力欄を変えるだけなら**殻を再ビルドせず
+  HTML/JS だけ書き換えれば済む**可能性があるが未確認。
+- **`OnFunctionCall` を受けてからの実処理（今回の用途なら「見た所見を PR へ送る」）は、
+  PIO の `Recalculate()` と同じやり方で本体へ委譲できる見込み**——殻の
+  `IWebCallbacksProvider` 実装が、受け取った `args` をその場でコピーしてから
+  （境界を越える記憶域は必ずその場で写す。[Plug-in Modules
+  の決めごと](Plug-in%20Modules.md)）、本体へ C の ABI 越しに渡す。
+- **明示的に閉じる／登録解除する API は、ヘッダ検索の範囲では見つからなかった。**
+  `IWebPaletteFrame` にあるのは `Reload` / `LoadURL` / `ExecuteJavaScript` /
+  `SetTitle` / `Focus` のみで、**閉じる・破棄する操作は無い**。ヘッダから保証できる
+  唯一の手立ては `SetWebPaletteVisibility(iid, false)` で**隠す**ことだけである。
+  拡張自体の登録解除は、他の拡張種別と同じく `plugin_main` の `action` 引数
+  （アンロード時に呼ばれるもの）で行う設計だと推測されるが、その `action` の値と
+  挙動はこの調査の範囲では確認していない。
+
+### 構文チェック（CI, `compile`）
+
+`VWExtensionWebPalette` / `VWExtensionPaletteJSProvider` を継承し、ディスパッチ
+マクロと `gSDK->{Get,Set}WebPaletteVisibility` / `GetWebPaletteFrame` を呼ぶ
+最小のクラス階層は **`-fsyntax-only` を通った**（調査用スニペットはマージ前に削除
+済み——結論はここに残す）。`REGISTER_Extension` の実際の呼び出し
+（`plugin_main` からの登録）は Menu 等の既存の拡張と同じ枠組みのため、この調査では
+構文チェックしていない。
+
+### まだ分かっていないこと（実機確認が必要）
+
+- 実際に**モードレスに開き、図面を操作しながら見える**か。
+- `DoInterface` が戻った後、**本当に `OnFunctionCall` が届く**か。
+- 拡張の登録（≒本体では持てない側）を**本体に置くと実際に落ちる**のか
+  （PIO と同型の話だが、Web Palette 自体での実機確認はまだ無い）。
+- **登録解除・アンロード時の `action` の扱い**——降ろす前に安全に手放せるか。
+- `.vwr` の外（本体側）に HTML/JS を置けるか、それとも `GetStandardURL` の既定どおり
+  殻の `.vwr` の中に置くしかないか。
