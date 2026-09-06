@@ -31,7 +31,13 @@
 #
 # 認証は既定で `Authorization: Bearer <トークン>`。ヘッダ名と接頭辞は変えられる
 # （WEBHOOK_TOKEN_HEADER / WEBHOOK_TOKEN_SCHEME）。トークンを URL に埋める形式の
-# webhook なら、トークンを空のままにしておけばヘッダは付かない。
+# webhook なら、トークンを空のままにしておけばヘッダは付かない。API キー方式の
+# 送り先には WEBHOOK_TOKEN_HEADER=x-api-key / WEBHOOK_TOKEN_SCHEME=none を使う。
+#
+# 送り先が要求する他のヘッダは WEBHOOK_HEADERS に 1 行 1 つ（`名前: 値`）で足せる。
+# **api.anthropic.com は `anthropic-version` を必須にしている**（無いと 400 で
+# `anthropic-version: header is required` が返る）ので、そこ宛てで明示が無いときは
+# 既定の版（ANTHROPIC_VERSION、既定 2023-06-01）を自動で足す。
 #
 # 使い方
 # ------
@@ -44,6 +50,8 @@
 #   WEBHOOK_TOKEN         認証トークン。空ならヘッダを付けない
 #   WEBHOOK_TOKEN_HEADER  トークンを載せるヘッダ名（既定 Authorization）
 #   WEBHOOK_TOKEN_SCHEME  トークンの接頭辞（既定 Bearer。`none` なら素のトークン）
+#   WEBHOOK_HEADERS       追加のヘッダ。1 行 1 つ、`名前: 値`。空行と # 始まりは無視
+#   ANTHROPIC_VERSION     api.anthropic.com 宛てに足す版（既定 2023-06-01）
 #   WEBHOOK_BODY_LIMIT    issue 本文の送信上限（文字数。既定 4000）
 #   WEBHOOK_EVENT_PATH    イベント JSON のパス（既定 $GITHUB_EVENT_PATH）
 #   ISSUE_NUMBER          指定するとイベントではなく API から issue を取る（gh が要る）
@@ -58,6 +66,8 @@ WEBHOOK_URL="${WEBHOOK_URL:-}"
 WEBHOOK_TOKEN="${WEBHOOK_TOKEN:-}"
 WEBHOOK_TOKEN_HEADER="${WEBHOOK_TOKEN_HEADER:-Authorization}"
 WEBHOOK_TOKEN_SCHEME="${WEBHOOK_TOKEN_SCHEME:-Bearer}"
+WEBHOOK_HEADERS="${WEBHOOK_HEADERS:-}"
+ANTHROPIC_VERSION="${ANTHROPIC_VERSION:-2023-06-01}"
 BODY_LIMIT="${WEBHOOK_BODY_LIMIT:-4000}"
 EVENT_PATH="${WEBHOOK_EVENT_PATH:-${GITHUB_EVENT_PATH:-}}"
 ISSUE_NUMBER="${ISSUE_NUMBER:-}"
@@ -132,6 +142,30 @@ fi
 
 # 送り先のホストだけはログに出す（設定を間違えたときに気付けるように）。
 webhook_host="$(printf '%s' "$WEBHOOK_URL" | sed -e 's#^https://##' -e 's#[/?].*$##')"
+
+# api.anthropic.com は anthropic-version を必須にしている（無いと 400）。明示されて
+# いなければ既定の版を足す——ここで足さないと、送り先を入れ替えるたびに variable の
+# 設定を思い出す羽目になる。
+if [ "${webhook_host%%:*}" = "api.anthropic.com" ] &&
+	! printf '%s\n' "$WEBHOOK_HEADERS" | grep -qi '^[[:space:]]*anthropic-version[[:space:]]*:'; then
+	WEBHOOK_HEADERS="$(printf '%s\nanthropic-version: %s\n' "$WEBHOOK_HEADERS" "$ANTHROPIC_VERSION")"
+fi
+
+# 追加ヘッダは組み立てる前に検めておく（送ってから 400 で気付くのは遅い）。値は
+# 伏せ、名前だけをログに出す。
+header_names=""
+while IFS= read -r header_line; do
+	header_line="${header_line%$'\r'}"
+	case "$header_line" in
+		'' | '#'*) continue ;;
+		*:*) ;;
+		*) die "WEBHOOK_HEADERS の行に : がありません: $header_line" ;;
+	esac
+	header_names="${header_names}${header_names:+, }${header_line%%:*}"
+done <<< "$WEBHOOK_HEADERS"
+if [ -n "$header_names" ]; then
+	echo "追加ヘッダ: $header_names"
+fi
 
 # ---------------------------------------------------------------------------
 # issue を取る（イベント JSON、または番号指定で API から）
@@ -217,6 +251,13 @@ conf_file="$workdir/curl.conf"
 		printf 'url = "%s"\n' "$(conf_escape "$WEBHOOK_URL")"
 		printf 'header = "Content-Type: application/json"\n'
 		printf 'header = "User-Agent: vectorworks-developer-sdk-reference/issue-webhook"\n'
+		while IFS= read -r header_line; do
+			header_line="${header_line%$'\r'}"
+			case "$header_line" in
+				'' | '#'*) continue ;;
+			esac
+			printf 'header = "%s"\n' "$(conf_escape "$header_line")"
+		done <<< "$WEBHOOK_HEADERS"
 		if [ -n "$WEBHOOK_TOKEN" ]; then
 			if [ "$WEBHOOK_TOKEN_SCHEME" = "none" ]; then
 				auth_value="$WEBHOOK_TOKEN"

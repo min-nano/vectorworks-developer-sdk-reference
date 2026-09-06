@@ -66,6 +66,7 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
 | `CLAUDE_ROUTINE_WEBHOOK_TOKEN` | **シークレットのみ** | 認証トークン。URL にトークンを含む形式なら空でよい |
 | `CLAUDE_ROUTINE_WEBHOOK_TOKEN_HEADER` | variable（任意） | トークンを載せるヘッダ名。既定 `Authorization` |
 | `CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME` | variable（任意） | トークンの接頭辞。既定 `Bearer`。`none` なら素のトークン |
+| `CLAUDE_ROUTINE_WEBHOOK_HEADERS` | variable（任意。値が秘密ならシークレット） | 追加のヘッダ。1 行 1 つ、`名前: 値` |
 
 - **URL が無ければ何もしない**（run は成功で終わる）。シークレットを入れる前にマージしても
   支障は無い。ただし手動実行（`workflow_dispatch`）のときだけは、設定漏れを取りこぼさない
@@ -76,6 +77,12 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
   展開しない——そこは他人が書ける文字列なので）。
 - **URL とトークンはコマンドライン引数に置かない**（`ps` から見えるため）。curl の設定
   ファイル経由で渡し、ログには送り先のホストだけを出す。
+- **送り先が `api.anthropic.com` のときは `anthropic-version` を自動で足す**（明示が
+  無ければ `2023-06-01`）。このヘッダが無いと 400 で
+  `anthropic-version: header is required` が返る——実際に踏んだ
+  （[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/34024387939)）。
+  API キー方式の送り先には `CLAUDE_ROUTINE_WEBHOOK_TOKEN_HEADER=x-api-key` と
+  `CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME=none` を組み合わせる。
 - 送信は一時的な失敗（接続断・429・5xx）のときだけ 3 回まで粘る。4xx は設定か中身の
   誤りなので即座に失敗させる。
 - **動作確認は Actions の "Issue webhook" を `workflow_dispatch` で叩く**（入力 `issue` に
