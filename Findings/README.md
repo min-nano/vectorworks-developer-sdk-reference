@@ -45,7 +45,7 @@
 | [Tagged Data](Tagged%20Data.md) | タグ付きデータ（`TaggedData*`）の型・読み書きの癖・補助オブジェクトの生バイト構造 |
 | [Undo](Undo.md) | undo イベントの開き方・登録の作法・戻らないもの |
 | [Progress and Diagnostics](Progress%20and%20Diagnostics.md) | 進捗ダイアログ・`DoYield`・例外境界・VW バージョンは取れない |
-| [Layout Dialogs](Layout%20Dialogs.md) | レイアウトダイアログ（`VWDialog`）の大きさ・コントロール・イベントの作法 |
+| [Layout Dialogs](Layout%20Dialogs.md) | レイアウトダイアログ（`VWDialog`）の大きさ・コントロール・イベントの作法・**モードレスなパレット（`IExtensionWebPalette`。未確認）** |
 | [TXString](TXString.md) | 文字列型。`const char*` / `std::string` からの暗黙変換・**リテラルで多重定義が曖昧になる**・UTF-8 の出し入れ |
 | [Plug-in Modules](Plug-in%20Modules.md) | プラグインモジュールの読み込みと入れ替え。起動時にしか読まれない・VCOM の初期化はモジュールごと・SDK をリンクするモジュールが必ず定義する 2 つ・**本体を外部モジュールへ出せば再起動なしで入れ替えられる**（mac 実測） |
 | [Investigation Techniques](Investigation%20Techniques.md) | 調査の作法。読み戻す・測る・正解と差分を取る・setter の戻り値を信じない |
