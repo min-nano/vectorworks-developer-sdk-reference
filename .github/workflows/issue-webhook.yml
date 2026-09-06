@@ -21,6 +21,9 @@ name: Issue webhook
 #
 # 送り先が api.anthropic.com のときは、必須の `anthropic-version` を明示が無ければ
 # 自動で足す（無いと 400 で `anthropic-version: header is required` が返る）。
+# ルーティンを起こす口（`/v1/claude_code/routines/<id>/fire`）宛てなら `anthropic-beta`
+# も足し、送る中身も `{"text": ...}` だけに絞る（余計な鍵を足すと 400）。だから
+# **設定するのは URL とトークンの 2 つだけでよい**。
 #
 # **URL が設定されていなければ何もしない**（run は成功で終わる）ので、シークレットを
 # 入れる前にこのワークフローをマージしても支障は無い。手動実行（workflow_dispatch）の

@@ -71,16 +71,21 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
 - **URL が無ければ何もしない**（run は成功で終わる）。シークレットを入れる前にマージしても
   支障は無い。ただし手動実行（`workflow_dispatch`）のときだけは、設定漏れを取りこぼさない
   ように失敗させる。
-- **送る中身**は `text`（ルーティンのプロンプトからそのまま読める 1 行の要約）と `issue`
-  （番号・題・URL・ラベル・起票者・本文）。本文は 4000 文字で切り、切ったことを
-  `issue.body_truncated` に立てる。組み立ては `jq` で行う（issue の題や本文をシェルへ
-  展開しない——そこは他人が書ける文字列なので）。
+- **送る中身は送り先で変わる**（`WEBHOOK_PAYLOAD_MODE`。既定 `auto`）。
+  **ルーティンを起こす口（`/v1/claude_code/routines/<id>/fire`）は `{"text": ...}` しか
+  受け取らない**ので、そこ宛てには `text` だけを送る（余計な鍵を足すと 400）。issue の
+  値——番号・題・URL・起票者・ラベル・本文——はその 1 本の文字列に畳む。それ以外の
+  送り先へは同じ `text` に構造化された `issue` を添えて送る。本文は 4000 文字で切り、
+  切ったことを `issue.body_truncated` に立てる。組み立ては `jq` で行う（issue の題や
+  本文をシェルへ展開しない——そこは他人が書ける文字列なので）。
 - **URL とトークンはコマンドライン引数に置かない**（`ps` から見えるため）。curl の設定
   ファイル経由で渡し、ログには送り先のホストだけを出す。
-- **送り先が `api.anthropic.com` のときは `anthropic-version` を自動で足す**（明示が
-  無ければ `2023-06-01`）。このヘッダが無いと 400 で
-  `anthropic-version: header is required` が返る——実際に踏んだ
+- **足りないヘッダは自動で補う**（設定するのは URL とトークンの 2 つで済ませたい）。
+  `api.anthropic.com` 宛てには `anthropic-version`（既定 `2023-06-01`）、ルーティンを
+  起こす口には更に `anthropic-beta`（既定 `experimental-cc-routine-2026-04-01`）。
+  前者が無いと 400 で `anthropic-version: header is required` が返る——実際に踏んだ
   （[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/34024387939)）。
+  明示が要るときは `CLAUDE_ROUTINE_WEBHOOK_HEADERS` に書けばそちらが勝つ。
   API キー方式の送り先には `CLAUDE_ROUTINE_WEBHOOK_TOKEN_HEADER=x-api-key` と
   `CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME=none` を組み合わせる。
 - 送信は一時的な失敗（接続断・429・5xx）のときだけ 3 回まで粘る。4xx は設定か中身の
