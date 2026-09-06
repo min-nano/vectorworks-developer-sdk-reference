@@ -20,7 +20,7 @@ Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https
 | `plugin/` | **実機確認プラグイン**（VwSdkProbes）。メニュー 1 つから、複数の PR の調査コードを同居させて実機で走らせる（[説明](plugin/README.md)） | 仕組みを変えるときだけ |
 | `probes/` | 調査用のコンパイルスニペット（[規約](probes/README.md)） | 調査中だけ。役目を終えたら消す |
 | `probes/runtime/` | **実機で走らせる調査（プローブ）**。1 調査 1 ディレクトリ（[規約](probes/runtime/README.md)） | 調査中だけ。役目を終えたら消す |
-| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`）・プローブの自動公開（`probe-auto-update`） | — |
+| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`）・プローブの自動公開（`probe-auto-update`）・issue を webhook へ流す（`issue-webhook`） | — |
 | `CLAUDE.md`（本ファイル） | 作業時の規約。調査のフロー・PR とマージ・CI の待ち方 | — |
 
 ## 調査のフロー
@@ -48,6 +48,39 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
    issue が閉じる（＝Findings に反映される）のを待って実装に入る**運用なので、調査は
    issue 単位で確実に閉じること。
 5. **実機確認が要るものは確認後にマージする**（下記「PR とマージ」）。
+
+## issue が立ったら Claude のルーティンを起こす（`issue-webhook`）
+
+調査は issue 単位で回すが、「issue を立てた」から「調査が始まる」までを人が繋いでいると、
+繋ぎ忘れた分だけ調査が止まる。そこを埋めるのが
+[`.github/workflows/issue-webhook.yml`](.github/workflows/issue-webhook.yml)
+（実体は [`scripts/issue-webhook.sh`](scripts/issue-webhook.sh)）で、**issue が
+open されたら、その内容を JSON で外部の webhook（Claude のルーティンの入口）へ POST する**。
+
+送り先と認証は**コードに書かない**。次のシークレット / variables から受け取る
+（Settings → Secrets and variables → Actions）。
+
+| 名前 | 置き場所 | 中身 |
+| --- | --- | --- |
+| `CLAUDE_ROUTINE_WEBHOOK_URL` | シークレット（推奨。variable でも可） | 送り先の URL。`https://` のみ |
+| `CLAUDE_ROUTINE_WEBHOOK_TOKEN` | **シークレットのみ** | 認証トークン。URL にトークンを含む形式なら空でよい |
+| `CLAUDE_ROUTINE_WEBHOOK_TOKEN_HEADER` | variable（任意） | トークンを載せるヘッダ名。既定 `Authorization` |
+| `CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME` | variable（任意） | トークンの接頭辞。既定 `Bearer`。`none` なら素のトークン |
+
+- **URL が無ければ何もしない**（run は成功で終わる）。シークレットを入れる前にマージしても
+  支障は無い。ただし手動実行（`workflow_dispatch`）のときだけは、設定漏れを取りこぼさない
+  ように失敗させる。
+- **送る中身**は `text`（ルーティンのプロンプトからそのまま読める 1 行の要約）と `issue`
+  （番号・題・URL・ラベル・起票者・本文）。本文は 4000 文字で切り、切ったことを
+  `issue.body_truncated` に立てる。組み立ては `jq` で行う（issue の題や本文をシェルへ
+  展開しない——そこは他人が書ける文字列なので）。
+- **URL とトークンはコマンドライン引数に置かない**（`ps` から見えるため）。curl の設定
+  ファイル経由で渡し、ログには送り先のホストだけを出す。
+- 送信は一時的な失敗（接続断・429・5xx）のときだけ 3 回まで粘る。4xx は設定か中身の
+  誤りなので即座に失敗させる。
+- **動作確認は Actions の "Issue webhook" を `workflow_dispatch` で叩く**（入力 `issue` に
+  番号を入れる。`dry_run` を立てると POST せず送る中身だけ出す）。`issues` イベントは
+  デフォルトブランチのワークフロー定義でしか走らないので、作業ブランチでの確認はこの手で行う。
 
 ## 知見の書き方
 
