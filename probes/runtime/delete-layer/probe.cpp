@@ -58,7 +58,7 @@ VW_PROBE("delete-layer", "レイヤのハンドルを DeleteObject で直接消�
 
 	// --- 1) 図形が乗った非アクティブレイヤを直接消す ---
 	const TXString name1 = "probe-delete-layer-1-with-rect";
-	MCObjectHandle layer1 = gSDK->CreateLayer(name1, kDesignLayerType);
+	MCObjectHandle layer1 = gSDK->CreateLayer(name1, kLayerDesign);
 	if (layer1 == nil)
 	{
 		probe.fail("CreateLayer(1) が nil を返した");
@@ -87,7 +87,7 @@ VW_PROBE("delete-layer", "レイヤのハンドルを DeleteObject で直接消�
 
 	// --- 2) アクティブレイヤ自身を消す（ここから先で VW が落ちる可能性がある） ---
 	const TXString name2 = "probe-delete-layer-2-active";
-	MCObjectHandle layer2 = gSDK->CreateLayer(name2, kDesignLayerType);
+	MCObjectHandle layer2 = gSDK->CreateLayer(name2, kLayerDesign);
 	if (layer2 == nil)
 	{
 		probe.fail("CreateLayer(2) が nil を返した");
