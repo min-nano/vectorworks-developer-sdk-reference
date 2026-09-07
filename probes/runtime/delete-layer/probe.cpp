@@ -22,31 +22,31 @@
 
 namespace
 {
-// 図面のオブジェクト列を先頭から辿り、同名のレイヤがまだ残っているかを見る。
-// ISDK に「名前でレイヤを引く」呼び出しは無いので、これが唯一の手立て
-// （probes/runtime/example/probe.cpp と同じ辿り方）。
-bool LayerExistsByName(const TXString& name)
-{
-	for (MCObjectHandle h = VWDocument::GetDrawingHeaderFristMember(); h != nil;
-		 h = gSDK->NextObject(h))
+	// 図面のオブジェクト列を先頭から辿り、同名のレイヤがまだ残っているかを見る。
+	// ISDK に「名前でレイヤを引く」呼び出しは無いので、これが唯一の手立て
+	// （probes/runtime/example/probe.cpp と同じ辿り方）。
+	bool LayerExistsByName(const TXString& name)
 	{
-		if (!VWLayerObj::IsLayerObject(h))
-			continue;
-		VWLayerObj layer(h); // SDK のラッパは const 修飾が揃っていないので非 const で持つ
-		if (layer.GetObjectName() == name)
-			return true;
+		for (MCObjectHandle h = VWDocument::GetDrawingHeaderFristMember(); h != nil;
+			 h = gSDK->NextObject(h))
+		{
+			if (!VWLayerObj::IsLayerObject(h))
+				continue;
+			VWLayerObj layer(h); // SDK のラッパは const 修飾が揃っていないので非 const で持つ
+			if (layer.GetObjectName() == name)
+				return true;
+		}
+		return false;
 	}
-	return false;
-}
 
-std::string LayerNameOrNil(MCObjectHandle h)
-{
-	if (h == nil)
-		return "(nil)";
-	TXString name;
-	gSDK->GetObjectName(h, name);
-	return static_cast<const char*>(name);
-}
+	std::string LayerNameOrNil(MCObjectHandle h)
+	{
+		if (h == nil)
+			return "(nil)";
+		TXString name;
+		gSDK->GetObjectName(h, name);
+		return static_cast<const char*>(name);
+	}
 } // namespace
 
 VW_PROBE("delete-layer", "レイヤのハンドルを DeleteObject で直接消す",
@@ -80,7 +80,7 @@ VW_PROBE("delete-layer", "レイヤのハンドルを DeleteObject で直接消�
 
 	gSDK->DeleteObject(layer1, true);
 	probe.log(std::string("layer1 を DeleteObject(useUndo=true) で削除した。"
-						   "本体から見た undo: building=") +
+						  "本体から見た undo: building=") +
 			  (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
 	probe.log(std::string("削除後、同名レイヤが図面に残っているか: ") +
 			  (LayerExistsByName(name1) ? "残っている（想定外）" : "消えた"));
