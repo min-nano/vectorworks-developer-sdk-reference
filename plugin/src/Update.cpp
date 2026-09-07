@@ -389,7 +389,11 @@ namespace vwprobe
 
 		// チェック本体。interactive = メニューから押されたとき（＝最新でも失敗でも必ず
 		// 何か見せる）。起動時は逆に、**最新なら無言**で通り過ぎる。
-		void CheckAndOffer(bool interactive)
+		//
+		// 戻り値は「この後も続けられるか」だけ（Update.h の UpdateOutcome）。**殻まで
+		// 入れ替えたときだけ** RestartNeeded で、それ以外は——断っても失敗しても、
+		// 本体だけ入れ替えても——Continue（ピッカーへ戻れる）。
+		UpdateOutcome CheckAndOffer(bool interactive)
 		{
 			std::string out;
 			if (!RunBundledScript({"q"}, out))
@@ -398,7 +402,7 @@ namespace vwprobe
 					Inform("アップデータを起動できませんでした。",
 						   "同梱スクリプトが見つかりません。zip を展開したときの構成のまま "
 						   "Plug-Ins フォルダへ置かれているか確認してください。");
-				return;
+				return UpdateOutcome::Continue;
 			}
 
 			const Status status = Evaluate(out);
@@ -406,18 +410,18 @@ namespace vwprobe
 			{
 				if (interactive)
 					Inform("更新を確認できませんでした。", status.error);
-				return;
+				return UpdateOutcome::Continue;
 			}
 			if (!status.offerUpdate)
 			{
 				if (interactive)
 					Inform("最新のビルドです。", DetailLines(status));
-				return;
+				return UpdateOutcome::Continue;
 			}
 
 			if (!Ask("新しいプローブビルドがあります。入れ替えますか？", DetailLines(status),
 					 "入れ替える", "後で"))
-				return;
+				return UpdateOutcome::Continue;
 
 			std::string err;
 			if (status.payloadOnly)
@@ -430,16 +434,22 @@ namespace vwprobe
 				if (Install("do-install-payload", status.url, err))
 					Inform("プローブを入れ替えました。",
 						   "build: " + status.latest +
-							   "\n\n次にメニュー「SDK 実機プローブ…」を開いたときから、"
-							   "新しいプローブが動きます。\nVectorworks の再起動は要りません。");
+							   "\n\n続けて新しいプローブを選べます"
+							   "（Vectorworks の再起動は要りません）。");
 				else
 					Inform("入れ替えに失敗しました。", err);
-				return;
+				// 失敗しても Continue——古い本体はそのまま残っているので、選んで走らせられる。
+				return UpdateOutcome::Continue;
 			}
 			if (Install("do-install", status.url, err))
+			{
 				OfferRestart("プローブビルドを入れ替えました。", "build: " + status.latest);
-			else
-				Inform("入れ替えに失敗しました。", err);
+				// **再起動を断られても RestartNeeded。** 動いているのは古い殻のままで、
+				// 隣には新しい本体が置かれている（版が食い違う）。この状態で選ばせない。
+				return UpdateOutcome::RestartNeeded;
+			}
+			Inform("入れ替えに失敗しました。", err);
+			return UpdateOutcome::Continue;
 		}
 	} // namespace
 
@@ -456,7 +466,7 @@ namespace vwprobe
 		// 付随機能。黙って諦めるのが**ここでは正しい**（オフラインのときと同じ扱い）。
 		try
 		{
-			CheckAndOffer(/*interactive*/ false);
+			(void)CheckAndOffer(/*interactive*/ false);
 		}
 		catch (...)
 		{
@@ -464,11 +474,11 @@ namespace vwprobe
 		// NOLINTEND(bugprone-empty-catch)
 	}
 
-	void RunManualUpdateCheck()
+	UpdateOutcome RunManualUpdateCheck()
 	{
 		try
 		{
-			CheckAndOffer(/*interactive*/ true);
+			return CheckAndOffer(/*interactive*/ true);
 		}
 		catch (const std::exception& error)
 		{
@@ -479,5 +489,8 @@ namespace vwprobe
 		{
 			Inform("更新の確認中にエラーが起きました。", "");
 		}
+		// 例外で来たときも**入れ替えは起きていない**（起きていれば戻り値で返っている）
+		// ので、ピッカーへ戻ってよい。
+		return UpdateOutcome::Continue;
 	}
 } // namespace vwprobe

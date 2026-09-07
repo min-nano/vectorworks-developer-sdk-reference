@@ -220,11 +220,24 @@ jobs:
             || { echo "::error::カタログ (VwSdkProbes.probes.txt) が作られていません"; exit 1; }
           cat build/VwSdkProbes.probes.txt
           # 本体（プローブはこちらに入る）。バンドルの**隣**であることが肝。群ごとに 1 本。
-          ls -l build/VwSdkProbesPayload-*.vwpayload
-          for payload in build/VwSdkProbesPayload-*.vwpayload; do lipo -info "$payload"; done
-          # main の群は必ず要る（PR の群は落ちていることがある）。
-          test -f build/VwSdkProbesPayload-main.vwpayload \
-            || { echo "::error::main の本体が作られていません"; exit 1; }
+          # **1 本も無いことがある**——`probes/runtime/` が空（いま調べているプローブが
+          # 無い）ときで、それは正常な状態（常駐の煙試験は置かない。
+          # probes/runtime/README.md）。そのときは殻とカタログだけを配り、ピッカーは
+          # 「プローブがありません」と出して入れ替えだけを選ばせる。
+          shopt -s nullglob
+          payloads=(build/VwSdkProbesPayload-*.vwpayload)
+          shopt -u nullglob
+          if [ "${#payloads[@]}" -eq 0 ]; then
+            echo "::warning::本体が 1 本もありません（probes/runtime/ が空）。殻とカタログだけを配ります。"
+          else
+            ls -l "${payloads[@]}"
+            for payload in "${payloads[@]}"; do lipo -info "$payload"; done
+          fi
+          # **群 main があるなら**その本体は必ず要る（PR の群は落ちていることがある）。
+          if grep -q '^main|' build-probes/groups.txt; then
+            test -f build/VwSdkProbesPayload-main.vwpayload \
+              || { echo "::error::main の本体が作られていません"; exit 1; }
+          fi
 
       # "<name>.vwlibrary/" の階層を保ったまま zip する（展開してそのまま使えるように）。
       # **zip は 1 つだけ。** 殻と本体を分けて配らないのは、展開の手間を増やさないため
@@ -337,9 +350,19 @@ jobs:
           test -f "$d/VwSdkProbes.probes.txt" \
             || { echo "::error::カタログ (VwSdkProbes.probes.txt) が作られていません"; exit 1; }
           # 本体（プローブはこちらに入る）。.vlb の隣に、群ごとに 1 本。
-          ls -l "$d"/VwSdkProbesPayload-*.vwpayload
-          test -f "$d/VwSdkProbesPayload-main.vwpayload" \
-            || { echo "::error::main の本体が作られていません"; exit 1; }
+          # mac 側と同じで、**1 本も無いことがある**（probes/runtime/ が空＝正常）。
+          shopt -s nullglob
+          payloads=("$d"/VwSdkProbesPayload-*.vwpayload)
+          shopt -u nullglob
+          if [ "${#payloads[@]}" -eq 0 ]; then
+            echo "::warning::本体が 1 本もありません（probes/runtime/ が空）。殻とカタログだけを配ります。"
+          else
+            ls -l "${payloads[@]}"
+          fi
+          if grep -q '^main|' build-probes/groups.txt; then
+            test -f "$d/VwSdkProbesPayload-main.vwpayload" \
+              || { echo "::error::main の本体が作られていません"; exit 1; }
+          fi
           cat "$d/VwSdkProbes.build-info.txt"
           cat "$d/VwSdkProbes.probes.txt"
 

@@ -18,6 +18,12 @@
 //	のものなので、結果ダイアログでは**最初から開いておく**（畳む・開くの作り直しはしない
 //	——レイアウトの大きさは作るときに 1 度しか決まらない）。
 //
+//	【横幅はいちばん長い行で決まる】レイアウトの大きさは作るときに 1 度だけ決まるので、
+//	長い 1 行を混ぜるとダイアログはそこに合わせて横へ伸び、後から縮められない。素性
+//	（ブランチ・コミット・ビルド ID・時刻）は 1 行に並べると 90 文字を超えるので、
+//	**見出しごとに行を分けて詰める**（組み立ては ProbeMenuText.h。長さは
+//	plugin/tests/ProbeMenuTextTests.cpp が見張る）。
+//
 //	【出せなかったときの逃げ道】レイアウトを組めなければ gSDK->AlertInform へ落とす。
 //	結果を伝えられないまま黙って終わるのが最悪。
 //
@@ -25,11 +31,13 @@
 #include "PluginPrefix.h"
 #include "BuildConfig.h"
 #include "ProbeMenu.h"
+#include "ProbeMenuText.h"
 #include "PayloadCatalog.h"
 #include "PayloadHost.h"
 #include "Update.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
@@ -76,16 +84,16 @@ namespace vwprobe
 		// 追うときに最初に見たい値になる（Update.h）。
 		std::string shellStamp()
 		{
-			return std::string("殻: ") + VW_BUILD_BRANCH + " " + VW_BUILD_VERSION + " (" +
-				   VW_BUILD_TIME + ") id=" + VW_BUILD_ID;
+			return text::StampLine("殻", VW_BUILD_BRANCH, VW_BUILD_VERSION, VW_BUILD_TIME,
+								   VW_BUILD_ID);
 		}
 
 		std::string payloadStamp(const Payload& payload)
 		{
 			if (!payload.isLoaded())
 				return "本体: 読み込めていません";
-			return "本体: " + payload.branch() + " " + payload.commit() + " (" +
-				   payload.buildTime() + ") id=" + payload.buildId();
+			return text::StampLine("本体", payload.branch(), payload.commit(), payload.buildTime(),
+								   payload.buildId());
 		}
 
 		// カタログの見出し（メニューを開いた時点で言えるのはここまで——**本体はまだ
@@ -94,8 +102,7 @@ namespace vwprobe
 		{
 			if (cat.empty())
 				return "カタログ: 読めていません";
-			return "カタログ: " + cat.branch + " " + cat.commit + " (" + cat.buildTime +
-				   ") id=" + cat.buildId;
+			return text::StampLine("カタログ", cat.branch, cat.commit, cat.buildTime, cat.buildId);
 		}
 
 		// -------------------------------------------------------------------
@@ -144,6 +151,12 @@ namespace vwprobe
 		// メニューコマンドは 1 つ、という設計。plugin/README.md）。
 		constexpr const char* kUpdateItem = "＊ 新しいプローブビルドを確認して入れ替える…";
 
+		// ピッカーの幅（標準文字）と、項目に入れる表示名の上限（文字）。**ダイアログの
+		// 横幅はここと素性の行で決まる**ので、広げるときは実機で見てから決めること
+		// （作った後では縮められない。Findings「Layout Dialogs」）。
+		constexpr short kPopupWidthChars = 52;
+		constexpr std::size_t kTitleChars = 30;
+
 		// ピッカーの 1 項目。「どの PR の・どのコミットの・何を調べるプローブか」を
 		// この 1 行だけで判断できるようにする（選ぶ前に見えるのはこれだけなので）。
 		//
@@ -161,9 +174,13 @@ namespace vwprobe
 				head = "main";
 			if (!choice.group.commit.empty())
 				head += " " + choice.group.commit;
-			std::string line = head + "  " + choice.probe.title + "  [" + choice.probe.id + "]";
+			// **表示名は詰める。** プルダウンの幅は作るときに決まる（kPopupWidthChars）
+			// ので、長い表示名をそのまま入れると末尾の `[slug]` が見切れる——slug は
+			// 出所と突き合わせる鍵なので、そちらを残す。
+			std::string line = head + " " + text::Ellipsize(choice.probe.title, kTitleChars) +
+							   " [" + choice.probe.id + "]";
 			if (!choice.available)
-				line += "  ※本体なし";
+				line += " ※本体なし";
 			return line;
 		}
 
@@ -243,10 +260,10 @@ namespace vwprobe
 		class CProbePickerDialog : public VWDialog
 		{
 		public:
-			CProbePickerDialog(const std::string& prompt, const std::string& stamp,
+			CProbePickerDialog(const std::string& prompt, const std::vector<std::string>& footer,
 							   const std::vector<TXString>& items, short initialSelection)
-				: fPrompt(kPromptID), fStamp(kStampID), fWarning(kWarningID), fPopup(kPopupID),
-				  fPromptText(prompt.c_str()), fStampText(stamp.c_str()), fItems(items),
+				: fPrompt(kPromptID), fWarning(kWarningID), fPopup(kPopupID),
+				  fPromptText(prompt.c_str()), fFooter(footer), fItems(items),
 				  fSelection(initialSelection)
 			{
 			}
@@ -271,19 +288,34 @@ namespace vwprobe
 					return false;
 				if (!fPrompt.CreateControl(this, fPromptText))
 					return false;
-				if (!fPopup.CreateControl(this, 72 /* width in standard chars */))
+				if (!fPopup.CreateControl(this, kPopupWidthChars))
 					return false;
-				if (!fWarning.CreateControl(
-						this,
-						"※ プローブは図面を変更します。作業中の図面では実行しないでください。"))
-					return false;
-				if (!fStamp.CreateControl(this, fStampText))
+				if (!fWarning.CreateControl(this,
+											"※ 図面を変更します。新規の空図面で実行してください。"))
 					return false;
 
 				this->AddFirstGroupControl(&fPrompt);
 				this->AddBelowControl(&fPrompt, &fPopup);
 				this->AddBelowControl(&fPopup, &fWarning, 0, 1);
-				this->AddBelowControl(&fWarning, &fStamp);
+
+				// 素性は**行に分けて**積む（1 行にまとめると、その 1 行の長さが
+				// そのままダイアログの横幅になる）。行数は呼び出し側で変わるので、
+				// **deque に直接作る**——vector だと追加のたびに既存の要素が動くが、
+				// ダイアログは生存中ずっとコントロールのアドレスを持つ。
+				TControlID id = kFirstFooterID;
+				VWControl* previous = &fWarning;
+				short spacing = 1;
+				for (const std::string& line : fFooter)
+				{
+					if (line.empty())
+						continue;
+					VWStaticTextCtrl& control = fFooterLines.emplace_back(id++);
+					if (!control.CreateControl(this, line.c_str()))
+						return false;
+					this->AddBelowControl(previous, &control, 0, spacing);
+					previous = &control;
+					spacing = 0;
+				}
 				return true;
 			}
 
@@ -312,15 +344,15 @@ namespace vwprobe
 				kPromptID = 3,
 				kPopupID = 4,
 				kWarningID = 5,
-				kStampID = 6
+				kFirstFooterID = 10
 			}; // 1 = OK, 2 = キャンセルは予約
 
 			VWStaticTextCtrl fPrompt;
-			VWStaticTextCtrl fStamp;
 			VWStaticTextCtrl fWarning;
 			VWPullDownMenuCtrl fPopup;
+			std::deque<VWStaticTextCtrl> fFooterLines;
 			TXString fPromptText;
-			TXString fStampText;
+			std::vector<std::string> fFooter;
 			std::vector<TXString> fItems;
 			short fSelection;
 			bool fShown = false;
@@ -539,118 +571,138 @@ vwprobe::CProbeMenu_EventSink::~CProbeMenu_EventSink() = default;
 
 void vwprobe::CProbeMenu_EventSink::DoInterface()
 {
-	// 0. **カタログを読む（本体はまだ 1 つも読み込まない）。** どの本体に何が入って
-	//    いるかは、ビルドが並べて置いたテキスト 1 枚に書いてある
-	//    （plugin/src/PayloadCatalog.h）。読み込むのは**選ばれた 1 本だけ**——群の
-	//    どれかが壊れていても、他の群は選んで走らせられる。
-	catalog::Catalog cat;
-	std::string catalogError;
-	const std::vector<Choice> all = ReadChoices(cat, catalogError);
-	const std::vector<size_t> order = displayOrder(all);
-
-	// 1. 選ばせる。**先頭は「新しいビルドに入れ替える」**で、その後ろにプローブが並ぶ
-	//    （カタログを読めなかったときでも、入れ替えだけは選べる——たいていそれが直し方）。
-	std::vector<TXString> items;
-	items.reserve(order.size() + 1);
-	items.emplace_back(kUpdateItem);
-	for (const size_t index : order)
-		items.emplace_back(pickerItem(all[index]).c_str());
-
-	std::string prompt = "実行するプローブを選んでください:";
-	if (all.empty())
-		prompt = "プローブがありません。新しいビルドを取り込めます:";
-
-	std::string stamp = catalogStamp(cat) + "  /  " + shellStamp();
-	if (cat.skippedLines > 0)
-		stamp += "  ※カタログに読めない行が " + std::to_string(cat.skippedLines) + " 行";
-
-	// 既定の選択は**先頭のプローブ**（あれば）。入れ替えは意識して選ぶものにする。
-	CProbePickerDialog picker(prompt, stamp, items, all.empty() ? 0 : 1);
-	const bool accepted = (picker.RunDialogLayout("") == VWFC::VWUI::kDialogButton_Ok);
-	if (!picker.Shown())
+	// **ピッカーは繰り返し出す。** 「入れ替える」を選ぶのは、たいてい新しいプローブを
+	// 走らせたいからである。本体だけの入れ替え（＝再起動が要らない道。Update.h）なら
+	// **その場で一覧を読み直して選ばせる**——ここで終わってしまうと、入れ替えるたびに
+	// メニューを開き直すことになる。殻まで入れ替わったときだけ抜ける（再起動するまで
+	// 動いているのは古い殻なので、そのまま選ばせない）。
+	for (;;)
 	{
-		// ダイアログを組めなかった。**黙って終わらない**——プローブは 1 件も走らない
-		// ので、なぜ何も起きなかったのかを伝える（Findings「Layout Dialogs」）。
-		gSDK->AlertInform("プローブの選択ダイアログを組めませんでした。", stamp.c_str(), false);
-		return;
-	}
-	if (!accepted)
-		return; // キャンセルなら静かに終える
-	const short selection = picker.GetSelection();
-	if (selection < 0)
-		return;
-	if (selection == 0)
-	{
-		// 先頭 = 入れ替え。確認・ダウンロード・再起動の案内はすべて Update.cpp が持つ
-		// （例外もあちらで受け止める）。**本体は読み込んでいない**ので、ここで降ろす
-		// ものは無い（Windows でも入れ替えが必ず通る）。
-		RunManualUpdateCheck();
-		return;
-	}
+		// 0. **カタログを読む（本体はまだ 1 つも読み込まない）。** どの本体に何が入って
+		//    いるかは、ビルドが並べて置いたテキスト 1 枚に書いてある
+		//    （plugin/src/PayloadCatalog.h）。読み込むのは**選ばれた 1 本だけ**——群の
+		//    どれかが壊れていても、他の群は選んで走らせられる。
+		catalog::Catalog cat;
+		std::string catalogError;
+		const std::vector<Choice> all = ReadChoices(cat, catalogError);
+		const std::vector<size_t> order = displayOrder(all);
 
-	if (all.empty())
-	{
-		// プローブを選べる状態ではない（一覧が空なので、ここへは来ないはずだが念のため）。
-		gSDK->AlertInform("プローブの一覧を読めませんでした。", catalogError.c_str(), false);
-		return;
-	}
+		// 1. 選ばせる。**先頭は「新しいビルドに入れ替える」**で、その後ろにプローブが並ぶ
+		//    （カタログを読めなかったときでも、入れ替えだけは選べる——たいていそれが
+		//    直し方）。
+		std::vector<TXString> items;
+		items.reserve(order.size() + 1);
+		items.emplace_back(kUpdateItem);
+		for (const size_t index : order)
+			items.emplace_back(pickerItem(all[index]).c_str());
 
-	const size_t choiceIndex = size_t(selection) - 1; // 先頭の 1 項目ぶんずらす
-	if (choiceIndex >= order.size())
-		return;
-	const Choice& choice = all[order[choiceIndex]];
+		std::string prompt = "実行するプローブを選んでください:";
+		if (all.empty())
+			prompt = "プローブがありません。新しいビルドを取り込めます:";
 
-	if (!choice.available)
-	{
-		// その群の本体が配られていない（たいていはその PR のビルドが落ちた）。
-		// **何が起きているかを言う**——黙って何も起きないのが一番たちが悪い。
-		const std::string why = "この本体は入っていません（" + choice.group.file +
-								"）。\nその群のビルドが通らなかったか、入れ替えが途中で"
-								"止まっています。\n他の群のプローブはそのまま選べます。";
-		gSDK->AlertInform(why.c_str(), provenanceLine(choice.group).c_str(), false);
-		return;
-	}
+		// 素性は**1 行 1 見出し**（つないで 1 行にすると、その長さがダイアログの横幅に
+		// なる。冒頭「横幅はいちばん長い行で決まる」）。
+		std::vector<std::string> footer;
+		footer.push_back(catalogStamp(cat));
+		footer.push_back(shellStamp());
+		if (cat.skippedLines > 0)
+			footer.push_back("※ カタログに読めない行が " + std::to_string(cat.skippedLines) +
+							 " 行あります");
 
-	// 2. **選ばれた群の本体だけ**を読み込む。読み終わったら必ず降ろす。
-	LogCollector collector;
-	Payload payload;
-	std::string loadError;
-	if (!payload.load(choice.payloadPath, (void*)gCBP, &collector, &CollectLine, loadError))
-	{
-		gSDK->AlertInform("本体を読み込めませんでした。", loadError.c_str(), false);
-		return;
-	}
-
-	// **カタログと本体が食い違っていないか。** 入れ替えが半端に済んだ（カタログだけ
-	// 新しい・本体だけ古い）と、選んだプローブがその本体に無いことがある。走らせて
-	// 「知らない id」と言われる前に、何が起きているかを言う。
-	bool inPayload = false;
-	for (const PayloadProbeInfo& entry : payload.probes())
-	{
-		if (entry.id == choice.probe.id)
+		// 既定の選択は**先頭のプローブ**（あれば）。入れ替えは意識して選ぶものにする。
+		CProbePickerDialog picker(prompt, footer, items, all.empty() ? 0 : 1);
+		const bool accepted = (picker.RunDialogLayout("") == VWFC::VWUI::kDialogButton_Ok);
+		if (!picker.Shown())
 		{
-			inPayload = true;
-			break;
+			// ダイアログを組めなかった。**黙って終わらない**——プローブは 1 件も走らない
+			// ので、なぜ何も起きなかったのかを伝える（Findings「Layout Dialogs」）。
+			std::string why;
+			for (const std::string& line : footer)
+				why += line + "\n";
+			gSDK->AlertInform("プローブの選択ダイアログを組めませんでした。", why.c_str(), false);
+			return;
 		}
-	}
-	if (!inPayload)
-	{
-		const std::string why = "カタログと本体が食い違っています（" + choice.probe.id +
-								" がこの本体にありません）。\n新しいビルドに入れ替えてください。";
-		// **降ろす前に**素性を控える（降ろした後だと「読み込めていません」しか言えない）。
-		const std::string stampNow = payloadStamp(payload);
+		if (!accepted)
+			return; // キャンセルなら静かに終える
+		const short selection = picker.GetSelection();
+		if (selection < 0)
+			return;
+		if (selection == 0)
+		{
+			// 先頭 = 入れ替え。確認・ダウンロード・再起動の案内はすべて Update.cpp が持つ
+			// （例外もあちらで受け止める）。**本体は読み込んでいない**ので、ここで降ろす
+			// ものは無い（Windows でも入れ替えが必ず通る）。
+			if (RunManualUpdateCheck() == UpdateOutcome::RestartNeeded)
+				return;
+			continue; // 一覧を読み直して選ばせる（新しいプローブはここで出てくる）
+		}
+
+		if (all.empty())
+		{
+			// プローブを選べる状態ではない（一覧が空なので、ここへは来ないはずだが念のため）。
+			gSDK->AlertInform("プローブの一覧を読めませんでした。", catalogError.c_str(), false);
+			return;
+		}
+
+		const size_t choiceIndex = size_t(selection) - 1; // 先頭の 1 項目ぶんずらす
+		if (choiceIndex >= order.size())
+			return;
+		const Choice& choice = all[order[choiceIndex]];
+
+		if (!choice.available)
+		{
+			// その群の本体が配られていない（たいていはその PR のビルドが落ちた）。
+			// **何が起きているかを言う**——黙って何も起きないのが一番たちが悪い。
+			const std::string why = "この本体は入っていません（" + choice.group.file +
+									"）。\nその群のビルドが通らなかったか、入れ替えが途中で"
+									"止まっています。\n他の群のプローブはそのまま選べます。";
+			gSDK->AlertInform(why.c_str(), provenanceLine(choice.group).c_str(), false);
+			return;
+		}
+
+		// 2. **選ばれた群の本体だけ**を読み込む。読み終わったら必ず降ろす。
+		LogCollector collector;
+		Payload payload;
+		std::string loadError;
+		if (!payload.load(choice.payloadPath, (void*)gCBP, &collector, &CollectLine, loadError))
+		{
+			gSDK->AlertInform("本体を読み込めませんでした。", loadError.c_str(), false);
+			return;
+		}
+
+		// **カタログと本体が食い違っていないか。** 入れ替えが半端に済んだ（カタログだけ
+		// 新しい・本体だけ古い）と、選んだプローブがその本体に無いことがある。走らせて
+		// 「知らない id」と言われる前に、何が起きているかを言う。
+		bool inPayload = false;
+		for (const PayloadProbeInfo& entry : payload.probes())
+		{
+			if (entry.id == choice.probe.id)
+			{
+				inPayload = true;
+				break;
+			}
+		}
+		if (!inPayload)
+		{
+			const std::string why =
+				"カタログと本体が食い違っています（" + choice.probe.id +
+				" がこの本体にありません）。\n新しいビルドに入れ替えてください。";
+			// **降ろす前に**素性を控える（降ろした後だと「読み込めていません」しか言えない）。
+			const std::string stampNow = payloadStamp(payload);
+			payload.unload();
+			gSDK->AlertInform(why.c_str(), stampNow.c_str(), false);
+			return;
+		}
+
+		// 3. 走らせる（例外は本体側が受け止める）。
+		const std::vector<std::string> body = RunProbe(payload, choice, cat);
+
+		// 4. **本体を降ろしてから**結果を見せる。ダイアログを出している間に本体を抱えた
+		//    ままにしない（その間に入れ替えを試されると Windows で失敗する）。ログは
+		//    こちらの collector に写してあるので、降ろしても失わない。
+		const std::string logText = collector.text;
 		payload.unload();
-		gSDK->AlertInform(why.c_str(), stampNow.c_str(), false);
+		ShowResult(body, logText);
 		return;
 	}
-
-	// 3. 走らせる（例外は本体側が受け止める）。
-	const std::vector<std::string> body = RunProbe(payload, choice, cat);
-
-	// 4. **本体を降ろしてから**結果を見せる。ダイアログを出している間に本体を抱えたまま
-	//    にしない（その間に入れ替えを試されると Windows で失敗する）。ログはこちらの
-	//    collector に写してあるので、降ろしても失わない。
-	const std::string logText = collector.text;
-	payload.unload();
-	ShowResult(body, logText);
 }

@@ -200,7 +200,10 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
   各 PR の head」から計算するので、**同じ顔ぶれで作り直しても変わらない**
   （`scripts/gather-probes.sh` / `plugin/src/UpdateParse.h`）。
 - **役目を終えたプローブは消す**（結論は `Findings/` に文章で残る。上記「調査のフロー」4）。
-  `probes/runtime/example/` だけは雛形かつ煙試験として残す。
+  **常駐の煙試験は置かない**——調べているわけではないプローブがピッカーに並ぶと、
+  いま確かめたいものと見分けが付かない。`probes/runtime/` が README だけになるのは
+  正常な状態で、そのときのピッカーは入れ替えだけが選べる。雛形は
+  [`probes/runtime/README.md`](probes/runtime/README.md) にある。
 - **プローブは undo イベントを自分では開かない**（[Findings「Undo」](Findings/Undo.md) の
   半端な記録を避けるため）。図面が戻らない前提で、新規の空図面で走らせる。
 

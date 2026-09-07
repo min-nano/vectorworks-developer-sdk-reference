@@ -10,7 +10,8 @@ name: Lint
 #                     整形の唯一の真実は .clang-format で、手で例外を作らない。
 #   * unit-tests    — 殻の純粋な部分（自動アップデートの判断＝plugin/src/UpdateParse.h、
 #                     本体のパスの組み立て＝plugin/src/PayloadHost.h、本体が殻から受け取った
-#                     ものを写しているか＝plugin/src/PayloadHostHolder.h）。SDK にも
+#                     ものを写しているか＝plugin/src/PayloadHostHolder.h、ダイアログに出す
+#                     文字列の長さ＝plugin/src/ProbeMenuText.h）。SDK にも
 #                     プラットフォームにも依存しないので普通のコンパイラで走る。**壊れても
 #                     静かに壊れる**（更新が来ない／常に来る／再起動が空振りする／実機でだけ
 #                     落ちる）ので、mac / Windows の実ビルドとは別に、ここで確かめる。
@@ -99,6 +100,9 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
             plugin/tests/PayloadCatalogTests.cpp -o /tmp/payload-catalog-tests
           /tmp/payload-catalog-tests
+          g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
+            plugin/tests/ProbeMenuTextTests.cpp -o /tmp/probe-menu-text-tests
+          /tmp/probe-menu-text-tests
 
       # カタログを**書く**側（CMake）の試験。SDK もコンパイラも要らない（純粋な文字列
       # 処理なので cmake -P でそのまま走る）。読む側（PayloadCatalogTests）と対で、
