@@ -49,9 +49,10 @@ VW_PROBE("open-document", "コマンド実行中に別の文書を OpenDocumentP
 		 "レイヤ・前の文書のハンドル・undo イベント・GetOpenFilesList の変化と、"
 		 "SwitchToOpenFile での復帰・CloseDocument の保存ダイアログを確かめる")
 {
-	using namespace VectorWorks; // TVWArray_OpenFileInformation は VectorWorks 直下、
-								 // IFileIdentifier 等は VectorWorks::Filing（ISDK.h が
-								 // 内側で using namespace 済みなので、ここは 1 つで足りる）
+	// TVWArray_OpenFileInformation は VectorWorks 直下、IFileIdentifier 等は
+	// VectorWorks::Filing にある（ISDK.h が内側で using namespace 済みなので、
+	// ここは VectorWorks だけで両方解決できる）。
+	using namespace VectorWorks;
 
 	// --- 開く前の状態を記録する ---
 	const MCObjectHandle beforeLayer = gSDK->GetCurrentLayer();
@@ -124,8 +125,8 @@ VW_PROBE("open-document", "コマンド実行中に別の文書を OpenDocumentP
 			  "GetObjectName を呼ぶ（別文書のハンドルを、今アクティブな別の文書の"
 			  "コンテキストで読む。ここまでのログは落ちても残る）");
 	const std::string beforeLayerNameNow = LayerNameOrNil(beforeLayer);
-	probe.log("前の文書のレイヤハンドルから今読めた名前: " + beforeLayerNameNow +
-			  "（開く前は「" + beforeLayerName + "」だった）");
+	probe.log("前の文書のレイヤハンドルから今読めた名前: " + beforeLayerNameNow + "（開く前は「" +
+			  beforeLayerName + "」だった）");
 
 	// --- 前の文書へ SwitchToOpenFile で戻れるか ---
 	if (beforeFileRef >= 0)
@@ -137,8 +138,8 @@ VW_PROBE("open-document", "コマンド実行中に別の文書を OpenDocumentP
 		{
 			const MCObjectHandle backLayer = gSDK->GetCurrentLayer();
 			probe.log("戻った後のカレントレイヤ: " + LayerNameOrNil(backLayer) +
-					  "（開く前と同じハンドルか: " +
-					  (backLayer == beforeLayer ? "同じ" : "違う") + "）");
+					  "（開く前と同じハンドルか: " + (backLayer == beforeLayer ? "同じ" : "違う") +
+					  "）");
 			probe.log(std::string("戻った後の undo: building=") +
 					  (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
 		}
