@@ -84,6 +84,30 @@ int main()
 						  "2026-09-03T22:24:03Z", "592b5b938687"),
 				64, "素性の行の長さ（半角換算でプルダウン幅に収まること）");
 
+	// --- 一括実行の行 --------------------------------------------------------
+	checkEq(BatchSummaryLine(7, 5, 1, 1), "一括実行: 7 件中 成功 5 / 失敗 1 / 走らず 1",
+			"まとめの見出し");
+	// 走らせられなかった件が無ければ、その欄は出さない（0 を並べない）。
+	checkEq(BatchSummaryLine(3, 3, 0, 0), "一括実行: 3 件中 成功 3 / 失敗 0",
+			"走らずが 0 なら出さない");
+
+	checkEq(BatchResultLine(3, 7, "#12", "layer-order", "成功", "1.24"),
+			"3/7 #12 [layer-order] 成功 (1.24 秒)", "1 件ぶんの行");
+	// 走らせられなかった件には所要時間が無い（空なら括弧ごと出さない）。
+	checkEq(BatchResultLine(1, 2, "main", "slab-riser", "この本体は入っていません", ""),
+			"1/2 main [slab-riser] この本体は入っていません", "走らなかった件の行");
+	// **長い結末は詰める。** 例外のメッセージがそのまま入ると、この 1 行でダイアログが
+	// 横へ伸びる（まとめは件数ぶん行が並ぶので、いちばん長い 1 行が幅になる）。
+	checkEq(BatchResultLine(2, 2, "#12", "tag-formula",
+							"例外で中断: std::bad_alloc（オブジェクトの生成に失敗）", "0.03"),
+			"2/2 #12 [tag-formula] 例外で中断: std::bad_alloc（オ… (0.03 秒)", "長い結末は詰める");
+	checkAtMost(BatchResultLine(12, 12, "#1234", "some-long-probe-slug",
+								"例外で中断: std::bad_alloc（オブジェクトの生成に失敗）", "123.45"),
+				72, "一括実行の行の長さ（結末を詰めても伸びきらないこと）");
+
+	checkEq(BatchLogHeader(3, 7, "#12", "layer-order"),
+			"===== 3/7 #12 [layer-order] =====", "ログ欄の区切り");
+
 	if (gFailures == 0)
 		std::printf("ProbeMenuTextTests: すべて通りました。\n");
 	return (gFailures == 0) ? 0 : 1;

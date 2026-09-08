@@ -94,5 +94,62 @@ namespace vwprobe
 			add(buildTime.empty() ? std::string() : "(" + ShortTime(buildTime) + ")");
 			return line;
 		}
+
+		// -------------------------------------------------------------------
+		// **一括実行（ピッカーの「すべて順に実行」）の行。**
+		//
+		// まとめは**最後に 1 枚だけ**出す（走らせるたびにダイアログが出るなら、一括に
+		// する意味が無い）。だから 1 件ぶんは **1 行に畳む**——結末の全文もログも、
+		// 同じダイアログのログ欄（コピーできる編集欄）に入っている。
+		//
+		// ここも横幅を決める。件数ぶん行が並ぶので、**いちばん長い 1 行**がダイアログの
+		// 幅になる（大きさは作るときに 1 度だけ決まる。Findings「Layout Dialogs」）。
+
+		// 結末を 1 行へ詰めるときの上限（文字）。「例外で中断: …」のような失敗の理由は
+		// そのままだと長く、放っておくとその 1 行でダイアログが横へ伸びる。
+		constexpr std::size_t kOutcomeChars = 24;
+
+		// まとめの見出し。`一括実行: 7 件中 成功 5 / 失敗 1 / 走らず 1`
+		// 「走らず」は本体が無い・カタログと食い違うなどで**走らせられなかった**件数で、
+		// プローブ自身の失敗（＝知見）とは別物なので分けて数える。
+		inline std::string BatchSummaryLine(std::size_t total, std::size_t ok, std::size_t failed,
+											std::size_t blocked)
+		{
+			std::string line = "一括実行: " + std::to_string(total) + " 件中 成功 " +
+							   std::to_string(ok) + " / 失敗 " + std::to_string(failed);
+			if (blocked > 0)
+				line += " / 走らず " + std::to_string(blocked);
+			return line;
+		}
+
+		// 1 件ぶんの行。`3/7 #12 [layer-order] 成功 (1.24 秒)`
+		// 見出し（`#12` / `main`）はコミットを含めない——ピッカーと違って**どれを選ぶか**
+		// ではなく**どれの結果か**が分かればよく、その鍵は slug である。
+		inline std::string BatchResultLine(std::size_t index, std::size_t total,
+										   const std::string& head, const std::string& id,
+										   const std::string& outcome, const std::string& seconds)
+		{
+			std::string line = std::to_string(index) + "/" + std::to_string(total);
+			if (!head.empty())
+				line += " " + head;
+			line += " [" + id + "]";
+			if (!outcome.empty())
+				line += " " + Ellipsize(outcome, kOutcomeChars);
+			if (!seconds.empty())
+				line += " (" + seconds + " 秒)";
+			return line;
+		}
+
+		// ログ欄の中の区切り。`===== 3/7 #12 [layer-order] =====`
+		// **ログ欄の幅は固定**（ProbeMenu.cpp の kLogWidthChars）でスクロールするので、
+		// ここは詰めない——1 件ぶんの境目がひと目で分かることのほうが大事。
+		inline std::string BatchLogHeader(std::size_t index, std::size_t total,
+										  const std::string& head, const std::string& id)
+		{
+			std::string line = "===== " + std::to_string(index) + "/" + std::to_string(total);
+			if (!head.empty())
+				line += " " + head;
+			return line + " [" + id + "] =====";
+		}
 	} // namespace text
 } // namespace vwprobe

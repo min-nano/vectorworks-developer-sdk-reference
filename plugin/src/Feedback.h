@@ -72,7 +72,9 @@ namespace vwprobe
 	void DisarmPendingRun();
 
 	// **投稿する。** 結果ダイアログへ添える行を返す（投稿しないときは空）。
-	std::vector<std::string> PostReport(const feedback::Report& report);
+	// posted には**送れたか**が入る（一括実行のまとめが「N 件送った」と言うために要る
+	// ——返す行は送れなかったときも 1 行あるので、行の有無では区別できない）。
+	std::vector<std::string> PostReport(const feedback::Report& report, bool* posted = nullptr);
 
 	// **前の走行の残りを拾って投稿する**（メニューを開いたときに 1 度）。拾ったものが
 	// あれば、その旨をピッカーの脚注へ出すための行を返す。

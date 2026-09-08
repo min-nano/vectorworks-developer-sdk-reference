@@ -551,8 +551,11 @@ namespace vwprobe
 	}
 
 	// -----------------------------------------------------------------------
-	std::vector<std::string> PostReport(const feedback::Report& report)
+	std::vector<std::string> PostReport(const feedback::Report& report, bool* posted)
 	{
+		if (posted != nullptr)
+			*posted = false;
+
 		std::vector<std::string> lines;
 		if (report.pr.empty())
 			return lines;
@@ -578,7 +581,11 @@ namespace vwprobe
 			// **送れたら控えを消す。** 送れなかったものは残し、次にメニューを開いた
 			// ときに拾い直す（CollectLeftovers）。
 			if (error.empty())
+			{
+				if (posted != nullptr)
+					*posted = true;
 				DisarmPendingRun();
+			}
 		}
 		catch (const std::exception& error)
 		{
