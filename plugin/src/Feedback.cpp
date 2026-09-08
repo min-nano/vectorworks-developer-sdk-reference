@@ -16,7 +16,6 @@
 //
 
 #include "PluginPrefix.h"
-#include "BuildConfig.h"
 #include "Feedback.h"
 #include "Alerts.h"
 #include "BundledScript.h"
@@ -25,7 +24,6 @@
 
 #include <array>
 #include <chrono>
-#include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -287,6 +285,16 @@ namespace vwprobe
 		std::string sPendingPath;  // 開いている控え（空なら控えていない）
 		std::ofstream sPendingLog; // その書き出し口（1 行ごとに flush する）
 
+		// 書き出し口を閉じるだけ（**ファイルは消さない**）。送れずに残っている控えを、
+		// 次のプローブを走らせたときに巻き添えで消さないための区別——消してよいのは
+		// 「送れた」か「そもそも送らない」と決まったときだけ（DisarmPendingRun）。
+		void ClosePendingLog()
+		{
+			if (sPendingLog.is_open())
+				sPendingLog.close();
+			sPendingPath.clear();
+		}
+
 		std::string PendingPathFor(const std::string& probeId)
 		{
 			std::error_code ec;
@@ -466,7 +474,7 @@ namespace vwprobe
 	// -----------------------------------------------------------------------
 	void ArmPendingRun(const feedback::Report& report)
 	{
-		DisarmPendingRun();
+		ClosePendingLog();
 		const std::string path = PendingPathFor(report.probeId);
 		if (path.empty())
 			return;

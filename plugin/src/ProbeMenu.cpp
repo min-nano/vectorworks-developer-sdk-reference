@@ -787,12 +787,12 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 		std::vector<std::string> posted;
 		if (posting)
 		{
+			// 結末を控えへ書き込んでから投稿する。**送れたら控えは消える**（PostReport）。
+			// 送れなければ残り、次にメニューを開いたときに結末付きのまま送り直される
+			// ——だから投稿しない周でここに Disarm を置いてはいけない（前の周の、まだ
+			// 送れていない控えを巻き添えで消すことになる）。
 			FinishPendingRun(report);
 			posted = PostReport(report);
-		}
-		else
-		{
-			DisarmPendingRun();
 		}
 		if (!posted.empty() || !feedbackNote.empty())
 			body.emplace_back("");
