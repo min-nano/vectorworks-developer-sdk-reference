@@ -57,33 +57,34 @@ namespace
 	TXString VectorScriptUndoSource()
 	{
 		return TXString("PROCEDURE __ProbeScriptEngineUndo;\n"
-						 "BEGIN\n"
-						 "\tDoMenuTextByName('Undo', 0);\n"
-						 "END;\n"
-						 "Run(__ProbeScriptEngineUndo);\n");
+						"BEGIN\n"
+						"\tDoMenuTextByName('Undo', 0);\n"
+						"END;\n"
+						"Run(__ProbeScriptEngineUndo);\n");
 	}
 
 	// Python 版。vs モジュール越しに同じ呼び出しをする。
 	TXString PythonUndoSource()
 	{
 		return TXString("import vs\n"
-						 "vs.DoMenuTextByName('Undo', 0)\n");
+						"vs.DoMenuTextByName('Undo', 0)\n");
 	}
 
 	// CompileScript の結果をログへ書く。両エンジンとも同じ形の
 	// CompileScript(script, showDialogs, outSuccess, outLine, outErrorText) を持つ。
 	template <typename EnginePtr>
 	bool LogCompileScript(::vwprobe::Report& probe, EnginePtr& engine, const TXString& script,
-						   const char* label)
+						  const char* label)
 	{
 		bool compiledOk = false;
 		Sint32 errorLine = -1;
 		TXString errorText;
-		VCOMError err =
-			engine->CompileScript(script, false /*showDialogs*/, compiledOk, &errorLine, &errorText);
+		VCOMError err = engine->CompileScript(script, false /*showDialogs*/, compiledOk, &errorLine,
+											  &errorText);
 		probe.log(std::string(label) + ": CompileScript VCOMError=" + std::to_string((long)err) +
-				  " ok=" + (compiledOk ? "yes" : "no") + " line=" + std::to_string((long)errorLine) +
-				  " errorText=[" + std::string(static_cast<const char*>(errorText)) + "]");
+				  " ok=" + (compiledOk ? "yes" : "no") +
+				  " line=" + std::to_string((long)errorLine) + " errorText=[" +
+				  std::string(static_cast<const char*>(errorText)) + "]");
 		return compiledOk;
 	}
 } // namespace
@@ -209,7 +210,8 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 			  " succeeded=" + (VCOM_SUCCEEDED(errB) ? "yes" : "no"));
 	probe.log("B: 呼び出し後の undo building: " +
 			  std::string(gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
-	probe.log("B: 呼び出し後のマーカーレイヤ(b-inner)存在確認: " + ExistsWord(LayerExistsByName(nameB)));
+	probe.log("B: 呼び出し後のマーカーレイヤ(b-inner)存在確認: " +
+			  ExistsWord(LayerExistsByName(nameB)));
 
 	// 自分が開いたイベントが（Undo 側の後始末で）既に閉じられていなければ、
 	// ここで明示的に後始末する。放置すると「半端な記録」がそのまま次の操作へ
@@ -246,8 +248,9 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 	}
 	else
 	{
-		probe.log("C: マーカーレイヤを 2 枚作った。c1 存在: " + ExistsWord(LayerExistsByName(nameC1)) +
-				  " / c2 存在: " + ExistsWord(LayerExistsByName(nameC2)));
+		probe.log(
+			"C: マーカーレイヤを 2 枚作った。c1 存在: " + ExistsWord(LayerExistsByName(nameC1)) +
+			" / c2 存在: " + ExistsWord(LayerExistsByName(nameC2)));
 
 		VCOMError errC1 = vsEngine->ExecuteScript(vsScript);
 		probe.log(std::string("C: 1 回目 ExecuteScript VCOMError=") + std::to_string((long)errC1) +
@@ -268,7 +271,7 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 	// =====================================================================
 	probe.log("=== D) 壊れたスクリプトでのエラー判別 ===");
 	const TXString brokenVs = "PROCEDURE __ProbeBroken;\nBEGIN\n\tThisIsNotAValidCall(;\nEND;\n"
-							   "Run(__ProbeBroken);\n";
+							  "Run(__ProbeBroken);\n";
 	bool brokenCompiledOk = LogCompileScript(probe, vsEngine, brokenVs, "D(VS broken)");
 	if (!brokenCompiledOk)
 	{
