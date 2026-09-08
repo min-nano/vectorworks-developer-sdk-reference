@@ -264,7 +264,13 @@ set(VW_BUNDLE_ID "io.github.min-nano.VwSdkProbes")
 # **殻にプローブは入らない。** プローブとレジストリは本体（ペイロード）側にあり、
 # 殻はそれを読み込んで呼ぶだけ（plugin/src/PayloadAbi.h）。ここが 2 つに割れているのが
 # 「Vectorworks を再起動せずに入れ替えられる」の全部である。
-set(VW_PLUGIN_SOURCES src/ModuleMain.cpp src/ProbeMenu.cpp src/Update.cpp src/PayloadHost.cpp)
+set(VW_PLUGIN_SOURCES
+	src/ModuleMain.cpp
+	src/ProbeMenu.cpp
+	src/Update.cpp
+	src/Feedback.cpp
+	src/BundledScript.cpp
+	src/PayloadHost.cpp)
 
 # MODULE: 実行時に読み込まれるプラグイン（リンク対象ではない）。macOS ではバンドル、
 # Windows では DLL（下で .vlb にリネームする）。
@@ -516,32 +522,42 @@ if(EXISTS "${VW_BUILDVWR}")
 	endif()
 endif()
 
-# --- 自動アップデータ（同梱スクリプト）を一緒に配る --------------------------------
-# プラグイン本体（src/Update.cpp）がこれを非対話で叩いて、リリースの確認と入れ替えを行う。
+# --- 同梱スクリプトを一緒に配る ------------------------------------------------
+# 殻（plugin/src/BundledScript.h）がこれらを**非対話**で叩く。
+#   vw-probes-update    … リリースの確認と入れ替え（plugin/src/Update.cpp）
+#   vw-probes-feedback  … プローブの結果を PR へ投稿（plugin/src/Feedback.cpp）
 # macOS はバンドルの Contents/Resources、Windows は .vlb の隣（SDK の作法と同じ置き方）。
-if(APPLE)
-	add_custom_command(
-		TARGET ${VW_PLUGIN_NAME}
-		POST_BUILD
-		COMMAND "${CMAKE_COMMAND}" -E make_directory
-				"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources"
-		COMMAND
-			"${CMAKE_COMMAND}" -E copy
-			"${CMAKE_CURRENT_SOURCE_DIR}/scripts/vw-probes-update.sh"
-			"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources/vw-probes-update.sh"
-		VERBATIM
-		COMMENT "Bundling vw-probes-update.sh into ${VW_PLUGIN_NAME}")
-else()
-	add_custom_command(
-		TARGET ${VW_PLUGIN_NAME}
-		POST_BUILD
-		COMMAND
-			"${CMAKE_COMMAND}" -E copy
-			"${CMAKE_CURRENT_SOURCE_DIR}/scripts/vw-probes-update.ps1"
-			"$<TARGET_FILE_DIR:${VW_PLUGIN_NAME}>/vw-probes-update.ps1"
-		VERBATIM
-		COMMENT "Bundling vw-probes-update.ps1 next to ${VW_PLUGIN_NAME}")
-endif()
+#
+# **スクリプトは殻の ID に入る**（scripts/gather-probes.sh が plugin/scripts を混ぜて
+# 計算する）。プロセスへ読み込まれないので理屈のうえでは再起動は要らないが、**本体だけの
+# 入れ替え（do-install-payload）は .vwpayload とカタログしか置かない**ので、そこから
+# 外すとスクリプトの直しが利用者へ永久に届かなくなる。だから「スクリプトを直したら
+# まるごと入れ替え」で揃えてある。
+set(VW_BUNDLED_SCRIPTS vw-probes-update vw-probes-feedback)
+
+foreach(script IN LISTS VW_BUNDLED_SCRIPTS)
+	if(APPLE)
+		add_custom_command(
+			TARGET ${VW_PLUGIN_NAME}
+			POST_BUILD
+			COMMAND "${CMAKE_COMMAND}" -E make_directory
+					"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources"
+			COMMAND
+				"${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/scripts/${script}.sh"
+				"$<TARGET_BUNDLE_CONTENT_DIR:${VW_PLUGIN_NAME}>/Resources/${script}.sh"
+			VERBATIM
+			COMMENT "Bundling ${script}.sh into ${VW_PLUGIN_NAME}")
+	else()
+		add_custom_command(
+			TARGET ${VW_PLUGIN_NAME}
+			POST_BUILD
+			COMMAND "${CMAKE_COMMAND}" -E copy
+					"${CMAKE_CURRENT_SOURCE_DIR}/scripts/${script}.ps1"
+					"$<TARGET_FILE_DIR:${VW_PLUGIN_NAME}>/${script}.ps1"
+			VERBATIM
+			COMMENT "Bundling ${script}.ps1 next to ${VW_PLUGIN_NAME}")
+	endif()
+endforeach()
 
 # Windows には Info.plist が無いので、ビルドの素性は隣のテキストへ書き出す
 # （どのビルドを入れたかを、プラグインを起動せずに確かめられるように）。

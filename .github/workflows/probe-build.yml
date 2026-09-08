@@ -48,6 +48,7 @@ on:
       # 走らせないよう、ビルドに入るものだけを並べる。
       - "plugin/src/**"
       - "plugin/resources/**"
+      - "plugin/scripts/**"
       - "plugin/CMakeLists.txt"
       - "probes/runtime/**"
       - "scripts/gather-probes.sh"
@@ -62,6 +63,7 @@ on:
       # 走らせると同じものを二度ビルドすることになる。
       - "plugin/src/**"
       - "plugin/resources/**"
+      - "plugin/scripts/**"
       - "plugin/CMakeLists.txt"
       - "scripts/gather-probes.sh"
       - "scripts/fetch-vw-sdk.sh"
@@ -210,8 +212,10 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :VWProbes"      "$bundle/Contents/Info.plist"
           # 自動アップデートが読む鍵。ここが空だと「常に最新」になって更新が止まる。
           /usr/libexec/PlistBuddy -c "Print :VWBuildId"     "$bundle/Contents/Info.plist"
-          test -f "$bundle/Contents/Resources/vw-probes-update.sh" \
-            || { echo "::error::vw-probes-update.sh がバンドルへ入っていません"; exit 1; }
+          for script in vw-probes-update vw-probes-feedback; do
+            test -f "$bundle/Contents/Resources/$script.sh" \
+              || { echo "::error::$script.sh がバンドルへ入っていません"; exit 1; }
+          done
           # 自動アップデートが「再起動が要るか」を決める鍵。空だと必ず再起動を求めてしまう。
           /usr/libexec/PlistBuddy -c "Print :VWShellId" "$bundle/Contents/Info.plist"
           # カタログ（殻が本体を読み込まずに一覧を出すための索引）。**これが無いと
@@ -348,8 +352,10 @@ jobs:
           d="build/Release"
           test -f "$d/VwSdkProbes.vlb" || { echo "::error::VwSdkProbes.vlb が作られていません"; exit 1; }
           test -f "$d/VwSdkProbes.vwr" || { echo "::error::VwSdkProbes.vwr が作られていません"; exit 1; }
-          test -f "$d/vw-probes-update.ps1" \
-            || { echo "::error::vw-probes-update.ps1 が置かれていません"; exit 1; }
+          for script in vw-probes-update vw-probes-feedback; do
+            test -f "$d/$script.ps1" \
+              || { echo "::error::$script.ps1 が置かれていません"; exit 1; }
+          done
           # カタログ（殻が本体を読み込まずに一覧を出すための索引）。
           test -f "$d/VwSdkProbes.probes.txt" \
             || { echo "::error::カタログ (VwSdkProbes.probes.txt) が作られていません"; exit 1; }
@@ -384,7 +390,8 @@ jobs:
             'build/Release/VwSdkProbes.vwr',
             'build/Release/VwSdkProbes.build-info.txt',
             'build/Release/VwSdkProbes.probes.txt',
-            'build/Release/vw-probes-update.ps1'
+            'build/Release/vw-probes-update.ps1',
+            'build/Release/vw-probes-feedback.ps1'
           ) + (Get-ChildItem 'build/Release' -Filter 'VwSdkProbesPayload-*.vwpayload' |
                  ForEach-Object { $_.FullName })
           $files = $files | Where-Object { Test-Path $_ }
@@ -411,6 +418,7 @@ jobs:
             build/Release/VwSdkProbes.build-info.txt
             build/Release/VwSdkProbes.probes.txt
             build/Release/vw-probes-update.ps1
+            build/Release/vw-probes-feedback.ps1
             build/Release/VwSdkProbesPayload-*.vwpayload
 
   # -------------------------------------------------------------------------

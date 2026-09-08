@@ -32,6 +32,9 @@
 #include "BuildConfig.h"
 #include "ProbeMenu.h"
 #include "ProbeMenuText.h"
+#include "Alerts.h"
+#include "Feedback.h"
+#include "FeedbackParse.h"
 #include "PayloadCatalog.h"
 #include "PayloadHost.h"
 #include "Update.h"
@@ -150,6 +153,16 @@ namespace vwprobe
 		// のは、増やすたびにワークスペースへの登録が要るため（このプラグインの
 		// メニューコマンドは 1 つ、という設計。plugin/README.md）。
 		constexpr const char* kUpdateItem = "＊ 新しいプローブビルドを確認して入れ替える…";
+
+		// ピッカーの 2 番目。**結果を PR へ自動で投稿するかの設定**（Feedback.h）。
+		// ふだんは触らない——初めて PR 由来のプローブを走らせるときに 1 度だけ尋ねられ、
+		// あとは黙って投稿される。ここは「断ったあとで気が変わった」「トークンの期限が
+		// 切れた」ときの入り口で、**メニュー項目を増やさずに済ませる**ための置き場所。
+		constexpr const char* kFeedbackItem = "＊ 結果の自動投稿を設定…";
+
+		// ピッカーの頭にある**プローブでない項目**の数（入れ替えと設定）。選ばれた添字を
+		// プローブの一覧へ読み替えるときに引く。
+		constexpr std::size_t kFixedItems = 2;
 
 		// ピッカーの幅（標準文字）と、項目に入れる表示名の上限（文字）。**ダイアログの
 		// 横幅はここと素性の行で決まる**ので、広げるときは実機で見てから決めること
@@ -474,7 +487,7 @@ namespace vwprobe
 				text += line;
 				text += '\n';
 			}
-			gSDK->AlertInform(text.c_str(), "", false /* modal */);
+			Inform(text, "");
 		}
 
 		// -------------------------------------------------------------------
@@ -492,8 +505,12 @@ namespace vwprobe
 				if (ctx == nullptr)
 					return;
 				LogCollector* collector = static_cast<LogCollector*>(ctx);
-				collector->text += (line != nullptr) ? line : "";
+				const std::string text = (line != nullptr) ? line : "";
+				collector->text += text;
 				collector->text += '\n';
+				// **控えにも 1 行ずつ流す。** プローブが VectorWorks ごと落としても、
+				// そこまでのログが残って次の起動で PR へ送られる（Feedback.h）。
+				AppendPendingLine(text);
 			}
 			catch (...)
 			{
@@ -502,23 +519,61 @@ namespace vwprobe
 		}
 
 		// -------------------------------------------------------------------
+		// このビルドが走っている環境（コメントの「実行」欄に出る）。
+		constexpr const char* kPlatformName =
+#if GS_MAC
+			"macOS";
+#else
+			"Windows";
+#endif
+
+		// 結果を**投稿する形**（FeedbackParse.h）に詰める。走らせる前に分かるところまで
+		// を埋め、結末は走らせてから足す（RunProbe）。
+		feedback::Report MakeReport(const Payload& payload, const Choice& choice,
+									const catalog::Catalog& cat)
+		{
+			feedback::Report report;
+			report.probeId = choice.probe.id;
+			report.title = choice.probe.title;
+			report.summary = choice.probe.summary;
+			report.pr = choice.group.pr;
+			report.prTitle = choice.group.prTitle;
+			report.group = choice.group.id;
+			report.commit = choice.group.commit;
+			report.branch = choice.group.branch;
+			report.buildId = payload.buildId();
+			report.payloadStamp = payloadStamp(payload) + "  [群 " + choice.group.id + "]";
+			report.catalogStamp = catalogStamp(cat);
+			report.shellStamp = shellStamp();
+			report.platform = kPlatformName;
+			report.startedAt = LocalTimestamp();
+			return report;
+		}
+
+		// -------------------------------------------------------------------
 		// プローブ 1 件を走らせて、結果ダイアログの見出しを組み立てる。
 		//
 		// **走らせるのは本体（ペイロード）側**（plugin/src/payload/PayloadMain.cpp）。
 		// 例外も undo の記録も所要時間もあちらが持っていて、こちらは結果を受け取って
 		// 見せるだけ。ログはこの呼び出しの間に collector へ 1 行ずつ流れてくる。
+		//
+		// 同じ値を report にも書き込む——**結果ダイアログに出すものと PR へ送るものは
+		// 同じ**でなければならないので、組み立ては 1 か所で行う。
 		std::vector<std::string> RunProbe(Payload& payload, const Choice& choice,
-										  const catalog::Catalog& cat)
+										  const catalog::Catalog& cat, feedback::Report& report)
 		{
-			std::string outcome;
-			std::string logPath;
-			double seconds = 0.0;
+			Payload::RunResult result;
 			std::string error;
-			if (!payload.run(choice.probe.id, outcome, logPath, seconds, error))
-				outcome = "走らせられなかった: " + error;
+			if (!payload.run(choice.probe.id, result, error))
+			{
+				result.outcome = "走らせられなかった: " + error;
+				result.failed = true;
+			}
 
-			char elapsed[64] = {0};
-			(void)std::snprintf(elapsed, sizeof(elapsed), "%.2f", seconds);
+			report.outcome = result.outcome;
+			report.failed = result.failed;
+			report.seconds = result.seconds;
+			report.logPath = result.logPath;
 
 			std::vector<std::string> body;
 			body.push_back("プローブ: " + choice.probe.title);
@@ -526,10 +581,10 @@ namespace vwprobe
 			if (!choice.probe.summary.empty())
 				body.push_back("概要: " + choice.probe.summary);
 			body.emplace_back("");
-			body.push_back("結果: " + outcome);
-			body.push_back(std::string("所要: ") + elapsed + " 秒");
-			if (!logPath.empty())
-				body.push_back("ログ: " + logPath);
+			body.push_back("結果: " + result.outcome);
+			body.push_back("所要: " + feedback::FormatSeconds(result.seconds) + " 秒");
+			if (!result.logPath.empty())
+				body.push_back("ログ: " + result.logPath);
 			body.emplace_back("");
 			body.push_back(payloadStamp(payload) + "  [群 " + choice.group.id + "]");
 			body.push_back(catalogStamp(cat));
@@ -576,6 +631,11 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 	// **その場で一覧を読み直して選ばせる**——ここで終わってしまうと、入れ替えるたびに
 	// メニューを開き直すことになる。殻まで入れ替わったときだけ抜ける（再起動するまで
 	// 動いているのは古い殻なので、そのまま選ばせない）。
+	// **前の走行の残りを先に片付ける。** プローブが VectorWorks ごと落ちていたら、
+	// 控え（ログ）が一時ディレクトリに残っている。ここで PR へ送って消す——人の操作は
+	// 増えず、落ちた回の記録も失われない（Feedback.h「落ちても拾う」）。
+	const std::vector<std::string> leftovers = PostLeftovers();
+
 	for (;;)
 	{
 		// 0. **カタログを読む（本体はまだ 1 つも読み込まない）。** どの本体に何が入って
@@ -591,8 +651,9 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 		//    （カタログを読めなかったときでも、入れ替えだけは選べる——たいていそれが
 		//    直し方）。
 		std::vector<TXString> items;
-		items.reserve(order.size() + 1);
+		items.reserve(order.size() + kFixedItems);
 		items.emplace_back(kUpdateItem);
+		items.emplace_back(kFeedbackItem);
 		for (const size_t index : order)
 			items.emplace_back(pickerItem(all[index]).c_str());
 
@@ -608,9 +669,12 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 		if (cat.skippedLines > 0)
 			footer.push_back("※ カタログに読めない行が " + std::to_string(cat.skippedLines) +
 							 " 行あります");
+		// 拾った控えのことは**ここで 1 行だけ**言う（アラートを増やさない）。
+		for (const std::string& line : leftovers)
+			footer.push_back("※ " + line);
 
-		// 既定の選択は**先頭のプローブ**（あれば）。入れ替えは意識して選ぶものにする。
-		CProbePickerDialog picker(prompt, footer, items, all.empty() ? 0 : 1);
+		// 既定の選択は**先頭のプローブ**（あれば）。入れ替えと設定は意識して選ぶものにする。
+		CProbePickerDialog picker(prompt, footer, items, all.empty() ? 0 : short(kFixedItems));
 		const bool accepted = (picker.RunDialogLayout("") == VWFC::VWUI::kDialogButton_Ok);
 		if (!picker.Shown())
 		{
@@ -619,7 +683,7 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 			std::string why;
 			for (const std::string& line : footer)
 				why += line + "\n";
-			gSDK->AlertInform("プローブの選択ダイアログを組めませんでした。", why.c_str(), false);
+			Inform("プローブの選択ダイアログを組めませんでした。", why);
 			return;
 		}
 		if (!accepted)
@@ -636,15 +700,23 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 				return;
 			continue; // 一覧を読み直して選ばせる（新しいプローブはここで出てくる）
 		}
+		if (selection == 1)
+		{
+			// 2 番目 = 結果の自動投稿の設定（Feedback.h）。ふだんは触らない項目なので、
+			// 済んだら**ピッカーへ戻す**——ここへ来た人はたいてい、このあとプローブを
+			// 走らせたい。
+			RunFeedbackSettings();
+			continue;
+		}
 
 		if (all.empty())
 		{
 			// プローブを選べる状態ではない（一覧が空なので、ここへは来ないはずだが念のため）。
-			gSDK->AlertInform("プローブの一覧を読めませんでした。", catalogError.c_str(), false);
+			Inform("プローブの一覧を読めませんでした。", catalogError);
 			return;
 		}
 
-		const size_t choiceIndex = size_t(selection) - 1; // 先頭の 1 項目ぶんずらす
+		const size_t choiceIndex = size_t(selection) - kFixedItems; // 頭の固定項目ぶんずらす
 		if (choiceIndex >= order.size())
 			return;
 		const Choice& choice = all[order[choiceIndex]];
@@ -656,17 +728,23 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 			const std::string why = "この本体は入っていません（" + choice.group.file +
 									"）。\nその群のビルドが通らなかったか、入れ替えが途中で"
 									"止まっています。\n他の群のプローブはそのまま選べます。";
-			gSDK->AlertInform(why.c_str(), provenanceLine(choice.group).c_str(), false);
+			Inform(why, provenanceLine(choice.group));
 			return;
 		}
 
-		// 2. **選ばれた群の本体だけ**を読み込む。読み終わったら必ず降ろす。
+		// 2. **走らせる前に、投稿の下ごしらえを済ませる。** 尋ねることがあるとしたら
+		//    ここだけで（初回の 1 度きり）、走らせたあとには何も尋ねない
+		//    （Feedback.h「走ったあとは何も尋ねない」）。
+		std::string feedbackNote;
+		const bool posting = PrepareFeedback(choice.group.pr, feedbackNote);
+
+		// 3. **選ばれた群の本体だけ**を読み込む。読み終わったら必ず降ろす。
 		LogCollector collector;
 		Payload payload;
 		std::string loadError;
 		if (!payload.load(choice.payloadPath, (void*)gCBP, &collector, &CollectLine, loadError))
 		{
-			gSDK->AlertInform("本体を読み込めませんでした。", loadError.c_str(), false);
+			Inform("本体を読み込めませんでした。", loadError);
 			return;
 		}
 
@@ -690,14 +768,40 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 			// **降ろす前に**素性を控える（降ろした後だと「読み込めていません」しか言えない）。
 			const std::string stampNow = payloadStamp(payload);
 			payload.unload();
-			gSDK->AlertInform(why.c_str(), stampNow.c_str(), false);
+			Inform(why, stampNow);
 			return;
 		}
 
-		// 3. 走らせる（例外は本体側が受け止める）。
-		const std::vector<std::string> body = RunProbe(payload, choice, cat);
+		// 4. 走らせる（例外は本体側が受け止める）。**投稿するなら、走らせる直前に控えを
+		//    置く**——プローブが VectorWorks ごと落としても、そこまでのログが残って次の
+		//    起動で送られる（Feedback.h「落ちても拾う」）。
+		feedback::Report report = MakeReport(payload, choice, cat);
+		if (posting)
+			ArmPendingRun(report);
 
-		// 4. **本体を降ろしてから**結果を見せる。ダイアログを出している間に本体を抱えた
+		std::vector<std::string> body = RunProbe(payload, choice, cat, report);
+		report.log = collector.text;
+
+		// 5. **投稿する（黙って）。** 結果は 1 行だけ結果ダイアログへ添える——ここで
+		//    アラートを増やすと、走らせるたびにクリックが 1 つ増える。
+		std::vector<std::string> posted;
+		if (posting)
+		{
+			FinishPendingRun(report);
+			posted = PostReport(report);
+		}
+		else
+		{
+			DisarmPendingRun();
+		}
+		if (!posted.empty() || !feedbackNote.empty())
+			body.emplace_back("");
+		for (const std::string& line : posted)
+			body.push_back(line);
+		if (!feedbackNote.empty())
+			body.push_back(feedbackNote);
+
+		// 6. **本体を降ろしてから**結果を見せる。ダイアログを出している間に本体を抱えた
 		//    ままにしない（その間に入れ替えを試されると Windows で失敗する）。ログは
 		//    こちらの collector に写してあるので、降ろしても失わない。
 		const std::string logText = collector.text;
