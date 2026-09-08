@@ -145,9 +145,14 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
    説明（`plugin/README.md`、`probes/runtime/README.md` など）も同じで、都度更新してよい。
    - **例外は、プラグインで分かったことを `Findings/` へ書くとき**（例:「外部モジュールは
      再起動なしで入れ替わる」）。その記述は 2 の対象——無印で書くなら実機確認が要る。
-   - **マージすれば公開は自動で走る**（`probe-build.yml` は main への push で動く。中身は
-     main のプローブだけの版）。手でディスパッチが要るのは、**まだ open な PR のプローブを
-     同居させたいとき**だけ——"Probe plug-in" を `workflow_dispatch` で叩き、入力 `prs` に
+   - **ビルドに入るものを触っていれば、マージで公開は自動で走る**（`probe-build.yml` は
+     main への push で動く。中身は main のプローブだけの版）。ただし**動くのは `paths` に
+     並んだものを触ったときだけ**——読み物（`plugin/README.md` など）の変更では走らない
+     ので、**公開されているリリースに関わる直しをしたら、走ったかを確かめる**（走らない
+     なら手でディスパッチする。`scripts/probe-release-notes.sh` を `paths` に足したのは
+     この取りこぼしを踏んだため）。
+   - 手でディスパッチするのは、**走らなかったとき**と、**まだ open な PR のプローブを
+     同居させたいとき**——"Probe plug-in" を `workflow_dispatch` で叩き、後者では入力 `prs` に
      番号を並べる（起動は GitHub MCP の `actions_run_trigger`。下記「CI デバッグ」と同じ手で、
      **リモートセッションの AI も自分で叩ける**）。公開できたことはユーザーに伝える。
 5. **コミットメッセージ**には Claude セッション URL を入れる
