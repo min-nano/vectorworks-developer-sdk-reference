@@ -182,12 +182,15 @@ function Install-Build([string] $url) {
         Get-ChildItem -LiteralPath $VW_PLUGINS_DIR -Filter '*.old-*' -ErrorAction SilentlyContinue |
             ForEach-Object { try { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop } catch {} }
 
-        foreach ($f in @("$VW_NAME.vlb", "$VW_NAME.vwr", "$VW_NAME.build-info.txt", 'vw-probes-update.ps1')) {
-            $s = Join-Path $work $f
-            if (Test-Path -LiteralPath $s) {
-                try { Install-File $s (Join-Path $VW_PLUGINS_DIR $f) }
-                catch { $script:LastError = 'インストール先へのコピーに失敗しました。'; return $false }
-            }
+        # **zip の直下にあるものを、そのまま置く**（ファイル名を列挙しない）。列挙すると、
+        # 配布物にファイルを足したときに**古い版のこのスクリプトが新しいファイルを
+        # 置いてくれない**——入れ替えを行うのは常に「いま入っている＝古い」版だからで、
+        # 実際に同梱スクリプトを 1 本足したときにそれを踏んだ。本体（.vwpayload）と
+        # カタログだけは Install-Payloads が別に扱うので、ここでは飛ばす。
+        foreach ($item in Get-ChildItem -LiteralPath $work -File -ErrorAction SilentlyContinue) {
+            if ($item.Name -like "$VW_PAYLOAD_PREFIX*.vwpayload" -or $item.Name -eq $VW_CATALOG) { continue }
+            try { Install-File $item.FullName (Join-Path $VW_PLUGINS_DIR $item.Name) }
+            catch { $script:LastError = 'インストール先へのコピーに失敗しました。'; return $false }
         }
         # 本体一式とカタログも一緒に（殻と本体の版は揃っていなければならない）。
         return (Install-Payloads $work)

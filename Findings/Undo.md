@@ -150,6 +150,82 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
 前回自分が作ったデザインレイヤを取り除く用途では、引き続き次節「レイヤのハンドルを
 直接 `DeleteObject` する」が唯一の代替案になる。
 
+## 間接経路: スクリプトエンジン経由で `DoMenuTextByName` 相当を呼ぶ
+
+**結論: 呼び出す口自体はある（ヘッダ根拠）が、同期/非同期・呼べる文脈・エラー判別・
+実際に取り消しがどう効くかは未確認のまま残る（[issue #36](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/36)）。**
+
+前節「プラグインから `DoMenuTextByName` 相当を呼ぶ」で確定した「メニューコマンドを
+名前で**直接**起動する汎用 API は無い」に対し、「SDK から VectorScript / Python の
+**スクリプト実行そのもの**を起動し、そのスクリプトの中で `DoMenuTextByName('Undo', 0)`
+を呼ぶ」という間接経路を確かめた。
+
+- **スクリプトを実行させる API 自体は存在する**【ヘッダ根拠】。
+  `Interfaces/VectorWorks/Scripting/` にある 2 つのシングルトンが持つ:
+
+  ```cpp
+  // IVectorScriptEngine.h（namespace VectorWorks::Scripting）
+  class IVectorScriptEngine : public IVWSingletonUnknown {
+  public:
+      // ...
+      virtual VCOMError VCOM_CALLTYPE ExecuteScript(const TXString& script) = 0;
+      // ...
+  };
+  // 取得: VCOMPtr<IVectorScriptEngine> engine(IID_VectorScriptEngine);
+  ```
+
+  ```cpp
+  // IPythonScriptEngine.h（同じ namespace。IVectorScriptEngine を include）
+  class IPythonScriptEngine : public IVWSingletonUnknown {
+  public:
+      // ...
+      virtual VCOMError VCOM_CALLTYPE ExecuteScript(const TXString& script, IPythonLogger* logger = NULL) = 0;
+      // ...
+  };
+  // 取得: VCOMPtr<IPythonScriptEngine> engine(IID_PythonScriptEngine);
+  ```
+
+  どちらも `script` は**ソーステキストそのもの**で、リソースとして保存済みの
+  スクリプトを直接指す引数は無い。SDK 同梱の実装ソース
+  （`SDKLib/Source/VWSDK/VWFC/Tools/ImageComparisonTesting.cpp`）でも、
+  `TXResource("Vectorworks/Scripts/….py")` でリソースからテキストを読んでから
+  別の口（`ScriptContext_Begin` / `ScriptContext_Run`。`IPythonScriptEngine` 固有で
+  `IVectorScriptEngine` には無い）へ渡している。したがって issue の問い1
+  「リソースとして保存済みのスクリプトを実行させる API」という形そのものは無く、
+  呼び出し側でリソースを読んでテキスト化する一手間が要る【ヘッダ根拠】。
+- **問い2（同期/非同期）: ヘッダに明記が無い。** `ExecuteScript` は他の VCOM
+  メソッドと同型の `VCOMError` 戻り値を持つだけで、非同期実行を示すコールバック・
+  ハンドル・ポーリング用の口は宣言に無い。**同期らしいと推測はできるが、実機で
+  確かめるまでは【推定】の域を出ない。**
+- **問い3（自分のプラグインコマンドが走っている最中に呼べるか。undo イベントを
+  開いている最中はどうなるか）: ヘッダに呼べる文脈の制約の記載は無い。**
+  `IVWSingletonUnknown` 派生のシングルトンで、取得自体に前提条件は書かれていない。
+  ただし「呼べそうに見える」ことと「安全に動く」ことは別で、本ファイル冒頭の
+  「半端な記録を取り消すと図面が壊れる」問題が、間接的にメニュー相当のコードを
+  起こした場合にも起きないかは**未検証のまま残る**。
+- **問い4（失敗判定）: `ExecuteScript` 自体には構造化されたエラー出力が無い。**
+  同じインターフェースの `CompileScript` は `outWasCompiledSuccessfully` /
+  `outLineNumberOfSelectedError` / `outErrorText` を持つのに対し、`ExecuteScript`
+  は `VCOMError` 1 個だけ【ヘッダ根拠】。`ReportRuntimeWarning` /
+  `ReportRuntimeError` も同インターフェースに宣言されているが、名前と引数
+  （通知したい `text` を渡すだけ）からは「スクリプト側からホストへ通知する」
+  用途に見え、「呼び出し側がスクリプト内の構文・実行時エラーを判別する」ために
+  使える保証は無い。`VCOMError` がインターフェース自体のエラー（未初期化等）を
+  示すだけで、スクリプト内のエラーを拾えない可能性がある——実機で確かめないと
+  分からない。
+- **問い5（この経路で `DoMenuTextByName('Undo', 0)` を呼んだ場合の、#27 で保留に
+  した問い）: 未着手。** 呼び出しの前提（同期か・呼べる文脈か）自体が未確認の
+  ため、その先の「取り消し対象イベント・複数段戻せるか・図面が壊れるか」を
+  実機で確かめる意味のある条件がまだ整っていない。
+
+**結論として、issue #27 で確定した「メニューコマンドを名前で直接起動する汎用 API は
+無い」という帰結自体は変わらない。** スクリプトエンジン経由という間接経路は存在するが
+（問い1は「できる」）、それを使って安全に `DoMenuTextByName('Undo', 0)` を起動できるかは
+同期性・呼べる文脈・エラー判別のいずれも実機でしか確かめられず、**この issue の範囲では
+未確認のまま**とする。ホームズ君 IFC 取り込みプラグインの「前回の描画を消す」用途では、
+引き続き次節「レイヤのハンドルを直接 `DeleteObject` する」を使う。この間接経路をあえて
+追う理由が出てきた時点で、新しい issue を立てて実機確認から始める。
+
 ## レイヤのハンドルを直接 `DeleteObject` する
 
 [issue #23](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/23) の
@@ -186,8 +262,38 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
   開始し、削除が終わったら `EndUndoEvent`（登録するものが無ければ
   `EndAndRemoveUndoEvent`）まで自分で閉じる**——本ファイル冒頭の RAII の作法をそのまま
   レイヤ削除にも適用する。
-- **未確認のまま残っているもの**: シートレイヤを消したときのビューポートへの副作用、
-  ビューポートが参照する側のデザインレイヤを先に消した場合の影響、削除順序の決まり。
-  今回のプローブはデザインレイヤ単体の削除しか見ていない。ホームズ君 IFC 取り込み
-  プラグインの用途（前回自分が作ったデザインレイヤを消す）はこれで足りるため、
-  シートレイヤ／ビューポート絡みは必要になった時点で別途 issue を立てて調べる。
+- **ビューポートの載ったシートレイヤも `DeleteObject(sheetLayer, true)` で丸ごと消せる**
+  （実機。[issue #29](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/29)、
+  `probes/runtime/delete-sheet-layer-viewport/`）。ビューポート 2 枚＋注釈空間へ
+  `ISDK::AddViewportAnnotationObject` で足したオブジェクト（データタグ・グラフィック
+  凡例の代用としてロケータ点）を載せたシートレイヤを削除したところ、シートは削除後に
+  同名レイヤとして辿れなくなり（消えた）、VW も落ちなかった。**ビューポート・注釈
+  オブジェクトのどちらも、他のレイヤへ取り残されることなくシートと一緒に消えた**
+  （削除後に図面上の全レイヤ直下を走査しても痕跡が残っていない）。
+  なお `ISDK::CreateViewport(parentHandle)` の `parentHandle` は「どのデザインレイヤを
+  表示するか」ではなく「どの容れ物（レイヤ／レイヤ内のグループ）に置くか」を指定する
+  引数【ヘッダ根拠】（`GS_CreateViewport` の説明: "The specified parent handle may only
+  be a layer or a group contained within a layer, nested or otherwise"）。表示する
+  デザインレイヤは作成後に `ISDK::SetViewportLayerVisibility(viewport, designLayer,
+  kLayerVisibilityNormal)` で個別に可視性を設定して初めて決まる。
+- **参照されていたデザインレイヤ側に副作用は無い。** シートレイヤを消しても、
+  ビューポートが表示していたデザインレイヤとその上の図形（矩形）はそのまま図面に
+  残った——ビューポート経由の参照は片方向で、シート側を消してもデザインレイヤは無傷。
+- **削除順序に決まりは無い。** 「シートを先に消す」のが安全という前提で調べたが、
+  逆に**ビューポートがまだ参照しているデザインレイヤを先に `DeleteObject` で消しても
+  VW は落ちない。** 参照先を失ったビューポートはシートレイヤの直下メンバとしてそのまま
+  辿れ、その状態で `UpdateViewport` を呼んでも落ちなかった（表示すべきデザインレイヤが
+  無いだけで、オブジェクトとしては壊れない）。**その後もシートレイヤ自体を
+  `DeleteObject` で問題なく消せる**——参照先を失っていても削除処理は通常どおり完了した。
+  したがって**どちらの順序で消しても最終的に同じ状態（両方消える）に落ち着く**
+  （ただし逆順では、デザインレイヤ削除後からシートレイヤ削除までの間、ビューポートが
+  「表示するものが無い」半端な状態のまま図面に残る点には留意する）。
+- 今回も落とし穴を踏んだ: **ビューポートの作成・更新（`CreateViewport` /
+  `SetViewportLayerVisibility` / `UpdateViewport` / `AddViewportAnnotationObject`）
+  だけで、`DeleteObject` を呼ぶ**前**から undo イベントが自動的に開いていた**
+  （実測: 最初の `DeleteObject` を呼ぶ前の時点で `IsCurrentlyBuildingAnUndoEvent()` が
+  既に `true`）。これは本ファイル冒頭の「断面ビューポートの生成のように SDK 内部が
+  自前で undo イベントを開く呼び出しがある」の一例で、**通常の（断面ではない）平面
+  ビューポートの生成・更新でも同じことが起きる**。レイヤ削除に限らず、ビューポートを
+  扱う処理を自前の undo イベントで包む場合は、包む**前**に
+  `IsCurrentlyBuildingAnUndoEvent()` を確認すること。

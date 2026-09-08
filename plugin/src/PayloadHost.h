@@ -209,10 +209,18 @@ namespace vwprobe
 			return fProbes;
 		}
 
+		// プローブ 1 件を走らせた結果（本体が返す VwPayloadResult を写したもの）。
+		struct RunResult
+		{
+			std::string outcome; // 「成功」「失敗: …」「例外で中断: …」
+			std::string logPath; // 本体が書いたログファイル（開けなければ空）
+			double seconds = 0.0;
+			bool failed = false; // プローブ自身が失敗した（走らせられたかどうかとは別）
+		};
+
 		// プローブ 1 件を走らせる。ログは load で渡した受け口へ 1 行ずつ流れる。
-		// 走らせられなかったときだけ false（プローブ自身の失敗は outcome に入る）。
-		bool run(const std::string& id, std::string& outcome, std::string& logPath, double& seconds,
-				 std::string& error);
+		// 走らせられなかったときだけ false（プローブ自身の失敗は result.failed に入る）。
+		bool run(const std::string& id, RunResult& result, std::string& error);
 
 	private:
 		// **本体へ渡した VwPayloadHost の実体。** load のローカルにしてはならない——

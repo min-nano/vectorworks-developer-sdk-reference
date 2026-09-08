@@ -421,13 +421,10 @@ namespace vwprobe
 		return true;
 	}
 
-	bool Payload::run(const std::string& id, std::string& outcome, std::string& logPath,
-					  double& seconds, std::string& error)
+	bool Payload::run(const std::string& id, RunResult& out, std::string& error)
 	{
 		error.clear();
-		outcome.clear();
-		logPath.clear();
-		seconds = 0.0;
+		out = RunResult{};
 		if (!fLoaded || fRunFn == nullptr)
 		{
 			error = "本体が読み込まれていません。";
@@ -443,9 +440,10 @@ namespace vwprobe
 			return false;
 		}
 		// **その場で写す**（次の呼び出しで無効になる。PayloadAbi.h）。
-		outcome = (result.outcome != nullptr) ? result.outcome : "";
-		logPath = (result.logPath != nullptr) ? result.logPath : "";
-		seconds = result.seconds;
+		out.outcome = (result.outcome != nullptr) ? result.outcome : "";
+		out.logPath = (result.logPath != nullptr) ? result.logPath : "";
+		out.seconds = result.seconds;
+		out.failed = (result.failed != 0);
 		return true;
 	}
 
