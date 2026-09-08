@@ -48,7 +48,7 @@
 | [Layout Dialogs](Layout%20Dialogs.md) | レイアウトダイアログ（`VWDialog`）の大きさ・コントロール・イベントの作法・**モードレスなパレット（`IExtensionWebPalette`。未確認）** |
 | [TXString](TXString.md) | 文字列型。`const char*` / `std::string` からの暗黙変換・**リテラルで多重定義が曖昧になる**・UTF-8 の出し入れ |
 | [Plug-in Modules](Plug-in%20Modules.md) | プラグインモジュールの読み込みと入れ替え。起動時にしか読まれない・VCOM の初期化はモジュールごと・SDK をリンクするモジュールが必ず定義する 2 つ・**本体を外部モジュールへ出せば再起動なしで入れ替えられる**（mac 実測） |
-| [Documents](Documents.md) | 図面（文書）を開く・作る。既存ファイルを開く/複数文書の切り替えは API がある・**テンプレートからの新規作成専用 API は無い**・コマンド実行中に呼んでよいか等は実機確認待ち |
+| [Documents](Documents.md) | 図面（文書）を開く・作る。**コマンド実行中に空の新規文書を開いて描画先を移せる**（実機確認済み）・複数文書を `SwitchToOpenFile` で行き来できる・**テンプレートからの新規作成専用 API は無い**・**未保存の変更がある文書は `CloseDocument()` で閉じられない** |
 | [Investigation Techniques](Investigation%20Techniques.md) | 調査の作法。読み戻す・測る・正解と差分を取る・setter の戻り値を信じない |
 
 ## 知見を足すときの決まり
