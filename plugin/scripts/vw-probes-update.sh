@@ -70,7 +70,8 @@ VW_CATALOG="VwSdkProbes.probes.txt"
 
 # api_get <サブパス> -> JSON を入れた一時ファイルのパス（失敗したら非 0）
 api_get() {
-	# --max-time で頭打ちにする。**起動時チェックが Vectorworks を止めないため**に必須。
+	# --max-time で頭打ちにする。**この呼び出しの間 Vectorworks は止まる**（メニューから
+	# 同期に叩かれる）ので、応答が返らないネットワークで待ち続けさせないために必須。
 	local f
 	f="$(mktemp)"
 	if curl -fsSL --max-time 20 --retry 2 -H "Accept: application/vnd.github+json" \

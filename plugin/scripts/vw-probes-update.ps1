@@ -62,8 +62,8 @@ $VW_PLUGINS_DIR = if ($env:VW_PLUGINS_DIR) { $env:VW_PLUGINS_DIR } else { Join-P
 
 $script:LastError = ''
 
-# GitHub API を 1 つ叩く。-TimeoutSec で頭打ちにする（起動時チェックが Vectorworks を
-# 止めないために必須）。
+# GitHub API を 1 つ叩く。-TimeoutSec で頭打ちにする（メニューから同期に叩かれる＝その間
+# Vectorworks は止まるので、応答が返らないネットワークで待ち続けさせないために必須）。
 function Invoke-GH([string] $subpath) {
     return Invoke-RestMethod -Uri "$VW_API/$subpath" `
         -Headers @{ 'Accept' = 'application/vnd.github+json' } `
