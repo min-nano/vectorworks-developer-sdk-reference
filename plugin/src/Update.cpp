@@ -240,35 +240,32 @@ namespace vwprobe
 			return detail;
 		}
 
-		// チェック本体。interactive = メニューから押されたとき（＝最新でも失敗でも必ず
-		// 何か見せる）。起動時は逆に、**最新なら無言**で通り過ぎる。
+		// チェック本体。**利用者がピッカーで選んだときにしか呼ばれない**ので、最新でも
+		// 失敗でも必ず何か見せる（Update.h「いつ走るか」）。
 		//
 		// 戻り値は「この後も続けられるか」だけ（Update.h の UpdateOutcome）。**殻まで
 		// 入れ替えたときだけ** RestartNeeded で、それ以外は——断っても失敗しても、
 		// 本体だけ入れ替えても——Continue（ピッカーへ戻れる）。
-		UpdateOutcome CheckAndOffer(bool interactive)
+		UpdateOutcome CheckAndOffer()
 		{
 			std::string out;
 			if (!RunBundledScript(kUpdateScript, {"q"}, out))
 			{
-				if (interactive)
-					Inform("アップデータを起動できませんでした。",
-						   "同梱スクリプトが見つかりません。zip を展開したときの構成のまま "
-						   "Plug-Ins フォルダへ置かれているか確認してください。");
+				Inform("アップデータを起動できませんでした。",
+					   "同梱スクリプトが見つかりません。zip を展開したときの構成のまま "
+					   "Plug-Ins フォルダへ置かれているか確認してください。");
 				return UpdateOutcome::Continue;
 			}
 
 			const Status status = Evaluate(out);
 			if (!status.error.empty())
 			{
-				if (interactive)
-					Inform("更新を確認できませんでした。", status.error);
+				Inform("更新を確認できませんでした。", status.error);
 				return UpdateOutcome::Continue;
 			}
 			if (!status.offerUpdate)
 			{
-				if (interactive)
-					Inform("最新のビルドです。", DetailLines(status));
+				Inform("最新のビルドです。", DetailLines(status));
 				return UpdateOutcome::Continue;
 			}
 
@@ -306,32 +303,11 @@ namespace vwprobe
 		}
 	} // namespace
 
-	void RunStartupUpdateCheck()
-	{
-		// plugin_module_main は 1 セッションに複数回呼ばれうる。チェックは 1 度だけ。
-		static bool sDone = false;
-		if (sDone)
-			return;
-		sDone = true;
-
-		// 例外を SDK コールバックの外へ漏らさない（起動を巻き込んで落とさない）。
-		// NOLINTBEGIN(bugprone-empty-catch): 起動中は報告先が無く、アップデートは
-		// 付随機能。黙って諦めるのが**ここでは正しい**（オフラインのときと同じ扱い）。
-		try
-		{
-			(void)CheckAndOffer(/*interactive*/ false);
-		}
-		catch (...)
-		{
-		}
-		// NOLINTEND(bugprone-empty-catch)
-	}
-
 	UpdateOutcome RunManualUpdateCheck()
 	{
 		try
 		{
-			return CheckAndOffer(/*interactive*/ true);
+			return CheckAndOffer();
 		}
 		catch (const std::exception& error)
 		{

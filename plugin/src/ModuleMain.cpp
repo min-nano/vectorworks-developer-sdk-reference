@@ -12,7 +12,6 @@
 #include "PluginPrefix.h"
 #include "BuildConfig.h"
 #include "ProbeMenu.h"
-#include "Update.h"
 
 // Vectorworks が実行時にこのプラグインのリソース（.vwr）を引くときの識別子。
 // パッケージされる .vwr の基底名と一致していなければならない（BuildConfig.h）。
@@ -39,11 +38,11 @@ extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_main(Sint32 action, void* modu
 	// VCOM（Vectorworks Component Object Model）の初期化。
 	::GS_InitializeVCOM(cbp);
 
-	// 起動時に、公開されているプローブビルドと入れ替えるかを尋ねる（最新なら無言）。
-	// **ここが本来の場所**——コンパイル済みプラグインは起動時にしか差し替わらないので、
-	// コマンドの実行時に入れ替えても次の起動まで効かない。例外はこの関数の中で
-	// 受け止めるので、失敗しても下の登録（この関数の本題）は必ず続く（Update.cpp）。
-	vwprobe::RunStartupUpdateCheck();
+	// **ここでは更新を確認しない。** 起動のたびにネットワークを叩けば、その待ちが
+	// Vectorworks の起動に乗る（オフラインなら尚更）。入れ替えは日常だが、**入れ替えたく
+	// なるのはプローブを走らせようとしたとき**なので、確認はピッカーの先頭項目を選んだ
+	// ときだけに寄せてある（Update.h / ProbeMenu.cpp）。本体（.vwpayload）だけの
+	// 入れ替えなら再起動が要らないので、その場で取り込んでそのまま選べる。
 
 	Sint32 reply = 0L;
 
