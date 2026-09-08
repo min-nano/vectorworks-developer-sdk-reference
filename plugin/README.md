@@ -324,6 +324,34 @@ zip を「まるごと用」と「本体だけ用」に分けていないのは�
 走らせたいからなので、**再起動が要らない道ならピッカーへ戻す**
 （`src/Update.h` の `UpdateOutcome` を `src/ProbeMenu.cpp` が見て決める）。
 
+### 取れなかったときは、**理由を名指しする**
+
+更新の確認は 2 つの道を順に試す。
+
+1. **GitHub の API**（`api.github.com/repos/…/releases/tags/probes`）。リリース名も
+   資産の URL も本文の隠しメタデータも、ここで一度に取れる。
+2. **決まった URL**（`https://github.com/<repo>/releases/download/probes/VwSdkProbes.release-info.txt`）。
+   資産の URL はタグと名前から決まるので、**API を通さなくてもリリースの素性は読める**。
+   中身は本文の隠しメタデータと同じ `key=value`（`scripts/probe-release-notes.sh --info`
+   が本文と同じ 1 か所から作って、資産として置く）。
+
+1 が駄目でも 2 で通るので、**API の呼び出し上限（未認証は 1 時間あたり 60 回）や、
+`api.github.com` だけが塞がれている網でも入れ替えられる**。
+
+両方駄目なときだけ「取得できませんでした」を出すが、**そこには理由を並べる**——
+curl の終了コード（macOS）か WebException の種別（Windows）と HTTP のコード、そして
+それが何を意味するか。
+
+```
+リリース（probes）を取得できませんでした。
+GitHub API: HTTP 403: GitHub API の呼び出し上限に達しました（未認証は 1 時間あたり 60 回）。あと 12 分で戻ります
+／直接取得: curl 終了コード 6（名前解決に失敗しました（DNS））: curl: (6) Could not resolve host: github.com
+```
+
+「ネットワークを確認してください」だけで終わらせない。**網は生きているのに落ちる**
+（回数制限・プロキシ・社内フィルタ・証明書）ほうが多く、そのときに何も言わないと、
+利用者にも直す側にも次の一手が無くなる。
+
 ### 新旧は「ビルド ID」で比べる（コミットではない）
 
 このプラグインは**同じ main の sha から、同居させる PR を変えて何度もビルドされる**。
@@ -349,7 +377,7 @@ pr=<番号>:<その PR の head の full sha>   … 同居させる PR のぶん
 
 | どこ | 何に入っているか |
 | --- | --- |
-| 公開されているビルド | リリース本文の隠しメタデータ `<!-- vw-probes … build=… -->`（ページには出ないが API の body には入る。`inputs=` に材料も入れてある） |
+| 公開されているビルド | リリース本文の隠しメタデータ `<!-- vw-probes … build=… -->`（ページには出ないが API の body には入る。`inputs=` に材料も入れてある）。**同じ行は資産 `VwSdkProbes.release-info.txt` にも入っている**（API が使えないときはそちらを読む） |
 | 入っているビルド | macOS: バンドルの `Info.plist` の `VWBuildId` / Windows: `VwSdkProbes.build-info.txt` の `build=` |
 | ビルドへ焼く値 | 集約が書いた `build-probes/manifest.cmake` の `VW_PROBE_BUILD_ID`（リリースへ書く値と**同じファイル由来**なので、ずれようがない） |
 
@@ -365,6 +393,7 @@ pr=<番号>:<その PR の head の full sha>   … 同居させる PR のぶん
 | `src/UpdateParse.h` | **純粋な**部分（出力のパース・判断・クォート・パス・再起動コマンドの組み立て） |
 | `tests/UpdateParseTests.cpp` | その単体テスト（SDK 不要。CI の lint で毎回走る） |
 | `scripts/vw-probes-update.sh` / `.ps1` | ダウンロードと差し替えの実務。**非対話**で、`q` と `do-install <url>` の 2 モードだけ |
+| `tests/vw-probes-update.test.sh` / `.test.ps1` | その単体テスト（source / ドットソースして curl だけ差し替える）。**取得の 2 つの道と、失敗したときの理由**を押さえる。CI の lint で毎回走る |
 
 **再起動を自分でやらない**のには理由がある（起動中の Vectorworks は自分を畳めず、
 古いプロセスが消える前に起動し直すとサポートファイルを読めずに落ちる）。切り離した

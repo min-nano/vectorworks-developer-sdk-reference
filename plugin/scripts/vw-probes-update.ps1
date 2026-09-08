@@ -10,6 +10,10 @@
 
       q                        installed= / latest= / installedShell= / latestShell= /
                                url= / title= / probes=（または error=）
+                               **error= の理由は具体的に書く**——HTTP のコードか
+                               WebException の種別と、それが何を意味するか（呼び出し
+                               上限・DNS・証明書・プロキシ）。「ネットワークを確認して
+                               ください」だけでは、網が生きているときに手掛かりが無い。
       do-install <url>         まるごと入れ替える（殻＋本体）。"ok" か error=<理由>。
       do-install-payload <url> **本体一式だけ**入れ替える。"ok" か error=<理由>。
 
@@ -31,6 +35,14 @@
     何度もビルドされるため）。公開側はリリース本文の隠しメタデータの build= と shell=、
     入っている側は本体がカタログ "VwSdkProbes.probes.txt" の build=、殻が
     "<name>.build-info.txt" の shell=。
+
+    【API が使えないときの逃げ道】q は最初に GitHub の API（api.github.com）を叩くが、
+    **そこが駄目でも諦めない**。資産の URL はタグと名前から決まる
+    （https://github.com/<repo>/releases/download/<タグ>/<名前>）ので、リリースの素性だけを
+    書いた小さなテキスト <名前>.release-info.txt を直接落として読む（中身はリリース本文の
+    隠しメタデータと同じ key=value で、scripts/probe-release-notes.sh --info が作る）。
+    これで **API の呼び出し上限（未認証は 1 時間あたり 60 回）や、api.github.com だけが
+    塞がれている網でも入れ替えられる**。両方駄目なときだけ、両方の理由を並べて返す。
 
     必要なもの: Windows PowerShell 5.1 以上（Windows に最初から入っている）。
     リポジトリは public なので認証も要らない。
@@ -59,15 +71,77 @@ $VW_NAME = 'VwSdkProbes'
 $VW_PAYLOAD_PREFIX = 'VwSdkProbesPayload-'
 $VW_CATALOG = 'VwSdkProbes.probes.txt'
 $VW_PLUGINS_DIR = if ($env:VW_PLUGINS_DIR) { $env:VW_PLUGINS_DIR } else { Join-Path $env:APPDATA 'Nemetschek\Vectorworks\2026\Plug-Ins' }
+# **API を通さない取得先。** 資産の URL はタグと名前から決まるので、api.github.com が
+# 使えないときはこちらから引く（下の Invoke-Query）。
+$VW_DL = "https://github.com/$VW_REPO/releases/download/$VW_TAG"
+$VW_INFO = "$VW_NAME.release-info.txt"
 
 $script:LastError = ''
+# 直近の取得が失敗した理由（Get-FetchText が入れる。**取れたら空**）。
+$script:FetchReason = ''
 
-# GitHub API を 1 つ叩く。-TimeoutSec で頭打ちにする（メニューから同期に叩かれる＝その間
-# Vectorworks は止まるので、応答が返らないネットワークで待ち続けさせないために必須）。
-function Invoke-GH([string] $subpath) {
-    return Invoke-RestMethod -Uri "$VW_API/$subpath" `
-        -Headers @{ 'Accept' = 'application/vnd.github+json' } `
-        -UserAgent 'vw-probes-update' -TimeoutSec 20 -Method Get
+# 失敗した理由を**1 行**にする。「ネットワークを確認してください」しか出さないと、網は
+# 生きているのに落ちたとき（API の呼び出し上限・プロキシ・証明書）に手掛かりが残らない。
+# HTTP のコードと WebException の種別は、**そのまま原因の名前**になるので捨てない。
+function Get-FetchReason($err) {
+    $resp = $null
+    try { $resp = $err.Exception.Response } catch {}
+    if ($resp) {
+        $code = 0
+        try { $code = [int] $resp.StatusCode } catch {}
+        if ($code -eq 401 -or $code -eq 403 -or $code -eq 429) {
+            $remaining = ''
+            try { $remaining = [string] $resp.Headers['X-RateLimit-Remaining'] } catch {}
+            if ($remaining -eq '0') {
+                $hint = ''
+                try {
+                    $reset = [int] $resp.Headers['X-RateLimit-Reset']
+                    $now = [int] [math]::Floor(([datetime]::UtcNow - [datetime] '1970-01-01').TotalSeconds)
+                    $mins = [int] [math]::Ceiling(($reset - $now) / 60.0)
+                    if ($mins -gt 0) { $hint = "。あと $mins 分で戻ります" }
+                }
+                catch {}
+                return "HTTP ${code}: GitHub API の呼び出し上限に達しました（未認証は 1 時間あたり 60 回）$hint"
+            }
+            return "HTTP ${code}: 拒否されました（プロキシや社内フィルタの可能性）"
+        }
+        if ($code -eq 404) { return 'HTTP 404: 見つかりません（リリースか資産がまだありません）' }
+        if ($code -ge 500) { return "HTTP ${code}: GitHub 側の一時的な障害" }
+        if ($code -gt 0) { return "HTTP $code" }
+    }
+
+    $msg = ''
+    try { $msg = ([string] $err.Exception.Message -replace '\s+', ' ').Trim() } catch {}
+    $status = ''
+    try { $status = [string] $err.Exception.Status } catch {}
+    switch ($status) {
+        'NameResolutionFailure' { return "名前解決に失敗しました（DNS）: $msg" }
+        'ProxyNameResolutionFailure' { return "プロキシの名前解決に失敗しました: $msg" }
+        'ConnectFailure' { return "接続できません（遮断・プロキシ設定の可能性）: $msg" }
+        'TrustFailure' { return "TLS の検証に失敗しました（証明書）: $msg" }
+        'SecureChannelFailure' { return "TLS の接続に失敗しました（SSL の設定）: $msg" }
+        'Timeout' { return '時間内に応答がありません（20 秒で打ち切り）' }
+    }
+    if ($status) { return "${status}: $msg" }
+    if ($msg) { return $msg }
+    return '理由が分かりません'
+}
+
+# 1 つ取ってくる（本文を文字列で返す。取れなければ $null と $script:FetchReason）。
+# -TimeoutSec で頭打ちにする（メニューから同期に叩かれる＝その間 Vectorworks は止まる
+# ので、応答が返らないネットワークで待ち続けさせないために必須）。-UseBasicParsing は
+# 古い Windows PowerShell で IE の初期設定に引きずられないため。
+function Get-FetchText([string] $uri, [string] $accept) {
+    try {
+        $r = Invoke-WebRequest -Uri $uri -Headers @{ 'Accept' = $accept } `
+            -UserAgent 'vw-probes-update' -TimeoutSec 20 -UseBasicParsing -Method Get
+        $script:FetchReason = ''
+        return [string] $r.Content
+    }
+    catch {
+        $script:FetchReason = (Get-FetchReason $_) -replace '[\r\n]+', ' '
+        return $null
+    }
 }
 
 # 資産名から browser_download_url を引く（無ければ $null）。
@@ -164,7 +238,12 @@ function Install-Build([string] $url) {
     try {
         $zip = Join-Path $tmp.FullName "$VW_NAME.vlb.zip"
         try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 300 }
-        catch { $script:LastError = 'ダウンロードに失敗しました。'; return $false }
+        catch {
+            # **理由は取得のときと同じ形で残す**（HTTP のコードか WebException の種別）。
+            $why = (Get-FetchReason $_) -replace '[\r\n]+', ' '
+            $script:LastError = "ダウンロードに失敗しました（$why）。"
+            return $false
+        }
 
         $work = Join-Path $tmp.FullName 'x'
         try { Expand-Archive -LiteralPath $zip -DestinationPath $work -Force }
@@ -210,7 +289,12 @@ function Install-Payload([string] $url) {
     try {
         $zip = Join-Path $tmp.FullName "$VW_NAME.vlb.zip"
         try { Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 300 }
-        catch { $script:LastError = 'ダウンロードに失敗しました。'; return $false }
+        catch {
+            # **理由は取得のときと同じ形で残す**（HTTP のコードか WebException の種別）。
+            $why = (Get-FetchReason $_) -replace '[\r\n]+', ' '
+            $script:LastError = "ダウンロードに失敗しました（$why）。"
+            return $false
+        }
 
         $work = Join-Path $tmp.FullName 'x'
         try { Expand-Archive -LiteralPath $zip -DestinationPath $work -Force }
@@ -232,13 +316,39 @@ function Install-Payload([string] $url) {
 }
 
 function Invoke-Query {
-    try { $rel = Invoke-GH "releases/tags/$VW_TAG" }
-    catch { Write-Output "error=リリース（$VW_TAG）を取得できませんでした。ネットワークを確認してください。"; return }
+    $body = ''
+    $name = ''
+    $url = $null
 
-    $url = Get-AssetUrl $rel "$VW_NAME.vlb.zip"
-    $latest = Get-Meta $rel.body 'build'
-    $latestShell = Get-Meta $rel.body 'shell'
-    $probes = Get-Meta $rel.body 'probes'
+    $json = Get-FetchText "$VW_API/releases/tags/$VW_TAG" 'application/vnd.github+json'
+    if ($json) {
+        $rel = $null
+        try { $rel = $json | ConvertFrom-Json } catch { $rel = $null }
+        if ($rel) {
+            $body = [string] $rel.body
+            $name = [string] $rel.name
+            $url = Get-AssetUrl $rel "$VW_NAME.vlb.zip"
+        }
+    }
+    else {
+        # **API が使えなくても更新はできる。** 資産の URL はタグと名前から決まるので、
+        # リリースの素性だけを書いた小さなテキスト（$VW_INFO）を直接落として読む。
+        # API の呼び出し上限（未認証は 1 時間あたり 60 回）や、api.github.com だけが
+        # 塞がれている網でもここで通る。**両方の理由を持ったまま**進む。
+        $apiReason = $script:FetchReason
+        $info = Get-FetchText "$VW_DL/$VW_INFO" '*/*'
+        if (-not $info) {
+            Write-Output "error=リリース（$VW_TAG）を取得できませんでした。GitHub API: $apiReason／直接取得: $($script:FetchReason)"
+            return
+        }
+        $body = $info
+        $name = Get-Meta $body 'title'
+        $url = "$VW_DL/$VW_NAME.vlb.zip"
+    }
+
+    $latest = Get-Meta $body 'build'
+    $latestShell = Get-Meta $body 'shell'
+    $probes = Get-Meta $body 'probes'
     if (-not $latest -or -not $url) {
         Write-Output 'error=リリースの情報が不完全です（ビルド ID か資産が見つかりません）。'
         return
@@ -249,7 +359,7 @@ function Invoke-Query {
     Write-Output ("installedShell=" + (Get-InstalledShell))
     if ($latestShell) { Write-Output ("latestShell=" + $latestShell) }
     Write-Output ("url=" + $url)
-    if ($rel.name) { Write-Output ("title=" + $rel.name) }
+    if ($name) { Write-Output ("title=" + $name) }
     if ($probes) { Write-Output ("probes=" + $probes) }
 }
 
