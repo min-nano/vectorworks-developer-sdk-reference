@@ -109,8 +109,7 @@ namespace
 								"except Exception:\n"
 								"\tprint('probe: raised\\n' + traceback.format_exc())\n"
 								"vs.Layer('" +
-								m2 +
-								"')\n";
+								m2 + "')\n";
 		return TXString(src.c_str());
 	}
 
@@ -236,8 +235,8 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 					  "（0 なら、実行時の失敗は戻り値では分からないということ）");
 			LogPythonLogger(probe, "C(Python)", logger);
 			probe.log(std::string("C: 落ちる前のレイヤ=") +
-					  Mark(LayerExistsByName("probe-se-undo-rt-before")) + " 落ちた後のレイヤ=" +
-					  Mark(LayerExistsByName("probe-se-undo-rt-after")) +
+					  Mark(LayerExistsByName("probe-se-undo-rt-before")) +
+					  " 落ちた後のレイヤ=" + Mark(LayerExistsByName("probe-se-undo-rt-after")) +
 					  "（前だけ有なら、確かに途中で止まっている）");
 		}
 	}
