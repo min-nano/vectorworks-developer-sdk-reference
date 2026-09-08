@@ -51,12 +51,14 @@ namespace vwprobe
 	bool FeedbackAvailable();
 
 	// **走らせる前の下ごしらえ。** 投稿するつもりなら true。
-	//   * pr が空（main のプローブ）      … false（宛先が無い）
-	//   * 断られている                    … false（尋ねない）
-	//   * まだ尋ねていない                … ここで 1 度だけ尋ねる
-	//   * トークンが無い                  … ここで 1 度だけ貼り付けてもらう
+	//   * pr が空で branch からも引けない  … false（宛先が無い）
+	//   * 断られている                     … false（尋ねない）
+	//   * まだ尋ねていない                 … ここで 1 度だけ尋ねる
+	//   * トークンが無い                   … ここで 1 度だけ貼り付けてもらう
+	// pr は**入力かつ出力**——空のまま渡すと、branch から引けた番号がここへ入る
+	// （上記「宛先の決め方」2）。branch は動いているビルドのブランチ。
 	// note には利用者へ伝えたいことが入る（呼び出し側が結果ダイアログへ添える）。
-	bool PrepareFeedback(const std::string& pr, std::string& note);
+	bool PrepareFeedback(std::string& pr, const std::string& branch, std::string& note);
 
 	// **走行中の控え**（落ちたときに次で拾うためのもの。Feedback.h 冒頭）。
 	//   Arm    … 走らせる直前にファイルを作る（**投稿する周でだけ呼ぶ**）

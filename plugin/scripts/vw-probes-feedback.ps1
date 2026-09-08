@@ -9,6 +9,7 @@
       token-status                  トークンの出どころと使えるかどうか
       login <token-file>            ファイルのトークンを保存し、ファイルを消す
       logout                        保存したトークンを消す
+      find-pr <repo> <branch>       そのブランチの open な PR 番号を引く
       post <repo> <pr> <body-file>  PR へコメントを 1 通投稿する
 
     成功は**素の `ok` 1 行**（post は先に url= を出す）。失敗は `error=<理由>` で、
@@ -155,6 +156,37 @@ function Invoke-Logout {
     Write-Output 'ok'
 }
 
+# find-pr <repo> <branch>: そのブランチの open な PR。出所に PR 番号が無いビルド
+# （PR のブランチでビルドしたものを手で入れたとき）の逃げ道で、**トークンは要らない**
+# （公開リポジトリの open な PR を引くだけ）。
+function Invoke-FindPr {
+    param([string] $Repo, [string] $Branch)
+
+    if (-not $Repo) { $Repo = $VW_REPO }
+    if (-not $Branch) {
+        Write-Output 'error=ブランチが指定されていません。'
+        return
+    }
+    $owner = $Repo.Split('/')[0]
+    $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'VwSdkProbes' }
+    $token = Resolve-Token
+    if ($token) { $headers['Authorization'] = "Bearer $token" }
+    try {
+        $url = "$VW_API/repos/$Repo/pulls?state=open&head=$owner`:$Branch"
+        $pulls = Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec 20
+    } catch {
+        Write-Output 'error=PR を検索できませんでした（ネットワークか権限）。'
+        return
+    }
+    if (-not $pulls -or $pulls.Count -eq 0) {
+        Write-Output "error=ブランチ $Branch に open な PR がありません。"
+        return
+    }
+    Write-Output "pr=$($pulls[0].number)"
+    if ($pulls[0].title) { Write-Output "title=$($pulls[0].title)" }
+    Write-Output 'ok'
+}
+
 # post <repo> <pr> <body-file>: PR へコメントを 1 通。本文は UTF-8 のまま送る
 # （ConvertTo-Json が JSON のエスケープを引き受けるので、自前の文字列連結はしない）。
 function Invoke-Post {
@@ -209,11 +241,12 @@ function Invoke-Main {
         'token-status' { Invoke-TokenStatus }
         'login'        { Invoke-Login -TokenFile (Get-Argument $Arguments 1) }
         'logout'       { Invoke-Logout }
+        'find-pr'      { Invoke-FindPr -Repo (Get-Argument $Arguments 1) -Branch (Get-Argument $Arguments 2) }
         'post'         {
             Invoke-Post -Repo (Get-Argument $Arguments 1) -Number (Get-Argument $Arguments 2) `
                 -BodyFile (Get-Argument $Arguments 3)
         }
-        default        { Write-Output "error=不明なモード: '$mode'（token-status / login / logout / post）。" }
+        default        { Write-Output "error=不明なモード: '$mode'（token-status / login / logout / find-pr / post）。" }
     }
 }
 

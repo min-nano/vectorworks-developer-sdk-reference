@@ -260,6 +260,40 @@ check "logout: 保存が消えている" "$(mode_token_status)" "source=none
 ok=no"
 
 # ---------------------------------------------------------------------------
+# find-pr — 出所に PR 番号が無いビルド（PR のブランチでビルドしたものを手で入れたとき）
+# の逃げ道。**トークン無しでも引けなければならない**——登録の前に宛先が分かる必要が
+# あるためで、実プラグイン側ではここが死んで番号を手入力させてしまった。
+# ---------------------------------------------------------------------------
+rm -f "$KEYCHAIN"
+GH_STUB=""
+CURL_BODY='[{"number":42,"title":"プローブの結果を PR コメントへ自動で投稿する"}]'
+CURL_CODE="200"
+out="$(mode_find_pr "min-nano/vectorworks-developer-sdk-reference" "claude/probe-results")"
+check "find-pr: トークンが無くても open な PR を返す" "$out" "pr=42
+title=プローブの結果を PR コメントへ自動で投稿する
+ok"
+check_contains "find-pr: head=<owner>:<branch> で引く" "$(cat "$CURL_URL_FILE")" \
+	"head=min-nano:claude/probe-results"
+
+out="$(mode_find_pr "" "claude/probe-results")"
+check_contains "find-pr: repo が空なら既定のリポジトリ" "$(cat "$CURL_URL_FILE")" \
+	"repos/min-nano/vectorworks-developer-sdk-reference/pulls"
+
+CURL_BODY='[]'
+out="$(mode_find_pr "o/r" "no-such-branch")"
+check "find-pr: open な PR が無いとき" "$out" \
+	"error=ブランチ no-such-branch に open な PR がありません。"
+
+check "find-pr: ブランチが無ければ断る" "$(mode_find_pr "o/r" "")" \
+	"error=ブランチが指定されていません。"
+
+CURL_FAIL=1
+out="$(mode_find_pr "o/r" "b")"
+CURL_FAIL=0
+check "find-pr: 網の失敗は理由を返すだけ（落とさない）" "$out" \
+	"error=PR を検索できませんでした（ネットワークか権限）。"
+
+# ---------------------------------------------------------------------------
 # post — 送り先・本文・成功と失敗の文言。
 # ---------------------------------------------------------------------------
 printf '%s' "keychain-secret-value" >"$KEYCHAIN"
@@ -311,7 +345,7 @@ check "post: PR 番号が無ければ断る" "$(mode_post "o/r" "" "$BODY_FILE")
 	"error=引数が不足しています。"
 
 check "不明なモードは名乗って終わる" "$(main "no-such-mode")" \
-	"error=不明なモード: 'no-such-mode'（token-status / login / logout / post）。"
+	"error=不明なモード: 'no-such-mode'（token-status / login / logout / find-pr / post）。"
 
 # ---------------------------------------------------------------------------
 # bash 3.2（macOS の /bin/bash）で動くこと。

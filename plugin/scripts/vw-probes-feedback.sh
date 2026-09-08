@@ -9,14 +9,17 @@
 #   token-status                  トークンの出どころ（keychain / gh / env / none）と使えるか
 #   login <token-file>            ファイルのトークンをキーチェーンへ入れて、ファイルを消す
 #   logout                        キーチェーンから消す
+#   find-pr <repo> <branch>       そのブランチの open な PR 番号を引く
 #   post <repo> <pr> <body-file>  PR（= issue）へコメントを 1 通投稿する
 #
 # 成功は**素の `ok` 1 行**（post は先に url= を出す）。失敗は `error=<理由>` で、
 # **終了コードは 0** のまま——何を見せるかはプラグイン側が決める。
 #
 # 【宛先を尋ねない】PR 番号は**プローブの出所**が持っている（ビルドのときに決まる。
-# scripts/gather-probes.sh）ので、この口には引数として渡ってくる。実プラグイン側の
-# vw-feedback.sh にある `find-pr`（ブランチから PR を引く）は、こちらには要らない。
+# scripts/gather-probes.sh）ので、ふつうは引数として渡ってくる。`find-pr` はその出所が
+# 無いときの逃げ道で、**PR のブランチでビルドしたプラグインを手で入れて確かめるとき**に
+# 使う——そのビルドではプローブが群 main に入る（＝出所に PR 番号が無い）ので、
+# 動いているビルドのブランチから PR を引く（plugin/src/Feedback.h「宛先の決め方」）。
 #
 # 【トークンをコマンドラインに乗せない】`login` が受け取るのは*ファイルのパス*で、中身は
 # 読んだ直後に消す——引数はプロセス一覧（ps）から誰にでも見えるので、そこへ秘密を置いては
@@ -189,6 +192,53 @@ mode_logout() {
 	echo "ok"
 }
 
+# find-pr <repo> <branch>: そのブランチの open な PR。**番号を人に打たせないため**の口で、
+# 見つからなければ error= を返す（呼び出し側は投稿しないだけ）。
+#
+# **トークンは要らない**（公開リポジトリの open な PR を引くだけ）。あれば付けるが、
+# 無くても引けなければならない——トークンを登録する前に宛先が分かる必要があるためで、
+# 実プラグイン側では round 1 でここが死に、番号を手入力させてしまった。
+mode_find_pr() {
+	local repo="${1:-}" branch="${2:-}"
+	[ -n "$repo" ] || repo="$VW_REPO"
+	if [ -z "$branch" ]; then
+		echo "error=ブランチが指定されていません。"
+		return 0
+	fi
+	local owner="${repo%%/*}"
+	local token
+	token="$(resolve_token || true)"
+	local url="${VW_API}/repos/${repo}/pulls?state=open&head=${owner}:${branch}"
+
+	local f got
+	f="$(mktemp)"
+	got=1
+	if [ -n "$token" ]; then
+		curl -fsSL --max-time 20 --retry 2 \
+			-H "Authorization: Bearer ${token}" \
+			-H "Accept: application/vnd.github+json" "$url" -o "$f" && got=0
+	else
+		curl -fsSL --max-time 20 --retry 2 \
+			-H "Accept: application/vnd.github+json" "$url" -o "$f" && got=0
+	fi
+	if [ "$got" -ne 0 ]; then
+		rm -f "$f"
+		echo "error=PR を検索できませんでした（ネットワークか権限）。"
+		return 0
+	fi
+	local number title
+	number="$(jval "$f" "0.number")"
+	title="$(jval "$f" "0.title")"
+	rm -f "$f"
+	if [ -z "$number" ]; then
+		echo "error=ブランチ ${branch} に open な PR がありません。"
+		return 0
+	fi
+	echo "pr=${number}"
+	[ -n "$title" ] && echo "title=${title}"
+	echo "ok"
+}
+
 # post <repo> <pr> <body-file>: PR へコメントを 1 通。
 #   url=<コメントの URL>
 #   ok
@@ -254,8 +304,9 @@ main() {
 		token-status) mode_token_status ;;
 		login) mode_login "${1:-}" ;;
 		logout) mode_logout ;;
+		find-pr) mode_find_pr "${1:-}" "${2:-}" ;;
 		post) mode_post "${1:-}" "${2:-}" "${3:-}" ;;
-		*) echo "error=不明なモード: '${mode}'（token-status / login / logout / post）。" ;;
+		*) echo "error=不明なモード: '${mode}'（token-status / login / logout / find-pr / post）。" ;;
 	esac
 }
 

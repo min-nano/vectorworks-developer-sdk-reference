@@ -529,14 +529,18 @@ namespace vwprobe
 
 		// 結果を**投稿する形**（FeedbackParse.h）に詰める。走らせる前に分かるところまで
 		// を埋め、結末は走らせてから足す（RunProbe）。
+		//
+		// pr は**下ごしらえが決めた宛先**を渡す（出所に無ければブランチから引いた番号が
+		// 入っている。Feedback.h「宛先の決め方」）ので、choice.group.pr をここで直接
+		// 読まない。
 		feedback::Report MakeReport(const Payload& payload, const Choice& choice,
-									const catalog::Catalog& cat)
+									const catalog::Catalog& cat, const std::string& pr)
 		{
 			feedback::Report report;
 			report.probeId = choice.probe.id;
 			report.title = choice.probe.title;
 			report.summary = choice.probe.summary;
-			report.pr = choice.group.pr;
+			report.pr = pr;
 			report.prTitle = choice.group.prTitle;
 			report.group = choice.group.id;
 			report.commit = choice.group.commit;
@@ -736,7 +740,8 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 		//    ここだけで（初回の 1 度きり）、走らせたあとには何も尋ねない
 		//    （Feedback.h「走ったあとは何も尋ねない」）。
 		std::string feedbackNote;
-		const bool posting = PrepareFeedback(choice.group.pr, feedbackNote);
+		std::string feedbackPr = choice.group.pr;
+		const bool posting = PrepareFeedback(feedbackPr, choice.group.branch, feedbackNote);
 
 		// 3. **選ばれた群の本体だけ**を読み込む。読み終わったら必ず降ろす。
 		LogCollector collector;
@@ -775,7 +780,7 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 		// 4. 走らせる（例外は本体側が受け止める）。**投稿するなら、走らせる直前に控えを
 		//    置く**——プローブが VectorWorks ごと落としても、そこまでのログが残って次の
 		//    起動で送られる（Feedback.h「落ちても拾う」）。
-		feedback::Report report = MakeReport(payload, choice, cat);
+		feedback::Report report = MakeReport(payload, choice, cat, feedbackPr);
 		if (posting)
 			ArmPendingRun(report);
 

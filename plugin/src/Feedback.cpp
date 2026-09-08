@@ -304,6 +304,21 @@ namespace vwprobe
 			return (dir / feedback::PendingFileName(probeId)).string();
 		}
 
+		// **出所に PR 番号が無いときの逃げ道**（Feedback.h「宛先の決め方」2）。動いている
+		// ビルドのブランチから open な PR を引く。引けなければ空を返す（投稿しない）。
+		//
+		// main と local は引かない——公開ビルドで main のプローブを走らせるたびに
+		// GitHub を叩くことになるうえ、そちらには宛先が無いのが正しい。
+		std::string ResolvePullRequestFromBranch(const std::string& branch)
+		{
+			if (branch.empty() || branch == "main" || branch == "local")
+				return "";
+			std::string out;
+			if (!RunBundledScript(kFeedbackScript, {"find-pr", "", branch}, out))
+				return "";
+			return ValueOf(out, "pr");
+		}
+
 		// 投稿を 1 通。成功なら url、失敗なら error を埋めて返す（どちらも空なら起動失敗）。
 		void PostOnce(const feedback::Report& report, const feedback::Settings& settings,
 					  std::string& url, std::string& error)
@@ -411,11 +426,9 @@ namespace vwprobe
 	}
 
 	// -----------------------------------------------------------------------
-	bool PrepareFeedback(const std::string& pr, std::string& note)
+	bool PrepareFeedback(std::string& pr, const std::string& branch, std::string& note)
 	{
 		note.clear();
-		if (pr.empty())
-			return false; // main のプローブには宛先が無い（もう Findings になった調査）
 
 		feedback::Settings settings = LoadSettings();
 		if (settings.consent == feedback::Consent::Never)
@@ -430,6 +443,12 @@ namespace vwprobe
 				   "もう一度「新しいプローブビルドを確認して入れ替える」を実行してください。";
 			return false;
 		}
+
+		// **宛先を決める。** 出所に無ければブランチから引く（Feedback.h「宛先の決め方」）。
+		if (pr.empty())
+			pr = ResolvePullRequestFromBranch(branch);
+		if (pr.empty())
+			return false; // 宛先が無い（main に入っているプローブ）。黙って投稿しない
 
 		if (settings.consent == feedback::Consent::Unset)
 		{
@@ -612,8 +631,8 @@ namespace vwprobe
 		state += haveToken ? "\nトークン: 登録済み" : "\nトークン: 未登録";
 
 		if (!Ask("プローブの結果を PR へ自動で投稿しますか？",
-				 state + "\n\n投稿先は、そのプローブが来た PR です（main のプローブは"
-						 "投稿しません）。\n"
+				 state + "\n\n投稿先は、そのプローブが来た PR です（出所も動いている"
+						 "ビルドのブランチも main なら、宛先が無いので投稿しません）。\n"
 						 "送るのは結果・所要時間・出所・ログ全文で、投稿は毎回黙って行います。",
 				 "投稿する", "投稿しない"))
 		{
