@@ -54,6 +54,63 @@ ISDK に「人がメニューの『取り消し』を選んだのと同じこと
   引き続き利用者（またはそれに代わる操作）に「取り消し」を実行してもらう前提で設計する。
   レイヤを直接消す代替案は後述する。
 
+## 打ち切った調査: undo イベントを閉じずにコマンドを終えて、次のコマンドから `UndoAndRemove` する
+
+**結論: できない（ヘッダの記述から確定。[issue #31](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/31)）。**
+前節の制約（`UndoAndRemove` が対象にできるのは「まだ `EndUndoEvent` で閉じていない」イベント
+だけ）に対し、「**イベントを閉じているのはプラグイン自身のコードなのだから、意図的に
+`EndUndoEvent` を呼ばずにコマンドから返れば、そのイベントは次のコマンド実行まで
+クローズされずに残るのでは**」という回避策を確かめた。しかしこれは `GS_EndUndoEvent`
+自身の説明文（`APIBase.Legacy.Defs.h`）で否定される。
+
+> `GS_EndUndoEvent`: Ends the creation of an undo event. A new event must have been
+> initiated (with the SetUndoEvent() callback) before EndUndoEvent() can be called.
+> EndUndoEvent() saves the view at the end of the user action and performs general
+> undo cleanup. **The use of this procedure is not required; VectorWorks will
+> automatically end the event when an external is completed.**
+
+最後の 1 文がそのまま今回の問いへの答え。**`EndUndoEvent()` を呼ぶこと自体が必須ではなく、
+呼ばなくても VW が「外部（＝そのコマンドの実行）が完了した時点」で自動的にイベントを
+終了（クローズ）する。** つまり「呼ばずに返す」を選んでも、**イベントは開いたまま残らない**
+——コマンド A の `DoInterface()` が戻った時点で、VW が代わりに `EndUndoEvent()` 相当の
+処理（「ビューの保存」と「一般的な undo の後始末」）を行って閉じてしまう【ヘッダ根拠】。
+本ファイル冒頭で「`GS_EndUndoEvent` の説明にある『外部の終了時に自動で閉じる』は
+『自動で開くではない』」として同じ一文を既に引用しているが、今回の issue はその**同じ一文の
+別の含意**（＝「呼ばなくても自動で閉じてしまう以上、次のコマンドまで開いたままにする策には
+使えない」）を確かめるものだった。
+
+issue #31 の問い 1〜6 への答えは、すべてこの 1 文からの帰結になる（★ = ヘッダの記述を
+素直に読んだ場合の帰結であり、実機で個別に再現・確認したわけではない）:
+
+- **問い1**: コマンド A が `EndUndoEvent` を呼ばずに返っても、VW が完了時点で自動的に
+  イベントを終了する。「開いたまま残る」でも「捨てられる」でもなく、**正常にクローズされる**。
+- **問い2**（★）: 直後のコマンド B で `IsCurrentlyBuildingAnUndoEvent()` を呼んでも、
+  A が開いたイベントについては `false` が返ると考えられる——A の完了時点で既に
+  「構築中」ではなくなっているため。ただし `IsCurrentlyBuildingAnUndoEvent()`
+  （`Interfaces/VectorWorks/ISDK.h` 2612 行目）には対応する `GS_` 系コールバックが無く、
+  それ自体の説明文も無い（宣言のみ）。この項目は上記のヘッダ根拠からの帰結であり、
+  それ自体はヘッダ根拠を持たない。
+- **問い3**（★）: `UndoAndRemove` の対象は「まだ閉じていないイベント」だけ（前節の
+  ヘッダ根拠）。A のイベントは A の完了時点で VW により閉じられている以上、
+  `SupportUndoAndRemove()` を A の `SetUndoMethod()` より前に呼んであったとしても、
+  コマンド B から `UndoAndRemove()` を呼んだ時点では**対象が既に無い**——前節「もう閉じた
+  イベントへ Undo を掛ける」と同じ状況に帰着する。**戻せない。**
+- **問い4〜6**（★）: 「イベントが開いたまま人へ操作を返る」という前提自体が成立しない
+  （コマンドが完了した時点で VW がクローズしている）ため、**人が取り消しを選ぶ・別の編集を
+  する・保存/終了する、のいずれの時点でも「半端な記録」は存在しない**はず——コマンド A の
+  完了までに、VW が（呼んだ場合と同じ）`EndUndoEvent()` 相当の後始末（ビューの保存・一般的な
+  undo の後始末）を行ってから制御を返すため。**この帰結は実機で個別に確かめていない**——
+  今回はここで調査を打ち切ったため、上記の危険シナリオ自体が実機プローブで再現されるかは
+  未検証のまま残る。
+
+**結論として、#23 の「もう閉じたイベントには `UndoAndRemove` が効かない」という制約に対し、
+「意図的に閉じずに返す」という回避策も塞がっている**——VW がコマンド完了時に代わりに閉じて
+しまうため、次のコマンド実行時点では結局「もう閉じたイベント」と同じ状態になる。往復の周
+ごとに前回の描画を undo で丸ごと戻す、という筋は、この方向でも成立しない。プラグイン側は、
+次節「レイヤのハンドルを直接 `DeleteObject` する」を代替案として使う前提に戻り、テンプレート
+由来のレイヤに描いた分は undo と違って戻らない（レイヤの直接削除は部分復元にしかならない）
+という制約を利用者に伝える運用とする。
+
 ## 打ち切った調査: プラグインから `DoMenuTextByName` 相当（メニューコマンドを名前で起動）を呼ぶ
 
 **結論: できない（ヘッダの記述から確定。[issue #27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)）。**
