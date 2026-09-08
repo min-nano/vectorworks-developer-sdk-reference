@@ -27,6 +27,11 @@
 //	【出せなかったときの逃げ道】レイアウトを組めなければ gSDK->AlertInform へ落とす。
 //	結果を伝えられないまま黙って終わるのが最悪。
 //
+//	【走らせる道は 1 本】単発でも一括（ピッカーの「すべて順に実行」）でも通るのは RunOne
+//	で、下ごしらえ・本体の読み込み・実行・PR への投稿はそこに全部ある。**結果ダイアログに
+//	出すものと PR へ送るものが食い違わない**ことが要点なので、経路を増やしても組み立ては
+//	1 か所に置く。一括のほうは結果を最後に 1 枚へまとめる（RunAll）。
+//
 
 #include "PluginPrefix.h"
 #include "BuildConfig.h"
@@ -160,15 +165,46 @@ namespace vwprobe
 		// 切れた」ときの入り口で、**メニュー項目を増やさずに済ませる**ための置き場所。
 		constexpr const char* kFeedbackItem = "＊ 結果の自動投稿を設定…";
 
-		// ピッカーの頭にある**プローブでない項目**の数（入れ替えと設定）。選ばれた添字を
-		// プローブの一覧へ読み替えるときに引く。
-		constexpr std::size_t kFixedItems = 2;
+		// ピッカーの 3 番目。**一覧に挙がっているプローブを、上から順に全部走らせる**。
+		//
+		// 【なぜ要るか】結果は PR へ自動で投稿されるようになった（Feedback.h）ので、
+		// 実機でする操作は「走らせる」だけになった。だとすれば**確かめたいものを 1 件ずつ
+		// 選び直す理由が無い**——ピッカーを開き直す回数が、そのまま検証の手間になる。
+		// ここを選べば、一覧のプローブが順に走り、**結果は最後に 1 枚だけ**出る。
+		//
+		// メニュー項目でもボタンでもなくピッカーの項目にしてあるのは、入れ替え・設定と
+		// 同じ理由——**メニューを増やさない**（増やすたびにワークスペースへの登録が要る）、
+		// そして**選択に連動して動くコントロールを置かない**（レイアウトの大きさは作る
+		// ときに 1 度だけ決まる。Findings「Layout Dialogs」）ため。
+		constexpr const char* kRunAllItem = "＊ 一覧のプローブをすべて順に実行…";
+
+		// ピッカーの頭にある**プローブでない項目**の数（入れ替え・設定・一括実行）。
+		// 選ばれた添字をプローブの一覧へ読み替えるときに引く。
+		constexpr std::size_t kFixedItems = 3;
+
+		// 一括実行のまとめに**行として並べる**上限。ダイアログの高さは作るときに 1 度
+		// だけ決まるので、件数が増えても縦に伸び続けないように頭打ちにする（あふれた
+		// ぶんもログ欄には全部入っている）。
+		constexpr std::size_t kMaxSummaryLines = 20;
 
 		// ピッカーの幅（標準文字）と、項目に入れる表示名の上限（文字）。**ダイアログの
 		// 横幅はここと素性の行で決まる**ので、広げるときは実機で見てから決めること
 		// （作った後では縮められない。Findings「Layout Dialogs」）。
 		constexpr short kPopupWidthChars = 52;
 		constexpr std::size_t kTitleChars = 30;
+
+		// 群を指す**いちばん短い見出し**（`#12` / `main` / ブランチ名）。ピッカーの項目にも
+		// 一括実行のまとめにも出るので、組み立ては 1 か所に置く。
+		std::string choiceHead(const Choice& choice)
+		{
+			if (!choice.group.pr.empty())
+				return "#" + choice.group.pr;
+			if (!choice.group.branch.empty())
+				return choice.group.branch;
+			if (!choice.group.commit.empty())
+				return "main";
+			return "local";
+		}
 
 		// ピッカーの 1 項目。「どの PR の・どのコミットの・何を調べるプローブか」を
 		// この 1 行だけで判断できるようにする（選ぶ前に見えるのはこれだけなので）。
@@ -178,13 +214,7 @@ namespace vwprobe
 		// プローブが無いのか」が実機からは分からないので、印を付けて残す。
 		std::string pickerItem(const Choice& choice)
 		{
-			std::string head = "local";
-			if (!choice.group.pr.empty())
-				head = "#" + choice.group.pr;
-			else if (!choice.group.branch.empty())
-				head = choice.group.branch;
-			else if (!choice.group.commit.empty())
-				head = "main";
+			std::string head = choiceHead(choice);
 			if (!choice.group.commit.empty())
 				head += " " + choice.group.commit;
 			// **表示名は詰める。** プルダウンの幅は作るときに決まる（kPopupWidthChars）
@@ -519,6 +549,70 @@ namespace vwprobe
 		}
 
 		// -------------------------------------------------------------------
+		// **本体（ペイロード）を 1 本抱える器。** 群が変わるまで使い回す。
+		//
+		// 単発なら 1 回読んで降ろすだけだが、一括実行では続けて何件も走らせる。読み込みは
+		// 0.3〜0.4 秒（PayloadHost.h）なので、**同じ群のあいだは読み直さない**。
+		//
+		// ログの受け口（collector）を本体と**同じ器に持たせている**のが肝——本体には
+		// 読み込みのときにこのポインタを渡し、降ろすまで使われる（PayloadAbi.h の
+		// 「寿命」）。別々に置くと、片方だけ先に消える書き方ができてしまう。
+		class PayloadSession
+		{
+		public:
+			PayloadSession() = default;
+			~PayloadSession()
+			{
+				release();
+			}
+
+			PayloadSession(const PayloadSession&) = delete;
+			PayloadSession& operator=(const PayloadSession&) = delete;
+
+			// choice の群の本体を使える状態にする（すでにその群なら何もしない）。
+			bool ensure(const Choice& choice, std::string& error)
+			{
+				if (fPayload.isLoaded() && fGroup == choice.group.id)
+					return true;
+				release();
+				if (!fPayload.load(choice.payloadPath, (void*)gCBP, &fCollector, &CollectLine,
+								   error))
+					return false;
+				fGroup = choice.group.id;
+				return true;
+			}
+
+			// **降ろす。** ダイアログを出す前に必ず呼ぶ（出している間に本体を抱えたままに
+			// しない——その間に入れ替えを試されると Windows で失敗する）。
+			void release()
+			{
+				if (fPayload.isLoaded())
+					fPayload.unload();
+				fGroup.clear();
+			}
+
+			Payload& payload()
+			{
+				return fPayload;
+			}
+
+			// 1 件走らせる前に空にする（ログは件ごとに切り分けて見せる）。
+			void clearLog()
+			{
+				fCollector.text.clear();
+			}
+			const std::string& log() const
+			{
+				return fCollector.text;
+			}
+
+		private:
+			Payload fPayload;
+			LogCollector fCollector;
+			std::string fGroup;
+		};
+
+		// -------------------------------------------------------------------
 		// このビルドが走っている環境（コメントの「実行」欄に出る）。
 		constexpr const char* kPlatformName =
 #if GS_MAC
@@ -596,6 +690,227 @@ namespace vwprobe
 			return body;
 		}
 
+		// -------------------------------------------------------------------
+		// **プローブ 1 件ぶんの結末。** 単発でも一括でもこれを作る——「結果ダイアログに
+		// 出すもの」「PR へ送るもの」「まとめの 1 行」が食い違わないように、走らせる道は
+		// 1 本にしておく。
+		struct OneResult
+		{
+			bool ran = false; // 走らせるところまで行けた
+			bool failed = false; // プローブ自身が失敗した（走らせられたかどうかとは別）
+			bool posted = false;	 // PR へ投稿できた
+			bool postFailed = false; // 投稿するつもりだったが送れなかった
+			double seconds = 0.0;
+			std::string outcome; // 1 行の結末（走らせられなければその理由）
+			std::string advice;	 // 走らせられなかったときの補足
+			std::string note;	 // 投稿の下ごしらえが利用者へ伝えたいこと
+			std::vector<std::string> body; // 見出し（単発ならそのままダイアログへ）
+			std::string log;
+		};
+
+		// 走らせられなかった（本体が無い・読めない・カタログと食い違う）。**黙って飛ばす
+		// のではなく、何が起きているかを結末として持ち回る**——一括実行では 1 件ずつ
+		// アラートを出せないので、まとめとログに残ることがそのまま説明になる。
+		OneResult Blocked(const Choice& choice, const std::string& why, const std::string& advice)
+		{
+			OneResult out;
+			out.outcome = why;
+			out.advice = advice;
+			out.body.push_back("プローブ: " + choice.probe.title);
+			out.body.push_back("出所: " + provenanceLine(choice.group));
+			out.body.emplace_back("");
+			out.body.push_back("結果: " + why);
+			if (!advice.empty())
+				out.body.push_back(advice);
+			return out;
+		}
+
+		// -------------------------------------------------------------------
+		// プローブ 1 件を、下ごしらえから投稿まで通す。**本体は session が抱える**ので、
+		// 一括実行では群が変わるまで読み直さない。**降ろすのは呼び出し側**（ダイアログを
+		// 出す前に必ず降ろす）。
+		OneResult RunOne(PayloadSession& session, const Choice& choice, const catalog::Catalog& cat)
+		{
+			if (!choice.available)
+				return Blocked(choice, "この本体は入っていません（" + choice.group.file + "）",
+							   "その群のビルドが通らなかったか、入れ替えが途中で止まって"
+							   "います。\n他の群のプローブはそのまま選べます。");
+
+			// 1. **走らせる前に、投稿の下ごしらえを済ませる。** 尋ねることがあるとしたら
+			//    ここだけで（初回の 1 度きり）、走らせたあとには何も尋ねない
+			//    （Feedback.h「走ったあとは何も尋ねない」）。一括実行でも同じ——2 件目
+			//    からは答えを覚えているので、もう尋ねられない。
+			std::string feedbackNote;
+			std::string feedbackPr = choice.group.pr;
+			const bool posting = PrepareFeedback(feedbackPr, choice.group.branch, feedbackNote);
+
+			// 2. **その群の本体を用意する**（すでに読んでいればそのまま使う）。
+			std::string loadError;
+			if (!session.ensure(choice, loadError))
+				return Blocked(choice, "本体を読み込めませんでした", loadError);
+
+			Payload& payload = session.payload();
+
+			// **カタログと本体が食い違っていないか。** 入れ替えが半端に済んだ（カタログだけ
+			// 新しい・本体だけ古い）と、選んだプローブがその本体に無いことがある。走らせて
+			// 「知らない id」と言われる前に、何が起きているかを言う。
+			bool inPayload = false;
+			for (const PayloadProbeInfo& entry : payload.probes())
+			{
+				if (entry.id == choice.probe.id)
+				{
+					inPayload = true;
+					break;
+				}
+			}
+			if (!inPayload)
+				return Blocked(choice,
+							   "カタログと本体が食い違っています（" + choice.probe.id +
+								   " がこの本体にありません）",
+							   "新しいビルドに入れ替えてください。\n" + payloadStamp(payload));
+
+			// 3. 走らせる（例外は本体側が受け止める）。**投稿するなら、走らせる直前に控えを
+			//    置く**——プローブが VectorWorks ごと落としても、そこまでのログが残って次の
+			//    起動で送られる（Feedback.h「落ちても拾う」）。
+			session.clearLog();
+			feedback::Report report = MakeReport(payload, choice, cat, feedbackPr);
+			if (posting)
+				ArmPendingRun(report);
+
+			OneResult out;
+			out.ran = true;
+			out.body = RunProbe(payload, choice, cat, report);
+			out.log = session.log();
+			report.log = out.log;
+			out.failed = report.failed;
+			out.seconds = report.seconds;
+			out.outcome = report.outcome;
+
+			// 4. **投稿する（黙って）。** 結果は行として添えるだけ——ここでアラートを
+			//    増やすと、走らせるたびにクリックが 1 つ増える（一括ならその件数ぶん）。
+			std::vector<std::string> posted;
+			if (posting)
+			{
+				// 結末を控えへ書き込んでから投稿する。**送れたら控えは消える**（PostReport）。
+				// 送れなければ残り、次にメニューを開いたときに結末付きのまま送り直される
+				// ——だから投稿しない周でここに Disarm を置いてはいけない（前の周の、まだ
+				// 送れていない控えを巻き添えで消すことになる）。
+				FinishPendingRun(report);
+				bool sent = false;
+				posted = PostReport(report, &sent);
+				out.posted = sent;
+				// **送れなかったことは数える。** 一括実行では 1 件ずつ読まないので、まとめが
+				// 黙っていると「全部 PR に載った」と読めてしまう（控えは残っていて次に
+				// 送り直されるが、それはあとの話である）。
+				out.postFailed = !sent && !posted.empty();
+			}
+			if (!posted.empty() || !feedbackNote.empty())
+				out.body.emplace_back("");
+			for (const std::string& line : posted)
+				out.body.push_back(line);
+			if (!feedbackNote.empty())
+				out.body.push_back(feedbackNote);
+			out.note = feedbackNote;
+			return out;
+		}
+
+		// -------------------------------------------------------------------
+		// **一覧のプローブを、上から順に全部走らせる**（ピッカーの kRunAllItem）。
+		//
+		// 【まとめは最後に 1 枚】1 件ごとに結果ダイアログを出すと、件数ぶんクリックが要る
+		// ——それを無くすための項目なので、ここでは**走り終えてから 1 枚だけ**出す。
+		// 1 件ぶんは 1 行に畳み（ProbeMenuText.h）、見出し・結末・ログの全文は
+		// **同じダイアログのログ欄**へ順に積む（選択してコピーできる）。
+		//
+		// 【投稿は 1 件ずつその場で】まとめて送らない。PR ごとに宛先が違ううえ、
+		// **プローブが VectorWorks ごと落とすことがある**（落ち方そのものが知見になる
+		// 調査がある）——1 件ずつ送っておけば、そこまでの結果は PR に残り、落ちた 1 件も
+		// 控えから次の起動で送られる（Feedback.h「落ちても拾う」）。
+		//
+		// 【走らせられない件は飛ばして続ける】本体が無い群・カタログと食い違う件は、
+		// そこで打ち切らずに結末を控えて次へ進む（単発なら「なぜ何も起きないか」を
+		// アラートで言えばよいが、一括では残りを走らせられなくなるほうが困る）。
+		void RunAll(const std::vector<Choice>& all, const std::vector<size_t>& order,
+					const catalog::Catalog& cat)
+		{
+			PayloadSession session;
+			const std::size_t total = order.size();
+			std::size_t ok = 0;
+			std::size_t failed = 0;
+			std::size_t blocked = 0;
+			std::size_t posted = 0;
+			std::size_t postFailed = 0;
+			std::string note; // 投稿の下ごしらえが伝えたいこと（最初の 1 つだけ出す）
+			double seconds = 0.0;
+			std::vector<std::string> lines; // まとめの 1 件 1 行
+			std::string log;
+
+			for (std::size_t i = 0; i < total; ++i)
+			{
+				const Choice& choice = all[order[i]];
+				const OneResult result = RunOne(session, choice, cat);
+
+				if (!result.ran)
+					++blocked;
+				else if (result.failed)
+					++failed;
+				else
+					++ok;
+				if (result.posted)
+					++posted;
+				if (result.postFailed)
+					++postFailed;
+				if (note.empty())
+					note = result.note;
+				seconds += result.seconds;
+
+				const std::string head = choiceHead(choice);
+				lines.push_back(text::BatchResultLine(
+					i + 1, total, head, choice.probe.id, result.outcome,
+					result.ran ? feedback::FormatSeconds(result.seconds) : std::string()));
+
+				log += text::BatchLogHeader(i + 1, total, head, choice.probe.id);
+				log += '\n';
+				for (const std::string& line : result.body)
+				{
+					log += line;
+					log += '\n';
+				}
+				if (!result.log.empty())
+				{
+					log += '\n';
+					log += result.log;
+				}
+				log += '\n';
+			}
+
+			// **降ろしてから見せる**（ダイアログを出している間に本体を抱えたままにしない。
+			// ログは上に写してあるので、降ろしても失わない）。
+			session.release();
+
+			std::vector<std::string> body;
+			body.push_back(text::BatchSummaryLine(total, ok, failed, blocked));
+			std::string spent = "所要: " + feedback::FormatSeconds(seconds) + " 秒";
+			if (posted > 0)
+				spent += " / PR へ投稿 " + std::to_string(posted) + " 件";
+			if (postFailed > 0)
+				spent += " / 送れず " + std::to_string(postFailed) + " 件";
+			body.push_back(spent);
+			if (!note.empty())
+				body.push_back(note);
+			body.emplace_back("");
+			const std::size_t shown = std::min(lines.size(), kMaxSummaryLines);
+			for (std::size_t i = 0; i < shown; ++i)
+				body.push_back(lines[i]);
+			if (shown < lines.size())
+				body.push_back("…ほか " + std::to_string(lines.size() - shown) +
+							   " 件（下のログ欄に全部あります）");
+			body.emplace_back("");
+			body.push_back(catalogStamp(cat));
+			body.push_back(shellStamp());
+			ShowResult(body, log);
+		}
+
 	} // namespace
 } // namespace vwprobe
 
@@ -658,6 +973,7 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 		items.reserve(order.size() + kFixedItems);
 		items.emplace_back(kUpdateItem);
 		items.emplace_back(kFeedbackItem);
+		items.emplace_back(kRunAllItem);
 		for (const size_t index : order)
 			items.emplace_back(pickerItem(all[index]).c_str());
 
@@ -713,6 +1029,22 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 			continue;
 		}
 
+		if (selection == 2)
+		{
+			// 3 番目 = **一覧のプローブをすべて順に実行**（RunAll）。結果は最後に 1 枚だけ
+			// 出る。ここでピッカーへは戻さない——まとめを閉じた直後にまた一覧が出てくると、
+			// 「全部終わった」ことが伝わらない。
+			if (all.empty())
+			{
+				// 走らせるものが無い（プローブが 1 つも載っていないビルド）。**ピッカーへ
+				// 戻す**——たいていの直し方は「新しいビルドに入れ替える」である。
+				Inform("走らせるプローブがありません。", catalogError);
+				continue;
+			}
+			RunAll(all, order, cat);
+			return;
+		}
+
 		if (all.empty())
 		{
 			// プローブを選べる状態ではない（一覧が空なので、ここへは来ないはずだが念のため）。
@@ -725,93 +1057,24 @@ void vwprobe::CProbeMenu_EventSink::DoInterface()
 			return;
 		const Choice& choice = all[order[choiceIndex]];
 
-		if (!choice.available)
+		// 2. **走らせる道は一括実行と同じ**（RunOne）——下ごしらえ・読み込み・実行・投稿は
+		//    そちらに全部あり、ここは結果の見せ方だけを持つ。本体を抱えるのは session で、
+		//    **結果ダイアログを出す前に必ず降ろす**（抱えたままだと Windows で入れ替えが
+		//    失敗する）。ログは写してあるので、降ろしても失わない。
+		PayloadSession session;
+		const OneResult result = RunOne(session, choice, cat);
+		const std::string logText = result.log;
+		session.release();
+
+		if (!result.ran)
 		{
-			// その群の本体が配られていない（たいていはその PR のビルドが落ちた）。
-			// **何が起きているかを言う**——黙って何も起きないのが一番たちが悪い。
-			const std::string why = "この本体は入っていません（" + choice.group.file +
-									"）。\nその群のビルドが通らなかったか、入れ替えが途中で"
-									"止まっています。\n他の群のプローブはそのまま選べます。";
-			Inform(why, provenanceLine(choice.group));
+			// 走らせられなかった（本体が無い・読めない・カタログと食い違う）。**何が
+			// 起きているかを言う**——黙って何も起きないのが一番たちが悪い。
+			Inform(result.outcome + "。", result.advice);
 			return;
 		}
 
-		// 2. **走らせる前に、投稿の下ごしらえを済ませる。** 尋ねることがあるとしたら
-		//    ここだけで（初回の 1 度きり）、走らせたあとには何も尋ねない
-		//    （Feedback.h「走ったあとは何も尋ねない」）。
-		std::string feedbackNote;
-		std::string feedbackPr = choice.group.pr;
-		const bool posting = PrepareFeedback(feedbackPr, choice.group.branch, feedbackNote);
-
-		// 3. **選ばれた群の本体だけ**を読み込む。読み終わったら必ず降ろす。
-		LogCollector collector;
-		Payload payload;
-		std::string loadError;
-		if (!payload.load(choice.payloadPath, (void*)gCBP, &collector, &CollectLine, loadError))
-		{
-			Inform("本体を読み込めませんでした。", loadError);
-			return;
-		}
-
-		// **カタログと本体が食い違っていないか。** 入れ替えが半端に済んだ（カタログだけ
-		// 新しい・本体だけ古い）と、選んだプローブがその本体に無いことがある。走らせて
-		// 「知らない id」と言われる前に、何が起きているかを言う。
-		bool inPayload = false;
-		for (const PayloadProbeInfo& entry : payload.probes())
-		{
-			if (entry.id == choice.probe.id)
-			{
-				inPayload = true;
-				break;
-			}
-		}
-		if (!inPayload)
-		{
-			const std::string why =
-				"カタログと本体が食い違っています（" + choice.probe.id +
-				" がこの本体にありません）。\n新しいビルドに入れ替えてください。";
-			// **降ろす前に**素性を控える（降ろした後だと「読み込めていません」しか言えない）。
-			const std::string stampNow = payloadStamp(payload);
-			payload.unload();
-			Inform(why, stampNow);
-			return;
-		}
-
-		// 4. 走らせる（例外は本体側が受け止める）。**投稿するなら、走らせる直前に控えを
-		//    置く**——プローブが VectorWorks ごと落としても、そこまでのログが残って次の
-		//    起動で送られる（Feedback.h「落ちても拾う」）。
-		feedback::Report report = MakeReport(payload, choice, cat, feedbackPr);
-		if (posting)
-			ArmPendingRun(report);
-
-		std::vector<std::string> body = RunProbe(payload, choice, cat, report);
-		report.log = collector.text;
-
-		// 5. **投稿する（黙って）。** 結果は 1 行だけ結果ダイアログへ添える——ここで
-		//    アラートを増やすと、走らせるたびにクリックが 1 つ増える。
-		std::vector<std::string> posted;
-		if (posting)
-		{
-			// 結末を控えへ書き込んでから投稿する。**送れたら控えは消える**（PostReport）。
-			// 送れなければ残り、次にメニューを開いたときに結末付きのまま送り直される
-			// ——だから投稿しない周でここに Disarm を置いてはいけない（前の周の、まだ
-			// 送れていない控えを巻き添えで消すことになる）。
-			FinishPendingRun(report);
-			posted = PostReport(report);
-		}
-		if (!posted.empty() || !feedbackNote.empty())
-			body.emplace_back("");
-		for (const std::string& line : posted)
-			body.push_back(line);
-		if (!feedbackNote.empty())
-			body.push_back(feedbackNote);
-
-		// 6. **本体を降ろしてから**結果を見せる。ダイアログを出している間に本体を抱えた
-		//    ままにしない（その間に入れ替えを試されると Windows で失敗する）。ログは
-		//    こちらの collector に写してあるので、降ろしても失わない。
-		const std::string logText = collector.text;
-		payload.unload();
-		ShowResult(body, logText);
+		ShowResult(result.body, logText);
 		return;
 	}
 }
