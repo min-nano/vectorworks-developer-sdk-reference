@@ -54,6 +54,63 @@ ISDK に「人がメニューの『取り消し』を選んだのと同じこと
   引き続き利用者（またはそれに代わる操作）に「取り消し」を実行してもらう前提で設計する。
   レイヤを直接消す代替案は後述する。
 
+## 打ち切った調査: undo イベントを閉じずにコマンドを終えて、次のコマンドから `UndoAndRemove` する
+
+**結論: できない（ヘッダの記述から確定。[issue #31](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/31)）。**
+前節の制約（`UndoAndRemove` が対象にできるのは「まだ `EndUndoEvent` で閉じていない」イベント
+だけ）に対し、「**イベントを閉じているのはプラグイン自身のコードなのだから、意図的に
+`EndUndoEvent` を呼ばずにコマンドから返れば、そのイベントは次のコマンド実行まで
+クローズされずに残るのでは**」という回避策を確かめた。しかしこれは `GS_EndUndoEvent`
+自身の説明文（`APIBase.Legacy.Defs.h`）で否定される。
+
+> `GS_EndUndoEvent`: Ends the creation of an undo event. A new event must have been
+> initiated (with the SetUndoEvent() callback) before EndUndoEvent() can be called.
+> EndUndoEvent() saves the view at the end of the user action and performs general
+> undo cleanup. **The use of this procedure is not required; VectorWorks will
+> automatically end the event when an external is completed.**
+
+最後の 1 文がそのまま今回の問いへの答え。**`EndUndoEvent()` を呼ぶこと自体が必須ではなく、
+呼ばなくても VW が「外部（＝そのコマンドの実行）が完了した時点」で自動的にイベントを
+終了（クローズ）する。** つまり「呼ばずに返す」を選んでも、**イベントは開いたまま残らない**
+——コマンド A の `DoInterface()` が戻った時点で、VW が代わりに `EndUndoEvent()` 相当の
+処理（「ビューの保存」と「一般的な undo の後始末」）を行って閉じてしまう【ヘッダ根拠】。
+本ファイル冒頭で「`GS_EndUndoEvent` の説明にある『外部の終了時に自動で閉じる』は
+『自動で開くではない』」として同じ一文を既に引用しているが、今回の issue はその**同じ一文の
+別の含意**（＝「呼ばなくても自動で閉じてしまう以上、次のコマンドまで開いたままにする策には
+使えない」）を確かめるものだった。
+
+issue #31 の問い 1〜6 への答えは、すべてこの 1 文からの帰結になる（★ = ヘッダの記述を
+素直に読んだ場合の帰結であり、実機で個別に再現・確認したわけではない）:
+
+- **問い1**: コマンド A が `EndUndoEvent` を呼ばずに返っても、VW が完了時点で自動的に
+  イベントを終了する。「開いたまま残る」でも「捨てられる」でもなく、**正常にクローズされる**。
+- **問い2**（★）: 直後のコマンド B で `IsCurrentlyBuildingAnUndoEvent()` を呼んでも、
+  A が開いたイベントについては `false` が返ると考えられる——A の完了時点で既に
+  「構築中」ではなくなっているため。ただし `IsCurrentlyBuildingAnUndoEvent()`
+  （`Interfaces/VectorWorks/ISDK.h` 2612 行目）には対応する `GS_` 系コールバックが無く、
+  それ自体の説明文も無い（宣言のみ）。この項目は上記のヘッダ根拠からの帰結であり、
+  それ自体はヘッダ根拠を持たない。
+- **問い3**（★）: `UndoAndRemove` の対象は「まだ閉じていないイベント」だけ（前節の
+  ヘッダ根拠）。A のイベントは A の完了時点で VW により閉じられている以上、
+  `SupportUndoAndRemove()` を A の `SetUndoMethod()` より前に呼んであったとしても、
+  コマンド B から `UndoAndRemove()` を呼んだ時点では**対象が既に無い**——前節「もう閉じた
+  イベントへ Undo を掛ける」と同じ状況に帰着する。**戻せない。**
+- **問い4〜6**（★）: 「イベントが開いたまま人へ操作を返る」という前提自体が成立しない
+  （コマンドが完了した時点で VW がクローズしている）ため、**人が取り消しを選ぶ・別の編集を
+  する・保存/終了する、のいずれの時点でも「半端な記録」は存在しない**はず——コマンド A の
+  完了までに、VW が（呼んだ場合と同じ）`EndUndoEvent()` 相当の後始末（ビューの保存・一般的な
+  undo の後始末）を行ってから制御を返すため。**この帰結は実機で個別に確かめていない**——
+  今回はここで調査を打ち切ったため、上記の危険シナリオ自体が実機プローブで再現されるかは
+  未検証のまま残る。
+
+**結論として、#23 の「もう閉じたイベントには `UndoAndRemove` が効かない」という制約に対し、
+「意図的に閉じずに返す」という回避策も塞がっている**——VW がコマンド完了時に代わりに閉じて
+しまうため、次のコマンド実行時点では結局「もう閉じたイベント」と同じ状態になる。往復の周
+ごとに前回の描画を undo で丸ごと戻す、という筋は、この方向でも成立しない。プラグイン側は、
+次節「レイヤのハンドルを直接 `DeleteObject` する」を代替案として使う前提に戻り、テンプレート
+由来のレイヤに描いた分は undo と違って戻らない（レイヤの直接削除は部分復元にしかならない）
+という制約を利用者に伝える運用とする。
+
 ## 打ち切った調査: プラグインから `DoMenuTextByName` 相当（メニューコマンドを名前で起動）を呼ぶ
 
 **結論: できない（ヘッダの記述から確定。[issue #27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)）。**
@@ -92,6 +149,82 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
 できないか確かめた形になるが、**その経路自体が SDK に存在しない**ため結論は変わらない。
 前回自分が作ったデザインレイヤを取り除く用途では、引き続き次節「レイヤのハンドルを
 直接 `DeleteObject` する」が唯一の代替案になる。
+
+## 間接経路: スクリプトエンジン経由で `DoMenuTextByName` 相当を呼ぶ
+
+**結論: 呼び出す口自体はある（ヘッダ根拠）が、同期/非同期・呼べる文脈・エラー判別・
+実際に取り消しがどう効くかは未確認のまま残る（[issue #36](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/36)）。**
+
+前節「プラグインから `DoMenuTextByName` 相当を呼ぶ」で確定した「メニューコマンドを
+名前で**直接**起動する汎用 API は無い」に対し、「SDK から VectorScript / Python の
+**スクリプト実行そのもの**を起動し、そのスクリプトの中で `DoMenuTextByName('Undo', 0)`
+を呼ぶ」という間接経路を確かめた。
+
+- **スクリプトを実行させる API 自体は存在する**【ヘッダ根拠】。
+  `Interfaces/VectorWorks/Scripting/` にある 2 つのシングルトンが持つ:
+
+  ```cpp
+  // IVectorScriptEngine.h（namespace VectorWorks::Scripting）
+  class IVectorScriptEngine : public IVWSingletonUnknown {
+  public:
+      // ...
+      virtual VCOMError VCOM_CALLTYPE ExecuteScript(const TXString& script) = 0;
+      // ...
+  };
+  // 取得: VCOMPtr<IVectorScriptEngine> engine(IID_VectorScriptEngine);
+  ```
+
+  ```cpp
+  // IPythonScriptEngine.h（同じ namespace。IVectorScriptEngine を include）
+  class IPythonScriptEngine : public IVWSingletonUnknown {
+  public:
+      // ...
+      virtual VCOMError VCOM_CALLTYPE ExecuteScript(const TXString& script, IPythonLogger* logger = NULL) = 0;
+      // ...
+  };
+  // 取得: VCOMPtr<IPythonScriptEngine> engine(IID_PythonScriptEngine);
+  ```
+
+  どちらも `script` は**ソーステキストそのもの**で、リソースとして保存済みの
+  スクリプトを直接指す引数は無い。SDK 同梱の実装ソース
+  （`SDKLib/Source/VWSDK/VWFC/Tools/ImageComparisonTesting.cpp`）でも、
+  `TXResource("Vectorworks/Scripts/….py")` でリソースからテキストを読んでから
+  別の口（`ScriptContext_Begin` / `ScriptContext_Run`。`IPythonScriptEngine` 固有で
+  `IVectorScriptEngine` には無い）へ渡している。したがって issue の問い1
+  「リソースとして保存済みのスクリプトを実行させる API」という形そのものは無く、
+  呼び出し側でリソースを読んでテキスト化する一手間が要る【ヘッダ根拠】。
+- **問い2（同期/非同期）: ヘッダに明記が無い。** `ExecuteScript` は他の VCOM
+  メソッドと同型の `VCOMError` 戻り値を持つだけで、非同期実行を示すコールバック・
+  ハンドル・ポーリング用の口は宣言に無い。**同期らしいと推測はできるが、実機で
+  確かめるまでは【推定】の域を出ない。**
+- **問い3（自分のプラグインコマンドが走っている最中に呼べるか。undo イベントを
+  開いている最中はどうなるか）: ヘッダに呼べる文脈の制約の記載は無い。**
+  `IVWSingletonUnknown` 派生のシングルトンで、取得自体に前提条件は書かれていない。
+  ただし「呼べそうに見える」ことと「安全に動く」ことは別で、本ファイル冒頭の
+  「半端な記録を取り消すと図面が壊れる」問題が、間接的にメニュー相当のコードを
+  起こした場合にも起きないかは**未検証のまま残る**。
+- **問い4（失敗判定）: `ExecuteScript` 自体には構造化されたエラー出力が無い。**
+  同じインターフェースの `CompileScript` は `outWasCompiledSuccessfully` /
+  `outLineNumberOfSelectedError` / `outErrorText` を持つのに対し、`ExecuteScript`
+  は `VCOMError` 1 個だけ【ヘッダ根拠】。`ReportRuntimeWarning` /
+  `ReportRuntimeError` も同インターフェースに宣言されているが、名前と引数
+  （通知したい `text` を渡すだけ）からは「スクリプト側からホストへ通知する」
+  用途に見え、「呼び出し側がスクリプト内の構文・実行時エラーを判別する」ために
+  使える保証は無い。`VCOMError` がインターフェース自体のエラー（未初期化等）を
+  示すだけで、スクリプト内のエラーを拾えない可能性がある——実機で確かめないと
+  分からない。
+- **問い5（この経路で `DoMenuTextByName('Undo', 0)` を呼んだ場合の、#27 で保留に
+  した問い）: 未着手。** 呼び出しの前提（同期か・呼べる文脈か）自体が未確認の
+  ため、その先の「取り消し対象イベント・複数段戻せるか・図面が壊れるか」を
+  実機で確かめる意味のある条件がまだ整っていない。
+
+**結論として、issue #27 で確定した「メニューコマンドを名前で直接起動する汎用 API は
+無い」という帰結自体は変わらない。** スクリプトエンジン経由という間接経路は存在するが
+（問い1は「できる」）、それを使って安全に `DoMenuTextByName('Undo', 0)` を起動できるかは
+同期性・呼べる文脈・エラー判別のいずれも実機でしか確かめられず、**この issue の範囲では
+未確認のまま**とする。ホームズ君 IFC 取り込みプラグインの「前回の描画を消す」用途では、
+引き続き次節「レイヤのハンドルを直接 `DeleteObject` する」を使う。この間接経路をあえて
+追う理由が出てきた時点で、新しい issue を立てて実機確認から始める。
 
 ## レイヤのハンドルを直接 `DeleteObject` する
 
