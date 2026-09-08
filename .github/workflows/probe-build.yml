@@ -254,8 +254,12 @@ jobs:
             [ -e "$payload" ] || continue
             payloads+=("$(basename "$payload")")
           done
+          # **1 本も無いことがある**（probes/runtime/ が空＝正常。上の Inspect と同じ）。
+          # 空の配列を `"${payloads[@]}"` で展開すると、macOS の bash 3.2 は set -u の
+          # もとで「unbound variable」で落ちる——`${配列[@]+...}` で包んで避ける。
           ( cd build && zip -qry "$GITHUB_WORKSPACE/dist/VwSdkProbes.vwlibrary.zip" \
-              VwSdkProbes.vwlibrary VwSdkProbes.probes.txt "${payloads[@]}" )
+              VwSdkProbes.vwlibrary VwSdkProbes.probes.txt \
+              ${payloads[@]+"${payloads[@]}"} )
           # 群ごとのビルド結果はリリースノートと PR のチェックが読む。
           cp payload-status-mac.txt dist/
           ls -l dist
