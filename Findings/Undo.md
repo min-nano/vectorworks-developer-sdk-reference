@@ -52,7 +52,46 @@ ISDK に「人がメニューの『取り消し』を選んだのと同じこと
   終了・警告ダイアログ・このペアのどれかに分類できる）。
 - したがって、**2 周目以降に「前回の取り込み結果を戻す」役はプラグイン自身では担えない。**
   引き続き利用者（またはそれに代わる操作）に「取り消し」を実行してもらう前提で設計する。
-  レイヤを直接消す代替案は次節。
+  レイヤを直接消す代替案は後述する。
+
+## 打ち切った調査: プラグインから `DoMenuTextByName` 相当（メニューコマンドを名前で起動）を呼ぶ
+
+**結論: できない（ヘッダの記述から確定。[issue #27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)）。**
+VectorScript の `DoMenuTextByName('Undo', 0)` のように、**メニューコマンドを名前・識別子・
+ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に存在しない**。
+
+- `DoMenuText` / `DoMenuTextByName` という名前が SDK 内に現れるのは
+  `Include/vs.py`（VectorScript / Python バインディングの宣言だけを集めた、C++ の
+  コンパイル対象には入らないスタブファイル）**のみ**【ヘッダ根拠】。ISDK・VWFC の
+  ヘッダにも実装ソース（`SDKLib/Source`）にも同名の呼び出しは無い。`vs.py` 側の
+  注釈でも `DoMenuText` は "Obsolete procedure"（廃止済み）とされている。
+- 「メニュー項目を実行する」に相当しうる語（`ExecuteMenuItem` / `SelectMenuItem` /
+  `PerformMenuCommand` / `PostMenuCommand` / `SendMenuCommand` / `CallMenuHandler` /
+  `InvokeCommand` / `ExecuteCommand` ／ `Perform*Command`）を SDK 全体
+  （ヘッダ＋実装ソース）で検索しても**1 件もヒットしない**【ヘッダ根拠】。
+- メニューを扱うインターフェースとして `IWorkspaceMenuItem`
+  （`Interfaces/VectorWorks/Workspaces/IWorkspaces.h`）が存在するが、これは
+  **ワークスペース（メニュー構成そのもの）を編集するための API**——識別子・表示名・
+  ショートカットキー・サブメニュー構成の get/set しか持たず、「このメニュー項目を
+  今すぐ実行しろ」に当たる `Execute` / `Invoke` / `Perform` 系のメソッドは無い
+  【ヘッダ根拠】。
+- `ISDK::GetMyMenuCommandIndex`（`GS_GetMyMenuCommandIndex`）は逆方向の情報——
+  **いま実行中の自分のプラグインコマンドが、メニューのどの位置から呼ばれたか**を
+  返すだけで、他のコマンドを呼び出す手段ではない【ヘッダ根拠】。
+- SDK の汎用エスケープハッチである `Kludge` 経由でメニュー実行や取り消しを行える ID
+  も無い。`kKludge` 系の定数を `Menu` / `Undo` / `Command` / `Execute` で検索して
+  唯一ヒットしたのは `kKludgeGetMenuItemUserFriendlyName`（4136、
+  `VWExtensionMenu.cpp` が使用）——メニュー項目の表示名を読むだけで、実行とは
+  無関係【ヘッダ根拠】。
+
+したがって issue #27 の問い 2〜6（取り消しの対象になるイベント・呼べる文脈・複数段
+戻せるか・失敗判定・半端な記録を取り消したときに図面が壊れるか）は、**そもそも
+呼び出す手段が無いため検証の対象にならない**。上記「プラグインから『もう閉じた
+イベント』へ Undo を掛ける」（`SupportUndoAndRemove` / `UndoAndRemove` は未クローズの
+イベントしか扱えない）を、「メニューコマンドを名前で起動する」という別経路で回避
+できないか確かめた形になるが、**その経路自体が SDK に存在しない**ため結論は変わらない。
+前回自分が作ったデザインレイヤを取り除く用途では、引き続き次節「レイヤのハンドルを
+直接 `DeleteObject` する」が唯一の代替案になる。
 
 ## レイヤのハンドルを直接 `DeleteObject` する
 
