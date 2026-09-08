@@ -204,13 +204,16 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
 - **実機で走らせるのはユーザー。** AI はビルドが公開されたことを伝えるところまで
   （自動更新に任せる／必要ならディスパッチする）。結果（ログ）を受け取ってから
   `Findings/` へ反映する。
-- **結果は PR コメントとして自動で返ってくる**（`plugin/README.md`「結果を PR へ自動で
+- **結果は PR コメント（PR が無ければ、プローブ先頭の `[issue #N]` が指す issue への
+  コメント）として自動で返ってくる**（`plugin/README.md`「結果を PR / issue へ自動で
   返す」）。次の行で始まるコメントは**利用者の Vectorworks が自動生成したもの**で、
   人は 1 文字も書いていない。
 
   ```
-  <!-- vw-probes-result v1 probe=<slug> group=<群> pr=<番号> build=<ビルド ID> result=ok|failed -->
+  <!-- vw-probes-result v1 probe=<slug> group=<群> pr=<番号> issue=<番号> build=<ビルド ID> result=ok|failed -->
   ```
+
+  `pr` と `issue` は**どちらか一方だけが値を持つ**（優先順位は PR → issue）。
 
   - **絵や所見はここに載らない。** 気付いたことは利用者が**チャットへ直接**書く
     （スクリーンショットもそちら）。数字とログしか無いことを前提に読む。

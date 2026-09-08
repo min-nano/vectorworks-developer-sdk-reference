@@ -24,7 +24,7 @@
 //	    built=<ISO 8601>
 //	    probes=<1 行の要約>
 //	    group|<群>|<ファイル名>|<PR>|<commit>|<branch>|<PR タイトル>
-//	    probe|<群>|<slug>|<表示名>|<概要>
+//	    probe|<群>|<slug>|<表示名>|<概要>|<issue>
 //
 //	【壊れた行は飛ばす】カタログが少し壊れていても、**読めた行だけで一覧を出す**。
 //	1 行の綴じ違いで「プローブが 1 件も無い」になるほうが困る（何も走らせられない）。
@@ -64,6 +64,10 @@ namespace vwprobe
 			std::string id; // slug
 			std::string title;
 			std::string summary;
+			// プローブ本体の先頭コメントにある `[issue #N]`（無ければ空）。**群ではなく
+			// プローブごと**の値で、PR が無いとき（main に入った後など）の投稿先の候補に
+			// なる（plugin/src/Feedback.h「宛先の決め方」）。
+			std::string issue;
 		};
 
 		struct Catalog
@@ -161,8 +165,8 @@ namespace vwprobe
 
 				if (raw.compare(0, 6, "probe|") == 0)
 				{
-					const std::vector<std::string> f = SplitFields(raw, 5);
-					if (f.size() < 5 || f[1].empty() || f[2].empty())
+					const std::vector<std::string> f = SplitFields(raw, 6);
+					if (f.size() < 6 || f[1].empty() || f[2].empty())
 					{
 						++out.skippedLines;
 						continue;
@@ -172,6 +176,7 @@ namespace vwprobe
 					probe.id = f[2];
 					probe.title = f[3].empty() ? f[2] : f[3];
 					probe.summary = f[4];
+					probe.issue = f[5];
 					out.probes.push_back(probe);
 					continue;
 				}

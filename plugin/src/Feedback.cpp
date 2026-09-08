@@ -319,6 +319,36 @@ namespace vwprobe
 			return ValueOf(out, "pr");
 		}
 
+		// **宛先の 2 番目の候補が使えるか**（Feedback.h「宛先の決め方」2）。閉じた issue
+		// へは投稿しないので、開いているかを走らせる前に確かめる。判定できなければ
+		// （網の失敗など）安全側に倒して false——投稿しないだけで、実害は無い。
+		bool IssueIsOpen(const std::string& issue)
+		{
+			if (issue.empty())
+				return false;
+			std::string out;
+			if (!RunBundledScript(kFeedbackScript, {"issue-state", "", issue}, out))
+				return false;
+			return ValueOf(out, "state") == "open";
+		}
+
+		// 投稿する番号（PR が無ければ issue）。**どちらか一方だけが値を持つ**——
+		// PrepareFeedback がそう揃えている（宛先の優先順位。Feedback.h）。
+		std::string DestinationNumber(const feedback::Report& report)
+		{
+			return report.pr.empty() ? report.issue : report.pr;
+		}
+
+		// 人へ見せる宛先のラベル（"PR #12" / "issue #34"）。
+		std::string DestinationLabel(const feedback::Report& report)
+		{
+			if (!report.pr.empty())
+				return "PR #" + report.pr;
+			if (!report.issue.empty())
+				return "issue #" + report.issue;
+			return "";
+		}
+
 		// 投稿を 1 通。成功なら url、失敗なら error を埋めて返す（どちらも空なら起動失敗）。
 		void PostOnce(const feedback::Report& report, const feedback::Settings& settings,
 					  std::string& url, std::string& error)
@@ -331,8 +361,8 @@ namespace vwprobe
 				return;
 			}
 			std::string out;
-			const bool ran =
-				RunBundledScript(kFeedbackScript, {"post", settings.repo, report.pr, file}, out);
+			const bool ran = RunBundledScript(
+				kFeedbackScript, {"post", settings.repo, DestinationNumber(report), file}, out);
 			RemoveTempFile(file);
 			if (!ran)
 			{
@@ -384,19 +414,31 @@ namespace vwprobe
 				in.close();
 
 				feedback::Report report;
-				if (feedback::ParsePending(text, report) && !report.pr.empty())
+				if (feedback::ParsePending(text, report) &&
+					(!report.pr.empty() || !report.issue.empty()))
 				{
-					std::string url;
-					std::string error;
-					PostOnce(report, settings, url, error);
-					if (!error.empty())
+					// **issue 宛てなら、送る前にもう一度開いているか確かめる。** 控えを
+					// 置いてから拾うまでの間に閉じているかもしれない（PR は find-pr が
+					// 開いているものしか返さないので、こちらだけ確かめれば足りる）。
+					if (report.pr.empty() && !IssueIsOpen(report.issue))
 					{
-						lines.push_back("前回の走行（" + report.probeId + "）の記録を PR #" +
-										report.pr + " へ送れませんでした: " + error);
-						continue;
+						report.issue.clear();
 					}
-					lines.push_back("前回の走行（" + report.probeId + "）の記録を PR #" +
-									report.pr + " へ送りました");
+					else
+					{
+						std::string url;
+						std::string error;
+						PostOnce(report, settings, url, error);
+						if (!error.empty())
+						{
+							lines.push_back("前回の走行（" + report.probeId + "）の記録を " +
+											DestinationLabel(report) +
+											" へ送れませんでした: " + error);
+							continue;
+						}
+						lines.push_back("前回の走行（" + report.probeId + "）の記録を " +
+										DestinationLabel(report) + " へ送りました");
+					}
 				}
 				std::error_code rm;
 				std::filesystem::remove(entry.path(), rm);
@@ -426,7 +468,8 @@ namespace vwprobe
 	}
 
 	// -----------------------------------------------------------------------
-	bool PrepareFeedback(std::string& pr, const std::string& branch, std::string& note)
+	bool PrepareFeedback(std::string& pr, std::string& issue, const std::string& branch,
+						 std::string& note)
 	{
 		note.clear();
 
@@ -444,19 +487,39 @@ namespace vwprobe
 			return false;
 		}
 
-		// **宛先を決める。** 出所に無ければブランチから引く（Feedback.h「宛先の決め方」）。
+		// **宛先を決める。** 優先順位は PR → issue（Feedback.h「宛先の決め方」）。
+		// 出所に PR が無ければブランチから引く。
 		if (pr.empty())
 			pr = ResolvePullRequestFromBranch(branch);
-		if (pr.empty())
-			return false; // 宛先が無い（main に入っているプローブ）。黙って投稿しない
+
+		if (!pr.empty())
+		{
+			// PR が宛先に決まったら、issue は使わない（優先順位は 1 つだけ通す）。
+			issue.clear();
+		}
+		else if (!issue.empty())
+		{
+			// **PR が無いときだけ issue を試す。** 閉じていれば宛先が無い扱いにする
+			// （読まれない投稿はしない）——結果ダイアログにはその旨を出す。
+			if (!IssueIsOpen(issue))
+			{
+				note = "issue #" + issue + " は閉じているため投稿しません。";
+				issue.clear();
+				return false;
+			}
+		}
+
+		if (pr.empty() && issue.empty())
+			return false; // 宛先が無い（issue 番号も書かれていないプローブ）。黙って投稿しない
 
 		if (settings.consent == feedback::Consent::Unset)
 		{
 			// **尋ねるのはここ 1 回だけ。** 走らせた後には何も尋ねない。
+			const std::string dest = pr.empty() ? ("issue #" + issue) : ("PR #" + pr);
 			const bool yes =
-				Ask("プローブの結果を PR へ自動で投稿しますか？",
-					"投稿先は、そのプローブが来た PR（このプローブなら #" + pr +
-						"）です。\n"
+				Ask("プローブの結果を自動で投稿しますか？",
+					"投稿先は、そのプローブが来た " + dest +
+						" です。\n"
 						"送るのは結果・所要時間・出所・ログ全文で、投稿は毎回黙って行います"
 						"（走らせたあとは何も尋ねません）。\n\n"
 						"「投稿する」を選ぶと、続けて GitHub のトークンを 1 度だけ尋ねます。\n"
@@ -557,7 +620,7 @@ namespace vwprobe
 			*posted = false;
 
 		std::vector<std::string> lines;
-		if (report.pr.empty())
+		if (report.pr.empty() && report.issue.empty())
 			return lines;
 
 		// **投稿の失敗でプローブの結果を失わない。** ここから先で何が起きても、
@@ -572,11 +635,12 @@ namespace vwprobe
 			std::string error;
 			PostOnce(report, settings, url, error);
 			if (!error.empty())
-				lines.push_back("投稿: PR #" + report.pr + " へ送れませんでした（" + error + "）");
+				lines.push_back("投稿: " + DestinationLabel(report) + " へ送れませんでした（" +
+								error + "）");
 			else if (!url.empty())
 				lines.push_back("投稿: " + url);
 			else
-				lines.push_back("投稿: PR #" + report.pr + " へ送りました");
+				lines.push_back("投稿: " + DestinationLabel(report) + " へ送りました");
 
 			// **送れたら控えを消す。** 送れなかったものは残し、次にメニューを開いた
 			// ときに拾い直す（CollectLeftovers）。
@@ -633,13 +697,15 @@ namespace vwprobe
 
 		std::string state = sending ? "いまの設定: 投稿する" : "いまの設定: 投稿しない";
 		if (settings.consent == feedback::Consent::Unset)
-			state = "いまの設定: まだ決めていません（初めて PR のプローブを走らせるときに"
+			state = "いまの設定: まだ決めていません（初めて宛先のあるプローブを走らせるときに"
 					"尋ねます）";
 		state += haveToken ? "\nトークン: 登録済み" : "\nトークン: 未登録";
 
-		if (!Ask("プローブの結果を PR へ自動で投稿しますか？",
-				 state + "\n\n投稿先は、そのプローブが来た PR です（出所も動いている"
-						 "ビルドのブランチも main なら、宛先が無いので投稿しません）。\n"
+		if (!Ask("プローブの結果を自動で投稿しますか？",
+				 state + "\n\n投稿先は、そのプローブが来た PR です。PR が無ければ、プローブ本体の"
+						 "先頭コメントにある issue 番号（開いているものだけ）。\n"
+						 "どちらも無ければ（main に入っていて issue 番号も書かれていなければ）、"
+						 "宛先が無いので投稿しません。\n"
 						 "送るのは結果・所要時間・出所・ログ全文で、投稿は毎回黙って行います。",
 				 "投稿する", "投稿しない"))
 		{

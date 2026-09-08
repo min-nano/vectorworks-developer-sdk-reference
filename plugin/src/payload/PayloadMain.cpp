@@ -102,12 +102,15 @@ namespace
 		if (origin == nullptr)
 			return "ローカル（出所の記録なし）";
 
-		// 見出しは PR 番号。無ければ取り込み元のブランチ（ふつうは main）を見出しに
-		// 使い、**そのときは末尾でブランチを繰り返さない**。
+		// 見出しは PR 番号。無ければ issue 番号（`[issue #N]`。プローブごとに違いうる）、
+		// それも無ければ取り込み元のブランチ（ふつうは main）を見出しに使い、
+		// **そのときは末尾でブランチを繰り返さない**。
 		std::string line;
 		const bool hasPr = !origin->pr.empty();
 		if (hasPr)
 			line += "PR #" + origin->pr;
+		else if (!origin->issue.empty())
+			line += "issue #" + origin->issue;
 		else
 			line += origin->branch.empty() ? std::string("main") : origin->branch;
 		if (!origin->commit.empty())

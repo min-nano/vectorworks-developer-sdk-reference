@@ -47,14 +47,16 @@ file(WRITE "${work}/sources/pr7/pipe/probe.cpp"
 # VW_PROBE を読み取れないもの（書き殴り）。slug で代用されること。
 file(WRITE "${work}/sources/pr7/odd/probe.cpp" "// まだ書いていない\n")
 
+# main の 1 件は issue 番号を持たせる（PR が無いプローブの投稿先候補。末尾の項目）。
 set(VW_PROBE_ORIGIN_main "|abc1234|main|")
 set(VW_PROBE_SOURCES_main "${work}/sources/main/example/probe.cpp")
-set(VW_PROBE_ENTRIES_main "example||abc1234|main|")
+set(VW_PROBE_ENTRIES_main "example||abc1234|main||34")
 
+# pipe は PR **と** issue の両方を持つ（両方あっても要約は PR を優先することを確かめる。
+# 下記「要約と件数」）。
 set(VW_PROBE_ORIGIN_pr7 "7|def5678|feature/x|PR の題 | 付き")
 set(VW_PROBE_SOURCES_pr7 "${work}/sources/pr7/pipe/probe.cpp" "${work}/sources/pr7/odd/probe.cpp")
-set(VW_PROBE_ENTRIES_pr7 "pipe|7|def5678|feature/x|PR の題 | 付き"
-						 "odd|7|def5678|feature/x|PR の題 | 付き")
+set(VW_PROBE_ENTRIES_pr7 "pipe|7|def5678|feature/x||99" "odd|7|def5678|feature/x||")
 
 vw_probe_catalog_lines("main;pr7" "VwSdkProbesPayload" group_lines probe_lines summary total)
 
@@ -66,13 +68,15 @@ expect_contains("PR の群" "${group_lines}"
 				"group|pr7|VwSdkProbesPayload-pr7.vwpayload|7|def5678|feature/x|PR の題 / 付き")
 
 # --- プローブの行 -------------------------------------------------------------------
-expect_contains("表示名と概要を拾う" "${probe_lines}" "probe|main|example|煙試験: レイヤを数える|図面のレイヤ数を読む")
-expect_contains("表示名の | は落とす" "${probe_lines}" "probe|pr7|pipe|a/b の実測|概要/付き")
-expect_contains("読めなければ slug で代用" "${probe_lines}" "probe|pr7|odd|odd|")
+expect_contains("表示名と概要を拾う" "${probe_lines}" "probe|main|example|煙試験: レイヤを数える|図面のレイヤ数を読む|34")
+expect_contains("表示名の | は落とす" "${probe_lines}" "probe|pr7|pipe|a/b の実測|概要/付き|99")
+expect_contains("読めなければ slug で代用" "${probe_lines}" "probe|pr7|odd|odd||")
 
 # --- 要約と件数 ---------------------------------------------------------------------
+# **PR と issue の両方があれば PR を優先する**（宛先の優先順位。plugin/src/Feedback.h）
+# ——pipe は issue #99 も持つが、要約には #7（PR）が出る。
 expect_equal("件数" "${total}" "3")
-expect_equal("要約" "${summary}" "example pipe(#7) odd(#7)")
+expect_equal("要約" "${summary}" "example(issue#34) pipe(#7) odd(#7)")
 
 file(REMOVE_RECURSE "${work}")
 

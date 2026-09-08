@@ -54,7 +54,9 @@ namespace
 		}
 	}
 
-	// ビルドが書くのと同じ形（plugin/cmake/ProbeCatalog.cmake）。
+	// ビルドが書くのと同じ形（plugin/cmake/ProbeCatalog.cmake）。**main の 1 件は
+	// issue 番号を持たせてある**——PR が無いプローブの投稿先候補（plugin/src/Feedback.h
+	// 「宛先の決め方」）。
 	const char* kCatalog =
 		"# VwSdkProbes probe catalog — 自動生成\n"
 		"version=1\n"
@@ -63,11 +65,11 @@ namespace
 		"branch=main\n"
 		"commit=c99966e\n"
 		"built=2026-09-03T09:00:00Z\n"
-		"probes=example layer-order(#12)\n"
+		"probes=example(issue#34) layer-order(#12)\n"
 		"group|main|VwSdkProbesPayload-main.vwpayload||c99966e|main|\n"
 		"group|pr12|VwSdkProbesPayload-pr12.vwpayload|12|3f9a1c2|feat/x|重ね順を測る\n"
-		"probe|main|example|煙試験: レイヤを数える|図面のレイヤ数を読む\n"
-		"probe|pr12|layer-order|レイヤの重ね順を実測する|3 枚作って並べ替える\n";
+		"probe|main|example|煙試験: レイヤを数える|図面のレイヤ数を読む|34\n"
+		"probe|pr12|layer-order|レイヤの重ね順を実測する|3 枚作って並べ替える|\n";
 } // namespace
 
 int main()
@@ -79,7 +81,7 @@ int main()
 		checkEq(cat.buildId, "2663132f4081", "ビルド ID");
 		checkEq(cat.shellId, "b3aceb717d1f", "殻の ID");
 		checkEq(cat.buildTime, "2026-09-03T09:00:00Z", "ビルド時刻");
-		checkEq(cat.probesLine, "example layer-order(#12)", "1 行の要約");
+		checkEq(cat.probesLine, "example(issue#34) layer-order(#12)", "1 行の要約");
 		checkEq(cat.groups.size(), size_t(2), "群の数");
 		checkEq(cat.probes.size(), size_t(2), "プローブの数");
 		checkEq(cat.skippedLines, size_t(0), "読めなかった行");
@@ -95,18 +97,24 @@ int main()
 		checkEq(cat.probes[1].group, "pr12", "プローブの群");
 		checkEq(cat.probes[1].title, "レイヤの重ね順を実測する", "表示名");
 		checkEq(cat.probes[1].summary, "3 枚作って並べ替える", "概要");
+		checkEq(cat.probes[1].issue, "", "PR 由来のプローブは issue が空");
 		checkTrue(cat.groupOf("pr12") != nullptr, "群を引ける");
 		checkTrue(cat.groupOf("pr99") == nullptr, "知らない群は nullptr");
+
+		// **issue は群ではなくプローブごと**（main のプローブが `[issue #34]` を持つ）。
+		checkEq(cat.probes[0].group, "main", "issue を持つプローブの群");
+		checkEq(cat.probes[0].issue, "34", "issue 番号を読める");
 	}
 
 	// --- CRLF（Windows で展開されたとき）------------------------------------
 	{
 		const Catalog cat = Parse("version=1\r\ngroup|main|P.vwpayload||abc|main|\r\n"
-								  "probe|main|example|題|概要\r\n");
+								  "probe|main|example|題|概要|34\r\n");
 		checkEq(cat.version, "1", "CRLF: version");
 		checkEq(cat.groups.size(), size_t(1), "CRLF: 群");
 		checkEq(cat.groups[0].file, "P.vwpayload", "CRLF: 行末の CR を落とす");
-		checkEq(cat.probes[0].summary, "概要", "CRLF: 最後の項目も CR を落とす");
+		checkEq(cat.probes[0].summary, "概要", "CRLF: 最後から 2 番目の項目も CR を落とす");
+		checkEq(cat.probes[0].issue, "34", "CRLF: 最後の項目（issue）も CR を落とす");
 	}
 
 	// --- 壊れた行は飛ばして数える -------------------------------------------
@@ -118,23 +126,34 @@ int main()
 								  "probe|main\n"   // 同上
 								  "なんだこれは\n" // key=value でもない
 								  "group|main|P.vwpayload||abc|main|\n"
-								  "probe|main|example|題|概要\n");
+								  "probe|main|example|題|概要|\n");
 		checkEq(cat.groups.size(), size_t(1), "壊れた group 行は飛ばす");
 		checkEq(cat.probes.size(), size_t(1), "壊れた probe 行は飛ばす");
 		checkEq(cat.skippedLines, size_t(3), "飛ばした行を数える");
 	}
 
+	// --- 版が古い（issue 列の無い）probe 行は飛ばして数える -------------------
+	// **catalog は毎回そのビルドが書き直すので古い版が実際に混ざることは無いが**、
+	// 壊れた行と同じ扱い（読めた行だけで一覧を出す）で安全側に倒れることを確かめる。
+	{
+		const Catalog cat = Parse("probe|main|example|題|概要\n"); // 旧版: 5 項目
+		checkEq(cat.probes.size(), size_t(0), "issue 列の無い行は読まない");
+		checkEq(cat.skippedLines, size_t(1), "壊れた行として数える");
+	}
+
 	// --- 区切り文字が混ざっても、後ろの項目に押し込むだけで壊れない -----------
 	{
-		const Catalog cat = Parse("probe|main|example|題|概要|付き\n");
+		const Catalog cat = Parse("probe|main|example|題|概要|34|付き\n");
 		checkEq(cat.probes.size(), size_t(1), "余分な | があっても 1 件");
-		checkEq(cat.probes[0].summary, "概要|付き", "余りは最後の項目に入る");
+		checkEq(cat.probes[0].summary, "概要", "概要は自分の列のまま");
+		checkEq(cat.probes[0].issue, "34|付き", "余りは最後の項目（issue）に入る");
 	}
 
 	// --- 表示名が空なら slug で代用 -----------------------------------------
 	{
-		const Catalog cat = Parse("probe|main|example||\n");
+		const Catalog cat = Parse("probe|main|example|||\n");
 		checkEq(cat.probes[0].title, "example", "表示名が空なら slug");
+		checkEq(cat.probes[0].issue, "", "issue も空のまま読める");
 	}
 
 	// --- 空・コメントだけ ----------------------------------------------------

@@ -128,6 +128,18 @@ sanitize() {
 	printf '%s' "$1" | tr -d '\n\r' | sed 's/[|;"\\]/ /g; s/  */ /g; s/^ //; s/ $//'
 }
 
+# probe_issue <ディレクトリ>: 先頭コメントの `[issue #<番号>]` を拾う（無ければ空）。
+# **角括弧付きの書式だけを拾う**——本文中で他の issue 番号に触れていても
+# （例:「issue #36 の続き」）、角括弧が無ければ拾わない。複数書かれていても最初の
+# 1 件だけを使う（「この調査の id」は 1 つという約束。probes/runtime/README.md）。
+#
+# これが宛先の 2 番目の候補になる（1 番目は PR。CLAUDE.md「調査のフロー」）。
+# **書き忘れても止めない**——単に宛先が無いプローブになるだけで、実害は無い。
+probe_issue() {
+	local dir="$1"
+	grep -hoE '\[issue #[0-9]+\]' "$dir"/*.cpp 2>/dev/null | head -n1 | grep -oE '[0-9]+' || true
+}
+
 # dir_digest <ディレクトリ>: プローブ 1 件の中身を表す指紋（ファイル名と内容）。
 # **PR のブランチには main のプローブもそのまま載っている**ので、「その PR が実際に
 # 足した／変えたプローブ」と「main から引き継いだだけのプローブ」を区別する必要がある。
@@ -173,13 +185,18 @@ add_group() {
 
 # add_probe <ソースのディレクトリ> <slug> <group>: 群へプローブを 1 件入れる。
 add_probe() {
-	local dir="$1" slug="$2" group="$3"
+	local dir="$1" slug="$2" group="$3" issue
 	mkdir -p "$OUT/sources/$group/$slug"
 	# コンパイル対象は *.cpp / *.h だけ（README や試験データは持ち込まない）。
 	find "$dir" -maxdepth 1 -type f \( -name '*.cpp' -o -name '*.h' \) \
 		-exec cp {} "$OUT/sources/$group/$slug/" \;
-	echo "$slug" >>"$OUT/entries-$group.txt"
-	echo "  + $slug  ($group)"
+	issue="$(probe_issue "$dir")"
+	# **タブ区切りで issue も一緒に控える。** 後段（マニフェスト・要約）は slug ごとに
+	# 引くので、複数ファイルのプローブでも 1 行に収まる（dir_digest と同じ理由）。
+	printf '%s\t%s\n' "$slug" "$issue" >>"$OUT/entries-$group.txt"
+	local issue_note=""
+	[ -n "$issue" ] && issue_note=" [issue #$issue]"
+	echo "  + $slug  ($group)$issue_note"
 }
 
 # --- main（＝いまチェックアウトしている作業ツリー）のプローブ ------------------
@@ -386,7 +403,7 @@ for group in ${PROBE_GROUPS[@]+"${PROBE_GROUPS[@]}"}; do
 		echo "set(VW_PROBE_SOURCES_$group"
 	} >>"$manifest"
 
-	while read -r slug; do
+	while IFS=$'\t' read -r slug _issue; do
 		[ -n "$slug" ] || continue
 		for src in "$OUT/sources/$group/$slug"/*.cpp; do
 			[ -f "$src" ] || continue
@@ -402,14 +419,22 @@ for group in ${PROBE_GROUPS[@]+"${PROBE_GROUPS[@]}"}; do
 		echo "set(VW_PROBE_ENTRIES_$group"
 	} >>"$manifest"
 
-	while read -r slug; do
+	# **issue は slug ごとに違いうる**（PR・コミット・ブランチは群で共通だが、
+	# `[issue #N]` はプローブごとの印なので add_probe が付けた表から引く）。
+	while IFS=$'\t' read -r slug issue; do
 		[ -n "$slug" ] || continue
-		echo "	\"$slug|$pr|$commit|$branch|$title\"" >>"$manifest"
+		echo "	\"$slug|$pr|$commit|$branch|$title|$issue\"" >>"$manifest"
 		total=$((total + 1))
 		if [ -n "$pr" ]; then
 			echo "| \`$slug\` | PR #$pr | \`$commit\` | $branch | $title |" >>"$summary_md"
 			echo "$slug <- PR #$pr ($commit)" >>"$summary_txt"
 			line_parts+=("$slug(#$pr)")
+		elif [ -n "$issue" ]; then
+			# **PR が無く issue だけがある**（main に入った後、または main から集めた
+			# プローブ）。フィードバックの宛先はこの issue になる（Feedback.h）。
+			echo "| \`$slug\` | issue #$issue | \`$commit\` | ${branch:-main} | |" >>"$summary_md"
+			echo "$slug <- issue #$issue (${branch:-main} $commit)" >>"$summary_txt"
+			line_parts+=("$slug(issue#$issue)")
 		else
 			echo "| \`$slug\` | ${branch:-main} | \`$commit\` | $branch | |" >>"$summary_md"
 			echo "$slug <- ${branch:-main} ($commit)" >>"$summary_txt"
