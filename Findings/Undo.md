@@ -23,6 +23,10 @@
   "that object is deleted when Undo is selected" なので、申告しておけば復活したそれが改めて
   消える。**レイヤの上に普通に置いた図形へは使わない**（レイヤごと消えるものを二重登録
   しない）。
+- **undo イベントの外で作ったものは、取り消しスタックに載らない。** イベントを開かずに
+  `CreateLayer` したレイヤは、そのあと（スクリプト経由で）取り消しを実行しても**残る**
+  （実測。下記「間接経路: スクリプトエンジン経由…」）。**戻したいものは自分でイベントを
+  開いて登録しておく**——登録していないものは、人がメニューから取り消しを選んでも戻らない。
 - **他所が開いているイベントを閉じることがある。** スクリプトエンジンの
   `ExecuteScript` は、こちらが開いたままの undo イベントを**勝手に終わらせる**（実測。
   下記「間接経路: スクリプトエンジン経由…」）。RAII で `EndUndoEvent` を呼ぶ作りは
@@ -157,11 +161,15 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
 
 ## 間接経路: スクリプトエンジン経由で `DoMenuTextByName` 相当を呼ぶ
 
-**結論: 呼び出す口はある**【ヘッダ根拠】。**ただし取り消しが効くかどうかは【未確認】**
-——実機では `ExecuteScript` が成功（`VCOMError=0`）を返したのに、画面にはスクリプトエラーが
-出ていた（[issue #39](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/39)
-を再開して確かめ直している）。実機で確定したのは次の 2 つ。
+**結論: 呼び出す口はあり、VectorScript 経由なら取り消しも実際に効く。ただし効くのは
+スクリプト自身が直前にした操作までで、呼び出し元（C++）がしたことには届かない**（実機。
+[issue #39](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/39)）。
+Python 経由は**まだ確かめ切れていない**——`vs.*` を呼んだところで VectorWorks ごと落ちる
+（原因の切り分けを続けている）。要点は次の 4 つ。
 
+- **VectorScript 経由の `DoMenuTextByName('Undo', 0)` は到達し、取り消しが 1 段掛かる。**
+- **取り消せるのは取り消しスタックに載っているものだけ**——C++ が undo イベントの外で
+  作ったものは載らないので、**呼び出し元の操作は戻らない**。
 - **`VCOMError=0` は「実行時エラーが起きなかった」を意味しない。**
 - **呼ぶと、呼び出し側が開いている undo イベントが終わらされる。**
   `ExecuteScript` は undo イベントを開いている最中に呼んではいけない。
@@ -207,52 +215,60 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
 
 ### 実機で走らせた結果と、その読み方（VW 2026 / macOS）
 
-**この節の結論は一度書き換えている。** 最初は「スクリプトは走ったが取り消しが効かない」と
-無印（＝実機確認済み）で書いたが、**走らせた利用者から「スクリプトエラーが出ていた」という
-指摘があり、その前提が崩れた**。エラーの出ていた回の実行は `DoMenuTextByName('Undo', 0)` へ
-**到達していない可能性がある**——そうであれば「取り消しが効かない」は確かめられていない。
-以下は**その指摘を織り込んだ、いまの水準**である。
+**この節の結論は二度書き換えている。**
 
-実機確認プラグイン（VwSdkProbes、ビルド `3a60d15e81fb`）でプローブ
-`probes/runtime/script-engine-undo/` を、**メニューコマンドの中（`DoInterface` の中）から**
-走らせた。マーカーには**直前に作ったデザインレイヤ**を使い、
-「`DoMenuTextByName('Undo', 0)` が効いたならレイヤが消えるはず」を判定にした。渡したのは
+1. 1 度目は「スクリプトは走ったが取り消しが効かない」と無印（＝実機確認済み）で書いた。
+   走らせた利用者から「**スクリプトエラーが出ていた**」という指摘があり、前提が崩れた。
+2. 2 度目にスクリプト自身へ**足跡**を残させたところ、**取り消しは効いていた**——1 度目の
+   結論は誤りで、消えていなかったのは「効かない」からではなく、**C++ が作ったものが
+   そもそも取り消しの対象になっていない**からだった（下記）。
+
+**判定に使った足跡**（3 度目のプローブ `probes/runtime/script-engine-undo/`。ビルド
+`4ce24ceaa810`）。メニューコマンドの中（`DoInterface` の中）から走らせている。
+
+| 印 | 誰が作るか | いつ |
+| --- | --- | --- |
+| `pre` | **C++（プローブ本体）** | スクリプトを呼ぶ前 |
+| `m1` | **スクリプト自身** | `DoMenuTextByName('Undo', 0)` の直前 |
+| `m2` | **スクリプト自身** | 同・直後 |
 
 ```
-（VectorScript）PROCEDURE __ProbeScriptEngineUndo;
-                BEGIN  DoMenuTextByName('Undo', 0);  END;
-                Run(__ProbeScriptEngineUndo);
-（Python）      import vs
-                vs.DoMenuTextByName('Undo', 0)
+（VectorScript）PROCEDURE __ProbeSeUndo;
+                BEGIN
+                  Layer('m1');  DoMenuTextByName('Undo', 0);  Layer('m2');
+                END;
+                Run(__ProbeSeUndo);
 ```
 
-の 2 つ。**呼び出しの形はどちらも宣言どおりで正しい**【ヘッダ根拠】——`Include/vs.py` に
+**呼び出しの形は宣言どおりで正しい**【ヘッダ根拠】——`Include/vs.py` に
 `Python: vs.DoMenuTextByName(subMenu, index)` /
 `VectorScript: PROCEDURE DoMenuTextByName(subMenu:STRING; index:INTEGER);` とある。
 
 #### 確定していること（無印＝実機確認済み）
 
+- **VectorScript 経由なら `DoMenuTextByName('Undo', 0)` は到達し、取り消しも効く。**
+  実測は **`pre=有 / m1=無 / m2=有`**（2 度目・3 度目とも同じ）。読み方はこうなる:
+  - `m2=有` ——**スクリプトは最後まで走った**。`Undo` の呼び出しで止まってはいない。
+  - `m1=無` ——**取り消しは実際に起きた**。消えたのは**スクリプト自身が直前に作った
+    `Layer('m1')`**、つまり**取り消しスタックのいちばん上の 1 段**である。
+  - `pre=有` ——**C++ が作ったものは消えない**（次項）。
+  1 度目の「取り消しは 1 段も掛からない」は**誤り**だった。マーカーが消えなかったのは、
+  マーカーを C++ が作っていたからである。
+- **C++ が undo イベントの外で作ったものは、取り消しスタックに載らない。**
+  スクリプトに**何も作らせず** `DoMenuTextByName('Undo', 0)` だけを呼ばせても、直前に
+  C++ が `CreateLayer` したレイヤは**残ったまま**（実測 `pre=有`）。**取り消せるものが
+  無いのではなく、C++ の作り物がそもそも記録されていない**——だから 1 度目の観測
+  （「マーカーが 1 枚も消えない」）と 2 度目の観測（「スクリプトの作ったものは消える」）は
+  矛盾しない。
+  - **裏を返すと、undo で戻したいものは自分で undo イベントに登録しておく必要がある**
+    （本ファイル冒頭「登録するのは『この処理が新しく作ったレイヤ』だけで足りる」）。
+    登録していないものは、**人がメニューから取り消しを選んでも戻らない**。
 - **両エンジンともコマンド実行中に取得できる。** `IVectorScriptEngine` /
   `IPythonScriptEngine` の `VCOMPtr` はコマンド実行中（`DoInterface` の中）に取れた。
-  **落ちない。**
 - **`CompileScript` は両エンジンとも通った**（`ok=yes`）。構文の問題ではない。
-- **`ExecuteScript` は `VCOMError=0`（成功）を返した。** ——**それでも実機の画面には
-  スクリプトエラーが出ていた**（走らせた利用者の報告）。つまり
-  **`VCOMError=0` は「エラーが起きなかった」を意味しない。**
-- **マーカーレイヤは 1 枚も消えなかった**（VectorScript 版・Python 版とも、連続 2 回でも）。
-  ただしこれは「取り消しが効かない」の証明にはならない——**呼び出しへ到達していなければ、
-  同じ結果になる**（下記「未確認」）。
-- **【危険】自分の undo イベントを開いたまま呼ぶと、そのイベントが終わっている。**
-  `SetUndoMethod(kUndoSwapObjects)` ＋ `NameUndoEvent(...)` で開き
-  （`IsCurrentlyBuildingAnUndoEvent()` = `yes`）、中でレイヤを 1 枚作ってから
-  `ExecuteScript` を呼ぶと、**戻ったときには `no`**——こちらは `EndUndoEvent` も
-  `EndAndRemoveUndoEvent` も呼んでいない。**イベントの中で作ったレイヤは残っている**ので、
-  取り消されて消えたのではなく**イベントだけが終わらされている**。
-  - これは C++ 側から直接見た値なので、**スクリプトがエラーで終わったとしても観測は有効**
-    （むしろ「エラー処理の巻き戻しがイベントを閉じた」可能性が出てきた）。
-  - どちらにせよ**危ない**。RAII で `EndUndoEvent` を呼ぶ作りだと、**もう無いイベントを
-    閉じにいく**ことになる。**`ExecuteScript` は undo イベントの中で呼ばない。**
-  - 図面が壊れる（本ファイル冒頭の「ビューポートだけ消える」）事態は起きなかった。
+- **`VCOMError=0` は「実行時エラーが起きなかった」を意味しない。** 1 度目は
+  `ExecuteScript` が `VCOMError=0`（成功）を返したのに、画面にはスクリプトエラーが
+  出ていた（走らせた利用者の報告）。
 - **構文エラーは戻り値で判別できる。** 壊れた VectorScript（`ThisIsNotAValidCall(;`）を
   渡すと `CompileScript` は `ok=no`、`ExecuteScript` は `VCOMError=1` / `succeeded=no`。
   ただし `CompileScript` の `outErrorText` は**空**、`outLineNumberOfSelectedError` は
@@ -260,51 +276,83 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
   ダイアログにも出ない）。
   - **これは「コンパイル時に落ちる誤り」の話であって、実行時のエラーとは別**である。
     上記のとおり実行時エラーは `VCOMError=0` のまま素通りした。
+- **Python エンジンにロガーを渡すこと自体は安全で、`stdout` も取れる。**
+  `vs` を一切触らない `print('...')` だけのスクリプトを
+  `ExecuteScript(script, &CDefaultPythonLogger)` で走らせると通り、`fOutput` に
+  `probe: hello from python` が入った。**1 度目の「ロガーに `nullptr` を渡していた」という
+  不備は、これで塞がる。**
+- **【危険】Python から `vs.*` を呼ぶと VectorWorks ごと落ちる。**
+  `import vs` ＋ `vs.Layer('...')` だけの最小のスクリプトを `ExecuteScript` へ渡すと、
+  **`EXC_BAD_ACCESS`（`KERN_INVALID_ADDRESS` at `0x232`、byte write）でプロセスごと終了**
+  する。3 回とも同じ場所で、クラッシュレポートのスタックは
+  `PyRun_SimpleStringFlags → PyRun_StringFlags → … → cfunction_call → VectorWorks 内部で
+  2 段` ——**`vs` モジュールの C 関数が呼ばれた直後**である。同じ実行の中で
+  `print` だけの Python は通っているので、**Python の実行そのものではなく `vs.*` の側**で
+  落ちている。
+  - **落ちてもログは残る**（`Report::log` は 1 行ごとに flush する）。次にメニューを開いた
+    ときに `recovered=yes` として PR へ自動投稿されるので、**末尾がそのまま最後に通った
+    場所**になる。
+- **【危険】自分の undo イベントを開いたまま呼ぶと、そのイベントが終わっている。**
+  `SetUndoMethod(kUndoSwapObjects)` ＋ `NameUndoEvent(...)` で開き
+  （`IsCurrentlyBuildingAnUndoEvent()` = `yes`）、中でレイヤを 1 枚作ってから
+  `ExecuteScript` を呼ぶと、**戻ったときには `no`**——こちらは `EndUndoEvent` も
+  `EndAndRemoveUndoEvent` も呼んでいない。**イベントの中で作ったレイヤは残っている**ので、
+  取り消されて消えたのではなく**イベントだけが終わらされている**。
+  - RAII で `EndUndoEvent` を呼ぶ作りだと、**もう無いイベントを閉じにいく**ことになる。
+    **`ExecuteScript` は undo イベントの中で呼ばない。**
+  - 図面が壊れる（本ファイル冒頭の「ビューポートだけ消える」）事態は起きなかった。
 
-#### 未確認のまま残っていること
+#### まだ確かめている最中のこと（[issue #39](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/39) は開いたまま）
 
-- **`DoMenuTextByName('Undo', 0)` の呼び出しに到達したのか。** 到達したうえで
-  取り消しが効かなかったのか、そこまで行かずにエラーで終わったのかが**切り分いていない**。
-  この節の元の結論（「取り消しは 1 段も掛からない」）は、この切り分けが付くまで**保留**。
-- **出たエラーの内容と、どちらのエンジンのものか。**
-  - **Python 版は取れたはずだった。** `ExecuteScript(script, IPythonLogger*)` の第 2 引数に
-    ロガーを渡せば `LogStdOut` / `LogStdErr` へ流れてくる。SDK は
-    **`CDefaultPythonLogger`（`IPythonWrapper.h` にヘッダだけで完結する実装）**を同梱して
-    おり、`fOutput` / `fErrors` に溜まる。**このプローブは `nullptr` を渡していて、
-    traceback を捨てていた**——プローブ側の不備【ヘッダ根拠】。
-  - **VectorScript 版は構造的に取れない。** `IVectorScriptEngine::ExecuteScript(const
-    TXString&)` は引数がスクリプト 1 つだけで、ロガーも出力引数も無い【ヘッダ根拠】。
-    `ReportRuntimeWarning` / `ReportRuntimeError` は**スクリプトからホストへ通知する**
-    逆方向の口。したがって**この経路のエラーは、呼び出し側からは見えない**。
-  - **スクリプトから C++ へ値を返す近道も無い。** `Repository_GetValue` はエンジン側
-    （C++）の API で、スクリプトから書き込む `vs.*` の口は無い（`vs.py` を検索して 0 件）
-    【ヘッダ根拠】。VectorScript 側の足跡は、**スクリプト自身に図形を作らせて C++ で
-    その存在を見る**しかない。
-- **同期性**【推定】。`ExecuteScript` から戻った時点で「開いていた undo イベントが
-  終わっている」という副作用が観測できるので、呼び出しの中で走っているとみなせる。
-  ただしエラーで終わっていたなら、それは**エラー処理が同期的だった**ことを示すに過ぎない。
+- **Python から `vs.*` を呼ぶと落ちるのは、ロガーのせいか、`vs.*` 呼び出しそのものか。**
+  落ちた 3 回はいずれも**ロガーを渡した**呼び出しだった。ロガー無しの同じスクリプトを
+  4 度目のプローブ（節 `C1`）で確かめている。
+- **別の口（`ScriptContext_Begin` → `ScriptContext_Run`）なら通るのか。** `IPythonScriptEngine`
+  にだけある口で、SDK 同梱の実装ソース
+  （`SDKLib/Source/VWSDK/VWFC/Tools/ImageComparisonTesting.cpp`）はこちらを使っている。
+  4 度目のプローブの節 `C4` で確かめている。
+- **「コンパイルに成功しました」というダイアログの出所。** 利用者はこれを見ている。
+  `CompileScript` は `showDialogs=false` で呼んでいるので、**出所が `CompileScript` なのか
+  `ExecuteScript` なのか**が付いていない（`showDialogs=false` が効いていないなら、それ自体が
+  知見になる）。4 度目のプローブは両方の直前に印を出して、どちらの後で出たかを言って
+  もらう作りにしてある。
+- **VectorScript 版の実行時エラーの内容は、いまも取れない**【ヘッダ根拠】。
+  `IVectorScriptEngine::ExecuteScript(const TXString&)` は引数がスクリプト 1 つだけで、
+  ロガーも出力引数も無い。`ReportRuntimeWarning` / `ReportRuntimeError` は**スクリプトから
+  ホストへ通知する**逆方向の口。**この経路のエラーは、呼び出し側からは見えない。**
+  スクリプトから C++ へ値を返す近道も無い（`Repository_GetValue` はエンジン側の API で、
+  スクリプトから書き込む `vs.*` の口は `vs.py` を検索して 0 件）。**VectorScript 側の足跡は、
+  スクリプト自身に図形を作らせて C++ でその存在を見るしかない。**
 
 #### 教訓（プローブの作り方）
 
-- **成否を戻り値だけで判定しない。** ここでは `VCOMError=0` を「走った」と読んでしまった。
+- **成否を戻り値だけで判定しない。** 1 度目は `VCOMError=0` を「走った」と読んでしまった。
   スクリプトの中の出来事は戻り値に出ない。
 - **スクリプトには足跡を残させる。** 呼び出しの前後で図形（レイヤ）を作らせておけば、
-  「どこまで到達したか」が**目視なしで**分かる。
+  「どこまで到達したか」も「何が取り消されたか」も**目視なしで**分かる。この 1 手で
+  1 度目の誤りが割れた。
+- **足跡は「誰が作ったか」で分ける。** 1 度目の誤りの正体は、**C++ が作ったマーカーで
+  スクリプトの取り消しを測ろうとした**こと。取り消しの対象になり得ないもので測れば、
+  何を測っても「効かない」に見える。
 - **拾える口があるなら必ず拾う。** Python のロガーを `nullptr` で捨てたのが、この調査の
   やり直しを生んだ。
+- **落ちる見込みのある呼び出しは後ろへ回し、直前に印を出す。** 落ちると VectorWorks ごと
+  終わるので、**1 回の走行で試せる「落ちるかもしれないもの」は 1 つだけ**。手前を先に
+  済ませておけば、落ちてもそこまでは取れる。
 
-**この経路を「使える」と判断してはいけない。** 取り消しが効くかどうかは未確認だが、
-**エラーが呼び出し側に伝わらない**（VectorScript 版は構造的に、Python 版もロガーを渡さない
-限り）という一点だけで、**前回の描画を消す**ような後戻りできない用途には向かない。
+**この経路を「使える」と判断してはいけない。** VectorScript 経由なら取り消しは効くが、
+効くのは**スクリプト自身が直前にした操作**であって、**呼び出し元（C++）がしたことは
+取り消しスタックに載っていない**——つまり「前回の描画を戻す」という当初の用途には
+そもそも届かない。加えて **エラーが呼び出し側に伝わらない**（VectorScript 版は構造的に）、
+**Python 版は落ちる**、**開いている undo イベントが終わる**。
 ホームズ君 IFC 取り込みプラグインの用途では、引き続き次節「レイヤのハンドルを直接
-`DeleteObject` する」を使う。あわせて **`ExecuteScript` を undo イベントの中で呼ばない**
-（開いているイベントが終わる）を守ること。
+`DeleteObject` する」を使う。
 
 [#23](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/23)
 （閉じたイベントには効かない）・[#27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)
 （メニューを名前で起動する API が無い）・[#31](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/31)
-（イベントを閉じずに返して次の実行から戻す）の 3 本は塞がったままで、**この間接経路だけが
-「まだ確かめ切れていない 4 本目」**として残っている。
+（イベントを閉じずに返して次の実行から戻す）の 3 本は塞がったままで、**この 4 本目も
+「口はあるが、呼び出し元の操作には届かない」で実質塞がっている。**
 
 ## レイヤのハンドルを直接 `DeleteObject` する
 
