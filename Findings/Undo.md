@@ -27,11 +27,13 @@
   `CreateLayer` したレイヤは、そのあと（スクリプト経由で）取り消しを実行しても**残る**
   （実測。下記「間接経路: スクリプトエンジン経由…」）。**戻したいものは自分でイベントを
   開いて登録しておく**——登録していないものは、人がメニューから取り消しを選んでも戻らない。
-- **他所が開いているイベントを閉じることがある。** スクリプトエンジンの
-  `ExecuteScript` は、こちらが開いたままの undo イベントを**勝手に終わらせる**（実測。
-  下記「間接経路: スクリプトエンジン経由…」）。RAII で `EndUndoEvent` を呼ぶ作りは
-  「もう無いイベントを閉じる」ことになるので、**イベントの中で他所の重い呼び出しを
-  しない**。
+- **他所の呼び出しが、開いているイベントを閉じてしまうことがある。** 実測で
+  「イベントを開いたまま呼んで戻ったら `IsCurrentlyBuildingAnUndoEvent()` が `no` に
+  なっていた」という事例を踏んだ（下記「間接経路: スクリプトエンジン経由…」）。
+  **スクリプトエンジンの `ExecuteScript` そのものは犯人ではない**——無害なスクリプトを
+  同じ形で走らせるとイベントは `yes` のまま残る（実測）。犯人を絞り込んでいる最中だが、
+  **RAII で `EndUndoEvent` を呼ぶ作りは「もう無いイベントを閉じにいく」ことになり得る**
+  という危険は変わらないので、**イベントの中で他所の重い呼び出しをしない**。
 - **戻らないもの**: クラス・ストーリ・レベルテンプレートはリソースなので残る（図面の
   見た目は処理前に戻る）。**処理前から在ったレイヤへ描いた分**も、そのレイヤごと消すわけに
   いかないので戻らない——利用者にはその旨を伝える。
@@ -164,15 +166,18 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
 **結論: 呼び出す口はあり、VectorScript 経由なら取り消しも実際に効く。ただし効くのは
 スクリプト自身が直前にした操作までで、呼び出し元（C++）がしたことには届かない**（実機。
 [issue #39](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/39)）。
-Python 経由は**まだ確かめ切れていない**——`vs.*` を呼んだところで VectorWorks ごと落ちる
-（原因の切り分けを続けている）。要点は次の 4 つ。
+**Python から `vs.*` を使うなら `ExecuteScript` を呼んではいけない——落ちる。
+`ScriptContext_Begin` → `ScriptContext_Run` を使う**（実機で確認済み）。要点は次の 5 つ。
 
 - **VectorScript 経由の `DoMenuTextByName('Undo', 0)` は到達し、取り消しが 1 段掛かる。**
 - **取り消せるのは取り消しスタックに載っているものだけ**——C++ が undo イベントの外で
   作ったものは載らないので、**呼び出し元の操作は戻らない**。
 - **`VCOMError=0` は「実行時エラーが起きなかった」を意味しない。**
-- **呼ぶと、呼び出し側が開いている undo イベントが終わらされる。**
-  `ExecuteScript` は undo イベントを開いている最中に呼んではいけない。
+- **【危険】`IPythonScriptEngine::ExecuteScript` から `vs.*` を呼ぶと VectorWorks ごと
+  落ちる**（ロガーの有無に関わらず。3 通り試して 3 通りとも）。**同じことを
+  `ScriptContext_Begin` → `ScriptContext_Run` でやると通る。**
+- **Python のロガーは実行時エラーの traceback を拾える**（`VCOMError` は 0 のまま）。
+  スクリプトの失敗を呼び出し側で知る手段は、**この経路にしか無い**。
 
 前節「プラグインから `DoMenuTextByName` 相当を呼ぶ」で確定した「メニューコマンドを
 名前で**直接**起動する汎用 API は無い」に対し、「SDK から VectorScript / Python の
@@ -276,46 +281,78 @@ Python 経由は**まだ確かめ切れていない**——`vs.*` を呼んだ�
   ダイアログにも出ない）。
   - **これは「コンパイル時に落ちる誤り」の話であって、実行時のエラーとは別**である。
     上記のとおり実行時エラーは `VCOMError=0` のまま素通りした。
-- **Python エンジンにロガーを渡すこと自体は安全で、`stdout` も取れる。**
+- **Python エンジンにロガーを渡すこと自体は安全で、`stdout` も `stderr` も取れる。**
   `vs` を一切触らない `print('...')` だけのスクリプトを
   `ExecuteScript(script, &CDefaultPythonLogger)` で走らせると通り、`fOutput` に
-  `probe: hello from python` が入った。**1 度目の「ロガーに `nullptr` を渡していた」という
-  不備は、これで塞がる。**
-- **【危険】Python から `vs.*` を呼ぶと VectorWorks ごと落ちる。**
-  `import vs` ＋ `vs.Layer('...')` だけの最小のスクリプトを `ExecuteScript` へ渡すと、
-  **`EXC_BAD_ACCESS`（`KERN_INVALID_ADDRESS` at `0x232`、byte write）でプロセスごと終了**
-  する。3 回とも同じ場所で、クラッシュレポートのスタックは
-  `PyRun_SimpleStringFlags → PyRun_StringFlags → … → cfunction_call → VectorWorks 内部で
-  2 段` ——**`vs` モジュールの C 関数が呼ばれた直後**である。同じ実行の中で
-  `print` だけの Python は通っているので、**Python の実行そのものではなく `vs.*` の側**で
-  落ちている。
-  - **落ちてもログは残る**（`Report::log` は 1 行ごとに flush する）。次にメニューを開いた
-    ときに `recovered=yes` として PR へ自動投稿されるので、**末尾がそのまま最後に通った
-    場所**になる。
-- **【危険】自分の undo イベントを開いたまま呼ぶと、そのイベントが終わっている。**
+  `probe: hello from python` が入った。
+- **Python の実行時エラーは、ロガーの `fErrors` に traceback として出る。**
+  `print('probe: before')` / `1 / 0` / `print('probe: after')` を渡すと、
+  **`VCOMError=0`（成功）が返る**のに `fErrors` は
+
+  ```
+  Traceback (most recent call last):
+    File "<string>", line 2, in <module>
+  ZeroDivisionError: division by zero
+  ```
+
+  で、`fOutput` は `probe: before` だけ（`after` は無い）。**戻り値では分からない失敗が、
+  ロガーには写る。** これが「スクリプトの失敗を呼び出し側で知る」唯一の手段である
+  （VectorScript 版にはこの口が無い）。
+- **【危険】`IPythonScriptEngine::ExecuteScript` から `vs.*` を呼ぶと VectorWorks ごと
+  落ちる。** `import vs` ＋ `vs.Layer('...')` だけの最小のスクリプトで**必ず**落ちた。
+  試した 3 通り——**ロガー無し / ロガーあり / `DoMenuTextByName` つき**——の**すべて**で
+  落ちたので、**ロガーは無関係**である。
+  - `EXC_BAD_ACCESS`（`KERN_INVALID_ADDRESS` at `0x232`、byte write）でプロセスごと終了。
+    クラッシュレポートのスタックは `PyRun_SimpleStringFlags → PyRun_StringFlags → … →
+    cfunction_call → VectorWorks 内部で 2 段`——**`vs` モジュールの C 関数が呼ばれた直後**。
+  - 同じ実行の中で `print` だけの Python は通っているので、**Python の実行そのものでは
+    なく `vs.*` の側**で落ちている。
+- **その代わり `ScriptContext_Begin` → `ScriptContext_Run` なら通る。**
+  **まったく同じスクリプト**（`import vs` ＋ `vs.Layer('probe-c4-py-layer')`）を
+
+  ```cpp
+  pyEngine->ScriptContext_Begin(script /*, IPythonLogger* = nullptr */);
+  pyEngine->ScriptContext_Run();          // ロガーを使うなら ScriptContext_RunEx(logger)
+  ```
+
+  で走らせると、**`VCOMError=0` で戻り、レイヤが実際に作られた**（落ちない）。
+  `IPythonScriptEngine` にだけある口で、SDK 同梱の実装ソース
+  （`SDKLib/Source/VWSDK/VWFC/Tools/ImageComparisonTesting.cpp`）もこちらを使っている。
+  **Python から `vs.*` を使う道はこちらである。**
+- **`ExecuteScript` そのものは、呼び出し側の undo イベントを閉じない。**
   `SetUndoMethod(kUndoSwapObjects)` ＋ `NameUndoEvent(...)` で開き
   （`IsCurrentlyBuildingAnUndoEvent()` = `yes`）、中でレイヤを 1 枚作ってから
-  `ExecuteScript` を呼ぶと、**戻ったときには `no`**——こちらは `EndUndoEvent` も
-  `EndAndRemoveUndoEvent` も呼んでいない。**イベントの中で作ったレイヤは残っている**ので、
-  取り消されて消えたのではなく**イベントだけが終わらされている**。
-  - RAII で `EndUndoEvent` を呼ぶ作りだと、**もう無いイベントを閉じにいく**ことになる。
-    **`ExecuteScript` は undo イベントの中で呼ばない。**
-  - 図面が壊れる（本ファイル冒頭の「ビューポートだけ消える」）事態は起きなかった。
+  **無害なスクリプト**（`Layer('...')` だけ）を `ExecuteScript` すると、
+  **戻っても `yes` のまま**で、イベントの中で作ったレイヤもスクリプトが作ったレイヤも
+  両方残っている。
+  - **これは 1 度目の観測を訂正するものである。** 1 度目は同じ形で `no` になっていた
+    （＝イベントが終わっていた）が、そのときスクリプトが呼んでいたのは
+    `DoMenuTextByName('Undo', 0)` で、しかも画面にはスクリプトエラーが出ていた。
+    **犯人は `ExecuteScript` ではなく、`Undo` の呼び出しか、失敗の後始末のどちらか**——
+    どちらであるかは切り分け中（下記）。
+  - 図面が壊れる（本ファイル冒頭の「ビューポートだけ消える」）事態は、いずれの回にも
+    起きていない。
 
 #### まだ確かめている最中のこと（[issue #39](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/39) は開いたまま）
 
-- **Python から `vs.*` を呼ぶと落ちるのは、ロガーのせいか、`vs.*` 呼び出しそのものか。**
-  落ちた 3 回はいずれも**ロガーを渡した**呼び出しだった。ロガー無しの同じスクリプトを
-  4 度目のプローブ（節 `C1`）で確かめている。
-- **別の口（`ScriptContext_Begin` → `ScriptContext_Run`）なら通るのか。** `IPythonScriptEngine`
-  にだけある口で、SDK 同梱の実装ソース
-  （`SDKLib/Source/VWSDK/VWFC/Tools/ImageComparisonTesting.cpp`）はこちらを使っている。
-  4 度目のプローブの節 `C4` で確かめている。
-- **「コンパイルに成功しました」というダイアログの出所。** 利用者はこれを見ている。
-  `CompileScript` は `showDialogs=false` で呼んでいるので、**出所が `CompileScript` なのか
-  `ExecuteScript` なのか**が付いていない（`showDialogs=false` が効いていないなら、それ自体が
-  知見になる）。4 度目のプローブは両方の直前に印を出して、どちらの後で出たかを言って
-  もらう作りにしてある。
+- **開いていた undo イベントを終わらせたのは何か。** `ExecuteScript` は無害な
+  スクリプトなら閉じない（上記）。残る候補は **`DoMenuTextByName('Undo', 0)` そのもの**か、
+  **スクリプトが失敗したときの後始末**か。同じ形でスクリプトだけを差し替えた 2 つの節
+  （5 度目のプローブの `N7` / `N8`）で分ける。
+- **`ScriptContext` 経由なら Python からも Undo は効くのか。** `vs.Layer` は通ったので、
+  同じ道で `vs.DoMenuTextByName('Undo', 0)` を含む足跡つきスクリプトを走らせて、
+  VectorScript 版と同じ `pre=有 / m1=無 / m2=有` になるかを見る（`C6`）。
+- **`ScriptContext` 経由でロガーは働くのか。** `ScriptContext_Begin` にロガーを渡した回は
+  `stdout` / `stderr` とも空だった（`print` を含まないスクリプトだったので、空が正しい
+  可能性もある）。`ScriptContext_RunEx(logger)` に `print` を渡して確かめる（`C5`）。
+- **「コンパイルに成功しました」というダイアログの出所。** 利用者はこれを見ているが、
+  **画面にコードの位置は出ないので「どの呼び出しで出たか」は人には答えられない**
+  （4 度目まではこれを尋ねてしまっていた）。5 度目は**呼び出しごとに所要時間を測る**——
+  モーダルダイアログは人が閉じるまで戻らないので、**秒単位で掛かった 1 本がダイアログを
+  出した呼び出し**である（他は数ミリ秒）。利用者に要るのは「出たら閉じる」だけになる。
+- **スクリプトを走らせると undo イベントが開いたまま残るのか。** 4 度目の走行は最後に
+  `undo: after building=yes` で終わっていた（プローブ自身は全部閉じている）。5 度目は
+  呼び出しごとに `building` を記録して出所を絞る。
 - **VectorScript 版の実行時エラーの内容は、いまも取れない**【ヘッダ根拠】。
   `IVectorScriptEngine::ExecuteScript(const TXString&)` は引数がスクリプト 1 つだけで、
   ロガーも出力引数も無い。`ReportRuntimeWarning` / `ReportRuntimeError` は**スクリプトから
@@ -339,14 +376,25 @@ Python 経由は**まだ確かめ切れていない**——`vs.*` を呼んだ�
 - **落ちる見込みのある呼び出しは後ろへ回し、直前に印を出す。** 落ちると VectorWorks ごと
   終わるので、**1 回の走行で試せる「落ちるかもしれないもの」は 1 つだけ**。手前を先に
   済ませておけば、落ちてもそこまでは取れる。
+- **落ちた節を次の走行で飛ばす。** 節に入る前と出た後をログの隣のファイルへ書いておくと、
+  「入ったのに出ていない節」＝前回落ちた節が分かる。次はそこを飛ばせるので、
+  **利用者に頼むのは「もう一度走らせてください」だけ**で切り分けが 1 段ずつ進む
+  （4 度目は 4 回の走行で 4 つの節を通し切った）。
+- **人に「どの行で出ましたか」と訊かない——画面にコードの位置は出ない。**
+  ダイアログの出所は**所要時間で測れる**。モーダルは人が閉じるまで戻らないので、
+  秒単位で掛かった呼び出しがそれである。**目視を頼む前に、機械で測れないかを考える。**
 
 **この経路を「使える」と判断してはいけない。** VectorScript 経由なら取り消しは効くが、
 効くのは**スクリプト自身が直前にした操作**であって、**呼び出し元（C++）がしたことは
 取り消しスタックに載っていない**——つまり「前回の描画を戻す」という当初の用途には
-そもそも届かない。加えて **エラーが呼び出し側に伝わらない**（VectorScript 版は構造的に）、
-**Python 版は落ちる**、**開いている undo イベントが終わる**。
+そもそも届かない。加えて **エラーが呼び出し側に伝わらない**（VectorScript 版は構造的に。
+Python 版はロガーで拾える）、**`ExecuteScript` から `vs.*` を呼ぶと落ちる**。
 ホームズ君 IFC 取り込みプラグインの用途では、引き続き次節「レイヤのハンドルを直接
 `DeleteObject` する」を使う。
+
+**ただし「SDK から Python を走らせる」こと自体は使える道である**——`vs.*` を呼ぶなら
+`ScriptContext_Begin` → `ScriptContext_Run`（ロガーを使うなら `ScriptContext_RunEx`）。
+`ExecuteScript` は `vs` を触らないスクリプト専用と考えるのが安全。
 
 [#23](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/23)
 （閉じたイベントには効かない）・[#27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)

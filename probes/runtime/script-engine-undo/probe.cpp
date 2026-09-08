@@ -1,44 +1,59 @@
 //
 //	probes/runtime/script-engine-undo/probe.cpp
 //
-//	[issue #39] スクリプトエンジン経由（IVectorScriptEngine / IPythonScriptEngine の
-//	ExecuteScript）で DoMenuTextByName('Undo', 0) を呼んだときの挙動を確かめる。
+//	[issue #39] スクリプトエンジン経由（IVectorScriptEngine / IPythonScriptEngine）で
+//	DoMenuTextByName('Undo', 0) を呼んだときの挙動を確かめる。
 //
-//	【4 度目である。ここまでに分かったこと】
+//	【5 度目である。ここまでに分かったこと】
 //
 //	1 度目: 「スクリプトは走ったが取り消しが効かない」と読んだ。走らせた利用者から
 //	        「画面にスクリプトエラーが出ていた」という指摘があり、前提が崩れた。
-//	2 度目: スクリプト自身に足跡を残させたところ VectorScript 版で pre=有 / m1=無 / m2=有。
-//	        **Undo は効いていた**——消えたのはスクリプト自身が直前に作った m1。
-//	3 度目: 落ちる場所を二分できた。**print だけ・ロガーあり（S3）は通り**、stdout も
-//	        取れた。**vs.Layer・ロガーあり（S4）で VectorWorks ごと落ちた**。つまり
-//	        原因はロガーではなく **Python から vs.* を呼ぶこと**の側にある。S2 も取れ、
-//	        **C++ が undo イベントの外で作ったものは取り消しスタックに載らない**と分かった。
+//	2・3 度目: スクリプト自身に足跡を残させたところ VectorScript 版で pre=有 / m1=無 / m2=有。
+//	        **Undo は効いていた**——消えたのはスクリプト自身が直前に作った m1。C++ が
+//	        undo イベントの外で作ったものは取り消しスタックに載らない（N2）。
+//	4 度目: 足跡簿のおかげで 4 回の走行で全部の節を通せた。分かったのは 4 つ。
+//	        ・**`IPythonScriptEngine::ExecuteScript` から `vs.*` を呼ぶと必ず落ちる**
+//	          （C1 ロガー無し / C2 ロガーあり / C3 Undo つき——3 通りとも落ちた）。
+//	        ・**`ScriptContext_Begin` → `ScriptContext_Run` なら通る**（C4。`vs.Layer` が
+//	          実際にレイヤを作った）。**Python から vs を使う道はこちらである。**
+//	        ・**Python のロガーは実行時エラーの traceback を拾える**（N6 で
+//	          ZeroDivisionError。`VCOMError` は 0 のまま）。
+//	        ・**`ExecuteScript` そのものは、こちらが開いた undo イベントを閉じない**
+//	          （N3 で building=yes のまま戻った）。1 度目の「閉じられた」の犯人は別にいる。
 //
-//	【この版の作り】3 度目は S4 で落ちたせいで S5 以降を丸ごと取りこぼした。落ちると
-//	VectorWorks ごと終わるので、**1 回の走行で確かめられる「落ちるかもしれないもの」は
-//	1 つだけ**——そこで次の 2 つを入れた。
+//	【この版で確かめること】
 //
-//	  ・落ちる見込みのあるもの（Python から vs.* を呼ぶもの）を**全部後ろへ回す**。
-//	  ・**足跡簿**（<ログ>.steps）を付ける。節に入る前と出た後を書き足しておき、次の
-//	    走行では「入ったのに出ていない節」＝**前回落ちた節**を飛ばす。だから走らせ直す
-//	    だけで先へ進む（利用者に頼むのは「もう一度走らせてください」だけで済む）。
+//	  ・**1 度目に undo イベントを終わらせたのは何か。** 候補は 2 つ——スクリプトが呼んだ
+//	    `DoMenuTextByName('Undo', 0)` そのもの（N7）か、スクリプトが失敗したこと（N8）か。
+//	  ・**「コンパイルに成功しました」のダイアログを出しているのはどの呼び出しか。**
+//	    利用者に「どの行で出たか」は答えられない——**画面にコードの位置は出ない**。
+//	    そこで**呼び出しごとに時間を測る**。モーダルダイアログは人が閉じるまで戻らないので、
+//	    **秒単位で掛かった呼び出しがダイアログを出した呼び出し**である（他は数ミリ秒）。
+//	    利用者に要るのは「出たら閉じる」だけになる。
+//	  ・**通る道（ScriptContext）で Python から Undo は効くか**（C6）。ロガーはこの道でも
+//	    働くか（C5。`ScriptContext_RunEx` はロガーを取る）。
+//	  ・**スクリプトを走らせると undo イベントが開いたまま残るのか。** 4 度目の走行は
+//	    最後に `undo: after building=yes` で終わっていた。節ごとに測って出所を絞る。
 //
-//	  N1 VectorScript・足跡つき Undo        … 2・3 度目の追認
-//	  N2 VectorScript・Undo だけ            … 3 度目の追認（C++ の作り物は載らない）
-//	  N3 VectorScript・開いた undo イベント … 呼ぶとイベントが終わらされるか
-//	  N4 Python・print だけ（ロガー無し）   … 3 度目に無かった素の経路
-//	  N5 Python・print だけ（ロガーあり）   … 3 度目の追認
-//	  N6 Python・1/0（vs を触らない）       … 実行時エラーが戻り値に出るか
-//	  --- ここから先は落ちる見込みがある（落ちても上は取れている） ---
-//	  C1 Python・vs.Layer（**ロガー無し**） … 落ちたら **vs.* 呼び出しそのもの**が原因
-//	  C2 Python・vs.Layer（ロガーあり）     … 3 度目に落ちた形そのもの
-//	  C3 Python・足跡つき Undo（ロガーあり）… 本題を Python でも見る
-//	  C4 Python・ScriptContext 経由         … ExecuteScript とは別の口。逃げ道があるか
+//	【この版の作り】落ちる見込みのある節を後ろへ回し、**足跡簿**（<ログ>.steps）で
+//	「入ったのに出ていない節」＝前回落ちた節を次の走行では飛ばす。だから走らせ直す
+//	だけで先へ進む（利用者に頼むのは「もう一度走らせてください」だけで済む）。
 //
-//	【ダイアログの出所】利用者は「コンパイルに成功しました」というダイアログを見ている。
-//	CompileScript は showDialogs=false で呼んでいるので、N1 の CompileScript と
-//	ExecuteScript の両方の直前に ★ を置いて、どちらの後で出たかを言ってもらう。
+//	  N1 VectorScript・足跡つき Undo        … 追認。CompileScript と ExecuteScript を計測
+//	  N2 VectorScript・Undo だけ            … C++ の作り物は取り消しスタックに載らない
+//	  N3 VectorScript・開いた undo イベント … 無害なスクリプトなら閉じられない（追認）
+//	  N7 同・**Undo を呼ぶスクリプト**      … 閉じたら **Undo が原因**
+//	  N8 同・**失敗するスクリプト**         … 閉じたら **失敗の後始末が原因**
+//	  N4 Python・print だけ（ロガー無し）
+//	  N5 Python・print だけ（ロガーあり）
+//	  N6 Python・1/0（vs を触らない）       … 実行時エラーはロガーで拾える
+//	  C4 Python・ScriptContext で vs.Layer  … 4 度目に通った道の追認
+//	  C5 同・print（RunEx でロガーを渡す）  … この道でもロガーは働くか
+//	  C6 同・**足跡つき Undo**              … **Python から Undo は効くか（本題）**
+//	  C1 Python・ExecuteScript で vs.Layer  … 落ちることの記録。**必ず最後に置く**
+//
+//	C2（ロガーつき）と C3（Undo つき）は落とした——C1 と合わせて 3 通りとも落ちると
+//	分かったので、同じことを二度落として確かめる意味が無い。
 //
 
 #include "Probe.h"
@@ -48,6 +63,7 @@
 #include "VWFC/VWObjects/VWDocument.h"
 #include "VWFC/VWObjects/VWLayerObj.h"
 
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -153,8 +169,8 @@ namespace
 			if (fSkip)
 			{
 				probe.log(std::string("=== ") + name +
-						  ") 飛ばす——**前回の走行はここで"
-						  "落ちた**（足跡簿に begin だけが残っている） ===");
+						  ") 飛ばす——**前回の走行はここで落ちた**"
+						  "（足跡簿に begin だけが残っている） ===");
 				return;
 			}
 			probe.log(std::string("=== ") + name + ") " + title + " ===");
@@ -180,6 +196,37 @@ namespace
 		std::string fName;
 		bool fSkip = false;
 	};
+
+	// -----------------------------------------------------------------------
+	// **どの呼び出しがダイアログを出したかを、目視なしで突き止めるための時計。**
+	// モーダルダイアログは人が閉じるまで戻らないので、**その呼び出しだけが秒単位で
+	// 掛かる**。他は数ミリ秒で戻る。だから利用者に要るのは「出たら閉じる」だけで、
+	// どこで出たかはログの `elapsed=` を読めば分かる（4 度目までは「どの行で出たか」を
+	// 尋ねていたが、**画面にコードの位置は出ない**ので答えようが無かった）。
+	class Stopwatch
+	{
+	public:
+		Stopwatch() : fStart(std::chrono::steady_clock::now()) {}
+
+		long ms() const
+		{
+			return (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+					   std::chrono::steady_clock::now() - fStart)
+				.count();
+		}
+
+	private:
+		std::chrono::steady_clock::time_point fStart;
+	};
+
+	// 1 秒を超えた呼び出しには目印を付ける（＝そこで人を待っていた＝ダイアログが出た）。
+	std::string Elapsed(long ms)
+	{
+		std::string s = " elapsed=" + std::to_string(ms) + "ms";
+		if (ms >= 1000)
+			s += " ← **ここで人を待っていた＝ダイアログを出したのはこの呼び出し**";
+		return s;
+	}
 
 	// -----------------------------------------------------------------------
 	// ISDK に名前でレイヤを引く呼び出しは無いので、図面の頭から辿る。
@@ -209,6 +256,11 @@ namespace
 		return "pre=" + Mark(LayerExistsByName(pre.c_str())) +
 			   " m1=" + Mark(LayerExistsByName(m1.c_str())) +
 			   " m2=" + Mark(LayerExistsByName(m2.c_str()));
+	}
+
+	std::string Building()
+	{
+		return gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no";
 	}
 
 	TXString VsWithFootprints(const std::string& m1, const std::string& m2)
@@ -249,6 +301,14 @@ namespace
 		return TXString(src.c_str());
 	}
 
+	// **必ず失敗する** VectorScript。3 度目に確かめた形（`CompileScript` は ok=no、
+	// `ExecuteScript` は VCOMError=1）をそのまま使う。「失敗した実行」が呼び出し側の
+	// undo イベントを閉じるかどうかを見るための材料。
+	TXString VsBroken()
+	{
+		return TXString("ThisIsNotAValidCall(;\n");
+	}
+
 	// vs を一切触らない。**Python の実行そのもの**を試すための最小のスクリプト。
 	TXString PyPrintOnly(const std::string& tag)
 	{
@@ -282,10 +342,11 @@ namespace
 		probe.log(std::string(label) + ": stderr=[" + (err.empty() ? "空" : err) + "]");
 	}
 
-	void LogResult(::vwprobe::Report& probe, const char* label, VCOMError err)
+	void LogResult(::vwprobe::Report& probe, const char* label, VCOMError err, long ms)
 	{
 		probe.log(std::string(label) + ": ExecuteScript VCOMError=" + std::to_string((long)err) +
-				  " succeeded=" + (VCOM_SUCCEEDED(err) ? "yes" : "no"));
+				  " succeeded=" + (VCOM_SUCCEEDED(err) ? "yes" : "no") + Elapsed(ms) +
+				  " / 呼び出し後の undo building=" + Building());
 	}
 
 	VCOMError RunVs(::vwprobe::Report& probe, IVectorScriptEnginePtr& engine,
@@ -293,15 +354,39 @@ namespace
 	{
 		probe.log(std::string("★ ") + label +
 				  ": これから ExecuteScript を呼ぶ。落ちたらこの行が最後に残る");
+		const Stopwatch watch;
 		const VCOMError err = engine->ExecuteScript(script);
-		LogResult(probe, label, err);
+		LogResult(probe, label, err, watch.ms());
 		return err;
+	}
+
+	// ScriptContext 経由（4 度目に通った道）。ロガーを渡すときは RunEx を使う。
+	void RunScriptContext(::vwprobe::Report& probe, IPythonScriptEnginePtr& engine,
+						  const TXString& script, const char* label, CDefaultPythonLogger* logger)
+	{
+		probe.log(std::string("★ ") + label + ": これから ScriptContext_Begin → " +
+				  (logger != nullptr ? "ScriptContext_RunEx(ロガー)" : "ScriptContext_Run") +
+				  " を呼ぶ");
+		const Stopwatch beginWatch;
+		const VCOMError berr = engine->ScriptContext_Begin(script, logger);
+		probe.log(std::string(label) + ": ScriptContext_Begin VCOMError=" +
+				  std::to_string((long)berr) + Elapsed(beginWatch.ms()));
+
+		const Stopwatch runWatch;
+		const VCOMError rerr =
+			logger != nullptr ? engine->ScriptContext_RunEx(logger) : engine->ScriptContext_Run();
+		probe.log(std::string(label) +
+				  ": ScriptContext_Run VCOMError=" + std::to_string((long)rerr) +
+				  " succeeded=" + (VCOM_SUCCEEDED(rerr) ? "yes" : "no") + Elapsed(runWatch.ms()) +
+				  " / 呼び出し後の undo building=" + Building());
+		if (logger != nullptr)
+			LogPythonLogger(probe, label, *logger);
 	}
 } // namespace
 
-VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニューを呼ぶ（4 度目）",
-		 "Python から vs.* を呼ぶと落ちる件を切り分ける。落ちた節は足跡簿に残り、次に"
-		 "走らせたときは飛ばすので、**走らせ直すだけで先へ進む**")
+VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニューを呼ぶ（5 度目）",
+		 "開いた undo イベントを終わらせた犯人を分け、ダイアログの出所を所要時間で突き止め、"
+		 "通る道（ScriptContext）で Python から Undo が効くかを見る")
 {
 	IVectorScriptEnginePtr vsEngine(IID_VectorScriptEngine);
 	IPythonScriptEnginePtr pyEngine(IID_PythonScriptEngine);
@@ -313,6 +398,8 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 	probe.log("両エンジンを取得できた");
 	probe.log("判定の読み方: pre=C++ が作ったマーカー（消えれば呼び出し元の操作まで"
 			  "取り消せたということ）/ m1=スクリプトが Undo の直前に作る / m2=直後に作る");
+	probe.log("**ダイアログが出たら閉じてください。どの呼び出しで出たかは elapsed= で分かる**"
+			  "——秒単位で掛かった 1 本がそれです（他は数ミリ秒で戻ります）");
 
 	StepLedger ledger(probe.logPath());
 	if (!ledger.enabled())
@@ -320,16 +407,12 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 	else if (ledger.previous().empty())
 		probe.log("足跡簿: 前回の記録は無い（初回）");
 	else
-	{
-		std::string joined;
-		for (const std::string& s : ledger.previous())
-			joined += (joined.empty() ? "" : " / ") + s;
-		probe.log("足跡簿（前回まで）: " + joined);
-		probe.log("足跡簿の置き場: " + ledger.path() + "（消せば飛ばした節もまた走る）");
-	}
+		probe.log("足跡簿: " + std::to_string(ledger.previous().size()) +
+				  " 行の記録がある。置き場は " + ledger.path() + "（消せば飛ばした節もまた走る）");
 
 	// =====================================================================
-	// N1) VectorScript・足跡つき（2・3 度目の追認）
+	// N1) VectorScript・足跡つき（2〜4 度目の追認）。**ここが唯一 CompileScript を
+	//     呼ぶ節**なので、ダイアログの出所を測るのもここ。
 	// =====================================================================
 	{
 		Step step(probe, ledger, "N1", "VectorScript・足跡つき Undo");
@@ -342,15 +425,16 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 			probe.log("N1: 実行前 " + Marks(pre, m1, m2));
 
 			const TXString script = VsWithFootprints(m1, m2);
-			probe.log("★ N1: これから CompileScript(showDialogs=false) を呼ぶ。**ここで"
-					  "「コンパイルに成功しました」が出たら、その旨を控えてください**");
+			probe.log("★ N1: これから CompileScript(showDialogs=false) を呼ぶ");
 			bool ok = false;
 			Sint32 line = -1;
 			TXString errorText;
+			const Stopwatch watch;
 			const VCOMError cerr = vsEngine->CompileScript(script, false, ok, &line, &errorText);
 			probe.log(std::string("N1: CompileScript VCOMError=") + std::to_string((long)cerr) +
 					  " ok=" + (ok ? "yes" : "no") + " line=" + std::to_string((long)line) +
-					  " errorText=[" + std::string(static_cast<const char*>(errorText)) + "]");
+					  " errorText=[" + std::string(static_cast<const char*>(errorText)) + "]" +
+					  Elapsed(watch.ms()));
 
 			RunVs(probe, vsEngine, script, "N1(VS)");
 			probe.log("N1: 実行後 " + Marks(pre, m1, m2) +
@@ -376,28 +460,23 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 	}
 
 	// =====================================================================
-	// N3) 開いた undo イベントの中で呼ぶ。**エラーの出ようが無いスクリプト**なので、
-	//     それでもイベントが終わるなら、原因はエラー処理ではなく ExecuteScript そのもの。
+	// N3) 開いた undo イベントの中で、**無害なスクリプト**を走らせる（4 度目の追認）。
+	//     4 度目は building=yes のまま戻った＝`ExecuteScript` は犯人ではない。
 	// =====================================================================
 	{
-		Step step(probe, ledger, "N3", "開いている undo イベントの中で呼ぶ（VectorScript）");
+		Step step(probe, ledger, "N3",
+				  "開いた undo イベントの中で無害なスクリプト（VectorScript）");
 		if (!step.skip())
 		{
 			const std::string inner = "probe-n3-inner";
-			probe.log(std::string("N3: 開始前の undo building=") +
-					  (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
+			probe.log("N3: 開始前の undo building=" + Building());
 			gSDK->SetUndoMethod(kUndoSwapObjects);
 			gSDK->NameUndoEvent("probe-n3-open-event");
-			probe.log(std::string("N3: 自分の undo イベントを開いた。building=") +
-					  (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
 			gSDK->CreateLayer(inner.c_str(), kLayerDesign);
-			probe.log("N3: イベントの中でレイヤを作った。存在=" +
-					  Mark(LayerExistsByName(inner.c_str())));
+			probe.log("N3: イベントを開いてレイヤを作った。building=" + Building() +
+					  " / レイヤ=" + Mark(LayerExistsByName(inner.c_str())));
 
 			RunVs(probe, vsEngine, VsLayerOnly("probe-n3-script-layer"), "N3(VS)");
-			probe.log(std::string("N3: 呼び出し後の undo building=") +
-					  (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no") +
-					  "（no なら、自分で閉じていないのに終わっている）");
 			probe.log(
 				"N3: イベントの中で作ったレイヤ=" + Mark(LayerExistsByName(inner.c_str())) +
 				" / スクリプトが作ったレイヤ=" + Mark(LayerExistsByName("probe-n3-script-layer")));
@@ -405,7 +484,63 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 			if (gSDK->IsCurrentlyBuildingAnUndoEvent())
 			{
 				const Boolean removed = gSDK->EndAndRemoveUndoEvent();
-				probe.log(std::string("N3: イベントが残っていたので EndAndRemoveUndoEvent() = ") +
+				probe.log(std::string("N3: 後始末 EndAndRemoveUndoEvent() = ") +
+						  (removed ? "true" : "false"));
+			}
+		}
+	}
+
+	// =====================================================================
+	// N7) 開いた undo イベントの中で、**Undo を呼ぶスクリプト**を走らせる。
+	//     N3 が閉じなかったので、ここで閉じるなら犯人は **Undo そのもの**である。
+	// =====================================================================
+	{
+		Step step(probe, ledger, "N7", "開いた undo イベントの中で Undo を呼ばせる");
+		if (!step.skip())
+		{
+			const std::string inner = "probe-n7-inner";
+			gSDK->SetUndoMethod(kUndoSwapObjects);
+			gSDK->NameUndoEvent("probe-n7-open-event");
+			gSDK->CreateLayer(inner.c_str(), kLayerDesign);
+			probe.log("N7: イベントを開いてレイヤを作った。building=" + Building() +
+					  " / レイヤ=" + Mark(LayerExistsByName(inner.c_str())));
+
+			RunVs(probe, vsEngine, VsUndoOnly(), "N7(VS)");
+			probe.log("N7: イベントの中で作ったレイヤ=" + Mark(LayerExistsByName(inner.c_str())) +
+					  "（building が no なら **イベントを終わらせたのは Undo そのもの**。"
+					  "レイヤも無なら、開きかけのイベントごと取り消された）");
+
+			if (gSDK->IsCurrentlyBuildingAnUndoEvent())
+			{
+				const Boolean removed = gSDK->EndAndRemoveUndoEvent();
+				probe.log(std::string("N7: 後始末 EndAndRemoveUndoEvent() = ") +
+						  (removed ? "true" : "false"));
+			}
+		}
+	}
+
+	// =====================================================================
+	// N8) 開いた undo イベントの中で、**必ず失敗するスクリプト**を走らせる。
+	//     N7 と対にして「Undo が犯人か、失敗の後始末が犯人か」を分ける。
+	// =====================================================================
+	{
+		Step step(probe, ledger, "N8", "開いた undo イベントの中で失敗するスクリプト");
+		if (!step.skip())
+		{
+			const std::string inner = "probe-n8-inner";
+			gSDK->SetUndoMethod(kUndoSwapObjects);
+			gSDK->NameUndoEvent("probe-n8-open-event");
+			gSDK->CreateLayer(inner.c_str(), kLayerDesign);
+			probe.log("N8: イベントを開いてレイヤを作った。building=" + Building());
+
+			RunVs(probe, vsEngine, VsBroken(), "N8(VS)");
+			probe.log("N8: イベントの中で作ったレイヤ=" + Mark(LayerExistsByName(inner.c_str())) +
+					  "（building が no なら **失敗の後始末がイベントを終わらせた**）");
+
+			if (gSDK->IsCurrentlyBuildingAnUndoEvent())
+			{
+				const Boolean removed = gSDK->EndAndRemoveUndoEvent();
+				probe.log(std::string("N8: 後始末 EndAndRemoveUndoEvent() = ") +
 						  (removed ? "true" : "false"));
 			}
 		}
@@ -413,20 +548,20 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 
 	// =====================================================================
 	// N4) Python・print だけ・**ロガー無し**（既定引数の NULL）。
-	//     3 度目に無かった経路。ここが通れば「Python の実行そのもの」は安全。
 	// =====================================================================
 	{
 		Step step(probe, ledger, "N4", "Python・print だけ（ロガー無し）");
 		if (!step.skip())
 		{
 			probe.log("★ N4: これから ExecuteScript(Python, print, ロガー無し) を呼ぶ");
+			const Stopwatch watch;
 			const VCOMError err = pyEngine->ExecuteScript(PyPrintOnly("no-logger"));
-			LogResult(probe, "N4", err);
+			LogResult(probe, "N4", err, watch.ms());
 		}
 	}
 
 	// =====================================================================
-	// N5) Python・print だけ・ロガーあり（3 度目の追認）。
+	// N5) Python・print だけ・ロガーあり。
 	// =====================================================================
 	{
 		Step step(probe, ledger, "N5", "Python・print だけ（ロガーあり）");
@@ -434,15 +569,15 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 		{
 			CDefaultPythonLogger logger;
 			probe.log("★ N5: これから ExecuteScript(Python, print, ロガーあり) を呼ぶ");
+			const Stopwatch watch;
 			const VCOMError err = pyEngine->ExecuteScript(PyPrintOnly("with-logger"), &logger);
-			LogResult(probe, "N5", err);
+			LogResult(probe, "N5", err, watch.ms());
 			LogPythonLogger(probe, "N5", logger);
 		}
 	}
 
 	// =====================================================================
-	// N6) 実行時エラーは戻り値に出るか。**vs を触らない**形で確かめる
-	//     （3 度目は vs.Layer を混ぜていたので、落ちて取りこぼした）。
+	// N6) 実行時エラーは戻り値に出るか。**vs を触らない**形で確かめる。
 	// =====================================================================
 	{
 		Step step(probe, ledger, "N6", "Python・実行時エラー 1/0（vs を触らない）");
@@ -450,89 +585,80 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由で Undo メニ
 		{
 			CDefaultPythonLogger logger;
 			probe.log("★ N6: これから ExecuteScript(Python, 1/0) を呼ぶ");
+			const Stopwatch watch;
 			const VCOMError err = pyEngine->ExecuteScript(
 				TXString("print('probe: before')\n1 / 0\nprint('probe: after')\n"), &logger);
 			probe.log(std::string("N6: ExecuteScript VCOMError=") + std::to_string((long)err) +
-					  " succeeded=" + (VCOM_SUCCEEDED(err) ? "yes" : "no") +
+					  " succeeded=" + (VCOM_SUCCEEDED(err) ? "yes" : "no") + Elapsed(watch.ms()) +
 					  "（0 なら、実行時の失敗は戻り値では分からないということ）");
 			LogPythonLogger(probe, "N6", logger);
 		}
 	}
 
 	// =====================================================================
-	// ここから先は **落ちる見込みがある**。3 度目はロガーつきの vs.Layer で落ちた。
-	// ロガーを外した形を先に置いて、原因がロガーなのか vs.* そのものなのかを分ける。
+	// C4) ScriptContext 経由（4 度目に**通った**道）の追認。
 	// =====================================================================
-	probe.log("=== ここから先は落ちる見込みがある（手前の結果はもう取れている） ===");
-
-	// C1) Python・vs.Layer・**ロガー無し**。
 	{
-		Step step(probe, ledger, "C1", "Python・vs.Layer だけ（ロガー無し）");
-		if (!step.skip())
-		{
-			const std::string name = "probe-c1-py-layer";
-			probe.log("★ C1: これから ExecuteScript(Python, vs.Layer, **ロガー無し**) を呼ぶ。"
-					  "落ちたらこの行が最後に残る＝**Python から vs.* を呼ぶこと自体が原因**"
-					  "（ロガーは無関係）");
-			const VCOMError err = pyEngine->ExecuteScript(PyLayerOnly(name));
-			LogResult(probe, "C1", err);
-			probe.log("C1: 作られたか=" + Mark(LayerExistsByName(name.c_str())));
-		}
-	}
-
-	// C2) Python・vs.Layer・ロガーあり（3 度目に落ちた形そのもの）。
-	{
-		Step step(probe, ledger, "C2", "Python・vs.Layer だけ（ロガーあり＝3 度目に落ちた形）");
-		if (!step.skip())
-		{
-			const std::string name = "probe-c2-py-layer";
-			CDefaultPythonLogger logger;
-			probe.log("★ C2: これから ExecuteScript(Python, vs.Layer, ロガーあり) を呼ぶ。"
-					  "落ちたらこの行が最後に残る＝**ロガーと vs.* の組み合わせ**が原因");
-			const VCOMError err = pyEngine->ExecuteScript(PyLayerOnly(name), &logger);
-			LogResult(probe, "C2", err);
-			LogPythonLogger(probe, "C2", logger);
-			probe.log("C2: 作られたか=" + Mark(LayerExistsByName(name.c_str())));
-		}
-	}
-
-	// C3) Python・足跡つき Undo。ここまで来られたら本題を Python でも見る。
-	{
-		Step step(probe, ledger, "C3", "Python・足跡つき Undo（ロガーあり）");
-		if (!step.skip())
-		{
-			const std::string pre = "probe-c3-pre";
-			const std::string m1 = "probe-c3-m1";
-			const std::string m2 = "probe-c3-m2";
-			gSDK->CreateLayer(pre.c_str(), kLayerDesign);
-			probe.log("C3: 実行前 " + Marks(pre, m1, m2));
-			CDefaultPythonLogger logger;
-			probe.log("★ C3: これから ExecuteScript(Python, 足跡つき Undo, ロガーあり) を呼ぶ");
-			const VCOMError err = pyEngine->ExecuteScript(PyWithFootprints(m1, m2), &logger);
-			LogResult(probe, "C3", err);
-			LogPythonLogger(probe, "C3", logger);
-			probe.log("C3: 実行後 " + Marks(pre, m1, m2));
-		}
-	}
-
-	// C4) ScriptContext 経由。ExecuteScript とは**別の口**（ヘッダにある
-	//     ScriptContext_Begin → ScriptContext_Run）。ExecuteScript が落ちるなら、
-	//     こちらが逃げ道になるかを見る。
-	{
-		Step step(probe, ledger, "C4", "Python・ScriptContext 経由で vs.Layer");
+		Step step(probe, ledger, "C4", "Python・ScriptContext で vs.Layer（通る道の追認）");
 		if (!step.skip())
 		{
 			const std::string name = "probe-c4-py-layer";
-			CDefaultPythonLogger logger;
-			probe.log("★ C4: これから ScriptContext_Begin → ScriptContext_Run を呼ぶ");
-			const VCOMError berr = pyEngine->ScriptContext_Begin(PyLayerOnly(name), &logger);
-			probe.log(std::string("C4: ScriptContext_Begin VCOMError=") +
-					  std::to_string((long)berr));
-			const VCOMError rerr = pyEngine->ScriptContext_Run();
-			probe.log(std::string("C4: ScriptContext_Run VCOMError=") + std::to_string((long)rerr) +
-					  " succeeded=" + (VCOM_SUCCEEDED(rerr) ? "yes" : "no"));
-			LogPythonLogger(probe, "C4", logger);
+			RunScriptContext(probe, pyEngine, PyLayerOnly(name), "C4", nullptr);
 			probe.log("C4: 作られたか=" + Mark(LayerExistsByName(name.c_str())));
+		}
+	}
+
+	// =====================================================================
+	// C5) 同じ道で print。**この道でもロガーは働くか**（RunEx がロガーを取る）。
+	//     4 度目は Begin にだけロガーを渡していて、stdout / stderr とも空だった。
+	// =====================================================================
+	{
+		Step step(probe, ledger, "C5", "Python・ScriptContext で print（RunEx にロガー）");
+		if (!step.skip())
+		{
+			CDefaultPythonLogger logger;
+			RunScriptContext(probe, pyEngine, PyPrintOnly("script-context"), "C5", &logger);
+		}
+	}
+
+	// =====================================================================
+	// C6) **本題。通る道で Python から Undo は効くか。** VectorScript 版（N1）と同じ
+	//     足跡で測るので、結果はそのまま比べられる。
+	// =====================================================================
+	{
+		Step step(probe, ledger, "C6", "Python・ScriptContext で足跡つき Undo（本題）");
+		if (!step.skip())
+		{
+			const std::string pre = "probe-c6-pre";
+			const std::string m1 = "probe-c6-m1";
+			const std::string m2 = "probe-c6-m2";
+			gSDK->CreateLayer(pre.c_str(), kLayerDesign);
+			probe.log("C6: 実行前 " + Marks(pre, m1, m2));
+			CDefaultPythonLogger logger;
+			RunScriptContext(probe, pyEngine, PyWithFootprints(m1, m2), "C6", &logger);
+			probe.log("C6: 実行後 " + Marks(pre, m1, m2) +
+					  "（VectorScript 版と同じ pre=有 m1=無 m2=有 なら、Python でも同じ挙動）");
+		}
+	}
+
+	// =====================================================================
+	// C1) **必ず最後に置く。** `ExecuteScript` から `vs.*` を呼ぶ道は 4 度目に 3 通り
+	//     とも落ちた。ここは「落ちること」の記録であって、新しい問いではない。
+	//     足跡簿に前回の記録があれば飛ばされる。
+	// =====================================================================
+	{
+		Step step(probe, ledger, "C1", "Python・ExecuteScript で vs.Layer（落ちることの記録）");
+		if (!step.skip())
+		{
+			const std::string name = "probe-c1-py-layer";
+			probe.log("★ C1: これから ExecuteScript(Python, vs.Layer, ロガー無し) を呼ぶ。"
+					  "**4 度目はここで落ちた**（ロガーの有無に関わらず落ちる）。"
+					  "落ちても、ここまでの結果はもう取れている");
+			const Stopwatch watch;
+			const VCOMError err = pyEngine->ExecuteScript(PyLayerOnly(name));
+			LogResult(probe, "C1", err, watch.ms());
+			probe.log("C1: 作られたか=" + Mark(LayerExistsByName(name.c_str())) +
+					  "（落ちなかった＝4 度目と違う。条件を洗い直すこと）");
 		}
 	}
 
