@@ -53,6 +53,10 @@ on:
       - "probes/runtime/**"
       - "scripts/gather-probes.sh"
       - "scripts/fetch-vw-sdk.sh"
+      # リリース本文を組むスクリプト。**これは「読み物」ではない**——公開されている
+      # リリースノートそのものなので、直しても作り直されないと、間違った案内が
+      # 転がりタグに残り続ける（実際に残った: #43 を入れても公開分は古いままだった）。
+      - "scripts/probe-release-notes.sh"
       - ".github/workflows/probe-build.yml"
   pull_request:
     paths:
