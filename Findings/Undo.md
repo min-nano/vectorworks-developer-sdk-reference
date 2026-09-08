@@ -262,8 +262,38 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
   開始し、削除が終わったら `EndUndoEvent`（登録するものが無ければ
   `EndAndRemoveUndoEvent`）まで自分で閉じる**——本ファイル冒頭の RAII の作法をそのまま
   レイヤ削除にも適用する。
-- **未確認のまま残っているもの**: シートレイヤを消したときのビューポートへの副作用、
-  ビューポートが参照する側のデザインレイヤを先に消した場合の影響、削除順序の決まり。
-  今回のプローブはデザインレイヤ単体の削除しか見ていない。ホームズ君 IFC 取り込み
-  プラグインの用途（前回自分が作ったデザインレイヤを消す）はこれで足りるため、
-  シートレイヤ／ビューポート絡みは必要になった時点で別途 issue を立てて調べる。
+- **ビューポートの載ったシートレイヤも `DeleteObject(sheetLayer, true)` で丸ごと消せる**
+  （実機。[issue #29](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/29)、
+  `probes/runtime/delete-sheet-layer-viewport/`）。ビューポート 2 枚＋注釈空間へ
+  `ISDK::AddViewportAnnotationObject` で足したオブジェクト（データタグ・グラフィック
+  凡例の代用としてロケータ点）を載せたシートレイヤを削除したところ、シートは削除後に
+  同名レイヤとして辿れなくなり（消えた）、VW も落ちなかった。**ビューポート・注釈
+  オブジェクトのどちらも、他のレイヤへ取り残されることなくシートと一緒に消えた**
+  （削除後に図面上の全レイヤ直下を走査しても痕跡が残っていない）。
+  なお `ISDK::CreateViewport(parentHandle)` の `parentHandle` は「どのデザインレイヤを
+  表示するか」ではなく「どの容れ物（レイヤ／レイヤ内のグループ）に置くか」を指定する
+  引数【ヘッダ根拠】（`GS_CreateViewport` の説明: "The specified parent handle may only
+  be a layer or a group contained within a layer, nested or otherwise"）。表示する
+  デザインレイヤは作成後に `ISDK::SetViewportLayerVisibility(viewport, designLayer,
+  kLayerVisibilityNormal)` で個別に可視性を設定して初めて決まる。
+- **参照されていたデザインレイヤ側に副作用は無い。** シートレイヤを消しても、
+  ビューポートが表示していたデザインレイヤとその上の図形（矩形）はそのまま図面に
+  残った——ビューポート経由の参照は片方向で、シート側を消してもデザインレイヤは無傷。
+- **削除順序に決まりは無い。** 「シートを先に消す」のが安全という前提で調べたが、
+  逆に**ビューポートがまだ参照しているデザインレイヤを先に `DeleteObject` で消しても
+  VW は落ちない。** 参照先を失ったビューポートはシートレイヤの直下メンバとしてそのまま
+  辿れ、その状態で `UpdateViewport` を呼んでも落ちなかった（表示すべきデザインレイヤが
+  無いだけで、オブジェクトとしては壊れない）。**その後もシートレイヤ自体を
+  `DeleteObject` で問題なく消せる**——参照先を失っていても削除処理は通常どおり完了した。
+  したがって**どちらの順序で消しても最終的に同じ状態（両方消える）に落ち着く**
+  （ただし逆順では、デザインレイヤ削除後からシートレイヤ削除までの間、ビューポートが
+  「表示するものが無い」半端な状態のまま図面に残る点には留意する）。
+- 今回も落とし穴を踏んだ: **ビューポートの作成・更新（`CreateViewport` /
+  `SetViewportLayerVisibility` / `UpdateViewport` / `AddViewportAnnotationObject`）
+  だけで、`DeleteObject` を呼ぶ**前**から undo イベントが自動的に開いていた**
+  （実測: 最初の `DeleteObject` を呼ぶ前の時点で `IsCurrentlyBuildingAnUndoEvent()` が
+  既に `true`）。これは本ファイル冒頭の「断面ビューポートの生成のように SDK 内部が
+  自前で undo イベントを開く呼び出しがある」の一例で、**通常の（断面ではない）平面
+  ビューポートの生成・更新でも同じことが起きる**。レイヤ削除に限らず、ビューポートを
+  扱う処理を自前の undo イベントで包む場合は、包む**前**に
+  `IsCurrentlyBuildingAnUndoEvent()` を確認すること。
