@@ -21,7 +21,7 @@ VectorScript の資料（`vs.py`、スクリプトのエクスポート）から
 | ビューポートの重ね順上書き | **書けない**（読み出しのみ） | VectorScript にも無い（`vs.py` に `Stacking` のヒット無し）。[Layers and Stories](Layers%20and%20Stories.md) |
 | `AddAssociation` / `RemoveAssociation`（図形同士の関連付け） | **無い**（読む `GetNumAssociations` / `GetAssociation`、消す `DeleteAssociations` だけ） | `associationKind` の定数は SDK ヘッダに 1 つも無い。[Parametric Objects](Parametric%20Objects.md) |
 | `SM_FromShape`（図形から構造材を作る） | **無い** | 構造材は PIO として `CreateCustomObject` で作る。構造材同士の自動結合を作る API は VectorScript 側にも無い。[Parametric Objects](Parametric%20Objects.md) |
-| `DoMenuText` / `DoMenuTextByName`（メニューコマンドを名前で起動） | **無い**（直接は） | 汎用の「メニュー項目を実行する」API が ISDK / VWFC に無い（`Include/vs.py` にスクリプト用の宣言があるだけ）。**間接経路**（`IVectorScriptEngine` / `IPythonScriptEngine` の `ExecuteScript` でスクリプトごと実行させる）は存在するが、同期性・呼べる文脈・エラー判別は未確認。[Undo](Undo.md) |
+| `DoMenuText` / `DoMenuTextByName`（メニューコマンドを名前で起動） | **無い**（直接は） | 汎用の「メニュー項目を実行する」API が ISDK / VWFC に無い（`Include/vs.py` にスクリプト用の宣言があるだけ）。**間接経路**（`IVectorScriptEngine` / `IPythonScriptEngine` の `ExecuteScript` でスクリプトごと実行させる）は存在し、コマンド実行中に呼べて成否も分かるが、**その中で `DoMenuTextByName('Undo', 0)` を呼んでも取り消しは 1 段も掛からない**（実機確認済み）。しかも**呼び出し側が開いている undo イベントが勝手に終わらされる**。[Undo](Undo.md) |
 
 **逆に、VectorScript 運用より SDK が楽になった例**: 断面ビューポートは
 `ISDK::CreateSectionViewport` で**新規作成できる**（VectorScript 時代に既製ビューポートを
