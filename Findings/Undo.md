@@ -157,10 +157,14 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
 
 ## 間接経路: スクリプトエンジン経由で `DoMenuTextByName` 相当を呼ぶ
 
-**結論: 呼び出す口はある（ヘッダ根拠）が、この経路で取り消しは 1 段も掛からない
-（実機確認済み。[issue #39](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/39)）。
-しかも呼ぶと、呼び出し側が開いている undo イベントが勝手に終わらされる**——
-`ExecuteScript` は undo イベントを開いている最中に呼んではいけない。
+**結論: 呼び出す口はある**【ヘッダ根拠】。**ただし取り消しが効くかどうかは【未確認】**
+——実機では `ExecuteScript` が成功（`VCOMError=0`）を返したのに、画面にはスクリプトエラーが
+出ていた（[issue #39](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/39)
+を再開して確かめ直している）。実機で確定したのは次の 2 つ。
+
+- **`VCOMError=0` は「実行時エラーが起きなかった」を意味しない。**
+- **呼ぶと、呼び出し側が開いている undo イベントが終わらされる。**
+  `ExecuteScript` は undo イベントを開いている最中に呼んではいけない。
 
 前節「プラグインから `DoMenuTextByName` 相当を呼ぶ」で確定した「メニューコマンドを
 名前で**直接**起動する汎用 API は無い」に対し、「SDK から VectorScript / Python の
@@ -201,13 +205,18 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
   「リソースとして保存済みのスクリプトを実行させる API」という形そのものは無く、
   呼び出し側でリソースを読んでテキスト化する一手間が要る【ヘッダ根拠】。
 
-### 実機で確かめたこと（VW 2026 / macOS）
+### 実機で走らせた結果と、その読み方（VW 2026 / macOS）
+
+**この節の結論は一度書き換えている。** 最初は「スクリプトは走ったが取り消しが効かない」と
+無印（＝実機確認済み）で書いたが、**走らせた利用者から「スクリプトエラーが出ていた」という
+指摘があり、その前提が崩れた**。エラーの出ていた回の実行は `DoMenuTextByName('Undo', 0)` へ
+**到達していない可能性がある**——そうであれば「取り消しが効かない」は確かめられていない。
+以下は**その指摘を織り込んだ、いまの水準**である。
 
 実機確認プラグイン（VwSdkProbes、ビルド `3a60d15e81fb`）でプローブ
 `probes/runtime/script-engine-undo/` を、**メニューコマンドの中（`DoInterface` の中）から**
-走らせた（役目を終えたのでプローブ自体は削除済み）。マーカーには**直前に作った
-デザインレイヤ**を使い、「`DoMenuTextByName('Undo', 0)` が効いたならレイヤが消えるはず」を
-判定にしている。渡したスクリプトは
+走らせた。マーカーには**直前に作ったデザインレイヤ**を使い、
+「`DoMenuTextByName('Undo', 0)` が効いたならレイヤが消えるはず」を判定にした。渡したのは
 
 ```
 （VectorScript）PROCEDURE __ProbeScriptEngineUndo;
@@ -217,62 +226,85 @@ ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に�
                 vs.DoMenuTextByName('Undo', 0)
 ```
 
-の 2 つ。**印の無い記述は実機確認済み。**
+の 2 つ。**呼び出しの形はどちらも宣言どおりで正しい**【ヘッダ根拠】——`Include/vs.py` に
+`Python: vs.DoMenuTextByName(subMenu, index)` /
+`VectorScript: PROCEDURE DoMenuTextByName(subMenu:STRING; index:INTEGER);` とある。
 
-- **両エンジンともコマンド実行中に取得でき、スクリプトは実際に走る。**
-  `IVectorScriptEngine` / `IPythonScriptEngine` の `VCOMPtr` はコマンド実行中に取れた。
-  `CompileScript` は VectorScript 版・Python 版とも `ok=yes`、`ExecuteScript` は
-  `VCOMError=0`（成功）。**落ちない。**
-- **しかし取り消しは 1 段も掛からない。** 直前に作ったマーカーレイヤは、VectorScript
-  版でも Python 版でも `ExecuteScript` から戻った時点で**残っている**。マーカーを 2 枚
-  作って**連続 2 回**呼んでも**両方残る**——「複数段戻せるか」以前に **1 段も戻らない**。
-- **`VCOMError=0` は「スクリプトを実行できた」であって「Undo が効いた」ではない。**
-  戻り値が見ているのはスクリプトの実行可否だけで、その中の
-  `DoMenuTextByName('Undo', 0)` が何もしなかったことは**呼び出し側へ伝わらない**。
-- **【危険】自分の undo イベントを開いたまま呼ぶと、そのイベントが消える。**
+#### 確定していること（無印＝実機確認済み）
+
+- **両エンジンともコマンド実行中に取得できる。** `IVectorScriptEngine` /
+  `IPythonScriptEngine` の `VCOMPtr` はコマンド実行中（`DoInterface` の中）に取れた。
+  **落ちない。**
+- **`CompileScript` は両エンジンとも通った**（`ok=yes`）。構文の問題ではない。
+- **`ExecuteScript` は `VCOMError=0`（成功）を返した。** ——**それでも実機の画面には
+  スクリプトエラーが出ていた**（走らせた利用者の報告）。つまり
+  **`VCOMError=0` は「エラーが起きなかった」を意味しない。**
+- **マーカーレイヤは 1 枚も消えなかった**（VectorScript 版・Python 版とも、連続 2 回でも）。
+  ただしこれは「取り消しが効かない」の証明にはならない——**呼び出しへ到達していなければ、
+  同じ結果になる**（下記「未確認」）。
+- **【危険】自分の undo イベントを開いたまま呼ぶと、そのイベントが終わっている。**
   `SetUndoMethod(kUndoSwapObjects)` ＋ `NameUndoEvent(...)` で開き
-  （`IsCurrentlyBuildingAnUndoEvent()` = `yes`）、その中でレイヤを 1 枚作ってから
-  `ExecuteScript` を呼ぶと、**戻ったときには `no` になっていた**——こちらは
-  `EndUndoEvent` も `EndAndRemoveUndoEvent` も呼んでいない。しかも**イベントの中で
-  作ったレイヤは残っている**ので、「取り消されて消えた」のではなく
-  **イベントだけが勝手に終わらされている**。
-  - 本ファイル冒頭の「半端な記録を取り消すと図面が壊れる」（ビューポートだけ消える）
-    事態は、**この場面では起きなかった**。
-  - それでも危ない。**RAII で `EndUndoEvent` を呼ぶ作りだと、もう無いイベントを
+  （`IsCurrentlyBuildingAnUndoEvent()` = `yes`）、中でレイヤを 1 枚作ってから
+  `ExecuteScript` を呼ぶと、**戻ったときには `no`**——こちらは `EndUndoEvent` も
+  `EndAndRemoveUndoEvent` も呼んでいない。**イベントの中で作ったレイヤは残っている**ので、
+  取り消されて消えたのではなく**イベントだけが終わらされている**。
+  - これは C++ 側から直接見た値なので、**スクリプトがエラーで終わったとしても観測は有効**
+    （むしろ「エラー処理の巻き戻しがイベントを閉じた」可能性が出てきた）。
+  - どちらにせよ**危ない**。RAII で `EndUndoEvent` を呼ぶ作りだと、**もう無いイベントを
     閉じにいく**ことになる。**`ExecuteScript` は undo イベントの中で呼ばない。**
-- **エラーは判別できる。ただし「どこが」は分からない。** 壊れた VectorScript
-  （`ThisIsNotAValidCall(;`）を渡すと `CompileScript` は `ok=no`、`ExecuteScript` は
-  `VCOMError=1` / `succeeded=no`。**`ExecuteScript` 単体でも成否は分かる**（ヘッダから
-  「`VCOMError` はインターフェース自体のエラーしか示さないかもしれない」と懸念して
-  いた点は、実測で否定された）。一方 `CompileScript` の `outErrorText` は**空**、
-  `outLineNumberOfSelectedError` は **-1** で、**エラーの内容も場所も取れなかった**
-  （`showDialogs=false` で呼んでいるのでダイアログにも出ない）。
-- **同期らしい**【推定】。`ExecuteScript` から戻った時点で「開いていた undo イベントが
-  終わっている」という**副作用が既に観測できる**ので、スクリプトは呼び出しの中で
-  走っているとみなせる。ただし「Undo だけが遅れて効く」可能性は、この実測では
-  否定しきれない（**少なくとも C の 2 回目の呼び出しが戻った時点までは 1 枚も
-  消えていない**ところまでしか見ていない。プローブは後片付けをしないので、
-  走らせた図面を見ればその先も確かめられる）。参考: `ExecuteScript` 6 回を含む
-  プローブ全体の所要は 13.8 秒（Python エンジンの初回起動を含む）。
+  - 図面が壊れる（本ファイル冒頭の「ビューポートだけ消える」）事態は起きなかった。
+- **構文エラーは戻り値で判別できる。** 壊れた VectorScript（`ThisIsNotAValidCall(;`）を
+  渡すと `CompileScript` は `ok=no`、`ExecuteScript` は `VCOMError=1` / `succeeded=no`。
+  ただし `CompileScript` の `outErrorText` は**空**、`outLineNumberOfSelectedError` は
+  **-1** で、**エラーの内容も場所も取れなかった**（`showDialogs=false` で呼んでいるので
+  ダイアログにも出ない）。
+  - **これは「コンパイル時に落ちる誤り」の話であって、実行時のエラーとは別**である。
+    上記のとおり実行時エラーは `VCOMError=0` のまま素通りした。
 
-**なぜ効かないのかは分かっていない。** `DoMenuTextByName('Undo', 0)` がプラグインの
-コマンド実行中には無視される／後回しにされるのか、この経路からはメニュー相当の取り消しが
-そもそも起動しないのか、どちらかまでは切り分けていない（スクリプトの実行自体は成功して
-いるので、少なくとも「スクリプトが走らなかった」ではない）。用途にとって必要なのは
-**この経路では取り消せない**という事実の方なので、ここで打ち切る。
+#### 未確認のまま残っていること
 
-**結論**: [#23](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/23)
+- **`DoMenuTextByName('Undo', 0)` の呼び出しに到達したのか。** 到達したうえで
+  取り消しが効かなかったのか、そこまで行かずにエラーで終わったのかが**切り分いていない**。
+  この節の元の結論（「取り消しは 1 段も掛からない」）は、この切り分けが付くまで**保留**。
+- **出たエラーの内容と、どちらのエンジンのものか。**
+  - **Python 版は取れたはずだった。** `ExecuteScript(script, IPythonLogger*)` の第 2 引数に
+    ロガーを渡せば `LogStdOut` / `LogStdErr` へ流れてくる。SDK は
+    **`CDefaultPythonLogger`（`IPythonWrapper.h` にヘッダだけで完結する実装）**を同梱して
+    おり、`fOutput` / `fErrors` に溜まる。**このプローブは `nullptr` を渡していて、
+    traceback を捨てていた**——プローブ側の不備【ヘッダ根拠】。
+  - **VectorScript 版は構造的に取れない。** `IVectorScriptEngine::ExecuteScript(const
+    TXString&)` は引数がスクリプト 1 つだけで、ロガーも出力引数も無い【ヘッダ根拠】。
+    `ReportRuntimeWarning` / `ReportRuntimeError` は**スクリプトからホストへ通知する**
+    逆方向の口。したがって**この経路のエラーは、呼び出し側からは見えない**。
+  - **スクリプトから C++ へ値を返す近道も無い。** `Repository_GetValue` はエンジン側
+    （C++）の API で、スクリプトから書き込む `vs.*` の口は無い（`vs.py` を検索して 0 件）
+    【ヘッダ根拠】。VectorScript 側の足跡は、**スクリプト自身に図形を作らせて C++ で
+    その存在を見る**しかない。
+- **同期性**【推定】。`ExecuteScript` から戻った時点で「開いていた undo イベントが
+  終わっている」という副作用が観測できるので、呼び出しの中で走っているとみなせる。
+  ただしエラーで終わっていたなら、それは**エラー処理が同期的だった**ことを示すに過ぎない。
+
+#### 教訓（プローブの作り方）
+
+- **成否を戻り値だけで判定しない。** ここでは `VCOMError=0` を「走った」と読んでしまった。
+  スクリプトの中の出来事は戻り値に出ない。
+- **スクリプトには足跡を残させる。** 呼び出しの前後で図形（レイヤ）を作らせておけば、
+  「どこまで到達したか」が**目視なしで**分かる。
+- **拾える口があるなら必ず拾う。** Python のロガーを `nullptr` で捨てたのが、この調査の
+  やり直しを生んだ。
+
+**この経路を「使える」と判断してはいけない。** 取り消しが効くかどうかは未確認だが、
+**エラーが呼び出し側に伝わらない**（VectorScript 版は構造的に、Python 版もロガーを渡さない
+限り）という一点だけで、**前回の描画を消す**ような後戻りできない用途には向かない。
+ホームズ君 IFC 取り込みプラグインの用途では、引き続き次節「レイヤのハンドルを直接
+`DeleteObject` する」を使う。あわせて **`ExecuteScript` を undo イベントの中で呼ばない**
+（開いているイベントが終わる）を守ること。
+
+[#23](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/23)
 （閉じたイベントには効かない）・[#27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)
 （メニューを名前で起動する API が無い）・[#31](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/31)
-（イベントを閉じずに返して次の実行から戻す）に続き、**この間接経路も塞がった**——
-「プログラムから取り消しを掛ける」道は**これで 4 本とも無い**。ホームズ君 IFC 取り込み
-プラグインの「前の周の図を消す」用途では、引き続き次節「レイヤのハンドルを直接
-`DeleteObject` する」を使う。あわせて **`ExecuteScript` を undo イベントの中で呼ばない**
-（開いているイベントが消える）を守ること。
-
-なお、スクリプトエンジン自体は「実行できる・成否が分かる・落ちない」ことが実機で
-確かめられた。**Undo 以外の用途**（SDK に口が無い VectorScript 関数を借りる等）で
-使う余地はある——その場合も上の「undo イベントの中で呼ばない」は同じく効く。
+（イベントを閉じずに返して次の実行から戻す）の 3 本は塞がったままで、**この間接経路だけが
+「まだ確かめ切れていない 4 本目」**として残っている。
 
 ## レイヤのハンドルを直接 `DeleteObject` する
 
