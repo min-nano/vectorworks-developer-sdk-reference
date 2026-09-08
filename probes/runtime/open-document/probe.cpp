@@ -49,7 +49,9 @@ VW_PROBE("open-document", "コマンド実行中に別の文書を OpenDocumentP
 		 "レイヤ・前の文書のハンドル・undo イベント・GetOpenFilesList の変化と、"
 		 "SwitchToOpenFile での復帰・CloseDocument の保存ダイアログを確かめる")
 {
-	using namespace VectorWorks::Filing;
+	using namespace VectorWorks; // TVWArray_OpenFileInformation は VectorWorks 直下、
+								 // IFileIdentifier 等は VectorWorks::Filing（ISDK.h が
+								 // 内側で using namespace 済みなので、ここは 1 つで足りる）
 
 	// --- 開く前の状態を記録する ---
 	const MCObjectHandle beforeLayer = gSDK->GetCurrentLayer();
