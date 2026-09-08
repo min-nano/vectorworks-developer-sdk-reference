@@ -5,10 +5,10 @@
 //	ネイティブダイアログ（gSDK->AlertInform / AlertQuestion）で、ネットワークと入れ替えの
 //	実務は同梱スクリプトへ渡す。
 //
-//	プラットフォーム依存はこの 3 つだけ:
-//	  * 自分のバイナリの場所（mac: dladdr / win: GetModuleHandleEx）
-//	  * スクリプトの起動と標準出力の取り込み（popen / _popen）
+//	プラットフォーム依存はこの 2 つだけ:
+//	  * ホストアプリ（Vectorworks 本体）の位置
 //	  * 再起動ヘルパーの投げ方（nohup … & / CreateProcess）
+//	同梱スクリプトの起動は BundledScript.h（結果の投稿＝Feedback.cpp と共有する）、
 //	文字列の処理と判断は UpdateParse.h（純粋）にある。
 //
 //	【出どころ】実プラグイン（vectorworks-plugin-import-ifc-homeskz の src/Updater.cpp）で
@@ -19,6 +19,8 @@
 #include "PluginPrefix.h"
 #include "BuildConfig.h"
 #include "Update.h"
+#include "Alerts.h"
+#include "BundledScript.h"
 #include "UpdateParse.h"
 
 #include <array>
@@ -42,62 +44,6 @@ using namespace vwprobe::update;
 namespace
 {
 #if GS_MAC
-
-	// 同梱スクリプトの名前（CMake がこの名前でバンドルの Contents/Resources へ置く）。
-	constexpr const char* kScriptName = "vw-probes-update.sh";
-
-	// 同梱スクリプトの絶対パス（見つからなければ空）。自分の binary は
-	// <name>.vwlibrary/Contents/MacOS/<name> なので、末尾を Resources/<script> に替える。
-	std::string BundledScriptPath()
-	{
-		Dl_info info{};
-		if (::dladdr(reinterpret_cast<const void*>(&BundledScriptPath), &info) == 0 ||
-			info.dli_fname == nullptr)
-			return "";
-		return MacScriptPathFromBinary(info.dli_fname, kScriptName);
-	}
-
-	// このビルドが**実際に読み込まれた** Plug-Ins フォルダ（既定パスの決め打ちではない）。
-	std::string BundlePluginsDir()
-	{
-		Dl_info info{};
-		if (::dladdr(reinterpret_cast<const void*>(&BundlePluginsDir), &info) == 0 ||
-			info.dli_fname == nullptr)
-			return "";
-		return MacPluginsDirFromBinary(info.dli_fname);
-	}
-
-	// スクリプトを実行して標準出力を out に取り込む（終わるまで待つ）。
-	bool RunBundledScript(const std::vector<std::string>& args, std::string& out)
-	{
-		const std::string script = BundledScriptPath();
-		if (script.empty())
-			return false;
-
-		// 読み込み元のフォルダを教える（そこから読み、そこへ入れる）。
-		std::string env;
-		const std::string pluginsDir = BundlePluginsDir();
-		if (!pluginsDir.empty())
-			env = "VW_PLUGINS_DIR=" + ShellQuote(pluginsDir) + " ";
-
-		std::string cmd = env + "/bin/bash " + ShellQuote(script);
-		for (const std::string& a : args)
-			cmd += " " + ShellQuote(a);
-		cmd += " 2>/dev/null";
-
-		// NOLINTNEXTLINE(cert-env33-c): 実行するのは自分が同梱したスクリプトだけ。
-		FILE* pipe = ::popen(cmd.c_str(), "r");
-		if (pipe == nullptr)
-			return false;
-
-		out.clear();
-		std::array<char, 4096> buf{};
-		size_t n = 0;
-		while ((n = ::fread(buf.data(), 1, buf.size(), pipe)) > 0)
-			out.append(buf.data(), n);
-		::pclose(pipe);
-		return true;
-	}
 
 	// 起動し直す対象の .app（ホストアプリ＝Vectorworks 本体のバンドル）。
 	std::string HostAppPath()
@@ -153,9 +99,6 @@ namespace
 
 #elif GS_WIN
 
-	// 同梱スクリプトの名前（CMake がこの名前で .vlb の隣へ置く）。
-	constexpr const char* kScriptName = "vw-probes-update.ps1";
-
 	std::wstring Widen(const std::string& s)
 	{
 		if (s.empty())
@@ -175,81 +118,6 @@ namespace
 		std::string s(n, '\0');
 		::WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), s.data(), n, nullptr, nullptr);
 		return s;
-	}
-
-	// 自分（読み込まれている .vlb）のフルパス。
-	std::string OwnModulePath()
-	{
-		HMODULE self = nullptr;
-		if (::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-									 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-								 reinterpret_cast<LPCWSTR>(&OwnModulePath), &self) == 0 ||
-			self == nullptr)
-			return "";
-
-		std::wstring buf(MAX_PATH, L'\0');
-		DWORD len = ::GetModuleFileNameW(self, buf.data(), (DWORD)buf.size());
-		while (len == buf.size())
-		{
-			buf.resize(buf.size() * 2, L'\0');
-			len = ::GetModuleFileNameW(self, buf.data(), (DWORD)buf.size());
-		}
-		if (len == 0)
-			return "";
-		buf.resize(len);
-		return Narrow(buf);
-	}
-
-	// Windows では .vlb が Plug-Ins フォルダに直に置かれるので、そこがスクリプトの場所でも
-	// 入れ先でもある。
-	std::string OwnModuleDir()
-	{
-		return WinModuleDirFromPath(OwnModulePath());
-	}
-
-	std::string BundledScriptPath()
-	{
-		return WinScriptPathFromDir(OwnModuleDir(), kScriptName);
-	}
-
-	std::string BundlePluginsDir()
-	{
-		return OwnModuleDir();
-	}
-
-	bool RunBundledScript(const std::vector<std::string>& args, std::string& out)
-	{
-		const std::string script = BundledScriptPath();
-		if (script.empty())
-			return false;
-
-		const std::string pluginsDir = BundlePluginsDir();
-		if (!pluginsDir.empty())
-			::SetEnvironmentVariableW(L"VW_PLUGINS_DIR", Widen(pluginsDir).c_str());
-
-		std::string cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File " + CmdQuote(script);
-		for (const std::string& a : args)
-			cmd += " " + CmdQuote(a);
-		cmd += " 2>NUL";
-
-		FILE* pipe = ::_popen(cmd.c_str(), "r");
-		if (pipe == nullptr)
-		{
-			if (!pluginsDir.empty())
-				::SetEnvironmentVariableW(L"VW_PLUGINS_DIR", nullptr);
-			return false;
-		}
-
-		out.clear();
-		std::array<char, 4096> buf{};
-		size_t n = 0;
-		while ((n = ::fread(buf.data(), 1, buf.size(), pipe)) > 0)
-			out.append(buf.data(), n);
-		::_pclose(pipe);
-
-		if (!pluginsDir.empty())
-			::SetEnvironmentVariableW(L"VW_PLUGINS_DIR", nullptr);
-		return true;
 	}
 
 	// ホストの実行ファイル（＝Vectorworks 本体）。
@@ -308,30 +176,15 @@ namespace vwprobe
 {
 	namespace
 	{
-		// モーダルの通知（false = 最小アラートではなくダイアログ。advice 行も出る）。
-		void Inform(const std::string& text, const std::string& advice)
-		{
-			gSDK->AlertInform(text.c_str(), advice.c_str(), false);
-		}
-
-		// はい／いいえ。肯定側を選んだら true。
-		bool Ask(const std::string& text, const std::string& advice, const std::string& okText,
-				 const std::string& cancelText)
-		{
-			// 戻り値 0 = 否定／キャンセル、1 = 肯定。defaultButton 1 = 肯定側が既定。
-			const short r =
-				gSDK->AlertQuestion(text.c_str(), advice.c_str(),
-									/*defaultButton*/ 1, okText.c_str(), cancelText.c_str(),
-									/*customButtonA*/ "", /*customButtonB*/ "");
-			return r == 1;
-		}
+		// 同梱スクリプトの基底名（拡張子は BundledScript.h が付ける）。
+		constexpr const char* kUpdateScript = "vw-probes-update";
 
 		// 同梱スクリプトで入れ替える。mode は "do-install"（まるごと）か
 		// "do-install-payload"（本体だけ）。失敗したら errorOut に理由を入れて false。
 		bool Install(const std::string& mode, const std::string& url, std::string& errorOut)
 		{
 			std::string out;
-			if (!RunBundledScript({mode, url}, out))
+			if (!RunBundledScript(kUpdateScript, {mode, url}, out))
 			{
 				errorOut = "アップデータを起動できませんでした。";
 				return false;
@@ -396,7 +249,7 @@ namespace vwprobe
 		UpdateOutcome CheckAndOffer(bool interactive)
 		{
 			std::string out;
-			if (!RunBundledScript({"q"}, out))
+			if (!RunBundledScript(kUpdateScript, {"q"}, out))
 			{
 				if (interactive)
 					Inform("アップデータを起動できませんでした。",

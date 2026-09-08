@@ -131,11 +131,15 @@ sanitize() {
 # dir_digest <ディレクトリ>: プローブ 1 件の中身を表す指紋（ファイル名と内容）。
 # **PR のブランチには main のプローブもそのまま載っている**ので、「その PR が実際に
 # 足した／変えたプローブ」と「main から引き継いだだけのプローブ」を区別する必要がある。
+#
+# **必ず 1 行に畳む**（ファイルの一覧をさらにハッシュする）。控えは
+# "slug<TAB>指紋" の表で、後で awk が slug で引くので、**複数ファイルのプローブで
+# 指紋が複数行になると引けなくなる**（2 行目には slug が付かない）。
 dir_digest() {
 	local dir="$1" file
 	find "$dir" -maxdepth 1 -type f \( -name '*.cpp' -o -name '*.h' \) | sort | while read -r file; do
 		printf '%s %s\n' "$(basename "$file")" "$(git hash-object "$file")"
-	done
+	done | git hash-object --stdin
 }
 
 # check_slug <slug> <ディレクトリ> <出どころの説明>: 名前と VW_PROBE の突き合わせ。
@@ -259,8 +263,11 @@ for pr in ${PRS[@]+"${PRS[@]}"}; do
 		# main と中身が同じなら「引き継いだだけ」。**群には入れない**（同じものが
 		# ピッカーに 2 度並ぶのを避ける。上記「PR のブランチには main のプローブも…」）。
 		digest="$(dir_digest "$dir")"
-		main_digest="$(awk -F'\t' -v s="$slug" '$1 == s { $1 = ""; sub(/^\t/, ""); print }' \
-			"$MAIN_DIGESTS")"
+		# **$1 = "" で削らない。** awk はそこでレコードを OFS（既定は空白）で組み直すので、
+		# 区切りの TAB が空白に化け、続く sub(/^\t/) が何も削らない——結果、指紋が必ず
+		# 食い違って**この判定が永久に偽になり、どの PR にも main の複製が並んでいた**
+		# （実際に PR #42 で 4 件出た）。$2 をそのまま取れば組み直しは起きない。
+		main_digest="$(awk -F'\t' -v s="$slug" '$1 == s { print $2 }' "$MAIN_DIGESTS")"
 		if [ -n "$main_digest" ] && [ "$digest" = "$main_digest" ]; then
 			continue
 		fi
