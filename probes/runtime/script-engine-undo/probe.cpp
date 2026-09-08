@@ -96,10 +96,14 @@ namespace
 	}
 
 	// 足跡を 3 つ作り、Undo を 3 回呼び、最後にもう 1 つ作る。
-	const char* kA = "probe-step-a";
-	const char* kB = "probe-step-b";
-	const char* kC = "probe-step-c";
-	const char* kD = "probe-step-d";
+	//
+	// **名前は短くしない。** 最初 `kA`〜`kD` と書いたらコンパイルが通らなかった——
+	// SDK の `Kernel/API/MiniCadCallBacks.h` がキーコードの列挙子として `kA = 9` …
+	// を撒いており、無名 namespace に置いても**修飾しない `kA` は曖昧**になる。
+	const char* kStepMarkA = "probe-step-a";
+	const char* kStepMarkB = "probe-step-b";
+	const char* kStepMarkC = "probe-step-c";
+	const char* kStepMarkD = "probe-step-d";
 
 	TXString VsThreeUndos()
 	{
@@ -207,16 +211,18 @@ VW_PROBE("script-engine-undo", "スクリプトエンジン経由の Undo・複�
 	{
 		const std::string pre = "probe-step-pre";
 		gSDK->CreateLayer(pre.c_str(), kLayerDesign);
-		probe.log("M1: 実行前 pre=" + Mark(pre) + " " + Steps(kA, kB, kC, kD));
+		probe.log("M1: 実行前 pre=" + Mark(pre) + " " +
+				  Steps(kStepMarkA, kStepMarkB, kStepMarkC, kStepMarkD));
 
 		const Stopwatch watch;
 		const VCOMError err = vsEngine->ExecuteScript(VsThreeUndos());
 		probe.log(std::string("M1: ExecuteScript VCOMError=") + std::to_string((long)err) +
 				  " succeeded=" + (VCOM_SUCCEEDED(err) ? "yes" : "no") + Elapsed(watch.ms()));
 
-		probe.log("M1: 実行後 pre=" + Mark(pre) + " " + Steps(kA, kB, kC, kD));
-		probe.log("M1: " + Readback(kA, kB, kC) + " / d=" + Mark(kD) +
-				  "（d=有 ならスクリプトは最後まで走っている）");
+		probe.log("M1: 実行後 pre=" + Mark(pre) + " " +
+				  Steps(kStepMarkA, kStepMarkB, kStepMarkC, kStepMarkD));
+		probe.log("M1: " + Readback(kStepMarkA, kStepMarkB, kStepMarkC) +
+				  " / d=" + Mark(kStepMarkD) + "（d=有 ならスクリプトは最後まで走っている）");
 		probe.log("M1: pre=" + Mark(pre) +
 				  "（有のままなら、C++ の作り物は何段戻っても取り消されない）");
 	}
