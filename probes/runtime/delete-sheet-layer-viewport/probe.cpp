@@ -167,8 +167,8 @@ VW_PROBE("delete-sheet-layer-viewport", "ビューポート付きシートレイ
 	}
 	gSDK->SetObjectName(annoA, annoNameA);
 	const bool addedToAnno = gSDK->AddViewportAnnotationObject(vpA1, annoA);
-	const bool isInAnnoGroup =
-		VWFC::VWObjects::VWViewportObj::IsViewportGroupContainedObject(annoA, kViewportGroupAnnotation);
+	const bool isInAnnoGroup = VWFC::VWObjects::VWViewportObj::IsViewportGroupContainedObject(
+		annoA, kViewportGroupAnnotation);
 	probe.log("注釈オブジェクト(" + annoNameA.GetStdString() +
 			  ") を vpA1 の注釈空間へ AddViewportAnnotationObject で追加した: added=" +
 			  std::string(addedToAnno ? "yes" : "no") +
@@ -180,16 +180,18 @@ VW_PROBE("delete-sheet-layer-viewport", "ビューポート付きシートレイ
 
 	gSDK->DeleteObject(sheetA, true);
 
-	probe.log(std::string("DeleteObject(sheetA, true) から戻った（落ちていない）。undo: building=") +
-			  (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
+	probe.log(
+		std::string("DeleteObject(sheetA, true) から戻った（落ちていない）。undo: building=") +
+		(gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
 	probe.log(std::string("削除後、シートA(" + sheetNameA.GetStdString() + ")は残っているか: ") +
 			  (LayerExistsByName(sheetNameA) ? "残っている（想定外）" : "消えた"));
 	probe.log(std::string("削除後、デザインA(" + designNameA.GetStdString() + ")は残っているか: ") +
 			  (LayerExistsByName(designNameA) ? "残っている" : "消えた（想定外）"));
 	if (LayerExistsByName(designNameA))
 	{
-		probe.log(std::string("デザインAの上の矩形(" + rectName.GetStdString() + ")は残っているか: ") +
-				  (LayerHasMemberNamed(designA, rectName) ? "残っている" : "消えた（想定外）"));
+		probe.log(
+			std::string("デザインAの上の矩形(" + rectName.GetStdString() + ")は残っているか: ") +
+			(LayerHasMemberNamed(designA, rectName) ? "残っている" : "消えた（想定外）"));
 	}
 	{
 		const std::vector<std::string> stray = FindObjectsByNamePrefix("probe-dslvp-");
@@ -282,8 +284,9 @@ VW_PROBE("delete-sheet-layer-viewport", "ビューポート付きシートレイ
 	{
 		probe.log("後始末: 参照先を失ったシートBを DeleteObject(sheetB, true) で消す");
 		gSDK->DeleteObject(sheetB, true);
-		probe.log(std::string("削除後、シートB(" + sheetNameB.GetStdString() + ")は残っているか: ") +
-				  (LayerExistsByName(sheetNameB) ? "残っている（想定外）" : "消えた"));
+		probe.log(
+			std::string("削除後、シートB(" + sheetNameB.GetStdString() + ")は残っているか: ") +
+			(LayerExistsByName(sheetNameB) ? "残っている（想定外）" : "消えた"));
 	}
 
 	probe.log(std::string("プローブ終了時点の undo: building=") +
