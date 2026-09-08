@@ -294,6 +294,43 @@ check "find-pr: 網の失敗は理由を返すだけ（落とさない）" "$out
 	"error=PR を検索できませんでした（ネットワークか権限）。"
 
 # ---------------------------------------------------------------------------
+# issue-state — PR が無いときの投稿先候補（プローブの `[issue #N]`）が使えるか。
+# **閉じた issue へは投稿しない**ので、この判定が要る（Feedback.cpp）。
+# ---------------------------------------------------------------------------
+CURL_BODY='{"state":"open"}'
+CURL_CODE="200"
+out="$(mode_issue_state "min-nano/vectorworks-developer-sdk-reference" "34")"
+check "issue-state: open を返す" "$out" "state=open
+ok"
+check_contains "issue-state: issues/<番号> を読む" "$(cat "$CURL_URL_FILE")" \
+	"repos/min-nano/vectorworks-developer-sdk-reference/issues/34"
+
+CURL_BODY='{"state":"closed"}'
+out="$(mode_issue_state "o/r" "34")"
+check "issue-state: closed を返す" "$out" "state=closed
+ok"
+
+out="$(mode_issue_state "" "34")"
+check_contains "issue-state: repo が空なら既定のリポジトリ" "$(cat "$CURL_URL_FILE")" \
+	"repos/min-nano/vectorworks-developer-sdk-reference/issues/34"
+
+check "issue-state: issue 番号が無ければ断る" "$(mode_issue_state "o/r" "")" \
+	"error=issue 番号が指定されていません。"
+
+CURL_BODY='{"message":"Not Found"}'
+CURL_CODE="404"
+out="$(mode_issue_state "o/r" "999999")"
+check "issue-state: state が読めなければ見つからない扱い" "$out" \
+	"error=issue #999999 が見つかりません。"
+CURL_CODE="200"
+
+CURL_FAIL=1
+out="$(mode_issue_state "o/r" "34")"
+CURL_FAIL=0
+check "issue-state: 網の失敗は理由を返すだけ（落とさない）" "$out" \
+	"error=issue を確認できませんでした（ネットワークか権限）。"
+
+# ---------------------------------------------------------------------------
 # post — 送り先・本文・成功と失敗の文言。
 # ---------------------------------------------------------------------------
 printf '%s' "keychain-secret-value" >"$KEYCHAIN"
@@ -345,7 +382,7 @@ check "post: PR 番号が無ければ断る" "$(mode_post "o/r" "" "$BODY_FILE")
 	"error=引数が不足しています。"
 
 check "不明なモードは名乗って終わる" "$(main "no-such-mode")" \
-	"error=不明なモード: 'no-such-mode'（token-status / login / logout / find-pr / post）。"
+	"error=不明なモード: 'no-such-mode'（token-status / login / logout / find-pr / issue-state / post）。"
 
 # ---------------------------------------------------------------------------
 # bash 3.2（macOS の /bin/bash）で動くこと。

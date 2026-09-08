@@ -10,6 +10,7 @@
 #   login <token-file>            ファイルのトークンをキーチェーンへ入れて、ファイルを消す
 #   logout                        キーチェーンから消す
 #   find-pr <repo> <branch>       そのブランチの open な PR 番号を引く
+#   issue-state <repo> <issue>    その issue が open か closed かを引く
 #   post <repo> <pr> <body-file>  PR（= issue）へコメントを 1 通投稿する
 #
 # 成功は**素の `ok` 1 行**（post は先に url= を出す）。失敗は `error=<理由>` で、
@@ -20,6 +21,10 @@
 # 無いときの逃げ道で、**PR のブランチでビルドしたプラグインを手で入れて確かめるとき**に
 # 使う——そのビルドではプローブが群 main に入る（＝出所に PR 番号が無い）ので、
 # 動いているビルドのブランチから PR を引く（plugin/src/Feedback.h「宛先の決め方」）。
+#
+# PR も見つからなければ、次の候補は**プローブごとの issue 番号**（probe.cpp 先頭の
+# `[issue #N]`）。`issue-state` はその issue が閉じていないかを確かめる口——**閉じた
+# issue へは投稿しない**（読まれないため）ので、投稿する前に必ずここを通す。
 #
 # 【トークンをコマンドラインに乗せない】`login` が受け取るのは*ファイルのパス*で、中身は
 # 読んだ直後に消す——引数はプロセス一覧（ps）から誰にでも見えるので、そこへ秘密を置いては
@@ -239,7 +244,50 @@ mode_find_pr() {
 	echo "ok"
 }
 
-# post <repo> <pr> <body-file>: PR へコメントを 1 通。
+# issue-state <repo> <issue>: その issue が open か closed か。**PR が見つからないとき
+# の宛先候補**（プローブ本体の `[issue #N]`）が使える状態かを確かめる口で、
+# **閉じた issue へは投稿しない**（読まれない）ための判定に使う。
+#
+# **トークンは要らない**（find-pr と同じ理由——公開リポジトリの issue を読むだけ）。
+mode_issue_state() {
+	local repo="${1:-}" number="${2:-}"
+	[ -n "$repo" ] || repo="$VW_REPO"
+	if [ -z "$number" ]; then
+		echo "error=issue 番号が指定されていません。"
+		return 0
+	fi
+	local token
+	token="$(resolve_token || true)"
+	local url="${VW_API}/repos/${repo}/issues/${number}"
+
+	local f got
+	f="$(mktemp)"
+	got=1
+	if [ -n "$token" ]; then
+		curl -fsSL --max-time 20 --retry 2 \
+			-H "Authorization: Bearer ${token}" \
+			-H "Accept: application/vnd.github+json" "$url" -o "$f" && got=0
+	else
+		curl -fsSL --max-time 20 --retry 2 \
+			-H "Accept: application/vnd.github+json" "$url" -o "$f" && got=0
+	fi
+	if [ "$got" -ne 0 ]; then
+		rm -f "$f"
+		echo "error=issue を確認できませんでした（ネットワークか権限）。"
+		return 0
+	fi
+	local state
+	state="$(jval "$f" "state")"
+	rm -f "$f"
+	if [ -z "$state" ]; then
+		echo "error=issue #${number} が見つかりません。"
+		return 0
+	fi
+	echo "state=${state}"
+	echo "ok"
+}
+
+# post <repo> <pr> <body-file>: PR（issue も同じ口）へコメントを 1 通。
 #   url=<コメントの URL>
 #   ok
 mode_post() {
@@ -305,8 +353,9 @@ main() {
 		login) mode_login "${1:-}" ;;
 		logout) mode_logout ;;
 		find-pr) mode_find_pr "${1:-}" "${2:-}" ;;
+		issue-state) mode_issue_state "${1:-}" "${2:-}" ;;
 		post) mode_post "${1:-}" "${2:-}" "${3:-}" ;;
-		*) echo "error=不明なモード: '${mode}'（token-status / login / logout / find-pr / post）。" ;;
+		*) echo "error=不明なモード: '${mode}'（token-status / login / logout / find-pr / issue-state / post）。" ;;
 	esac
 }
 

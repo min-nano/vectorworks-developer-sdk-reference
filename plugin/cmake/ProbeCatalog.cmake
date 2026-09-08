@@ -18,7 +18,7 @@
 #   build=<ビルド ID>          … 自動アップデートが新旧を比べる鍵
 #   shell=<殻の ID>            … 再起動が要るかを決める鍵
 #   group|<群>|<ファイル名>|<PR>|<commit>|<branch>|<PR タイトル>
-#   probe|<群>|<slug>|<表示名>|<概要>
+#   probe|<群>|<slug>|<表示名>|<概要>|<issue>
 #
 # 群の行にファイルが**在るか**は書かない。ビルドできなかった群はファイルが配られない
 # だけでカタログには残り、殻が「隣に無い」ことを見て「本体が入っていません」と出す
@@ -89,14 +89,15 @@ function(vw_probe_catalog_lines groups basename out_groups out_probes out_summar
 		)
 
 		foreach(entry IN LISTS VW_PROBE_ENTRIES_${group})
-			# 5 項目を正規表現で切り出す。list(GET) を使わないのは、**空の項目**（main 由来の
+			# 6 項目を正規表現で切り出す。list(GET) を使わないのは、**空の項目**（main 由来の
 			# プローブは PR 番号が空）がリスト分割で落ちうるため（CMP0007）。
-			if(NOT entry MATCHES "^([^|]*)\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|(.*)$")
+			if(NOT entry MATCHES "^([^|]*)\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|(.*)$")
 				message(FATAL_ERROR "VW_PROBE_ENTRIES_${group} の形式が違います"
-									"（slug|PR|commit|branch|title の 5 項目）: ${entry}")
+									"（slug|PR|commit|branch|title|issue の 6 項目）: ${entry}")
 			endif()
 			set(e_slug "${CMAKE_MATCH_1}")
 			set(e_pr "${CMAKE_MATCH_2}")
+			set(e_issue "${CMAKE_MATCH_6}")
 
 			# 表示名と概要はソースから読む。同じ slug のディレクトリに置かれたソースを探す
 			# （集約はディレクトリ単位なので、ディレクトリ名＝slug）。
@@ -112,11 +113,14 @@ function(vw_probe_catalog_lines groups basename out_groups out_probes out_summar
 			vw_probe_meta("${probe_source}" "${e_slug}" p_title p_summary)
 			vw_catalog_field("${p_title}" p_title)
 			vw_catalog_field("${p_summary}" p_summary)
-			string(APPEND probe_lines "probe|${group}|${e_slug}|${p_title}|${p_summary}\n")
+			vw_catalog_field("${e_issue}" e_issue)
+			string(APPEND probe_lines "probe|${group}|${e_slug}|${p_title}|${p_summary}|${e_issue}\n")
 
 			math(EXPR total "${total} + 1")
 			if(e_pr)
 				string(APPEND summary "${e_slug}(#${e_pr}) ")
+			elseif(e_issue)
+				string(APPEND summary "${e_slug}(issue#${e_issue}) ")
 			else()
 				string(APPEND summary "${e_slug} ")
 			endif()

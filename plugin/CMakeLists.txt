@@ -116,7 +116,7 @@ endif()
 #
 #   VW_PROBE_GROUPS             … 群の一覧（"main" "pr12" …）
 #   VW_PROBE_SOURCES_<group>    … その群でコンパイルするプローブのソース（絶対パス）
-#   VW_PROBE_ENTRIES_<group>    … 出所の表。1 件 "slug|PR番号|短縮sha|ブランチ|PRタイトル"
+#   VW_PROBE_ENTRIES_<group>    … 出所の表。1 件 "slug|PR番号|短縮sha|ブランチ|PRタイトル|issue番号"
 #   VW_PROBE_ORIGIN_<group>     … 群そのものの出所 "PR番号|短縮sha|ブランチ|PRタイトル"
 #
 # **群 1 つにつき本体（.vwpayload）が 1 本できる。** main のプローブが 1 本、PR の
@@ -152,7 +152,8 @@ else()
 			list(SORT probe_sources)
 			if(probe_sources)
 				list(APPEND VW_PROBE_SOURCES_main ${probe_sources})
-				list(APPEND VW_PROBE_ENTRIES_main "${slug}||local|local|")
+				# issue 番号は空のまま（PR と同じく、ローカルビルドには出所が無い）。
+				list(APPEND VW_PROBE_ENTRIES_main "${slug}||local|local||")
 			endif()
 		endif()
 	endforeach()
@@ -222,18 +223,19 @@ foreach(group IN LISTS VW_PROBE_GROUPS)
 	# 必ずエスケープする。
 	set(VW_PROBE_PROVENANCE_ENTRIES "")
 	foreach(entry IN LISTS VW_PROBE_ENTRIES_${group})
-		if(NOT entry MATCHES "^([^|]*)\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|(.*)$")
+		if(NOT entry MATCHES "^([^|]*)\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|([^|]*)\\|(.*)$")
 			message(FATAL_ERROR "VW_PROBE_ENTRIES_${group} の形式が違います"
-								"（slug|PR|commit|branch|title の 5 項目）: ${entry}")
+								"（slug|PR|commit|branch|title|issue の 6 項目）: ${entry}")
 		endif()
 		set(e_slug "${CMAKE_MATCH_1}")
 		set(e_pr "${CMAKE_MATCH_2}")
 		set(e_commit "${CMAKE_MATCH_3}")
 		set(e_branch "${CMAKE_MATCH_4}")
 		set(e_title "${CMAKE_MATCH_5}")
+		set(e_issue "${CMAKE_MATCH_6}")
 
 		set(escaped "")
-		foreach(field IN ITEMS e_slug e_pr e_commit e_branch e_title)
+		foreach(field IN ITEMS e_slug e_pr e_commit e_branch e_title e_issue)
 			set(value "${${field}}")
 			string(REPLACE "\\" "\\\\" value "${value}")
 			string(REPLACE "\"" "\\\"" value "${value}")

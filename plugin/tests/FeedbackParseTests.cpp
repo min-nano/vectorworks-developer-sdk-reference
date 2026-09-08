@@ -125,7 +125,7 @@ int main()
 
 		// 1 行目は**機械可読の目印**（読むのは Claude。見た目に依らず拾えること）。
 		checkTrue(body.starts_with("<!-- vw-probes-result v1 probe=layer-order group=pr12 pr=12 "
-								   "build=592b5b938687 result=ok -->\n"),
+								   "issue= build=592b5b938687 result=ok -->\n"),
 				  "1 行目が目印");
 		checkContains(body, "| 結果 | 成功 |", "結末が表に出る");
 		checkContains(body, "| 所要 | 0.42 秒 |", "所要が表に出る");
@@ -134,6 +134,25 @@ int main()
 		checkContains(body, "はじめ\nできた", "ログ全文が入る");
 		checkContains(body, report.shellStamp, "素性が入る");
 		checkNotContains(body, "前の走行が終わらないまま", "走り切った回に落ちた断りは出ない");
+	}
+
+	// --- 宛先が issue のとき（PR が無い。main に入ったプローブなど）-----------
+	// 優先順位は PR → issue（Feedback.h「宛先の決め方」）。pr が空で issue だけ
+	// あるときの見出し・目印を確かめる。
+	{
+		Report report = sample();
+		report.pr.clear();
+		report.prTitle.clear();
+		report.group = "main";
+		report.issue = "34";
+		const std::string body = CommentBody(report);
+
+		checkTrue(body.starts_with("<!-- vw-probes-result v1 probe=layer-order group=main pr= "
+								   "issue=34 build=592b5b938687 result=ok -->\n"),
+				  "目印の pr は空、issue に番号");
+		checkContains(body, "issue #34 / 8b2d004 / claude/layer-order",
+					  "出所は issue 番号で始まる");
+		checkEq(ProvenanceLine(report), "issue #34 / 8b2d004 / claude/layer-order", "1 行の出所");
 	}
 
 	// --- 秒の整形 ------------------------------------------------------------
@@ -181,6 +200,7 @@ int main()
 		checkTrue(ParsePending(armed + "1 行目\n2 行目\n", recovered), "控えを読める");
 		checkEq(recovered.probeId, "layer-order", "プローブの id");
 		checkEq(recovered.pr, "12", "宛先の PR");
+		checkEq(recovered.issue, "", "PR 宛てのときは issue が空のまま往復する");
 		checkEq(recovered.log, "1 行目\n2 行目\n", "ログは目印の下の全部");
 		checkTrue(recovered.recovered, "未了の控えは「拾ったもの」になる");
 		checkTrue(recovered.failed, "結末が書けていないので失敗扱い");
@@ -206,6 +226,18 @@ int main()
 		checkTrue(ParsePending(armed + "pr=999\nprobe=other\n", tricky), "ログ混じりでも読める");
 		checkEq(tricky.pr, "12", "**ログの中の pr= を見出しと取り違えない**");
 		checkEq(tricky.probeId, "layer-order", "ログの中の probe= も見出しではない");
+
+		// **issue 宛ての控えも同じように往復する**（main に入ったプローブが落ちても、
+		// 次の起動で issue へ送り直せる）。
+		Report issueReport = sample();
+		issueReport.pr.clear();
+		issueReport.issue = "34";
+		const std::string issueArmed = FormatPending(issueReport, /*finished*/ false);
+		Report issueRecovered;
+		checkTrue(ParsePending(issueArmed + "落ちる前の行\n", issueRecovered),
+				  "issue 宛ての控えを読める");
+		checkEq(issueRecovered.pr, "", "issue 宛ては pr が空のまま往復する");
+		checkEq(issueRecovered.issue, "34", "issue 番号が往復する");
 	}
 
 	// --- 控えのファイル名 ----------------------------------------------------

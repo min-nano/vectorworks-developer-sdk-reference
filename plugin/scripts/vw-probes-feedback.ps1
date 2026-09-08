@@ -10,7 +10,8 @@
       login <token-file>            ファイルのトークンを保存し、ファイルを消す
       logout                        保存したトークンを消す
       find-pr <repo> <branch>       そのブランチの open な PR 番号を引く
-      post <repo> <pr> <body-file>  PR へコメントを 1 通投稿する
+      issue-state <repo> <issue>    その issue が open か closed かを引く
+      post <repo> <pr> <body-file>  PR（issue も同じ口）へコメントを 1 通投稿する
 
     成功は**素の `ok` 1 行**（post は先に url= を出す）。失敗は `error=<理由>` で、
     終了コードは 0 のまま——何を見せるかはプラグイン側が決める。
@@ -187,6 +188,35 @@ function Invoke-FindPr {
     Write-Output 'ok'
 }
 
+# issue-state <repo> <issue>: その issue が open か closed か。**PR が見つからないとき
+# の宛先候補**（プローブ本体の `[issue #N]`）が使える状態かを確かめる口で、
+# **閉じた issue へは投稿しない**（読まれない）ための判定に使う。トークンは要らない
+# （find-pr と同じ理由）。
+function Invoke-IssueState {
+    param([string] $Repo, [string] $Number)
+
+    if (-not $Repo) { $Repo = $VW_REPO }
+    if (-not $Number) {
+        Write-Output 'error=issue 番号が指定されていません。'
+        return
+    }
+    $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'VwSdkProbes' }
+    $token = Resolve-Token
+    if ($token) { $headers['Authorization'] = "Bearer $token" }
+    try {
+        $issue = Invoke-RestMethod -Uri "$VW_API/repos/$Repo/issues/$Number" -Headers $headers -TimeoutSec 20
+    } catch {
+        Write-Output 'error=issue を確認できませんでした（ネットワークか権限）。'
+        return
+    }
+    if (-not $issue.state) {
+        Write-Output "error=issue #$Number が見つかりません。"
+        return
+    }
+    Write-Output "state=$($issue.state)"
+    Write-Output 'ok'
+}
+
 # post <repo> <pr> <body-file>: PR へコメントを 1 通。本文は UTF-8 のまま送る
 # （ConvertTo-Json が JSON のエスケープを引き受けるので、自前の文字列連結はしない）。
 function Invoke-Post {
@@ -242,11 +272,12 @@ function Invoke-Main {
         'login'        { Invoke-Login -TokenFile (Get-Argument $Arguments 1) }
         'logout'       { Invoke-Logout }
         'find-pr'      { Invoke-FindPr -Repo (Get-Argument $Arguments 1) -Branch (Get-Argument $Arguments 2) }
+        'issue-state'  { Invoke-IssueState -Repo (Get-Argument $Arguments 1) -Number (Get-Argument $Arguments 2) }
         'post'         {
             Invoke-Post -Repo (Get-Argument $Arguments 1) -Number (Get-Argument $Arguments 2) `
                 -BodyFile (Get-Argument $Arguments 3)
         }
-        default        { Write-Output "error=不明なモード: '$mode'（token-status / login / logout / find-pr / post）。" }
+        default        { Write-Output "error=不明なモード: '$mode'（token-status / login / logout / find-pr / issue-state / post）。" }
     }
 }
 

@@ -624,17 +624,19 @@ namespace vwprobe
 		// 結果を**投稿する形**（FeedbackParse.h）に詰める。走らせる前に分かるところまで
 		// を埋め、結末は走らせてから足す（RunProbe）。
 		//
-		// pr は**下ごしらえが決めた宛先**を渡す（出所に無ければブランチから引いた番号が
-		// 入っている。Feedback.h「宛先の決め方」）ので、choice.group.pr をここで直接
-		// 読まない。
+		// pr / issue は**下ごしらえが決めた宛先**を渡す（出所に無ければブランチから引いた
+		// PR 番号、それも無ければ開いている issue 番号が入っている。Feedback.h「宛先の
+		// 決め方」）ので、choice.group.pr / choice.probe.issue をここで直接読まない。
 		feedback::Report MakeReport(const Payload& payload, const Choice& choice,
-									const catalog::Catalog& cat, const std::string& pr)
+									const catalog::Catalog& cat, const std::string& pr,
+									const std::string& issue)
 		{
 			feedback::Report report;
 			report.probeId = choice.probe.id;
 			report.title = choice.probe.title;
 			report.summary = choice.probe.summary;
 			report.pr = pr;
+			report.issue = issue;
 			report.prTitle = choice.group.prTitle;
 			report.group = choice.group.id;
 			report.commit = choice.group.commit;
@@ -698,7 +700,7 @@ namespace vwprobe
 		{
 			bool ran = false; // 走らせるところまで行けた
 			bool failed = false; // プローブ自身が失敗した（走らせられたかどうかとは別）
-			bool posted = false;	 // PR へ投稿できた
+			bool posted = false;	 // 投稿できた（宛先は PR、無ければ issue）
 			bool postFailed = false; // 投稿するつもりだったが送れなかった
 			double seconds = 0.0;
 			std::string outcome; // 1 行の結末（走らせられなければその理由）
@@ -742,7 +744,9 @@ namespace vwprobe
 			//    からは答えを覚えているので、もう尋ねられない。
 			std::string feedbackNote;
 			std::string feedbackPr = choice.group.pr;
-			const bool posting = PrepareFeedback(feedbackPr, choice.group.branch, feedbackNote);
+			std::string feedbackIssue = choice.probe.issue;
+			const bool posting =
+				PrepareFeedback(feedbackPr, feedbackIssue, choice.group.branch, feedbackNote);
 
 			// 2. **その群の本体を用意する**（すでに読んでいればそのまま使う）。
 			std::string loadError;
@@ -773,7 +777,7 @@ namespace vwprobe
 			//    置く**——プローブが VectorWorks ごと落としても、そこまでのログが残って次の
 			//    起動で送られる（Feedback.h「落ちても拾う」）。
 			session.clearLog();
-			feedback::Report report = MakeReport(payload, choice, cat, feedbackPr);
+			feedback::Report report = MakeReport(payload, choice, cat, feedbackPr, feedbackIssue);
 			if (posting)
 				ArmPendingRun(report);
 
@@ -892,7 +896,7 @@ namespace vwprobe
 			body.push_back(text::BatchSummaryLine(total, ok, failed, blocked));
 			std::string spent = "所要: " + feedback::FormatSeconds(seconds) + " 秒";
 			if (posted > 0)
-				spent += " / PR へ投稿 " + std::to_string(posted) + " 件";
+				spent += " / 投稿 " + std::to_string(posted) + " 件";
 			if (postFailed > 0)
 				spent += " / 送れず " + std::to_string(postFailed) + " 件";
 			body.push_back(spent);

@@ -1,13 +1,13 @@
 //
 //	FeedbackParse.h
 //
-//	**プローブの結果を PR コメントへ自動で返す仕組みの、純粋な部分。**（意図と流れは
-//	Feedback.h、全体像は plugin/README.md「結果を PR へ自動で返す」）
+//	**プローブの結果をコメントへ自動で返す仕組みの、純粋な部分。**（意図と流れは
+//	Feedback.h、全体像は plugin/README.md「結果を PR / issue へ自動で返す」）
 //
 //	ここに置くのは SDK にもプラットフォームにも依存しない文字列処理だけ:
 //
 //	  * 設定（送ってよいか）の読み書き               … Settings / ParseSettings / FormatSettings
-//	  * PR コメントの本文                            … Report / CommentBody
+//	  * コメントの本文（宛先は PR、無ければ issue）  … Report / CommentBody
 //	  * 走行中の控え（落ちたときに次で拾う）の読み書き … FormatPending / ParsePending
 //
 //	【なぜ切り出すか】UpdateParse.h と同じ理由である——SDK 呼び出しやダイアログの合間に
@@ -151,7 +151,10 @@ namespace vwprobe::feedback
 		std::string summary;
 
 		// 出所（ビルドのときに決まる。scripts/gather-probes.sh）。
-		std::string pr; // PR 番号。**空なら投稿しない**（main のプローブには宛先が無い）
+		std::string pr; // PR 番号。**pr も issue も空なら投稿しない**
+		// issue 番号（プローブ本体の先頭コメントの `[issue #N]`）。**pr が空のときだけ
+		// 使う、宛先の 2 番目の候補**（優先順位: PR → issue → 投稿しない。Feedback.h）。
+		std::string issue;
 		std::string prTitle;
 		std::string group;
 		std::string commit;
@@ -198,16 +201,21 @@ namespace vwprobe::feedback
 	}
 
 	// 出所を 1 行に畳む（ピッカーと同じ言い回し。人が突き合わせられるように）。
+	// **見出しは PR → issue → ブランチ の順**（宛先の優先順位と同じ。Feedback.h）。
 	inline std::string ProvenanceLine(const Report& report)
 	{
 		std::string line;
 		if (!report.pr.empty())
 			line += "PR #" + report.pr;
+		else if (!report.issue.empty())
+			line += "issue #" + report.issue;
 		else
 			line += report.branch.empty() ? std::string("main") : report.branch;
 		if (!report.commit.empty())
 			line += " / " + report.commit;
-		if (!report.pr.empty() && !report.branch.empty())
+		// ブランチは見出しに使わなかったとき（＝見出しが PR か issue）だけ添える。
+		// **見出しがブランチそのもの**（main フォールバック）のときは繰り返さない。
+		if ((!report.pr.empty() || !report.issue.empty()) && !report.branch.empty())
 			line += " / " + report.branch;
 		if (!report.prTitle.empty())
 			line += " / " + report.prTitle;
@@ -215,11 +223,13 @@ namespace vwprobe::feedback
 	}
 
 	// **機械可読の目印**（コメントの 1 行目）。読む側（Claude）はこれで自動投稿だと分かる。
+	// pr と issue は**どちらか一方だけが値を持つ**（宛先の優先順位。Feedback.h）。
 	inline std::string CommentMarker(const Report& report)
 	{
 		std::string out = "<!-- vw-probes-result v1 probe=" + OneLine(report.probeId);
 		out += " group=" + OneLine(report.group);
 		out += " pr=" + OneLine(report.pr);
+		out += " issue=" + OneLine(report.issue);
 		out += " build=" + OneLine(report.buildId);
 		out += report.failed ? " result=failed" : " result=ok";
 		if (report.recovered)
@@ -379,6 +389,7 @@ namespace vwprobe::feedback
 		out += "title=" + OneLine(report.title) + "\n";
 		out += "summary=" + OneLine(report.summary) + "\n";
 		out += "pr=" + OneLine(report.pr) + "\n";
+		out += "issue=" + OneLine(report.issue) + "\n";
 		out += "prTitle=" + OneLine(report.prTitle) + "\n";
 		out += "group=" + OneLine(report.group) + "\n";
 		out += "commit=" + OneLine(report.commit) + "\n";
@@ -439,6 +450,7 @@ namespace vwprobe::feedback
 		out.title = ValueOf(header, "title");
 		out.summary = ValueOf(header, "summary");
 		out.pr = ValueOf(header, "pr");
+		out.issue = ValueOf(header, "issue");
 		out.prTitle = ValueOf(header, "prTitle");
 		out.group = ValueOf(header, "group");
 		out.commit = ValueOf(header, "commit");

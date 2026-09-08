@@ -139,6 +139,11 @@ namespace vwprobe
 		std::string commit; // 短縮 sha
 		std::string branch;
 		std::string title; // PR のタイトル（あれば）
+		// **プローブ本体（probe.cpp）の先頭コメントにある `[issue #N]` から拾う。**
+		// PR と違い群ではなく**プローブごとに違いうる**値（scripts/gather-probes.sh の
+		// probe_issue）。PR がまだ無い・PR がマージされて群が main になった、という
+		// ときの投稿先の候補になる（plugin/src/Feedback.h「宛先の決め方」）。
+		std::string issue;
 	};
 
 	// 生成された表を登録する（生成ファイルの静的オブジェクトが 1 度だけ呼ぶ）。
