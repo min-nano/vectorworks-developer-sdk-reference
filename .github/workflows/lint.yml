@@ -16,6 +16,9 @@ name: Lint
 #                     プラットフォームにも依存しないので普通のコンパイラで走る。**壊れても
 #                     静かに壊れる**（更新が来ない／常に来る／再起動が空振りする／実機でだけ
 #                     落ちる）ので、mac / Windows の実ビルドとは別に、ここで確かめる。
+#   * pwsh          — Windows 版の同梱スクリプト（plugin/scripts/*.ps1）。ランナーに
+#                     入っている pwsh で、取得まわりの振る舞い（mac 側と対の試験）と
+#                     構文を見る。shellcheck に相当するものが無いぶん、ここが唯一の門。
 #
 # 完了待ちは `scripts/ci-wait.sh --pr <番号>` で行う（CLAUDE.md「CI の完了を待つ」）。
 # plugin/ を触った PR ではこれに加えて probe-build.yml（mac / Windows の実ビルド）が、
@@ -113,7 +116,33 @@ jobs:
       # 応答の扱いも本物**が走る。macOS でしか動かないコマンドを使う 1 本なので、
       # ここで押さえておかないと実機で初めて壊れているのが分かる。
       - name: Run the bundled-script tests
-        run: bash plugin/tests/vw-probes-feedback.test.sh
+        run: |
+          bash plugin/tests/vw-probes-feedback.test.sh
+          bash plugin/tests/vw-probes-update.test.sh
+
+      # Windows 側の同梱スクリプト（.ps1）。実機は Windows だが、**ランナーには pwsh が
+      # 入っている**ので、ここで構文と——mac 側と同じように——取得まわりの振る舞いを
+      # 押さえられる。shellcheck に相当するものが無いぶん、ここが唯一の門になる。
+      - name: Run the Windows bundled-script tests
+        shell: pwsh
+        run: pwsh -NoProfile -File plugin/tests/vw-probes-update.test.ps1
+
+      - name: Parse the PowerShell scripts
+        shell: pwsh
+        run: |
+          $bad = 0
+          foreach ($f in Get-ChildItem plugin/scripts -Filter *.ps1) {
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile(
+                  $f.FullName, [ref] $null, [ref] $errors) | Out-Null
+              if ($errors -and $errors.Count -gt 0) {
+                  $bad = 1
+                  Write-Host "[ FAIL ] $($f.Name)"
+                  $errors | ForEach-Object { Write-Host "         $_" }
+              }
+              else { Write-Host "[ PASS ] $($f.Name)" }
+          }
+          exit $bad
 
       # カタログを**書く**側（CMake）の試験。SDK もコンパイラも要らない（純粋な文字列
       # 処理なので cmake -P でそのまま走る）。読む側（PayloadCatalogTests）と対で、

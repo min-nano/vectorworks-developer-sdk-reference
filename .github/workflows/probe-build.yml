@@ -479,11 +479,21 @@ jobs:
           # ある（shellcheck も掛かるし、手元で確かめられる）。
           scripts/probe-release-notes.sh --commit "$BUILD_SHA" > notes.md
           cat notes.md
+          # **同じ隠しメタデータを、資産としても置く。** 自動アップデータは
+          # api.github.com が使えないとき（呼び出し上限・社内フィルタ・プロキシ）に、
+          # 決まった URL（…/releases/download/probes/VwSdkProbes.release-info.txt）から
+          # これだけを落として素性を読む（plugin/scripts/vw-probes-update.* の
+          # 「API が使えないときの逃げ道」）。**中身は本文と同じ 1 か所から出す**ので、
+          # 綴りがずれようがない。
+          scripts/probe-release-notes.sh --commit "$BUILD_SHA" --info --title "$title" \
+            > dist/VwSdkProbes.release-info.txt
+          cat dist/VwSdkProbes.release-info.txt
           # 転がりタグなので、毎回消して作り直す（常にこのビルドを指すように）。
           gh release delete probes --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes 2>/dev/null || true
           gh release create probes \
             "dist/VwSdkProbes.vwlibrary.zip" \
             "dist/VwSdkProbes.vlb.zip" \
+            "dist/VwSdkProbes.release-info.txt" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$BUILD_SHA" \
             --title "$title" \

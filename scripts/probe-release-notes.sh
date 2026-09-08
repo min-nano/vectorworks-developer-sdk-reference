@@ -24,6 +24,13 @@
 # 使い方:
 #   scripts/probe-release-notes.sh --commit <sha> [--in build-probes] [--dist dist] \
 #       [--repo owner/repo] > notes.md
+#   scripts/probe-release-notes.sh --commit <sha> --info [--title <リリース名>] \
+#       > VwSdkProbes.release-info.txt
+#
+# --info は**隠しメタデータと同じ行だけ**を出す（HTML コメントに包まない）。これを
+# リリースの資産として置いておくと、自動アップデータは api.github.com が使えないとき
+# （呼び出し上限・社内フィルタ・プロキシ）でも、決まった URL からリリースの素性を
+# 読める（plugin/scripts/vw-probes-update.* の「API が使えないときの逃げ道」）。
 #
 set -euo pipefail
 
@@ -31,6 +38,12 @@ IN="build-probes"
 DIST="dist"
 COMMIT=""
 REPO="${GITHUB_REPOSITORY:-min-nano/vectorworks-developer-sdk-reference}"
+# --info のとき（既定は本文まるごと）。**同じ隠しメタデータを、リリースの資産として
+# 別に配る**ためのもの——自動アップデータは api.github.com が使えないとき
+# （呼び出し上限・社内フィルタ）に、決まった URL からこのテキストだけを落として読む
+# （plugin/scripts/vw-probes-update.* の「API が使えないときの逃げ道」）。
+MODE="notes"
+TITLE=""
 
 usage() {
 	awk 'NR > 1 { if ($0 !~ /^#/) exit; print }' "$0"
@@ -52,6 +65,14 @@ while [ "$#" -gt 0 ]; do
 			;;
 		--repo)
 			REPO="${2:?}"
+			shift 2
+			;;
+		--info)
+			MODE="info"
+			shift
+			;;
+		--title)
+			TITLE="${2:?}"
 			shift 2
 			;;
 		-h | --help)
@@ -126,14 +147,27 @@ fi
 # ビルドがあります」と誘ってしまうため。inputs= はその材料（更新が来ない・来すぎる
 # ときに最初に見る行）。payloads= は群ごとのビルド結果（PR のチェックが読む）。
 # HTML コメントなのでリリースのページには出ないが、API の body には入る。
+meta="build=$(cat "$IN/build-id.txt")
+shell=$(cat "$IN/shell-id.txt")
+commit=${COMMIT}
+built=${now}
+probes=$(cat "$IN/summary-line.txt" 2>/dev/null || true)
+payloads=${payloads_line}
+inputs=$(tr '\n' ' ' <"$IN/build-id-source.txt")"
+
+# --info: **同じ行を、HTML コメントに包まずそのまま**出す。リリースの資産として
+# 置くので、自動アップデータは API を通さずに（決まった URL から）読める。
+# リリース名は本文には出ない値なので、ここでは title= として足す。
+if [ "$MODE" = "info" ]; then
+	printf '%s\n' "$meta"
+	if [ -n "$TITLE" ]; then
+		printf 'title=%s\n' "$TITLE"
+	fi
+	exit 0
+fi
+
 echo "<!-- vw-probes"
-echo "build=$(cat "$IN/build-id.txt")"
-echo "shell=$(cat "$IN/shell-id.txt")"
-echo "commit=${COMMIT}"
-echo "built=${now}"
-echo "probes=$(cat "$IN/summary-line.txt" 2>/dev/null || true)"
-echo "payloads=${payloads_line}"
-echo "inputs=$(tr '\n' ' ' <"$IN/build-id-source.txt")"
+printf '%s\n' "$meta"
 echo "-->"
 echo
 echo "実機確認プラグイン **VwSdkProbes**（${short} / ${now}）。"

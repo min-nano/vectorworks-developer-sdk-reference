@@ -15,6 +15,10 @@
 #                              title=<リリース名>
 #                              probes=<入っているプローブ>
 #                            取れなかったときは error=<理由>（終了コードは 0）。
+#                            **理由は具体的に書く**——curl の終了コードか HTTP の
+#                            コードと、それが何を意味するか（回数制限・DNS・証明書・
+#                            プロキシ）。「ネットワークを確認してください」だけでは、
+#                            網が生きているときに手掛かりが残らない。
 #   do-install <url>         まるごと入れ替える（殻＋本体）。"ok" か error=<理由>。
 #   do-install-payload <url> **本体だけ**入れ替える。"ok" か error=<理由>。
 #
@@ -41,6 +45,14 @@
 #   入っている側 … 本体はカタログ VwSdkProbes.probes.txt の build=
 #                  殻はバンドルの Info.plist の VWShellId
 #
+# 【API が使えないときの逃げ道】q は最初に GitHub の API（api.github.com）を叩くが、
+# **そこが駄目でも諦めない**。資産の URL はタグと名前から決まる
+# （https://github.com/<repo>/releases/download/<タグ>/<名前>）ので、リリースの素性だけを
+# 書いた小さなテキスト <名前>.release-info.txt を直接落として読む（中身はリリース本文の
+# 隠しメタデータと同じ key=value で、scripts/probe-release-notes.sh --info が作る）。
+# これで **API の呼び出し上限（未認証は 1 時間あたり 60 回）や、api.github.com だけが
+# 塞がれている網でも入れ替えられる**。両方駄目なときだけ、両方の理由を並べて返す。
+#
 # 手で叩いて確かめることもできる:
 #   ./vw-probes-update.sh q
 #
@@ -59,28 +71,104 @@ VW_PLUGINS_DIR="${VW_PLUGINS_DIR:-$HOME/Library/Application Support/Vectorworks/
 VW_API="https://api.github.com/repos/${VW_REPO}"
 VW_TAG="${VW_TAG:-probes}"
 VW_NAME="VwSdkProbes"
+# 名乗り（GitHub は User-Agent を見る）と、**API を通さない取得先**。資産の URL は
+# タグと名前から決まるので、api.github.com が使えないときはこちらから引く（下の mode_q）。
+VW_UA="vw-probes-update"
+VW_DL="https://github.com/${VW_REPO}/releases/download/${VW_TAG}"
+VW_INFO="${VW_NAME}.release-info.txt"
 # 本体のファイル名の頭（実体は "<この頭>-<群>.vwpayload"）と、殻が読む索引。
 # plugin/src/PayloadHost.h の payload::FileNameFor / CatalogFileName と対。
 VW_PAYLOAD_PREFIX="VwSdkProbesPayload-"
 VW_CATALOG="VwSdkProbes.probes.txt"
 
 # ---------------------------------------------------------------------------
-# GitHub REST の下請け。JSON は plutil で読む（macOS に最初から入っていて JSON を解せる）。
+# 取得の下請け。JSON は plutil で読む（macOS に最初から入っていて JSON を解せる）。
+#
+# **失敗したら理由を残す。** 「ネットワークを確認してください」しか出さないと、網は
+# 生きているのに落ちたとき（API の回数制限・プロキシ・証明書・社内フィルタ）に、
+# 利用者にも直す側にも手掛かりが無い。curl の終了コードと HTTP のコードは、
+# **そのまま原因の名前**になるので捨てない。
 # ---------------------------------------------------------------------------
 
-# api_get <サブパス> -> JSON を入れた一時ファイルのパス（失敗したら非 0）
-api_get() {
+# 直近の取得が失敗した理由（fetch_to が入れる。**成功したら空**）。
+# **fetch_to を $(...) の中で呼ばないこと**——サブシェルではここへ書いた値が消える。
+VW_FETCH_REASON=""
+
+# rate_reset_hint <応答ヘッダのファイル> -> 「あと N 分で戻ります」（分からなければ空）
+rate_reset_hint() {
+	local reset now mins
+	reset="$(sed -n 's/^[Xx]-[Rr]ate[Ll]imit-[Rr]eset:[[:space:]]*//p' "$1" | tr -d '\r' | tail -n 1)"
+	case "$reset" in
+		'' | *[!0-9]*) return 0 ;;
+	esac
+	now="$(date +%s)"
+	mins=$(((reset - now + 59) / 60))
+	[ "$mins" -gt 0 ] || return 0
+	printf 'あと %s 分で戻ります' "$mins"
+}
+
+# fetch_reason <curl の終了コード> <HTTP コード> <curl のメッセージ> <応答ヘッダのファイル>
+#   -> **1 行**の理由（そのままダイアログに出る。error= は 1 行しか読まれない）
+fetch_reason() {
+	local code="$1" http="$2" msg="$3" hdr="$4" why hint
+	if [ "$code" -ne 0 ]; then
+		case "$code" in
+			5) why="プロキシに接続できません" ;;
+			6) why="名前解決に失敗しました（DNS）" ;;
+			7) why="接続できません（遮断・プロキシ設定の可能性）" ;;
+			28) why="時間内に応答がありません（打ち切り）" ;;
+			35 | 58 | 59 | 60 | 77 | 91) why="TLS の検証に失敗しました（証明書・SSL の設定）" ;;
+			*) why="curl が失敗しました" ;;
+		esac
+		printf 'curl 終了コード %s（%s）%s' "$code" "$why" "${msg:+: ${msg}}"
+		return 0
+	fi
+	case "$http" in
+		401 | 403 | 429)
+			if grep -qi '^x-ratelimit-remaining:[[:space:]]*0' "$hdr" 2>/dev/null; then
+				hint="$(rate_reset_hint "$hdr")"
+				printf 'HTTP %s: GitHub API の呼び出し上限に達しました（未認証は 1 時間あたり 60 回）%s' \
+					"$http" "${hint:+。${hint}}"
+			else
+				printf 'HTTP %s: 拒否されました（プロキシや社内フィルタの可能性）' "$http"
+			fi
+			;;
+		404) printf 'HTTP 404: 見つかりません（リリースか資産がまだありません）' ;;
+		5??) printf 'HTTP %s: GitHub 側の一時的な障害' "$http" ;;
+		000) printf '応答がありません' ;;
+		*) printf 'HTTP %s' "$http" ;;
+	esac
+}
+
+# fetch_to <URL> <出力先> <Accept> [秒] : 取れたら 0。取れなければ VW_FETCH_REASON に
+# 理由を入れて非 0。**-f を付けない**——付けると HTTP のコードもろとも消えて、
+# 「取れなかった」以上のことが言えなくなる。
+fetch_to() {
+	local url="$1" out="$2" accept="$3" maxtime="${4:-20}"
+	local hdr err http code msg
+	hdr="$(mktemp)"
+	err="$(mktemp)"
 	# --max-time で頭打ちにする。**この呼び出しの間 Vectorworks は止まる**（メニューから
 	# 同期に叩かれる）ので、応答が返らないネットワークで待ち続けさせないために必須。
-	local f
-	f="$(mktemp)"
-	if curl -fsSL --max-time 20 --retry 2 -H "Accept: application/vnd.github+json" \
-		"${VW_API}/$1" -o "$f"; then
-		printf '%s' "$f"
+	if http="$(curl -sSL --max-time "$maxtime" --retry 2 -A "$VW_UA" -H "Accept: ${accept}" \
+		-D "$hdr" -w '%{http_code}' "$url" -o "$out" 2>"$err")"; then
+		code=0
 	else
-		rm -f "$f"
-		return 1
+		code=$?
 	fi
+	case "$http" in
+		'' | *[!0-9]*) http="000" ;;
+	esac
+	# curl のメッセージは**最後の行**を採る（--retry の警告が先に出るため）。
+	msg="$(grep -v '^[[:space:]]*$' "$err" 2>/dev/null | tail -n 1 | tr -d '\r\n' || true)"
+	if [ "$code" -eq 0 ] && [ "$http" -lt 400 ]; then
+		VW_FETCH_REASON=""
+		rm -f "$hdr" "$err"
+		return 0
+	fi
+	VW_FETCH_REASON="$(fetch_reason "$code" "$http" "$msg" "$hdr")"
+	rm -f "$hdr" "$err"
+	return 1
 }
 
 # jval <json ファイル> <キーパス> -> 値（無ければ空）
@@ -108,8 +196,10 @@ meta() {
 	printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -n 1
 }
 
+# download <URL> <出力先>: zip を落とす。**理由の残し方は取得と同じ**（fetch_to）で、
+# 時間の頭打ちだけ緩める（1 MB 強あるので 20 秒では足りない網がある）。
 download() {
-	curl -fL --retry 3 --max-time 300 "$1" -o "$2"
+	fetch_to "$1" "$2" "*/*" 300
 }
 
 # installed_build -> 入っている**本体一式**のビルド ID（無ければ none）。
@@ -205,18 +295,34 @@ install_payloads() {
 # ---------------------------------------------------------------------------
 
 mode_q() {
-	local f
-	if ! f="$(api_get "releases/tags/${VW_TAG}")"; then
-		echo "error=リリース（${VW_TAG}）を取得できませんでした。ネットワークを確認してください。"
-		return 0
+	local f body name url api_reason latest latest_shell probes
+	f="$(mktemp)"
+	body=""
+	name=""
+	url=""
+	if fetch_to "${VW_API}/releases/tags/${VW_TAG}" "$f" "application/vnd.github+json"; then
+		body="$(jval "$f" body)"
+		name="$(jval "$f" name)"
+		url="$(asset_url "$f" "$VW_NAME.vwlibrary.zip" || true)"
+	else
+		# **API が使えなくても更新はできる。** 資産の URL はタグと名前から決まる
+		# （…/releases/download/<タグ>/<名前>）ので、リリースの素性だけを書いた小さな
+		# テキスト（VW_INFO）を直接落として読む。API の呼び出し上限（未認証は 1 時間
+		# あたり 60 回）や、api.github.com だけが塞がれている網でもここで通る。
+		# **両方の理由を持ったまま**進む——どちらも駄目だったときに 1 行で言うため。
+		api_reason="$VW_FETCH_REASON"
+		if fetch_to "${VW_DL}/${VW_INFO}" "$f" "*/*"; then
+			body="$(cat "$f")"
+			name="$(meta "$body" title)"
+			url="${VW_DL}/${VW_NAME}.vwlibrary.zip"
+		else
+			rm -f "$f"
+			echo "error=リリース（${VW_TAG}）を取得できませんでした。GitHub API: ${api_reason}／直接取得: ${VW_FETCH_REASON}"
+			return 0
+		fi
 	fi
-	local body name url
-	body="$(jval "$f" body)"
-	name="$(jval "$f" name)"
-	url="$(asset_url "$f" "$VW_NAME.vwlibrary.zip" || true)"
 	rm -f "$f"
 
-	local latest latest_shell probes
 	latest="$(meta "$body" build)"
 	latest_shell="$(meta "$body" shell)"
 	probes="$(meta "$body" probes)"
@@ -258,7 +364,7 @@ mode_do_install() {
 
 	if ! download "$url" "$tmp/bundle.zip"; then
 		rm -rf "$tmp" "$work"
-		echo "error=ダウンロードに失敗しました。"
+		echo "error=ダウンロードに失敗しました（${VW_FETCH_REASON}）。"
 		return 0
 	fi
 	if ! unzip -q "$tmp/bundle.zip" -d "$work" >/dev/null 2>&1; then
@@ -311,7 +417,7 @@ mode_do_install_payload() {
 
 	if ! download "$url" "$tmp/bundle.zip"; then
 		rm -rf "$tmp" "$work"
-		echo "error=ダウンロードに失敗しました。"
+		echo "error=ダウンロードに失敗しました（${VW_FETCH_REASON}）。"
 		return 0
 	fi
 	if ! unzip -q "$tmp/bundle.zip" -d "$work" >/dev/null 2>&1; then
