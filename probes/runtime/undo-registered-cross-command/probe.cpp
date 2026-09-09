@@ -100,13 +100,11 @@ VW_PROBE("undo-registered-cross-command",
 				  "）。存在確認: " + ExistsWord(LayerExistsByName(name)));
 
 		Boolean added = gSDK->AddAfterSwapObject(layer);
-		probe.log(std::string("1 回目: AddAfterSwapObject の戻り値=") +
-				  (added ? "true" : "false"));
+		probe.log(std::string("1 回目: AddAfterSwapObject の戻り値=") + (added ? "true" : "false"));
 
 		Boolean ended = gSDK->EndUndoEvent();
 		probe.log(std::string("1 回目: EndUndoEvent() 戻り値=") + (ended ? "true" : "false") +
-				  " / undo building=" +
-				  (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
+				  " / undo building=" + (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
 
 		previous = name;
 		probe.log("1 回目はここまで。もう一度このプローブを選んで走らせてください"
@@ -137,10 +135,10 @@ VW_PROBE("undo-registered-cross-command",
 	}
 
 	const TXString script = TXString("PROCEDURE __ProbeUndoCrossCommand;\n"
-									  "BEGIN\n"
-									  "\tDoMenuTextByName('Undo', 0);\n"
-									  "END;\n"
-									  "Run(__ProbeUndoCrossCommand);\n");
+									 "BEGIN\n"
+									 "\tDoMenuTextByName('Undo', 0);\n"
+									 "END;\n"
+									 "Run(__ProbeUndoCrossCommand);\n");
 	VCOMError err = engine->ExecuteScript(script);
 	probe.log(std::string("2 回目: ExecuteScript(Undo) VCOMError=") + std::to_string((long)err) +
 			  " succeeded=" + (VCOM_SUCCEEDED(err) ? "yes" : "no"));
@@ -153,6 +151,6 @@ VW_PROBE("undo-registered-cross-command",
 				  "1 段の Undo で戻せた ===");
 	else
 		probe.fail(std::string("結論: 前回閉じた自分の undo イベントは、別コマンドからの"
-								"Undo では戻らなかった（before=") +
-					ExistsWord(before) + " after=" + ExistsWord(after) + "）");
+							   "Undo では戻らなかった（before=") +
+				   ExistsWord(before) + " after=" + ExistsWord(after) + "）");
 }
