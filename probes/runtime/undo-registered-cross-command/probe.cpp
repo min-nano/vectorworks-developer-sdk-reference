@@ -12,22 +12,30 @@
 //	いう意味ではない（issue #54 の指摘。ホームズ君 IFC 取り込みプラグインの実機フィード
 //	バックでは、登録して閉じたイベントが次のコマンド実行の Undo で実際に戻っている）。
 //
-//	このプローブは 2 回に分けて走らせる。本体はモジュール内の static 変数で前回の
-//	状態を覚えている——プラグイン本体（ペイロード）はコマンドをまたいで同じモジュールが
-//	載ったままなので（plugin/README.md「殻と本体」）、これで cross-command の状態を
-//	再現できる。
+//	このプローブは 2 回に分けて走らせる。前回の状態は**図面そのもの**（マーカーレイヤの
+//	有無）から読み取る——モジュール内の static 変数では駄目だった（実機で確認済み。下記
+//	「教訓」）。
 //
-//	  1 回目: SetUndoMethod(kUndoSwapObjects) + NameUndoEvent(...) でイベントを開き、
-//	          新規レイヤを作って AddAfterSwapObject で登録し、EndUndoEvent() で閉じる。
-//	          ここでコマンドが終わる（＝ DoInterface が戻る）。
-//	  2 回目（別のメニュー実行）: 前回のレイヤがまだ残っているか読み戻してから、
+//	  1 回目: マーカーレイヤがまだ無ければ、SetUndoMethod(kUndoSwapObjects) +
+//	          NameUndoEvent(...) でイベントを開き、新規レイヤを作って AddAfterSwapObject
+//	          で登録し、EndUndoEvent() で閉じる。ここでコマンドが終わる
+//	          （＝ DoInterface が戻る）。
+//	  2 回目（別のメニュー実行）: マーカーレイヤが既にあれば、その残存を確認してから、
 //	          IVectorScriptEngine 経由で DoMenuTextByName('Undo', 0) を 1 回呼び、
 //	          もう一度読み戻す。
 //
 //	目視は要らない——「レイヤ名が読み戻せるか」だけで判定できる（issue #54 が指摘する
 //	「効いたかは読み戻しで判定する」をそのまま踏襲）。1 回目と 2 回目の間に他の undo
 //	可能な操作（レイヤ・図形の作成/削除等）を挟むと、2 回目の Undo が別の操作を戻して
-//	しまい判定を汚すので行わないこと。
+//	しまい判定を汚すので行わないこと。同じ図面を開いたまま 2 回目を走らせること
+//	（図面を保存せず閉じて開き直すと、マーカーレイヤごと消えて 1 回目からやり直しになる）。
+//
+//	【教訓】最初は「前回のレイヤ名」をモジュール内の static 変数（TXString&
+//	PreviousLayerName()）で覚える設計にしたが、実機で連続 2 回走らせても両方とも
+//	「1 回目」のログが出た（issue #54 のコメントで実測）。原因は特定していないが
+//	（本体の入れ替え・VW の再起動など、モジュールの静的記憶域がクリアされる経路は複数
+//	ある）、**static はコマンドをまたいで生き残るとは限らない**と分かったので、
+//	図面自身に状態を持たせる設計へ直した。
 //
 
 #include "Probe.h"
@@ -64,12 +72,8 @@ namespace
 		return exists ? "残っている" : "消えた";
 	}
 
-	// 2 回目の実行から見えればよいだけなので、モジュール内の static で足りる。
-	TXString& PreviousLayerName()
-	{
-		static TXString sName;
-		return sName;
-	}
+	// マーカーレイヤの名前は固定（1 図面につき 1 回分の状態しか要らない）。
+	const TXString kMarkerLayerName = "probe-undo-cross-command-1";
 } // namespace
 
 VW_PROBE("undo-registered-cross-command",
@@ -78,26 +82,26 @@ VW_PROBE("undo-registered-cross-command",
 		 "エンジン経由の Undo を 1 回掛けて、前回のレイヤが消えるかを読み戻しで確かめる"
 		 "（issue #54）")
 {
-	TXString& previous = PreviousLayerName();
-
-	if (previous.GetLength() == 0)
+	// 「前回」の状態は図面そのもの（マーカーレイヤの有無）から読み取る。static 変数は
+	// 使わない（コマンドをまたいで生き残るとは限らないことを実機で確認済み。ファイル
+	// 冒頭「教訓」）。
+	if (!LayerExistsByName(kMarkerLayerName))
 	{
 		// --- 1 回目: 登録して閉じる ---
-		const TXString name = "probe-undo-cross-command-1";
-
 		probe.log("1 回目: undo イベントを開く（SetUndoMethod + NameUndoEvent）");
 		gSDK->SetUndoMethod(kUndoSwapObjects);
 		gSDK->NameUndoEvent("probe-undo-registered-cross-command");
 
-		MCObjectHandle layer = gSDK->CreateLayer(name, kLayerDesign);
+		MCObjectHandle layer = gSDK->CreateLayer(kMarkerLayerName, kLayerDesign);
 		if (layer == nil)
 		{
 			gSDK->EndAndRemoveUndoEvent();
 			probe.fail("1 回目: CreateLayer が nil を返した");
 			return;
 		}
-		probe.log("1 回目: レイヤを作った（" + std::string(static_cast<const char*>(name)) +
-				  "）。存在確認: " + ExistsWord(LayerExistsByName(name)));
+		probe.log("1 回目: レイヤを作った（" +
+				  std::string(static_cast<const char*>(kMarkerLayerName)) +
+				  "）。存在確認: " + ExistsWord(LayerExistsByName(kMarkerLayerName)));
 
 		Boolean added = gSDK->AddAfterSwapObject(layer);
 		probe.log(std::string("1 回目: AddAfterSwapObject の戻り値=") + (added ? "true" : "false"));
@@ -106,26 +110,17 @@ VW_PROBE("undo-registered-cross-command",
 		probe.log(std::string("1 回目: EndUndoEvent() 戻り値=") + (ended ? "true" : "false") +
 				  " / undo building=" + (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
 
-		previous = name;
-		probe.log("1 回目はここまで。もう一度このプローブを選んで走らせてください"
-				  "（2 回目で Undo を掛けます。それまで他の undo 可能な操作をしないこと）");
+		probe.log("1 回目はここまで。同じ図面を開いたまま、もう一度このプローブを選んで"
+				  "走らせてください（2 回目で Undo を掛けます。それまで他の undo 可能な"
+				  "操作をしないこと）");
 		return;
 	}
 
-	// --- 2 回目: 前回のレイヤの残存を確認してから Undo を掛ける ---
-	const TXString name = previous;
-	previous = ""; // 途中で fail しても 3 回目が 1 回目からやり直せるように、先に戻す
-
-	probe.log("2 回目: 前回のレイヤ（" + std::string(static_cast<const char*>(name)) +
+	// --- 2 回目: マーカーレイヤが既にあるので、残存を確認してから Undo を掛ける ---
+	probe.log("2 回目: 前回のレイヤ（" + std::string(static_cast<const char*>(kMarkerLayerName)) +
 			  "）の残存を確認する");
-	const bool before = LayerExistsByName(name);
+	const bool before = LayerExistsByName(kMarkerLayerName);
 	probe.log("2 回目: undo 前の存在確認: " + ExistsWord(before));
-	if (!before)
-	{
-		probe.fail("2 回目: 前回のレイヤが最初から無い（1 回目の後に他の undo 可能な"
-				   "操作をしていないか確認すること）");
-		return;
-	}
 
 	IVectorScriptEnginePtr engine(IID_VectorScriptEngine);
 	if (!engine)
@@ -143,7 +138,7 @@ VW_PROBE("undo-registered-cross-command",
 	probe.log(std::string("2 回目: ExecuteScript(Undo) VCOMError=") + std::to_string((long)err) +
 			  " succeeded=" + (VCOM_SUCCEEDED(err) ? "yes" : "no"));
 
-	const bool after = LayerExistsByName(name);
+	const bool after = LayerExistsByName(kMarkerLayerName);
 	probe.log("2 回目: undo 後の存在確認: " + ExistsWord(after));
 
 	if (before && !after)
