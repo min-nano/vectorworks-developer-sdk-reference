@@ -85,17 +85,17 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 
 		probe.log("=== B. 同じオブジェクトへ SetObjectStoryBound（自階の LayerElevation "
 				  "基準）を掛ける ===");
-		SStoryObjectData bottomBound;
-		bottomBound.fBound = eStoryObjectBound_LayerElevation;
+		MockUp::SStoryObjectData bottomBound;
+		bottomBound.fBound = MockUp::eStoryObjectBound_LayerElevation;
 		bottomBound.fBoundStory = 0;
 		bottomBound.fOffset = kBottomZ;
-		SStoryObjectData topBound;
-		topBound.fBound = eStoryObjectBound_LayerElevation;
+		MockUp::SStoryObjectData topBound;
+		topBound.fBound = MockUp::eStoryObjectBound_LayerElevation;
 		topBound.fBoundStory = 0;
 		topBound.fOffset = kTopZ;
 
-		const TObjectBoundID kBottomBoundID = 1;
-		const TObjectBoundID kTopBoundID = 0;
+		const MockUp::TObjectBoundID kBottomBoundID = 1;
+		const MockUp::TObjectBoundID kTopBoundID = 0;
 		bool setBottomOk = gSDK->SetObjectStoryBound(pioA, kBottomBoundID, bottomBound);
 		bool setTopOk = gSDK->SetObjectStoryBound(pioA, kTopBoundID, topBound);
 		probe.log(std::string("B. SetObjectStoryBound 戻り値: bottom=") +
