@@ -35,6 +35,66 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 下端と同値にする（＝差 0）と高さ 0 になるので、**「差＝部材高さ」**にする。
 逆に水平材のパスに傾斜を持たせてはいけない（バウンドの高さ差と二重に効く）。
 
+**【調査中】** この結論（上記 3 周）と食い違う実測が
+[issue #56](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/56) で
+報告されている——ストーリバウンドの与え方をどう変えても実体の高さが動かず、代わりに
+**パス自身が 0 長へ潰れていた**というもの。本節の結論を無条件の一般則として読まず、
+次節「`CreateCustomObjectPath` 系のパス座標系」と合わせて読むこと。
+
+## `CreateCustomObjectPath` 系のパス座標系（世界座標を渡すが、PIO が持つのは挿入点相対）【調査中: issue #56】
+
+[issue #56](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/56) の
+調査。ホームズ君 IFC 取り込みプラグインで、構造材 PIO の柱 46 本が「オブジェクトとしては
+在るのに長さ 0（実体無し）で図に出ない」事故が起きた
+（[あちらの PR #113](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/113)）。
+実機 10 周の切り分けで、**上端の絶対 Z が上階のストーリレベルの Z とちょうど一致する柱だけ**
+PIO 内部のパスが 2 点とも同じ位置へ潰れる（`GetCustomObjectPath` ＋ `NurbsGetPt3D` の読み戻しで
+確認）ことが分かったが、「なぜ潰れるか」は未解明。
+
+**ヘッダ／同梱実装ソースで確認できたこと（無条件に成立。VW 2026 SDK / mac）**:
+
+- **`CreateCustomObjectPath` には `CreateCustomObjectPathNoOffset` という別の入口がある**
+  （`ISDK.h`。`CreateCustomObjectPath(name, pathHand, profileGroupHand, doRegen=true)` と
+  `CreateCustomObjectPathNoOffset(name, pathHand, profileGroupHand)` が並んで宣言されている）。
+  名前から**既定の入口は何らかの「offset」を適用し、`NoOffset` はそれを飛ばす**と読める。
+  ただしどちらの宣言にもコメントが 1 行も無く、offset の中身（何を基準に何を引くのか）は
+  ヘッダからは分からない。
+- **VWFC のラッパーはパスをそのまま渡すだけで、座標変換は一切していない**
+  （`SDKLib/Source/VWSDK/VWFC/VWObjects/VWParametricObj.cpp`）。パス付きコンストラクタ・
+  `GetObjectPath()`・`SetObjectPath()` はいずれも
+  `::GS_CreateCustomObjectPath` / `::GS_GetCustomObjectPath` / `::GS_SetCustomObjectPath`
+  （`extern "C"` の callback）を素通しで呼ぶだけで、VWFC 側にオフセット計算のコードは無い。
+  **つまり座標変換をしているとすれば、それは SDK に同梱されていない VW 本体側の実装**
+  ——ここから先は `sdk-grep` では答えが出ず、実機（プローブ）でしか確かめられない。
+- **`SetObjectStoryBound` / `GetObjectStoryBound` が扱う `SStoryObjectData` は受け渡し用の
+  レコードで、ジオメトリ生成には触れていない**（`ISDK.h`）。フィールドは
+  `fBound`（`eStoryObjectBound_LayerElevation` / `LayerWallHeight` / `Story`）・
+  `fBoundStory`（0=自階・1=上階・-1=下階）・`fLayerLevelType`・`fOffset` のみ。**別に
+  `GetObjectBoundElevation(hObject, id)` という、バウンドを解決した絶対 Z だけを返す
+  読み取り専用 API がある**——これは「バウンドの記録」と「解決結果」を読み分けるのに使える。
+- **`kPIOGenericStoryLevelBoundID = -3`** というボウンド ID が「2017 年に追加されたストーリ
+  レベル対応を使うパラメトリック用」とコメント付きで定義されている（`ISDK.h`）。構造材 PIO
+  自身がこの汎用の仕組みに乗っているのか、独自の再計算コードを持っているのかは
+  ヘッダからは分からない（乗っているなら「潰れ」は ISDK レベルの一般的な挙動、独自なら
+  構造材 PIO 固有のバグという分かれ方になる）。
+
+**未確認（実機プローブが要る。`probes/runtime/custom-object-path-coordinate-system/`）**:
+
+1. `CreateCustomObjectPath` に世界座標のパスを渡したとき、PIO 内部に保持されるのは
+   世界座標かローカル（挿入点相対）か。挿入点自体はどこに決まるか（パスの始点か、原点か）。
+2. `SetCustomObjectPath` は同じ座標系で受け取るか（issue #56 の実測では**相対**——
+   `CreateCustomObjectPath` と非対称に見える）。
+3. 汎用のカスタムオブジェクト（構造材のような専用の再計算コードを持たないもの）に対して
+   `SetObjectStoryBound` を掛けても、保持しているパスの座標が変わらないこと（＝バウンドは
+   受け渡し用のデータに過ぎない、を一般則として裏付ける）。
+4. 「上端の絶対 Z が別のレベルの Z とちょうど一致するとパスが潰れる」という条件が、構造材
+   PIO 固有の現象か、ISDK レベルでも起こるものか（3 が確認できれば、少なくとも汎用オブジェクト
+   では起きないと言えるようになる）。
+
+これらが確認できるまで、**「パスとバウンドで絶対 Z を二重に指定すべきか」への回答は保留**
+する（プラグイン側の `draw/StructuralMember.h` 「Z の置き方」・`draw/Member.cpp` の作りを
+見直せるかどうかは、この保留が解けてから判断する）。
+
 ## パラメータ名は実機の PIO 登録から採る
 
 VectorScript のエクスポートから推測した名前（`pitch` / `label` / 先頭大文字の
