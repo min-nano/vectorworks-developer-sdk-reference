@@ -307,5 +307,50 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 					  "（両端の絶対Zを一致させたので、ここが 0 に潰れれば issue #56 の"
 					  "現象を直接再現したことになる）");
 		}
+
+		probe.log("=== H. パスの絶対Zはバウンド解決後も意味を持つか（わざと嘘のパスで作る） ===");
+		// F と全く同じバウンド（bottom=572, top=3531）を、新しいオブジェクトへ
+		// **わざと大きく外れた絶対Z のパス**（0 -> 1）で作ってから掛ける。もし結果が F と
+		// 一致すれば、ResetObject 後の実体はパスの絶対Zに依らずバウンドだけで決まる
+		// ＝「パスにも絶対Zを持たせる」現行の二重指定は不要という根拠になる。
+		MCObjectHandle worldPathH = MakeVerticalWorldPath(probe, "H", 0, 1);
+		MCObjectHandle pioH = nullptr;
+		if (worldPathH != nullptr)
+			pioH = gSDK->CreateCustomObjectPath("StructuralMember", worldPathH, nullptr);
+		if (pioH == nullptr)
+		{
+			probe.log("H. \"StructuralMember\" の2つ目のインスタンスが作れなかった。");
+		}
+		else
+		{
+			VWParametricObj objH(pioH);
+			LogPoint(probe, "H. ResetObject 前の挿入点（GetObjectModelPos）",
+					 objH.GetObjectModelPos());
+
+			MockUp::SStoryObjectData bottomBoundH;
+			bottomBoundH.fBound = MockUp::eStoryObjectBound_LayerElevation;
+			bottomBoundH.fBoundStory = 0;
+			bottomBoundH.fOffset = kBottomZ;
+			MockUp::SStoryObjectData topBoundH;
+			topBoundH.fBound = MockUp::eStoryObjectBound_LayerElevation;
+			topBoundH.fBoundStory = 0;
+			topBoundH.fOffset = kTopZ;
+			gSDK->SetObjectStoryBound(pioH, kBottomBoundIDF, bottomBoundH);
+			gSDK->SetObjectStoryBound(pioH, kTopBoundIDF, topBoundH);
+
+			gSDK->ResetObject(pioH);
+
+			LogPoint(probe, "H. ResetObject 後の挿入点（GetObjectModelPos）",
+					 objH.GetObjectModelPos());
+			WorldPt3 i0, i1;
+			if (ReadPathEndpoints(probe, pioH, i0, i1))
+			{
+				LogPoint(probe, "H. ResetObject 後のパス[0]", i0);
+				LogPoint(probe, "H. ResetObject 後のパス[1]", i1);
+				probe.log("H. z1-z0 = " + std::to_string(i1.z - i0.z) +
+						  "（F と同じ (0,-2959) 相当になれば、パスの絶対Zはバウンド解決後は"
+						  "意味を持たない＝二重指定は不要、という根拠になる）");
+			}
+		}
 	}
 }
