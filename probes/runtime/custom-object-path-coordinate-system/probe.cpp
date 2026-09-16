@@ -223,21 +223,17 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 		}
 	}
 
-	probe.log("=== E（参考・失敗して構わない）実在の「構造材」PIO 名を当ててみる ===");
+	probe.log("=== E. 実在の「構造材」PIO（内部登録名 \"StructuralMember\"。空白なし）===");
+	// ホームズ君プラグイン draw/StructuralMember.h の kStructuralMemberPlugin より
+	// （PR #57 のコメントで確認: "Structural Member" ではなく空白なしの "StructuralMember"）。
 	MCObjectHandle worldPathE = MakeVerticalWorldPath(probe, "E", kBottomZ, kTopZ);
 	MCObjectHandle pioE = nullptr;
 	if (worldPathE != nullptr)
-		pioE = gSDK->CreateCustomObjectPath("Structural Member", worldPathE, nullptr);
+		pioE = gSDK->CreateCustomObjectPath("StructuralMember", worldPathE, nullptr);
 	if (pioE == nullptr)
 	{
-		probe.log(
-			"E. \"Structural Member\" "
-			"という名前では作れなかった（内部の登録名が違う可能性が高い。あるいは A/C/D と"
-			"同じ理由で CreateNurbsCurve 自体が失敗している可能性もある——上のログを見比べること）。"
-			"issue #56 "
-			"の報告者はホームズ君プラグイン側で使っている正しい名前を知っているはずなので、"
-			"ここを差し替えて再走行してほしい——本命は E 系列で「上端の絶対 Z が別レベルの Z と"
-			"ちょうど一致する」状況を作って潰れを再現することにある。");
+		probe.log("E. \"StructuralMember\" でも作れなかった（詳細は上の CreateNurbsCurve の"
+				  "ログを見比べること。名前以外の要因が疑わしい）。");
 	}
 	else
 	{
@@ -248,6 +244,39 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 		{
 			LogPoint(probe, "E. 読み戻したパス[0]", f0);
 			LogPoint(probe, "E. 読み戻したパス[1]", f1);
+			probe.log("E. z1-z0 = " + std::to_string(f1.z - f0.z) + "（渡した差は " +
+					  std::to_string(kTopZ - kBottomZ) + "）");
+		}
+
+		probe.log("=== F. 実在の構造材PIOへ SetObjectStoryBound（自階の LayerElevation "
+				  "基準）を掛ける ===");
+		MockUp::SStoryObjectData bottomBoundF;
+		bottomBoundF.fBound = MockUp::eStoryObjectBound_LayerElevation;
+		bottomBoundF.fBoundStory = 0;
+		bottomBoundF.fOffset = kBottomZ;
+		MockUp::SStoryObjectData topBoundF;
+		topBoundF.fBound = MockUp::eStoryObjectBound_LayerElevation;
+		topBoundF.fBoundStory = 0;
+		topBoundF.fOffset = kTopZ;
+
+		const MockUp::TObjectBoundID kBottomBoundIDF = 1;
+		const MockUp::TObjectBoundID kTopBoundIDF = 0;
+		bool setBottomOkF = gSDK->SetObjectStoryBound(pioE, kBottomBoundIDF, bottomBoundF);
+		bool setTopOkF = gSDK->SetObjectStoryBound(pioE, kTopBoundIDF, topBoundF);
+		probe.log(std::string("F. SetObjectStoryBound 戻り値: bottom=") +
+				  (setBottomOkF ? "true" : "false") + " top=" + (setTopOkF ? "true" : "false"));
+		probe.log("F. GetObjectBoundElevation: bottom=" +
+				  std::to_string(gSDK->GetObjectBoundElevation(pioE, kBottomBoundIDF)) +
+				  " top=" + std::to_string(gSDK->GetObjectBoundElevation(pioE, kTopBoundIDF)));
+
+		gSDK->ResetObject(pioE);
+
+		WorldPt3 g0, g1;
+		if (ReadPathEndpoints(probe, pioE, g0, g1))
+		{
+			LogPoint(probe, "F. ResetObject 後のパス[0]", g0);
+			LogPoint(probe, "F. ResetObject 後のパス[1]", g1);
+			probe.log("F. z1-z0 = " + std::to_string(g1.z - g0.z));
 		}
 	}
 }
