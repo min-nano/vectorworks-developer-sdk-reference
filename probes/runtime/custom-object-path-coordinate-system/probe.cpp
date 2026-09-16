@@ -5,6 +5,10 @@
 //	（世界座標か、挿入点相対か）と、SetObjectStoryBound が汎用カスタムオブジェクトの
 //	パス（実体）に影響するかどうかを、汎用のカスタムオブジェクトを使って実測する。
 //
+//	初回実行（build 5c704191dbe0）は A 系列の最初の一歩（CreateNurbsCurve か
+//	CreateCustomObjectPath）で 0.01 秒のうちに失敗し、どちらが nil を返したのか
+//	区別が付かなかった。今回はステップごとに個別のログ／fail を出して切り分ける。
+//
 
 #include "Probe.h"
 
@@ -19,11 +23,31 @@ namespace
 	}
 
 	// 2 点の直線パス（NURBS）を世界座標で作る（(0,0,z0) -> (0,0,z1)）。
-	MCObjectHandle MakeVerticalWorldPath(WorldCoord z0, WorldCoord z1)
+	// 途中の各ステップをログに出し、失敗した箇所が分かるようにする。
+	MCObjectHandle MakeVerticalWorldPath(vwprobe::Report& probe, const char* stepLabel,
+										 WorldCoord z0, WorldCoord z1)
 	{
 		MCObjectHandle curve = gSDK->CreateNurbsCurve(WorldPt3(0, 0, z0), false, 1);
-		if (curve != nullptr)
-			gSDK->Add3DVertex(curve, WorldPt3(0, 0, z1), true);
+		if (curve == nullptr)
+		{
+			probe.log(std::string(stepLabel) +
+					  ": CreateNurbsCurve が nil を返した（z0=" + std::to_string(z0) + "）");
+			return nullptr;
+		}
+		probe.log(std::string(stepLabel) + ": CreateNurbsCurve は非nilを返した");
+
+		gSDK->Add3DVertex(curve, WorldPt3(0, 0, z1), true);
+
+		WorldPt3 v0, v1;
+		Boolean ok0 = gSDK->NurbsGetPt3D(curve, 0, 0, v0);
+		Boolean ok1 = gSDK->NurbsGetPt3D(curve, 0, 1, v1);
+		probe.log(std::string(stepLabel) + ": Add3DVertex 直後の読み戻し ok0=" +
+				  (ok0 ? "true" : "false") + " ok1=" + (ok1 ? "true" : "false"));
+		if (ok0)
+			LogPoint(probe, (std::string(stepLabel) + ": curve[0]").c_str(), v0);
+		if (ok1)
+			LogPoint(probe, (std::string(stepLabel) + ": curve[1]").c_str(), v1);
+
 		return curve;
 	}
 
@@ -57,18 +81,27 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 	const WorldCoord kBottomZ = 572;
 	const WorldCoord kTopZ = 3531;
 
-	gSDK->DefineCustomObject(kPioName, kCustomObjectPrefNever);
+	MCObjectHandle formatNode = gSDK->DefineCustomObject(kPioName, kCustomObjectPrefNever);
+	probe.log(std::string("DefineCustomObject は ") + (formatNode != nullptr ? "非nil" : "nil") +
+			  " を返した");
 
 	probe.log("=== A. CreateCustomObjectPath に世界座標の2点パスを渡す ===");
-	MCObjectHandle worldPathA = MakeVerticalWorldPath(kBottomZ, kTopZ);
-	MCObjectHandle pioA = (worldPathA != nullptr)
-							  ? gSDK->CreateCustomObjectPath(kPioName, worldPathA, nullptr)
-							  : nullptr;
-	if (pioA == nullptr)
+	MCObjectHandle worldPathA = MakeVerticalWorldPath(probe, "A", kBottomZ, kTopZ);
+	MCObjectHandle pioA = nullptr;
+	if (worldPathA == nullptr)
 	{
-		probe.fail("A: CreateNurbsCurve か CreateCustomObjectPath が nil を返した");
+		probe.fail("A: CreateNurbsCurve が nil を返した（詳細は上のログ）");
 	}
 	else
+	{
+		pioA = gSDK->CreateCustomObjectPath(kPioName, worldPathA, nullptr);
+		if (pioA == nullptr)
+		{
+			probe.fail("A: CreateCustomObjectPath が nil を返した（CreateNurbsCurve 自体は成功）");
+		}
+	}
+
+	if (pioA != nullptr)
 	{
 		VWParametricObj objA(pioA);
 		WorldPt3 insertionA = objA.GetObjectModelPos();
@@ -116,15 +149,19 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 	}
 
 	probe.log("=== C. CreateCustomObjectPathNoOffset との比較（同じ世界座標パス） ===");
-	MCObjectHandle worldPathC = MakeVerticalWorldPath(kBottomZ, kTopZ);
-	MCObjectHandle pioC = (worldPathC != nullptr)
-							  ? gSDK->CreateCustomObjectPathNoOffset(kPioName, worldPathC, nullptr)
-							  : nullptr;
-	if (pioC == nullptr)
+	MCObjectHandle worldPathC = MakeVerticalWorldPath(probe, "C", kBottomZ, kTopZ);
+	MCObjectHandle pioC = nullptr;
+	if (worldPathC == nullptr)
 	{
-		probe.fail("C: CreateNurbsCurve か CreateCustomObjectPathNoOffset が nil を返した");
+		probe.fail("C: CreateNurbsCurve が nil を返した（詳細は上のログ）");
 	}
 	else
+	{
+		pioC = gSDK->CreateCustomObjectPathNoOffset(kPioName, worldPathC, nullptr);
+		if (pioC == nullptr)
+			probe.fail("C: CreateCustomObjectPathNoOffset が nil を返した");
+	}
+	if (pioC != nullptr)
 	{
 		VWParametricObj objC(pioC);
 		LogPoint(probe, "C. 挿入点（GetObjectModelPos）", objC.GetObjectModelPos());
@@ -138,17 +175,21 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 	}
 
 	probe.log("=== D. SetCustomObjectPath の座標系（世界座標 vs 相対座標で差し替え） ===");
-	MCObjectHandle basePathD = MakeVerticalWorldPath(kBottomZ, kTopZ);
-	MCObjectHandle pioD = (basePathD != nullptr)
-							  ? gSDK->CreateCustomObjectPath(kPioName, basePathD, nullptr)
-							  : nullptr;
-	if (pioD == nullptr)
+	MCObjectHandle basePathD = MakeVerticalWorldPath(probe, "D-base", kBottomZ, kTopZ);
+	MCObjectHandle pioD = nullptr;
+	if (basePathD == nullptr)
 	{
-		probe.fail("D: 土台の CreateCustomObjectPath に失敗した");
+		probe.fail("D: 土台の CreateNurbsCurve が nil を返した（詳細は上のログ）");
 	}
 	else
 	{
-		MCObjectHandle worldReplacement = MakeVerticalWorldPath(kBottomZ, kTopZ);
+		pioD = gSDK->CreateCustomObjectPath(kPioName, basePathD, nullptr);
+		if (pioD == nullptr)
+			probe.fail("D: 土台の CreateCustomObjectPath が nil を返した");
+	}
+	if (pioD != nullptr)
+	{
+		MCObjectHandle worldReplacement = MakeVerticalWorldPath(probe, "D-world", kBottomZ, kTopZ);
 		if (worldReplacement != nullptr && gSDK->SetCustomObjectPath(pioD, worldReplacement))
 		{
 			WorldPt3 d0, d1;
@@ -160,10 +201,12 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 		}
 		else
 		{
-			probe.log("D. 世界座標での SetCustomObjectPath に失敗した");
+			probe.log("D. 世界座標での SetCustomObjectPath に失敗した（差し替え用パスの作成失敗、"
+					  "または SetCustomObjectPath 自体が false）");
 		}
 
-		MCObjectHandle localReplacement = MakeVerticalWorldPath(0, kTopZ - kBottomZ);
+		MCObjectHandle localReplacement =
+			MakeVerticalWorldPath(probe, "D-local", 0, kTopZ - kBottomZ);
 		if (localReplacement != nullptr && gSDK->SetCustomObjectPath(pioD, localReplacement))
 		{
 			WorldPt3 e0, e1;
@@ -175,21 +218,22 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 		}
 		else
 		{
-			probe.log("D. 相対座標での SetCustomObjectPath に失敗した");
+			probe.log("D. 相対座標での SetCustomObjectPath に失敗した（差し替え用パスの作成失敗、"
+					  "または SetCustomObjectPath 自体が false）");
 		}
 	}
 
 	probe.log("=== E（参考・失敗して構わない）実在の「構造材」PIO 名を当ててみる ===");
-	MCObjectHandle worldPathE = MakeVerticalWorldPath(kBottomZ, kTopZ);
-	MCObjectHandle pioE =
-		(worldPathE != nullptr)
-			? gSDK->CreateCustomObjectPath("Structural Member", worldPathE, nullptr)
-			: nullptr;
+	MCObjectHandle worldPathE = MakeVerticalWorldPath(probe, "E", kBottomZ, kTopZ);
+	MCObjectHandle pioE = nullptr;
+	if (worldPathE != nullptr)
+		pioE = gSDK->CreateCustomObjectPath("Structural Member", worldPathE, nullptr);
 	if (pioE == nullptr)
 	{
 		probe.log(
 			"E. \"Structural Member\" "
-			"という名前では作れなかった（内部の登録名が違う可能性が高い）。"
+			"という名前では作れなかった（内部の登録名が違う可能性が高い。あるいは A/C/D と"
+			"同じ理由で CreateNurbsCurve 自体が失敗している可能性もある——上のログを見比べること）。"
 			"issue #56 "
 			"の報告者はホームズ君プラグイン側で使っている正しい名前を知っているはずなので、"
 			"ここを差し替えて再走行してほしい——本命は E 系列で「上端の絶対 Z が別レベルの Z と"
