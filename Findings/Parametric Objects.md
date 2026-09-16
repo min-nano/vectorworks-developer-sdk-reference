@@ -52,9 +52,10 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
    ジオメトリを再構築する**。
 4. **上下端の解決済み絶対Zが一致すると、パスが正確に0長へ潰れる。** 両方のバウンドを
    同じ絶対Z（3531）へ解決させて `ResetObject` すると、パスは
-   `(0,0,0)→(0,0,-0.000000)` になった（`z1-z0 = 0`）。**これが issue #56 の柱46本の
-   事故そのもの**——おそらく元の事故でも、上階の「横架材天端」バウンドの解決結果が、
-   たまたま下端の解決結果と一致してしまっていた。
+   `(0,0,0)→(0,0,-0.000000)` になった（`z1-z0 = 0`）。ただし**これを「issue #56 の柱46本の
+   事故そのもの」と読んではいけない**——この 4 は両端の `fOffset` を人手で同じ値へ揃えて
+   作った状況で、事故のほうは**バウンドが階を跨いでいて絶対Zは本来一致しない**。
+   なぜ一致してしまうのかは下記「階を跨ぐバウンドは `fBound` で書き分ける」を読むこと。
 5. **`ResetObject` が呼ばれる前提では、パスの絶対Zは意味を持たない。** わざと大きく
    外れた絶対Z（`0→1`）のパスで新しいオブジェクトを作り、3 と同じバウンド（572/3531）を
    掛けて `ResetObject` すると、結果は 3 と寸分違わず一致した（挿入点 `(0,0,3531)`、
@@ -108,6 +109,55 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
   受け渡し用のレコード（`fBound` / `fBoundStory` / `fLayerLevelType` / `fOffset`）にしか
   見えない。ジオメトリを再構築するのは `ResetObject` 側の実装（同じくクローズド）。
   バウンドを解決した絶対Zだけを読み取れる `GetObjectBoundElevation(hObject, id)` がある。
+
+### 階を跨ぐバウンドは `fBound` で書き分ける（`fBoundStory` だけでは跨がない）
+
+**【ヘッダ根拠】**（VW 2026 SDK。`ISDK.h` の `SStoryObjectData` の宣言に付いたコメント。
+**実機未確認**——確かめるプローブは
+[issue #56](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/56) で走らせる）:
+
+```cpp
+struct SStoryObjectData
+{
+    EStoryObjectBound   fBound;
+    Sint8               fBoundStory;    // used with fBound = eStoryObjectBound_Story
+                                        //  if fBoundStory == 0 then it is this story
+                                        //  if fBoundStory == 1 then it is the story above
+                                        //  if fBoundStory == -1 then it is the story below
+    TXString            fLayerLevelType;
+    double              fOffset;
+};
+```
+
+**`fBoundStory` が効くのは `fBound == eStoryObjectBound_Story` のときだけ**とコメントは
+言っている。`eStoryObjectBound_LayerElevation`（レイヤ高さ基準）のまま `fBoundStory = 1` を
+書いても**階は跨がず、自階の同名レベルへ解決される**と読める。
+
+これが効いてくるのは、**同じ名前のレベル種別が全部の階に居る**——ストーリレイヤ
+テンプレート（`CreateStoryLayerTemplate` の `elevationOffset`＝**階内の相対Z**）から
+階を作るので、ふつうはそうなる——モデルで、**上下端のレベルの階内相対Zが等しい**ときである。
+跨げていないぶん上端も下端も自階の同じ高さへ落ち、差が 0 になってパスが潰れる。
+`Findings` の上記 4 が「絶対Zが一致すると潰れる」と言っているのはその先の話で、
+**一致する理由がここにある**（という仮説。実機で確認中）。
+
+ストーリ周りで使える口（`ISDK.h`。**プログラムから階を組める**）:
+
+| 呼び出し | 何をするか |
+| --- | --- |
+| `CreateLayerLevelType(name)` | レベル種別（FL・横架材天端…）を足す |
+| `CreateStoryLayerTemplate(name, scale, levelType, elevationOffset, wallHeight, index)` | 階を作るときの雛形。**`elevationOffset` が階内の相対Z** |
+| `CreateStory(name, suffix)` / `GetNumStories()` | 階を作る。**ハンドルは返らない**（`GetStoryAt` に当たる口が無い） |
+| `GetStoryOfLayer(layer)` / `GetLayerForStory(story, levelType)` | 階とレイヤの行き来。**階のハンドルはレイヤ経由でしか取れない** |
+| `GetStoryElevation(story)` / `SetStoryElevation(story, z)` | 階の絶対Z |
+| `GetStoryAbove(story)` / `GetStoryBelow(story)` | 上下の階 |
+| `GetStoryBoundChoiceStrings(story, topBound, strings)` | **OIP のポップアップに出る選択肢**の一覧 |
+| `GetStoryBoundDataFromChoiceString(string, data)` / `GetChoiceStringFromStoryBoundData(data, string)` | 選択肢文字列 ⇄ `SStoryObjectData`。**VW 自身の書き方を読み出せる** |
+| `GetStoryObjectDataBoundHeight(data, hContainer)` | **オブジェクトを作らずに**バウンド指定の解決先の絶対Zを得る |
+
+最後の 2 つは調査の道具として強い。**「上階のこのレベル」を正しく書く方法が分からないときは、
+`GetStoryBoundChoiceStrings` で VW が出す選択肢を全部もらい、
+`GetStoryBoundDataFromChoiceString` で構造体へ戻して中身を見ればよい**——推測でフィールドを
+埋めるより確実で、`GetStoryObjectDataBoundHeight` を使えば解決先だけを先に検算できる。
 
 ## パラメータ名は実機の PIO 登録から採る
 
