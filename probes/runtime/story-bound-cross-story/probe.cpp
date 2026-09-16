@@ -285,28 +285,47 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 
 	// ===========================================================================
 	probe.log("=== S. 実在の構造材 PIO で、相対Z一致／不一致のパス長を測る ===");
-	// 下端は必ず「自階の Floor」。上端だけを変えて、パスが潰れる条件を切り分ける。
+	// 事故の形をそのまま作る。柱 46 本の下端は `{自階, FL, offset -40}`、上端は
+	// `{上階, 横架材天端, offset 0}` で、**自階の横架材天端も FL-40**——だから上端が
+	// 階を跨げていなければ、上下端はぴったり同じ絶対Zへ落ちて 0 長になる。
+	// ここでも下階 Floor-40 (=572) と下階 BeamTop (=572) が一致するようにしてある。
 	struct Case
 	{
 		const char* label;
-		MockUp::EStoryObjectBound bound;
-		int story;
-		const char* level;
-		WorldCoord offset;
+		// 下端
+		MockUp::EStoryObjectBound bottomBound;
+		int bottomStory;
+		const char* bottomLevel;
+		WorldCoord bottomOffset;
+		// 上端
+		MockUp::EStoryObjectBound topBound;
+		int topStory;
+		const char* topLevel;
+		WorldCoord topOffset;
+		const char* expectation;
 	};
 	const Case cases[] = {
-		// (1) 現行プラグインと同じ書き方。LayerElevation のまま上階を指そうとする。
-		//     仮説どおりなら fBoundStory は無視され、自階 BeamTop(572) へ落ちる。
-		{"S1 LayerElevation/上階/BeamTop(相対-40)", MockUp::eStoryObjectBound_LayerElevation, 1,
-		 kLevelBeamTop, 0},
-		// (2) 同じ書き方で、上端のレベルの階内相対Zが下端と**違う**場合の対照。
-		{"S2 LayerElevation/上階/Floor(相対0)", MockUp::eStoryObjectBound_LayerElevation, 1,
-		 kLevelFloor, 0},
-		// (3) ヘッダのコメントどおりの書き方（fBound=Story で上階を指す）。
-		{"S3 Story/上階/BeamTop(相対-40)", MockUp::eStoryObjectBound_Story, 1, kLevelBeamTop, 0},
-		// (4) 自階のまま。比較の土台。
-		{"S4 LayerElevation/自階/BeamTop(相対-40)", MockUp::eStoryObjectBound_LayerElevation, 0,
-		 kLevelBeamTop, 0},
+		// (1) 事故の再現。下端を Floor-40 (=572) にして、自階 BeamTop (=572) と一致させる。
+		//     上端が階を跨げていなければ両端 572 でパスが 0 長へ潰れるはず。
+		{"S1 事故の再現: 下端=自階Floor-40 / 上端=LayerElevation・上階・BeamTop",
+		 MockUp::eStoryObjectBound_LayerElevation, 0, kLevelFloor, kBeamTopRelative,
+		 MockUp::eStoryObjectBound_LayerElevation, 1, kLevelBeamTop, 0,
+		 "跨げていなければ上端も 572 に解決され、z1-z0 = 0（潰れる）"},
+		// (2) 同じ下端で、上端だけヘッダのコメントどおり fBound=Story にする。
+		{"S2 ヘッダどおり: 下端=自階Floor-40 / 上端=Story・上階・BeamTop",
+		 MockUp::eStoryObjectBound_LayerElevation, 0, kLevelFloor, kBeamTopRelative,
+		 MockUp::eStoryObjectBound_Story, 1, kLevelBeamTop, 0,
+		 "跨げていれば上端 3531、z1-z0 = 2959（潰れない）"},
+		// (3)(4) fBoundStory が無視されているかの直接の対照。上端の指定は
+		//        fBoundStory だけが違う。**両者の結果が同じなら無視されている。**
+		{"S3 対照(上階指定): 下端=自階Floor / 上端=LayerElevation・上階・BeamTop",
+		 MockUp::eStoryObjectBound_LayerElevation, 0, kLevelFloor, 0,
+		 MockUp::eStoryObjectBound_LayerElevation, 1, kLevelBeamTop, 0,
+		 "S4 と同じ結果なら fBoundStory は無視されている"},
+		{"S4 対照(自階指定): 下端=自階Floor / 上端=LayerElevation・自階・BeamTop",
+		 MockUp::eStoryObjectBound_LayerElevation, 0, kLevelFloor, 0,
+		 MockUp::eStoryObjectBound_LayerElevation, 0, kLevelBeamTop, 0,
+		 "S3 と同じ結果なら fBoundStory は無視されている"},
 	};
 
 	const MockUp::TObjectBoundID kTopBoundID = 0;
@@ -316,9 +335,13 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 	{
 		const Case& testCase = cases[i];
 		probe.log(std::string("--- ") + testCase.label + " ---");
+		probe.log(std::string("  見込み: ") + testCase.expectation);
 
-		MCObjectHandle path = MakeVerticalPath(probe, testCase.label, kStory1Elevation,
-											   kStory2Elevation + kBeamTopRelative);
+		// パスは「潰れていない 2 点」であればよい（PR #57 の 5: ResetObject を呼ぶなら
+		// パスの絶対Zは上書きされる）。ここでは正しい高さを入れておく。
+		MCObjectHandle path =
+			MakeVerticalPath(probe, testCase.label, kStory1Elevation + kBeamTopRelative,
+							 kStory2Elevation + kBeamTopRelative);
 		if (path == nullptr)
 			continue;
 		MCObjectHandle pio = gSDK->CreateCustomObjectPath("StructuralMember", path, nullptr);
@@ -328,14 +351,16 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 			continue;
 		}
 
-		MockUp::SStoryObjectData bottom =
-			MakeBound(MockUp::eStoryObjectBound_LayerElevation, 0, kLevelFloor, 0);
+		MockUp::SStoryObjectData bottom = MakeBound(testCase.bottomBound, testCase.bottomStory,
+													testCase.bottomLevel, testCase.bottomOffset);
 		MockUp::SStoryObjectData top =
-			MakeBound(testCase.bound, testCase.story, testCase.level, testCase.offset);
+			MakeBound(testCase.topBound, testCase.topStory, testCase.topLevel, testCase.topOffset);
 		bool setBottom = gSDK->SetObjectStoryBound(pio, kBottomBoundID, bottom);
 		bool setTop = gSDK->SetObjectStoryBound(pio, kTopBoundID, top);
 		probe.log(std::string("  SetObjectStoryBound: bottom=") + (setBottom ? "true" : "false") +
 				  " top=" + (setTop ? "true" : "false"));
+		probe.log("  書いた bottom = " + Describe(bottom));
+		probe.log("  書いた top    = " + Describe(top));
 
 		MockUp::SStoryObjectData readBottom;
 		MockUp::SStoryObjectData readTop;
@@ -344,9 +369,10 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 		if (gSDK->GetObjectStoryBound(pio, kTopBoundID, readTop))
 			probe.log("  読み戻し top    = " + Describe(readTop));
 
-		probe.log("  GetObjectBoundElevation: bottom=" +
-				  Num(gSDK->GetObjectBoundElevation(pio, kBottomBoundID)) +
-				  " top=" + Num(gSDK->GetObjectBoundElevation(pio, kTopBoundID)));
+		const WorldCoord bottomZ = gSDK->GetObjectBoundElevation(pio, kBottomBoundID);
+		const WorldCoord topZ = gSDK->GetObjectBoundElevation(pio, kTopBoundID);
+		probe.log("  GetObjectBoundElevation: bottom=" + Num(bottomZ) + " top=" + Num(topZ) +
+				  " 差=" + Num(topZ - bottomZ));
 
 		gSDK->ResetObject(pio);
 
@@ -362,7 +388,11 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 	}
 
 	probe.log("=== 読み方 ===");
-	probe.log("R/S1 の解決Zが自階の値（" + Num(kStory1Elevation + kBeamTopRelative) +
-			  "）なら、fBound=LayerElevation では fBoundStory が無視されている＝"
-			  "issue #56 の潰れの原因はこれ。S1 が潰れて S2・S3 が潰れなければ確定。");
+	probe.log("下階 Floor=" + Num(kStory1Elevation) +
+			  " 下階 BeamTop=" + Num(kStory1Elevation + kBeamTopRelative) +
+			  " 上階 BeamTop=" + Num(kStory2Elevation + kBeamTopRelative) + "。");
+	probe.log("R で fBound=LayerElevation の行が fBoundStory によらず同じ解決Zなら、"
+			  "fBoundStory は LayerElevation では無視されている＝ヘッダのコメントどおり。");
+	probe.log("S1 が潰れ（z1-z0=0）、S2 が潰れず、S3 と S4 が同じ結果なら、issue #56 の"
+			  "「各階レイヤの相対Zが一致したときだけ潰れる」の機構が確定する。");
 }
