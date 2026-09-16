@@ -30,7 +30,10 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 ホームズ君 IFC 取り込みプラグインで、構造材 PIO の柱 46 本が「オブジェクトとしては在るのに
 長さ 0（実体無し）で図に出ない」事故が起きた
 （[あちらの PR #113](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/113)）。
-その原因と、下記「実機で3周かけて切り分けた結果」の関係が、この節でようやく判明した。
+この節は、その調査の過程で分かった**「高さと実体が何で決まるか」の機構**である
+（**あの 46 本の原因が何だったかは、まだ確定していない**——
+[issue #59](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/59) で
+「階だけが違う 2 本の `_Story` バウンド」を潰した結果は下記のとおり**白**だった）。
 
 **結論**:
 
@@ -52,10 +55,12 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
    ジオメトリを再構築する**。
 4. **上下端の解決済み絶対Zが一致すると、パスが正確に0長へ潰れる。** 両方のバウンドを
    同じ絶対Z（3531）へ解決させて `ResetObject` すると、パスは
-   `(0,0,0)→(0,0,-0.000000)` になった（`z1-z0 = 0`）。**実際の事故（柱46本）もこれだが、
-   両端が同じ絶対Zへ解決されてしまう理由は別にある**——`eStoryObjectBound_LayerElevation`
-   で書くと階もレベル種別も見てもらえず、両端が「乗っているレイヤの高さ」へ落ちる。
-   下記「階やレベルを指すバウンドは `eStoryObjectBound_Story` で書く」が原因と直し方。
+   `(0,0,0)→(0,0,-0.000000)` になった（`z1-z0 = 0`）。両端が同じ絶対Zへ解決されてしまう
+   書き方の代表が `eStoryObjectBound_LayerElevation` で、これで書くと階もレベル種別も
+   見てもらえず両端が「乗っているレイヤの高さ」へ落ちる（下記「階やレベルを指すバウンドは
+   `eStoryObjectBound_Story` で書く」）。**0 長へ潰れる条件はもう 1 つあり、
+   バウンドを 1 本も持たないまま `ResetObject` を呼んでも潰れる**（下記
+   「同じオブジェクトに 2 本のバウンドを書く」）。
 5. **`ResetObject` が呼ばれる前提では、パスの絶対Zは意味を持たない。** わざと大きく
    外れた絶対Z（`0→1`）のパスで新しいオブジェクトを作り、3 と同じバウンド（572/3531）を
    掛けて `ResetObject` すると、結果は 3 と寸分違わず一致した（挿入点 `(0,0,3531)`、
@@ -115,7 +120,13 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 [issue #56](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/56) で
 **実機確認済み**（VW 2026 / mac。実際に事故が起きたモデルで
 `probes/runtime/story-bound-cross-story/` を走らせた。以下の値は実行ログそのまま）。
-**これが「柱 46 本が長さ 0 で描かれない」事故の原因**である。
+
+> **帰属についての訂正**（[issue #59](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/59)）:
+> 当初ここには「**これが**柱 46 本が長さ 0 になる事故の原因である」と書いていたが、
+> **事故を起こしたプラグインは `LayerElevation` で書く経路を持っていない**（最初から
+> `fBound = eStoryObjectBound_Story`）。下記の機構は**実測として正しく、再現もする**が、
+> **あの 46 本の原因がこれだとは言えない**。以下は「`LayerElevation` で書くとこうなる」
+> という機構の記述として読むこと。
 
 #### `EStoryObjectBound` の 3 つの値は「何を見るか」が違う
 
@@ -175,7 +186,7 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 > `GetStoryObjectDataBoundHeight(data, hContainer)` で**オブジェクトを作らずに**
 > 解決先を検算するほうが速くて確実。
 
-#### 事故（柱 46 本が長さ 0）の機構
+#### 上下端とも `LayerElevation` で書くと 0 長へ潰れる（機構）
 
 上下端とも `LayerElevation` で書くと、レベル種別にも階にも関わらず**両端が同じ
 「レイヤの高さ」へ解決される**。残るのは `fOffset` の差だけなので、
@@ -209,6 +220,69 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
   は 572（＝container のレイヤ高さ）になった——下階（基礎）に `FL` が無いため。
   データ点が 1 つなので推定に留める。
 
+### 同じオブジェクトに 2 本のバウンドを書く（ID 0 / 1。階だけが違っても独立に解決される）
+
+[issue #59](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/59) で
+**実機確認済み**（VW 2026 / mac。`probes/runtime/story-bound-two-ids/` を事故のモデルで
+走らせた。1階=612 / 2階=3571、`耐力壁` の階内相対Z=−40、`FL`=0。以下の値は実行ログそのまま）。
+
+#### 結論: 消えない・混ざらない・書く順も効かない
+
+レイヤ `1-耐力壁`（572）に置いた構造材 PIO へ、**バウンド ID 0 と 1 に 1 本ずつ**
+`eStoryObjectBound_Story` を書き、`GetObjectBoundElevation` と `ResetObject` 後のパスを読んだ:
+
+| | ID 0 に書いたもの | ID 1 に書いたもの | 解決Z（ID0 / ID1） | `ResetObject` 後の `z1−z0` |
+| --- | --- | --- | --- | --- |
+| A | `{Story, 0, 耐力壁, 0}` | `{Story, **1**, 耐力壁, 0}`（**階だけが違う**） | **572 / 3531** | **2959（正常）** |
+| B | `{Story, 0, 耐力壁, 0}` | `{Story, 1, 耐力壁, **−739.75**}` | 572 / 2791.25 | 2219.25 |
+| C | `{Story, 0, 耐力壁, 0}` | `{Story, 1, **FL**, 0}` | 572 / 3571 | 2999 |
+| D | `{Story, 0, 耐力壁, 0}` | `{Story, 0, 耐力壁, 0}`（**完全に同一**） | 572 / 572 | **0（潰れる）** |
+| E | A と同じ形で、**ID 1 を先に**書く | | 572 / 3531 | 2959 |
+
+- **`fBoundStory` だけが違う 2 本の `_Story` バウンドは、両方そのまま保持され、
+  それぞれ独立に解決される**（A）。`GetObjectStoryBoundsCount` は 2 を返し、
+  `GetObjectStoryBoundsAt` は 0 と 1 を返し、`GetObjectStoryBound` は書いたとおりに
+  読み戻る。**片方が消える・2 本が「同じ 1 つ」として畳まれる、ということは起きない。**
+- **書く順も効かない**（E。先に ID 1 を書いても結果は A と同じ）。
+- 完全に同一のレコードを 2 本書いても**2 件として保持される**（D。件数=2、ID も 0 と 1 で
+  並ぶ）。ただし解決結果が同じ 572 なので**パスは 0 長へ潰れる**——潰れているのは
+  「バウンドが 1 本に畳まれたから」ではなく、**上下端が同じ絶対Zへ解決されたから**である
+  （上記「高さ・実体を最終的に決めるのは…」4）。
+- **したがって「2 本の `_Story` バウンドを書くと片方が消える」という筋で長さ 0 を
+  説明することはできない。** この経路でのバウンドの扱いは**白**である。
+
+#### バウンド ID は 0 と 1。`ID 0 がパスの始点`、`ID 1 が終点`
+
+- **新規に作った構造材 PIO はバウンドを 1 つも持たない。** `CreateCustomObjectPath` 直後は
+  `HasObjectStoryBounds=false` / 件数 0 で、`ResetObject` を挟んでも増えない
+  ——**VW が勝手に既定のバウンドを作ることはない**。並ぶのは `SetObjectStoryBound` で
+  書いた ID だけ。
+- **`ResetObject` はパスの始点を ID 0 の解決Zに、終点を ID 1 の解決Zに置く。** A では
+  挿入点が `(0,0,572)`（＝ID 0 の解決Z）になり、端点の絶対Z（挿入点＋パスZ）は
+  `[0]=572`（ID 0）/ `[1]=3531`（ID 1）だった。**下から上へ描くパスなら ID 0 が下端**。
+  - この対応は #56 の実行ログとも合う。あちらのプローブは逆に「ID 0 ＝上端」のつもりで
+    書いており、そのとき `ResetObject` 後のパスが `−2999`（＝始点のほうが高い）に
+    なっていた。**2 回の実行が同じ規則で説明できる**ので、規則は「上端/下端」ではなく
+    **「ID 0 → 始点 / ID 1 → 終点」**と読むのが正しい。
+- **`kPIOGenericStoryLevelBoundID`（−3）へは書けない。** `{Story, 1, 耐力壁, 0}` を
+  この ID へ `SetObjectStoryBound` すると **`false` を返し**、`HasObjectStoryBounds` も
+  false のまま・件数 0 のままだった。`ISDK.h` のコメント（「2017 年に足されたストーリ
+  レベル対応を使う parametric 用の Story boundID」）に釣られてこの ID を使わないこと。
+  **構造材 PIO のバウンドは 0 と 1 で扱う。**
+
+#### `ResetObject` 後のパスが 0 長になるのは 2 通り（実測）
+
+1. **上下端の解決済み絶対Zが一致したとき**（上表 D。`572 / 572` → `z1−z0 = 0`）。
+2. **バウンドが 1 本も無いまま `ResetObject` を呼んだとき。** バウンドを書かずに
+   `(0,0,0)→(0,0,2959)` のパスで作った構造材 PIO を `ResetObject` すると、パスは
+   `(0,0,0)→(0,0,0)` になった（`−3` への書き込みが `false` で弾かれた回でも同じ）。
+   **つまり `SetObjectStoryBound` が効いていないだけでも、実体は 0 長になる。**
+
+> **書いたら数えて読む。** `SetObjectStoryBound` の戻り値は `true` でも、**その ID が
+> 実際に並んでいるか**は `GetObjectStoryBoundsCount` / `GetObjectStoryBoundsAt` で、
+> **解決結果が上下で違うか**は `GetObjectBoundElevation` で確かめる。この 2 つを見れば、
+> 上の 1 と 2 のどちらで潰れるのかを `ResetObject` の前に弾ける。
+
 #### ストーリを触る API（`ISDK.h`）
 
 | 呼び出し | 何をするか |
@@ -222,6 +296,10 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 | `GetStoryObjectDataBoundHeight(data, hContainer)` | **オブジェクトを作らずに**解決先の絶対Zを得る |
 | `AddStoryLevel(story, levelType, 階内相対Z, layerName)` / `AddStoryLevelFromTemplate` / `RemoveStoryLevel` / `SetStoryLevelElevation` / `ResetDefaultStoryLevels` | 階へレベル（＝レイヤ）を足す |
 | `CreateLayerLevelType(name)` / `CreateStoryLevelTemplate(...)` / `CreateStoryLayerTemplate(...)` | レベル種別と雛形の登録 |
+| 【ヘッダ根拠】`AssociateLayerWithStory(layer, story)` / `SetLayerLevelType(layer, levelType)` | **既にあるレイヤを階へ結び付ける / レベル種別を付け替える。** `AddStoryLevel` で生やす以外の道がここにある（`ISDK.h`。実機未確認） |
+| `HasObjectStoryBound(h, id)` / `GetObjectStoryBound` / `SetObjectStoryBound` / `DelObjectStoryBound(h, id)` / `DelObjectStoryBounds(h)` | オブジェクトのバウンドを ID 単位で読み書き・削除する |
+| `GetObjectStoryBoundsCount(h)` / `GetObjectStoryBoundsAt(h, index)` | **実際に並んでいるバウンド ID を数えて引く。** 書けたかどうかはこれで確かめる（上記） |
+| `GetObjectBoundElevation(h, id)` | その ID のバウンドを**解決した絶対Z**。潰れの検知はここ |
 
 落とし穴が 3 つ（すべて実測）:
 
