@@ -52,9 +52,10 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
    ジオメトリを再構築する**。
 4. **上下端の解決済み絶対Zが一致すると、パスが正確に0長へ潰れる。** 両方のバウンドを
    同じ絶対Z（3531）へ解決させて `ResetObject` すると、パスは
-   `(0,0,0)→(0,0,-0.000000)` になった（`z1-z0 = 0`）。**これが issue #56 の柱46本の
-   事故そのもの**——おそらく元の事故でも、上階の「横架材天端」バウンドの解決結果が、
-   たまたま下端の解決結果と一致してしまっていた。
+   `(0,0,0)→(0,0,-0.000000)` になった（`z1-z0 = 0`）。**実際の事故（柱46本）もこれだが、
+   両端が同じ絶対Zへ解決されてしまう理由は別にある**——`eStoryObjectBound_LayerElevation`
+   で書くと階もレベル種別も見てもらえず、両端が「乗っているレイヤの高さ」へ落ちる。
+   下記「階やレベルを指すバウンドは `eStoryObjectBound_Story` で書く」が原因と直し方。
 5. **`ResetObject` が呼ばれる前提では、パスの絶対Zは意味を持たない。** わざと大きく
    外れた絶対Z（`0→1`）のパスで新しいオブジェクトを作り、3 と同じバウンド（572/3531）を
    掛けて `ResetObject` すると、結果は 3 と寸分違わず一致した（挿入点 `(0,0,3531)`、
@@ -88,11 +89,11 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 - **`SetCustomObjectPath` で差し替えるときは、挿入点を読んでから相対座標を計算する**
   （上記 2）。挿入点は `GetObjectModelPos`（VWFC）で読める。
 
-**検証範囲の限界**: 上記はすべて**鉛直材**（X=Y=0 の2点。`eStoryObjectBound_LayerElevation`、
-自階基準）で確認したもの。水平材（両端が異なるX/Yを持ち、Zの差はバウンドoffsetの差だけで
-表す設計。`draw/Member.cpp`）や、`eStoryObjectBound_Story`（他階基準）・
-`fLayerLevelType`（横架材天端・軒高等の名前付きレベル）を使う場合に同じ機構が働くかは、
-本調査では確認していない（同じ `ResetObject` 起点の再構築である可能性は高いが、未確認）。
+**検証範囲の限界**: 上記はすべて**鉛直材**（X=Y=0 の2点）で確認したもの。水平材
+（両端が異なるX/Yを持ち、Zの差はバウンドoffsetの差だけで表す設計。`draw/Member.cpp`）で
+同じ機構が働くかは未確認（同じ `ResetObject` 起点の再構築である可能性は高い）。
+`eStoryObjectBound_Story`（他階基準）と `fLayerLevelType`（横架材天端等の名前付きレベル）
+については下記の節で実機確認済み。
 
 **ヘッダ／同梱実装ソースからの補足**（VW 2026 SDK / mac。上記の実機確認とは独立に、
 `sdk-grep` で確認できる事実）:
@@ -108,6 +109,134 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
   受け渡し用のレコード（`fBound` / `fBoundStory` / `fLayerLevelType` / `fOffset`）にしか
   見えない。ジオメトリを再構築するのは `ResetObject` 側の実装（同じくクローズド）。
   バウンドを解決した絶対Zだけを読み取れる `GetObjectBoundElevation(hObject, id)` がある。
+
+### 階やレベルを指すバウンドは `eStoryObjectBound_Story` で書く（`LayerElevation` では跨がらない）
+
+[issue #56](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/56) で
+**実機確認済み**（VW 2026 / mac。実際に事故が起きたモデルで
+`probes/runtime/story-bound-cross-story/` を走らせた。以下の値は実行ログそのまま）。
+**これが「柱 46 本が長さ 0 で描かれない」事故の原因**である。
+
+#### `EStoryObjectBound` の 3 つの値は「何を見るか」が違う
+
+| `fBound` | 何に解決されるか | `fLayerLevelType` | `fBoundStory` |
+| --- | --- | --- | --- |
+| `eStoryObjectBound_LayerElevation` | **そのオブジェクトが乗っているレイヤの高さ** | **見ない** | **見ない** |
+| `eStoryObjectBound_LayerWallHeight` | 同上（レイヤ設定の壁高） | **見ない** | **見ない** |
+| `eStoryObjectBound_Story` | **`fBoundStory` で選んだ階の、`fLayerLevelType` のレベル** | 見る | 見る（0=自階 / 1=上階 / −1=下階） |
+
+どの場合も `fOffset` は最後に足される。
+
+`LayerElevation` が `fLayerLevelType` を見ないことは、**同じレベル種別の指定を container の
+レイヤだけ変えて解かせる**と一目で分かる（`GetStoryObjectDataBoundHeight`。1階=612 /
+2階=3571、`FL` の階内相対Z=0、`耐力壁`・`横架材天端`=−40 のモデル）:
+
+| container のレイヤ | 種別 `耐力壁` | 種別 `FL` | 種別 `横架材天端` |
+| --- | --- | --- | --- |
+| `1-耐力壁`（572） | 572 | **572** | 572 |
+| `1-FL`（612） | 612 | 612 | **612** |
+| `1-横架材天端`（572） | 572 | **572** | 572 |
+
+**行（レイヤ）を変えると全部動き、列（レベル種別）を変えても何も動かない。**
+同じ container のまま `fBound` を `Story` に替えると、逆に**レイヤに依らず**
+`耐力壁=572 / FL=612 / 横架材天端=572` で一定になる。
+
+`fBoundStory` も同じで、`LayerElevation` のままでは 0 / 1 / −1 のどれを書いても
+解決結果は変わらない（実測。下表は container=`1-耐力壁` での総当たり）:
+
+| `fBound` | `fBoundStory` = 0 | = 1 | = −1 |
+| --- | --- | --- | --- |
+| `LayerElevation`（種別 `FL` / `耐力壁`） | 572 / 572 | **572 / 572** | **572 / 572** |
+| `LayerWallHeight`（同上） | 572 / 572 | 572 / 572 | 572 / 572 |
+| `Story`（種別 `FL` / `耐力壁`） | 612 / 572 | **3571 / 3531** | 572 / 572 |
+
+#### 正しい書き方は VW 自身に聞ける
+
+`GetStoryBoundChoiceStrings`（OIP のポップアップに出る選択肢）を
+`GetStoryBoundDataFromChoiceString` で構造体へ戻すと、**VW がその選択肢をどう表現して
+いるか**がそのまま読める。実測（下階＝1階）:
+
+| 選択肢の文字列 | 復号した `SStoryObjectData` | 解決Z |
+| --- | --- | --- |
+| `レイヤの高さ` | `{LayerElevation, 0, "", 0}` | 572 |
+| `壁の高さ（レイヤ設定）` | `{LayerWallHeight, 0, "", 0}` | 572 |
+| `FL` | `{Story, 0, "FL", 0}` | 612 |
+| `横架材天端` | `{Story, 0, "横架材天端", 0}` | 572 |
+| `横架材天端 [上階]` | `{Story, **1**, "横架材天端", 0}` | 3531 |
+| `FL [上階]` | `{Story, **1**, "FL", 0}` | 3571 |
+| `基礎天端 [下階]` | `{Story, **−1**, "基礎天端", 0}` | 400 |
+
+**階やレベルを指す選択肢はすべて `fBound = eStoryObjectBound_Story`。**
+`LayerElevation` の選択肢は「レイヤの高さ」ただ 1 つで、`fLayerLevelType` は**空文字**
+——「レベル種別を書いた `LayerElevation`」という組み合わせは、VW 自身は一度も作らない。
+
+> **迷ったらここから引く。** フィールドを推測で埋めるより、
+> `GetStoryBoundChoiceStrings` → `GetStoryBoundDataFromChoiceString` で正解を取り出し、
+> `GetStoryObjectDataBoundHeight(data, hContainer)` で**オブジェクトを作らずに**
+> 解決先を検算するほうが速くて確実。
+
+#### 事故（柱 46 本が長さ 0）の機構
+
+上下端とも `LayerElevation` で書くと、レベル種別にも階にも関わらず**両端が同じ
+「レイヤの高さ」へ解決される**。残るのは `fOffset` の差だけなので、
+**offset が同じなら長さがちょうど 0 になる**。実測（レイヤ `1-耐力壁`＝572 に置いた
+構造材 PIO。`ResetObject` 後のパスを読み戻した）:
+
+| 下端 | 上端 | 解決Z（下/上） | `z1−z0` |
+| --- | --- | --- | --- |
+| `{LayerElevation, 0, FL, 0}` | `{LayerElevation, **1**, 耐力壁, 0}` | 572 / 572 | **0（潰れる）** |
+| `{LayerElevation, 0, FL, 0}` | `{LayerElevation, **0**, 耐力壁, 0}` | 572 / 572 | **0（潰れる）** |
+| `{LayerElevation, 0, FL, −40}` | `{LayerElevation, 1, 耐力壁, 0}` | 532 / 572 | −40 |
+| `{LayerElevation, 0, FL, −40}` | `{**Story**, 1, 耐力壁, 0}` | 532 / **3531** | **−2999（正常）** |
+
+上の 2 行は `fBoundStory` だけが違うのに**結果が 1 ビットも違わない**——
+`fBoundStory` が `LayerElevation` では死んでいることの直接の証拠である。
+4 行目は上端の `fBound` を `Story` に替えただけで、正しく階を跨いだ。
+
+**したがって直し方は「階やレベルを指す指定は `fBound = eStoryObjectBound_Story` で
+書く」**。`SetObjectStoryBound` は `LayerElevation` ＋ レベル種別という組み合わせも
+**`true` を返して受け取り、`GetObjectStoryBound` で書いたとおりに読み戻せる**ので、
+戻り値でも読み戻しでも誤りに気付けない。**気付けるのは `GetObjectBoundElevation`
+（または `GetStoryObjectDataBoundHeight`）で解決結果を読んだときだけ**。
+
+- **書いた後は必ず解決結果を読む。** 上下端の `GetObjectBoundElevation` が一致していたら
+  その部材は 0 長になる。
+- **「階内相対Zが各階で一致している」モデルほど当たりやすい**が、原因は相対Zの一致では
+  ない。ストーリレイヤテンプレートから階を作れば同名レベルの階内相対Zは揃うので、
+  そういうモデルで目立って見えるだけで、**`LayerElevation` で書いた時点で階は跨げて
+  いない**（相対Zが揃っていなくても、offset が同じなら同じように潰れる）。
+- **【推定】解決できないレベル種別を指すと「レイヤの高さ」へ落ちる。** `{Story, −1, FL}`
+  は 572（＝container のレイヤ高さ）になった——下階（基礎）に `FL` が無いため。
+  データ点が 1 つなので推定に留める。
+
+#### ストーリを触る API（`ISDK.h`）
+
+| 呼び出し | 何をするか |
+| --- | --- |
+| `ForEachLayerN(std::function<void(MCObjectHandle)>)` | **レイヤ列挙はこれ。** `VWDocument::GetDrawingHeaderFristMember` ＋ `NextObject` では辿れない（実測） |
+| `GetStoryOfLayer(layer)` / `GetLayerForStory(story, levelType)` | 階とレイヤの行き来。**階のハンドルはレイヤ経由でしか取れない**（`GetStoryAt` に当たる口が無い） |
+| `GetStoryElevation(story)` / `SetStoryElevation(story, z)` | 階の絶対Z |
+| `GetStoryLevelElevation(story, levelType)` | **階内の相対Z**。レイヤ高さを読む口が無い問題の回避にも使える |
+| `GetStoryAbove(story)` / `GetStoryBelow(story)` / `GetNumStories()` | 階の並び |
+| `GetStoryBoundChoiceStrings` / `GetStoryBoundDataFromChoiceString` / `GetChoiceStringFromStoryBoundData` | 選択肢文字列 ⇄ `SStoryObjectData`（上記） |
+| `GetStoryObjectDataBoundHeight(data, hContainer)` | **オブジェクトを作らずに**解決先の絶対Zを得る |
+| `AddStoryLevel(story, levelType, 階内相対Z, layerName)` / `AddStoryLevelFromTemplate` / `RemoveStoryLevel` / `SetStoryLevelElevation` / `ResetDefaultStoryLevels` | 階へレベル（＝レイヤ）を足す |
+| `CreateLayerLevelType(name)` / `CreateStoryLevelTemplate(...)` / `CreateStoryLayerTemplate(...)` | レベル種別と雛形の登録 |
+
+落とし穴が 3 つ（すべて実測）:
+
+- **`CreateStory` はレイヤを 1 枚も作らない。** `true` を返し `GetNumStories()` も増えるが、
+  できるのは**レベルの無い空の階**で、`ForEachLayerN` からは見えない。階のハンドルは
+  `GetStoryOfLayer` 経由でしか取れないので、**`CreateStory` だけで作った階には手が届かない**。
+  レベルを足すには `AddStoryLevel`（`Story Level` 系）を使う。
+- **`Story Layer Template` と `Story Level` は別系統。** `GetNumStoryLayerTemplates` /
+  `CreateStoryLayerTemplate` の一群と、`GetNumStoryLevelTemplates` /
+  `CreateStoryLevelTemplate` / `AddStoryLevel` … の一群がある。階へレベルを生やすのは後者。
+- **`GetLayerLevelTypeName` / `GetStoryLayerTemplateInfo` / `GetStoryLevelTemplateInfo` の
+  添字は 1 始まり。** 添字 0 は無効（前者は空文字、後者は `false`）で、件数 N に対して
+  有効なのは 1〜N。0 始まりで回すと**末尾の 1 件を毎回取りこぼす**。
+  一覧は**名前順**に並ぶので、`Create*Template` が返す `index` は挿入時点での整列位置に
+  過ぎない（2 本続けて足すと 1 本目が押し下げられ、どちらも `index=1` を返しうる）。
 
 ## パラメータ名は実機の PIO 登録から採る
 
