@@ -352,5 +352,58 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 						  "意味を持たない＝二重指定は不要、という根拠になる）");
 			}
 		}
+
+		probe.log("=== I. 実在の構造材PIOに対する SetCustomObjectPath の座標系 ===");
+		// issue #56 の報告では、生成（CreateCustomObjectPath＝世界座標）と差し替え
+		// （SetCustomObjectPath＝相対）が非対称に見える、とされていた。汎用PIO（D系列）
+		// では DefineCustomObject の制約で確かめられなかったので、実在の構造材PIOで試す。
+		MCObjectHandle worldPathI = MakeVerticalWorldPath(probe, "I", kBottomZ, kTopZ);
+		MCObjectHandle pioI = nullptr;
+		if (worldPathI != nullptr)
+			pioI = gSDK->CreateCustomObjectPath("StructuralMember", worldPathI, nullptr);
+		if (pioI == nullptr)
+		{
+			probe.log("I. 3つ目の \"StructuralMember\" インスタンスが作れなかった。");
+		}
+		else
+		{
+			// バウンドは掛けない。ResetObject に頼らず、SetCustomObjectPath 直後の
+			// 読み戻しだけで座標系を見る。
+			MCObjectHandle worldReplacementI =
+				MakeVerticalWorldPath(probe, "I-world", kBottomZ, kTopZ);
+			if (worldReplacementI != nullptr && gSDK->SetCustomObjectPath(pioI, worldReplacementI))
+			{
+				WorldPt3 j0, j1;
+				if (ReadPathEndpoints(probe, pioI, j0, j1))
+				{
+					LogPoint(probe, "I. 世界座標で差し替えた後のパス[0]", j0);
+					LogPoint(probe, "I. 世界座標で差し替えた後のパス[1]", j1);
+					probe.log("I. z1-z0 = " + std::to_string(j1.z - j0.z));
+				}
+			}
+			else
+			{
+				probe.log("I. 世界座標での SetCustomObjectPath に失敗した。");
+			}
+
+			MCObjectHandle localReplacementI =
+				MakeVerticalWorldPath(probe, "I-local", 0, kTopZ - kBottomZ);
+			if (localReplacementI != nullptr && gSDK->SetCustomObjectPath(pioI, localReplacementI))
+			{
+				WorldPt3 k0, k1;
+				if (ReadPathEndpoints(probe, pioI, k0, k1))
+				{
+					LogPoint(probe, "I. 相対座標(0..差分)で差し替えた後のパス[0]", k0);
+					LogPoint(probe, "I. 相対座標(0..差分)で差し替えた後のパス[1]", k1);
+					probe.log("I. z1-z0 = " + std::to_string(k1.z - k0.z) +
+							  "（世界座標での差し替えと結果が違えば、SetCustomObjectPath は"
+							  "CreateCustomObjectPath と非対称な座標系を取ることの根拠になる）");
+				}
+			}
+			else
+			{
+				probe.log("I. 相対座標での SetCustomObjectPath に失敗した。");
+			}
+		}
 	}
 }
