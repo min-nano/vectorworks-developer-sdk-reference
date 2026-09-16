@@ -22,7 +22,27 @@
 //	モデルでは、上端も下端も自階の同じ高さへ落ちて差が 0 になる——issue #56 の
 //	「各階レイヤの相対Zが一致したときだけ潰れる」と一致する。
 //
-//	【初回（build 7fccec3b6009）の失敗と、その直し】
+//	【実機で 3 回転んだ経緯と、そこで分かったこと】
+//	1 回目（7fccec3b6009）: レイヤの列挙を VWDocument::GetDrawingHeaderFristMember() +
+//	   NextObject でやっていて辿れなかった。**正しいのは ForEachLayerN**。
+//	2 回目（e88f678c0d6f / 空図面）: CreateStory は true を返し GetNumStories も増えるが、
+//	   **レイヤを 1 枚も作らない**。GetStoryOfLayer 経由でしかストーリのハンドルは
+//	   取れないので、自分で組んだ階には手が届かない。併せて
+//	   **GetLayerLevelTypeName / GetStoryLayerTemplateInfo の添字は 1 始まり**
+//	   （0 は無効）と分かった——0 始まりで回すと毎回 1 件取りこぼす。
+//	3 回目（e88f678c0d6f / 事故のモデル）: 階の選び方で外した。「一番低い階とその上」を
+//	   取ったので 基礎(0) と 1階(612) になり、この 2 つは**共通のレベル種別を 1 つも
+//	   持たない**。欲しいのは 1階(612) と 2階(3571) で、横架材天端・耐力壁・FL を
+//	   共有している。**共有するレベル種別がいちばん多い隣接ペアを選ぶ**のが正解。
+//	   このとき初めて事故のモデルの中身が見えた:
+//
+//	     1階(612): 1-横架材天端(相対-40) 1-耐力壁(-40) 1to3-柱 1to2-柱 1-FL(0)
+//	     2階(3571): 2-横架材天端(-40) 2-耐力壁(-40) 2-垂木 2-野地板 2to3-柱 2-FL(0)
+//
+//	   **横架材天端の階内相対Zは両階とも -40。** だから 1階の横架材天端は 612-40=572、
+//	   2階は 3571-40=3531 で、issue #56 の数字とぴったり合う。
+//
+//	【古い経緯（1 回目の直し）】
 //	P で「作ったはずのストーリをレイヤ経由で見つけられなかった」で止まった。ログには
 //	`GetNumStories = 2`（＝ストーリは確かにできている）と出ているのに、レイヤの列挙が
 //	"共通" と名前の空のもの 2 つしか拾えていなかった。**列挙の仕方が間違っていた**
@@ -47,16 +67,6 @@
 
 namespace
 {
-	// ---- 自分で組む 2 階建ての諸元（既存のストーリが使えないときだけ使う）--------
-	// 階内相対Zは **両階で同じ** にする（issue #56 のモデルと同じ形）。
-	const char* const kLevelFloor = "VwProbeFloor";		// 階内相対Z = 0
-	const char* const kLevelBeamTop = "VwProbeBeamTop"; // 階内相対Z = -40
-	const WorldCoord kBeamTopRelative = -40;
-	const WorldCoord kStory1Elevation = 612;
-	const WorldCoord kStory2Elevation = 3571;
-	const char* const kStory1Name = "VwProbeStoryLower";
-	const char* const kStory2Name = "VwProbeStoryUpper";
-
 	std::string Num(double v)
 	{
 		return std::to_string(v);
@@ -258,189 +268,134 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 		 "読み取り、fBound × fBoundStory × レベル種別の総当たりで解決結果とパス長を測る")
 {
 	// ===========================================================================
-	probe.log("=== P. 測るための 2 階建てを用意する ===");
-	DumpRegistries(probe, "P. 作る前:");
+	probe.log("=== P. 測るための「隣り合う 2 階」と「両階にあるレベル種別 2 つ」を選ぶ ===");
+	DumpRegistries(probe, "P. 触る前:");
 
-	probe.log("P. まず自分で組んでみる（階内相対Zは両階とも 0 / -40）");
-	TXString levelFloor(kLevelFloor);
-	TXString levelBeamTop(kLevelBeamTop);
-	probe.log(std::string("P.   CreateLayerLevelType(\"") + kLevelFloor +
-			  "\") = " + (gSDK->CreateLayerLevelType(levelFloor) ? "true" : "false"));
-	probe.log(std::string("P.   CreateLayerLevelType(\"") + kLevelBeamTop +
-			  "\") = " + (gSDK->CreateLayerLevelType(levelBeamTop) ? "true" : "false"));
-
-	// **Story *Level* Template のほうへ登録する。** 2 回目は Story *Layer* Template
-	// にしか登録しておらず、CreateStory はレイヤを 1 枚も作らなかった。
-	short levelTemplateIndexFloor = -1;
-	short levelTemplateIndexBeamTop = -1;
-	TXString levelTemplateFloor("VwProbeLevelFloor");
-	TXString levelTemplateBeamTop("VwProbeLevelBeamTop");
-	probe.log(std::string("P.   CreateStoryLevelTemplate(Floor, 階内相対Z=0) = ") +
-			  (gSDK->CreateStoryLevelTemplate(levelTemplateFloor, 1.0, levelFloor, 0, 2400,
-											  levelTemplateIndexFloor)
-				   ? "true"
-				   : "false") +
-			  " index=" + std::to_string(levelTemplateIndexFloor));
-	probe.log(std::string("P.   CreateStoryLevelTemplate(BeamTop, 階内相対Z=") +
-			  Num(kBeamTopRelative) + ") = " +
-			  (gSDK->CreateStoryLevelTemplate(levelTemplateBeamTop, 1.0, levelBeamTop,
-											  kBeamTopRelative, 2400, levelTemplateIndexBeamTop)
-				   ? "true"
-				   : "false") +
-			  " index=" + std::to_string(levelTemplateIndexBeamTop));
-
-	TXString story1Name(kStory1Name);
-	TXString story1Suffix("-L");
-	TXString story2Name(kStory2Name);
-	TXString story2Suffix("-U");
-	probe.log(std::string("P.   CreateStory(lower) = ") +
-			  (gSDK->CreateStory(story1Name, story1Suffix) ? "true" : "false"));
-	probe.log(std::string("P.   CreateStory(upper) = ") +
-			  (gSDK->CreateStory(story2Name, story2Suffix) ? "true" : "false"));
-
-	DumpRegistries(probe, "P. 作った後:");
-
+	// **既にある階を優先して使い、図面には何も足さない。** 実機 3 回目（事故のモデル、
+	// build e88f678c0d6f）で分かったこと:
+	//   * CreateStory は**レイヤの無い階**を作る（GetNumStories は数えるが
+	//     ForEachLayerN からは見えない）。足すだけ図面が散らかる。
+	//   * 「一番低い階とその上」では駄目だった——基礎(0) と 1階(612) は共通のレベル
+	//     種別を 1 つも持たない。欲しいのは 1階(612) と 2階(3571) で、こちらは
+	//     横架材天端・耐力壁・FL を共有している。
+	// なので**共有するレベル種別がいちばん多い隣接ペア**を選ぶ。
 	std::vector<StoryInfo> stories = CollectStories(probe);
 
-	// ストーリはできている（GetNumStories が数える）のにレイヤが無いと、
-	// GetStoryOfLayer 経由でハンドルを取れず何も測れない。ResetDefaultStoryLevels で
-	// 既定のレベル（＝レイヤ）を生やせないか試す——これが通れば手が届く。
-	if (stories.empty() && gSDK->GetNumStories() > 0)
+	// 図面のレベル種別の一覧（添字は 1 始まり）。
+	std::vector<TXString> allLevelTypes;
 	{
-		probe.log("P. レイヤの無いストーリしかない。ResetDefaultStoryLevels(false) を試す。");
-		probe.log(std::string("P.   ResetDefaultStoryLevels(false) = ") +
-				  (gSDK->ResetDefaultStoryLevels(false) ? "true" : "false"));
-		stories = CollectStories(probe);
+		const short levelTypeCount = gSDK->GetNumLayerLevelTypes();
+		for (short i = 1; i <= levelTypeCount; ++i)
+		{
+			const TXString type = gSDK->GetLayerLevelTypeName(i);
+			if (!Str(type).empty())
+				allLevelTypes.push_back(type);
+		}
 	}
 
-	// 自分で組んだ階に高さを入れる（見つかっていれば）。
+	struct LevelInfo
+	{
+		TXString type;
+		WorldCoord selfZ = 0;		  // 下階でのこのレベルの**絶対**Z
+		WorldCoord lowerRelative = 0; // 下階での**階内相対**Z
+		WorldCoord upperRelative = 0; // 上階での**階内相対**Z
+	};
+
+	// ある隣接ペアが共有するレベル種別を集める。
+	auto sharedLevels = [&](const StoryInfo& a, const StoryInfo& b)
+	{
+		std::vector<LevelInfo> found;
+		for (size_t i = 0; i < allLevelTypes.size(); ++i)
+		{
+			const TXString& type = allLevelTypes[i];
+			if (gSDK->GetLayerForStory(a.handle, type) == nullptr)
+				continue;
+			if (gSDK->GetLayerForStory(b.handle, type) == nullptr)
+				continue;
+			LevelInfo info;
+			info.type = type;
+			info.lowerRelative = gSDK->GetStoryLevelElevation(a.handle, type);
+			info.upperRelative = gSDK->GetStoryLevelElevation(b.handle, type);
+			info.selfZ = gSDK->GetStoryObjectDataBoundHeight(
+				MakeBound(MockUp::eStoryObjectBound_LayerElevation, 0, type, 0), a.anyLayer);
+			found.push_back(info);
+		}
+		return found;
+	};
+
+	StoryInfo lower;
+	StoryInfo upper;
+	std::vector<LevelInfo> levels;
 	for (size_t i = 0; i < stories.size(); ++i)
 	{
-		const std::string name = Str(stories[i].name);
-		if (name == kStory1Name)
-			probe.log(
-				std::string("P. SetStoryElevation(lower, ") + Num(kStory1Elevation) + ") = " +
-				(gSDK->SetStoryElevation(stories[i].handle, kStory1Elevation) ? "true" : "false"));
-		else if (name == kStory2Name)
-			probe.log(
-				std::string("P. SetStoryElevation(upper, ") + Num(kStory2Elevation) + ") = " +
-				(gSDK->SetStoryElevation(stories[i].handle, kStory2Elevation) ? "true" : "false"));
+		MCObjectHandle above = gSDK->GetStoryAbove(stories[i].handle);
+		if (above == nullptr)
+			continue;
+		for (size_t j = 0; j < stories.size(); ++j)
+		{
+			if (stories[j].handle != above)
+				continue;
+			std::vector<LevelInfo> shared = sharedLevels(stories[i], stories[j]);
+			probe.log("P. 隣接ペア \"" + Str(stories[i].name) + "\"(" + Num(stories[i].elevation) +
+					  ") → \"" + Str(stories[j].name) + "\"(" + Num(stories[j].elevation) +
+					  ") が共有するレベル種別: " + std::to_string(shared.size()) + " 件");
+			for (size_t k = 0; k < shared.size(); ++k)
+				probe.log("P.   \"" + Str(shared[k].type) + "\" 階内相対Z: 下階=" +
+						  Num(shared[k].lowerRelative) + " 上階=" + Num(shared[k].upperRelative) +
+						  " / 下階での絶対Z=" + Num(shared[k].selfZ));
+			if (shared.size() > levels.size())
+			{
+				levels = shared;
+				lower = stories[i];
+				upper = stories[j];
+			}
+		}
 	}
-	// 高さを変えたので拾い直す（並べ替えの基準に使う）。
-	for (size_t i = 0; i < stories.size(); ++i)
-		stories[i].elevation = gSDK->GetStoryElevation(stories[i].handle);
 
-	if (stories.size() < 2)
+	if (lower.handle == nullptr || levels.size() < 2)
 	{
 		probe.fail(
-			"P. ストーリが 2 つ見つからない（見つかった数=" + std::to_string(stories.size()) +
-			"）。自分で組めなかったので、**2 階以上あるモデル**（事故の起きた図面でよい）"
-			"で走らせ直してほしい。上のレイヤ一覧とテンプレート一覧が手掛かり。");
+			"P. 「共有するレベル種別を 2 つ以上持つ隣り合う 2 階」が図面に無い（最良のペアの"
+			"共有数=" +
+			std::to_string(levels.size()) +
+			"）。**2 階以上あって、同じレベル種別が両方の階に居るモデル**（事故の起きた図面が"
+			"まさにそれ）で走らせ直してほしい。上のレイヤ一覧が手掛かり。");
 		return;
 	}
 
-	// 下から 2 つ隣り合う階を選ぶ。GetStoryAbove で隣接を確かめる。
-	StoryInfo lower = stories[0];
-	StoryInfo upper;
-	for (size_t i = 0; i < stories.size(); ++i)
-		if (stories[i].elevation < lower.elevation)
-			lower = stories[i];
-	{
-		MCObjectHandle above = gSDK->GetStoryAbove(lower.handle);
-		for (size_t i = 0; i < stories.size(); ++i)
-			if (stories[i].handle == above)
-				upper = stories[i];
-	}
-	if (upper.handle == nullptr)
-	{
-		probe.fail("P. 下階の GetStoryAbove がどの階とも一致しない（隣り合う 2 階が要る）。");
-		return;
-	}
 	probe.log("P. 使う階: 下=\"" + Str(lower.name) + "\"(" + Num(lower.elevation) + ") 上=\"" +
 			  Str(upper.name) + "\"(" + Num(upper.elevation) + ")");
 
 	MCObjectHandle container = lower.anyLayer;
 	gSDK->SetCurrentLayer(container);
 
-	// **両階に同じレベル種別を、同じ階内相対Zで足す。** AddStoryLevel はレベルと
-	// レイヤの両方を作る（elevation は階内の相対Z）。既にあるなら false が返るはずで、
-	// そのときは SetStoryLevelElevation で相対Zだけ揃える。事故のモデルと同じ形
-	// ——「同名のレベルが両方の階に、同じ相対Zで居る」——を確実に作るための段。
-	{
-		const StoryInfo* targets[] = {&lower, &upper};
-		const TXString wantedTypes[] = {TXString(kLevelFloor), TXString(kLevelBeamTop)};
-		const WorldCoord wantedRelative[] = {0, kBeamTopRelative};
-		for (size_t t = 0; t < sizeof(targets) / sizeof(targets[0]); ++t)
-			for (size_t l = 0; l < sizeof(wantedTypes) / sizeof(wantedTypes[0]); ++l)
-			{
-				const TXString layerName = Str(targets[t]->name) + "-" + Str(wantedTypes[l]);
-				const bool added = gSDK->AddStoryLevel(targets[t]->handle, wantedTypes[l],
-													   wantedRelative[l], layerName);
-				const bool adjusted = gSDK->SetStoryLevelElevation(
-					targets[t]->handle, wantedTypes[l], wantedRelative[l]);
-				probe.log("P. AddStoryLevel(\"" + Str(targets[t]->name) + "\", \"" +
-						  Str(wantedTypes[l]) + "\", 階内相対Z=" + Num(wantedRelative[l]) +
-						  ") = " + (added ? "true" : "false") + " / SetStoryLevelElevation = " +
-						  (adjusted ? "true" : "false") + " / 読み戻し GetStoryLevelElevation = " +
-						  Num(gSDK->GetStoryLevelElevation(targets[t]->handle, wantedTypes[l])));
-			}
-	}
-
-	// 両方の階にあるレベル種別を、自階での解決Zつきで集める。**高さは決め打ちにせず測る。**
-	struct LevelInfo
-	{
-		TXString type;
-		WorldCoord selfZ = 0; // 自階（下階）でのこのレベルの絶対Z
-	};
-	std::vector<LevelInfo> levels;
-	{
-		const short levelTypeCount = gSDK->GetNumLayerLevelTypes();
-		for (short i = 1; i <= levelTypeCount; ++i) // 添字は 1 始まり（上記）
-		{
-			const TXString type = gSDK->GetLayerLevelTypeName(i);
-			if (Str(type).empty())
-				continue;
-			if (gSDK->GetLayerForStory(lower.handle, type) == nullptr)
-				continue;
-			if (gSDK->GetLayerForStory(upper.handle, type) == nullptr)
-				continue;
-			LevelInfo info;
-			info.type = type;
-			info.selfZ = gSDK->GetStoryObjectDataBoundHeight(
-				MakeBound(MockUp::eStoryObjectBound_LayerElevation, 0, type, 0), container);
-			levels.push_back(info);
-			// **階内相対Zは GetStoryLevelElevation が直接返す。** issue #56 の
-			// 「各階レイヤの相対Zが一致した時」がこの値のこと。両階を並べて出す。
-			probe.log("P. 両階にあるレベル種別 \"" + Str(type) +
-					  "\" 下階での解決Z=" + Num(info.selfZ) +
-					  " 階内相対Z: 下階=" + Num(gSDK->GetStoryLevelElevation(lower.handle, type)) +
-					  " 上階=" + Num(gSDK->GetStoryLevelElevation(upper.handle, type)));
-		}
-	}
-	if (levels.size() < 2)
-	{
-		probe.fail("P. 両方の階にあるレベル種別が 2 つ未満（見つかった数=" +
-				   std::to_string(levels.size()) + "）。2 種類ないと相対Z一致／不一致を作れない。");
-		return;
-	}
-	// 解決Zが違う 2 つを選ぶ（同じでは対照が作れない）。
+	// 下階での絶対Zが違う 2 つを選ぶ（同じでは相対Z一致／不一致の対照が作れない）。
+	// **B は「階内相対Zが両階で等しい」ものを優先する**——それが事故の条件そのもの。
 	LevelInfo levelA = levels[0];
 	LevelInfo levelB;
-	for (size_t i = 1; i < levels.size(); ++i)
-		if (levels[i].selfZ != levelA.selfZ)
-		{
+	for (size_t i = 0; i < levels.size(); ++i)
+	{
+		if (levels[i].selfZ == levelA.selfZ)
+			continue;
+		if (Str(levelB.type).empty() || (levels[i].lowerRelative == levels[i].upperRelative &&
+										 levelB.lowerRelative != levelB.upperRelative))
 			levelB = levels[i];
-			break;
-		}
+	}
 	if (Str(levelB.type).empty())
 	{
-		probe.fail("P. 自階での解決Zが違うレベル種別の組が作れない（全部同じ高さ）。");
+		probe.fail("P. 下階での絶対Zが違うレベル種別の組が作れない（共有分が全部同じ高さ）。");
 		return;
 	}
-	probe.log("P. 使うレベル種別: A=\"" + Str(levelA.type) + "\"(" + Num(levelA.selfZ) + ") B=\"" +
-			  Str(levelB.type) + "\"(" + Num(levelB.selfZ) + ")");
+	probe.log("P. 使うレベル種別: A=\"" + Str(levelA.type) + "\"(下階での絶対Z " +
+			  Num(levelA.selfZ) + ", 階内相対Z " + Num(levelA.lowerRelative) + "/" +
+			  Num(levelA.upperRelative) + ") B=\"" + Str(levelB.type) + "\"(下階での絶対Z " +
+			  Num(levelB.selfZ) + ", 階内相対Z " + Num(levelB.lowerRelative) + "/" +
+			  Num(levelB.upperRelative) + ")");
+	probe.log(std::string("P. B の階内相対Zは両階で") +
+			  (levelB.lowerRelative == levelB.upperRelative
+				   ? "**一致している**（事故と同じ条件）"
+				   : "一致していない（事故の条件ではない）"));
 
-	// ===========================================================================
 	probe.log("=== Q. VW 自身が出す選択肢（OIP ポップアップ）を全部ダンプして復号する ===");
 	// 「上階のレベルを指す」正しい書き方を、VW の口から読み取るのがねらい。
 	for (int isTop = 0; isTop <= 1; ++isTop)
