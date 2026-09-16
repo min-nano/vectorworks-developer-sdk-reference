@@ -271,12 +271,41 @@ VW_PROBE("custom-object-path-coordinate-system", "CreateCustomObjectPath 系の�
 
 		gSDK->ResetObject(pioE);
 
+		LogPoint(probe, "F. ResetObject 後の挿入点（GetObjectModelPos）", objE.GetObjectModelPos());
+
 		WorldPt3 g0, g1;
 		if (ReadPathEndpoints(probe, pioE, g0, g1))
 		{
 			LogPoint(probe, "F. ResetObject 後のパス[0]", g0);
 			LogPoint(probe, "F. ResetObject 後のパス[1]", g1);
 			probe.log("F. z1-z0 = " + std::to_string(g1.z - g0.z));
+		}
+
+		probe.log("=== G. 両端のバウンドを同じ絶対Zへ解決させる（潰れの直接再現を試みる） ===");
+		MockUp::SStoryObjectData sameBound;
+		sameBound.fBound = MockUp::eStoryObjectBound_LayerElevation;
+		sameBound.fBoundStory = 0;
+		sameBound.fOffset = kTopZ; // 上下とも同じ絶対Z（kTopZ）に解決させる
+		bool setBottomOkG = gSDK->SetObjectStoryBound(pioE, kBottomBoundIDF, sameBound);
+		bool setTopOkG = gSDK->SetObjectStoryBound(pioE, kTopBoundIDF, sameBound);
+		probe.log(std::string("G. SetObjectStoryBound 戻り値: bottom=") +
+				  (setBottomOkG ? "true" : "false") + " top=" + (setTopOkG ? "true" : "false"));
+		probe.log("G. GetObjectBoundElevation: bottom=" +
+				  std::to_string(gSDK->GetObjectBoundElevation(pioE, kBottomBoundIDF)) +
+				  " top=" + std::to_string(gSDK->GetObjectBoundElevation(pioE, kTopBoundIDF)));
+
+		gSDK->ResetObject(pioE);
+
+		LogPoint(probe, "G. ResetObject 後の挿入点（GetObjectModelPos）", objE.GetObjectModelPos());
+
+		WorldPt3 h0, h1;
+		if (ReadPathEndpoints(probe, pioE, h0, h1))
+		{
+			LogPoint(probe, "G. ResetObject 後のパス[0]", h0);
+			LogPoint(probe, "G. ResetObject 後のパス[1]", h1);
+			probe.log("G. z1-z0 = " + std::to_string(h1.z - h0.z) +
+					  "（両端の絶対Zを一致させたので、ここが 0 に潰れれば issue #56 の"
+					  "現象を直接再現したことになる）");
 		}
 	}
 }
