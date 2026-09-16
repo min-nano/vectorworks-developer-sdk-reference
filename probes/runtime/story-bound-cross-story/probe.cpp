@@ -141,17 +141,21 @@ namespace
 	// 2 回とも index=1 を返した件を切り分けるため、作る前と後の両方で出す。
 	void DumpRegistries(vwprobe::Report& probe, const char* whenLabel)
 	{
+		// **添字は 1 始まり**（実機 build e88f678c0d6f で確定: index 0 は
+		// GetStoryLayerTemplateInfo が false を返し、件数 N に対して有効なのは 1..N）。
+		// 0 も出して「0 は無効」が毎回ログに残るようにしてある。
 		const short levelTypeCount = gSDK->GetNumLayerLevelTypes();
 		std::string levelTypes;
-		for (short i = 0; i < levelTypeCount; ++i)
-			levelTypes += (i != 0 ? ", " : "") + Str(gSDK->GetLayerLevelTypeName(i));
+		for (short i = 0; i <= levelTypeCount; ++i)
+			levelTypes += (i != 0 ? ", " : "") + ("[" + std::to_string(i) + "]\"" +
+												  Str(gSDK->GetLayerLevelTypeName(i)) + "\"");
 		probe.log(std::string(whenLabel) + " レベル種別 " + std::to_string(levelTypeCount) +
-				  " 件: " + levelTypes);
+				  " 件（添字 0 も確認用に出す）: " + levelTypes);
 
 		const short templateCount = gSDK->GetNumStoryLayerTemplates();
 		probe.log(std::string(whenLabel) + " ストーリレイヤテンプレート " +
 				  std::to_string(templateCount) + " 件:");
-		for (short i = 0; i < templateCount; ++i)
+		for (short i = 0; i <= templateCount; ++i)
 		{
 			TXString name, levelType;
 			double scaleFactor = 0, elevationOffset = 0, defaultWallHeight = 0;
@@ -333,9 +337,11 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 	std::vector<LevelInfo> levels;
 	{
 		const short levelTypeCount = gSDK->GetNumLayerLevelTypes();
-		for (short i = 0; i < levelTypeCount; ++i)
+		for (short i = 1; i <= levelTypeCount; ++i) // 添字は 1 始まり（上記）
 		{
 			const TXString type = gSDK->GetLayerLevelTypeName(i);
+			if (Str(type).empty())
+				continue;
 			if (gSDK->GetLayerForStory(lower.handle, type) == nullptr)
 				continue;
 			if (gSDK->GetLayerForStory(upper.handle, type) == nullptr)
