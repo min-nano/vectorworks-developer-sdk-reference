@@ -16,13 +16,29 @@
 //	                        //  if fBoundStory == 1 then it is the story above
 //	                        //  if fBoundStory == -1 then it is the story below
 //
-//	つまり **fBoundStory は fBound == eStoryObjectBound_Story のときしか使われない**と
-//	読める。もしそうなら、fBound=LayerElevation のまま fBoundStory=1 を書いても階は
-//	跨がず、**自階の同名レベル**へ解決される。自階と上階でレベルの階内相対Zが等しい
-//	モデルでは、上端も下端も自階の同じ高さへ落ちて差が 0 になる——issue #56 の
-//	「各階レイヤの相対Zが一致したときだけ潰れる」と一致する。
+//	**fBoundStory は fBound == eStoryObjectBound_Story のときしか使われない**と読める。
 //
-//	【実機で 3 回転んだ経緯と、そこで分かったこと】
+//	【実機 4 回目（build 15721c41da34 / 事故のモデル）で出た決定的な数字】
+//	1階(612)/2階(3571) が共有するレベル種別 3 件を、下階のレイヤ "1-横架材天端"(=572) を
+//	container にして GetStoryObjectDataBoundHeight で解かせたところ:
+//
+//	    "耐力壁"     階内相対Z 下階=-40 上階=-40 → 絶対Z 572
+//	    "FL"         階内相対Z 下階=  0 上階=  0 → 絶対Z 572   ← 612 になるはず
+//	    "横架材天端"  階内相対Z 下階=-40 上階=-40 → 絶対Z 572
+//
+//	**レベル種別が何であれ 572**——container に渡したレイヤ自身の高さである。つまり
+//	`eStoryObjectBound_LayerElevation` は文字どおり「**そのオブジェクトが乗っている
+//	レイヤの高さ**」で、**fLayerLevelType も fBoundStory も見ていない**。これなら
+//	事故の説明が付く: 上下端とも LayerElevation で書けば、レベル種別や階の指定に
+//	関わらず両端が同じレイヤ高さへ落ち、差が 0 になる。
+//
+//	この回のプローブは「下階での絶対Zが違うレベル種別の組」を要求していたので、
+//	**全部同じ値だったせいで測定の本体（R/S）へ進めずに止まった**。今回はそこを直し、
+//	**R は必ず走る**ようにしてある（R は container のレイヤ 1 枚だけで測れる）。
+//	新しく R0 を足し、**container を下階の全レイヤに振って**解決Zがどう動くかを見る
+//	——container のレイヤ高さに追随するなら上の見立てが確定する。
+//
+//	【そこへ至るまでに転んだ 3 回（同じ轍を踏まないために残す）】
 //	1 回目（7fccec3b6009）: レイヤの列挙を VWDocument::GetDrawingHeaderFristMember() +
 //	   NextObject でやっていて辿れなかった。**正しいのは ForEachLayerN**。
 //	2 回目（e88f678c0d6f / 空図面）: CreateStory は true を返し GetNumStories も増えるが、
@@ -32,31 +48,14 @@
 //	   （0 は無効）と分かった——0 始まりで回すと毎回 1 件取りこぼす。
 //	3 回目（e88f678c0d6f / 事故のモデル）: 階の選び方で外した。「一番低い階とその上」を
 //	   取ったので 基礎(0) と 1階(612) になり、この 2 つは**共通のレベル種別を 1 つも
-//	   持たない**。欲しいのは 1階(612) と 2階(3571) で、横架材天端・耐力壁・FL を
-//	   共有している。**共有するレベル種別がいちばん多い隣接ペアを選ぶ**のが正解。
-//	   このとき初めて事故のモデルの中身が見えた:
+//	   持たない**。**共有するレベル種別がいちばん多い隣接ペアを選ぶ**のが正解。
 //
-//	     1階(612): 1-横架材天端(相対-40) 1-耐力壁(-40) 1to3-柱 1to2-柱 1-FL(0)
-//	     2階(3571): 2-横架材天端(-40) 2-耐力壁(-40) 2-垂木 2-野地板 2to3-柱 2-FL(0)
-//
-//	   **横架材天端の階内相対Zは両階とも -40。** だから 1階の横架材天端は 612-40=572、
-//	   2階は 3571-40=3531 で、issue #56 の数字とぴったり合う。
-//
-//	【古い経緯（1 回目の直し）】
-//	P で「作ったはずのストーリをレイヤ経由で見つけられなかった」で止まった。ログには
-//	`GetNumStories = 2`（＝ストーリは確かにできている）と出ているのに、レイヤの列挙が
-//	"共通" と名前の空のもの 2 つしか拾えていなかった。**列挙の仕方が間違っていた**
-//	——`VWDocument::GetDrawingHeaderFristMember()` ＋ `NextObject` ではレイヤ列を辿れて
-//	いない。ISDK には `ForEachLayerN(std::function<void(MCObjectHandle)>)` があるので
-//	そちらへ替え、**両方を出して見比べられる**ようにした。
-//
-//	併せて、初回のような「準備で転んで何も測れない」を繰り返さないために:
-//	  * レベル種別とストーリレイヤテンプレートの一覧を**作る前と後に**ダンプする
-//	    （`CreateStoryLayerTemplate` が 2 回とも index=1 を返していた件の切り分け）。
-//	  * 自分で組んだストーリが使えなければ、**図面に既にあるストーリで測る**へ落ちる
-//	    （実際の事故モデルで走らせればそのまま再現できる）。
-//	  * 高さは決め打ちにせず `GetStoryObjectDataBoundHeight` で**測ってから**使う
-//	    （Findings「レイヤ高さを取得する呼び出しが無い」の回避にもなる）。
+//	【測る順】
+//	  P.  隣り合う 2 階と、両階にあるレベル種別を選ぶ（何も図面に足さない）
+//	  R0. container を下階の全レイヤに振って LayerElevation の解決Zを見る
+//	  Q.  VW 自身が出す選択肢文字列を全部ダンプし、SStoryObjectData へ復号する
+//	  R.  fBound × fBoundStory × レベル種別の総当たり
+//	  S.  実在の構造材 PIO で ResetObject 後のパス長を測る
 //
 
 #include "Probe.h"
@@ -369,32 +368,79 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 	MCObjectHandle container = lower.anyLayer;
 	gSDK->SetCurrentLayer(container);
 
-	// 下階での絶対Zが違う 2 つを選ぶ（同じでは相対Z一致／不一致の対照が作れない）。
-	// **B は「階内相対Zが両階で等しい」ものを優先する**——それが事故の条件そのもの。
+	// レベル種別 A / B は**階内相対Z**で選ぶ（絶対Zで選ぶと、4 回目のように
+	// 「全部同じ値」で組が作れず測定の手前で止まる）。A は相対Z 0、B は相対Z が
+	// A と違うもの。どちらも両階にあることは上で確かめてある。
 	LevelInfo levelA = levels[0];
 	LevelInfo levelB;
 	for (size_t i = 0; i < levels.size(); ++i)
-	{
-		if (levels[i].selfZ == levelA.selfZ)
-			continue;
-		if (Str(levelB.type).empty() || (levels[i].lowerRelative == levels[i].upperRelative &&
-										 levelB.lowerRelative != levelB.upperRelative))
+		if (levels[i].lowerRelative == 0)
+		{
+			levelA = levels[i];
+			break;
+		}
+	for (size_t i = 0; i < levels.size(); ++i)
+		if (levels[i].lowerRelative != levelA.lowerRelative)
+		{
 			levelB = levels[i];
-	}
-	if (Str(levelB.type).empty())
-	{
-		probe.fail("P. 下階での絶対Zが違うレベル種別の組が作れない（共有分が全部同じ高さ）。");
-		return;
-	}
-	probe.log("P. 使うレベル種別: A=\"" + Str(levelA.type) + "\"(下階での絶対Z " +
-			  Num(levelA.selfZ) + ", 階内相対Z " + Num(levelA.lowerRelative) + "/" +
-			  Num(levelA.upperRelative) + ") B=\"" + Str(levelB.type) + "\"(下階での絶対Z " +
-			  Num(levelB.selfZ) + ", 階内相対Z " + Num(levelB.lowerRelative) + "/" +
-			  Num(levelB.upperRelative) + ")");
+			break;
+		}
+	const bool haveLevelPair = !Str(levelB.type).empty();
+	if (!haveLevelPair)
+		probe.log("P. 階内相対Zが違うレベル種別の組が作れなかった。S 系列は A だけで組む。");
+	if (!haveLevelPair)
+		levelB = levelA;
+	probe.log("P. 使うレベル種別: A=\"" + Str(levelA.type) + "\"(階内相対Z " +
+			  Num(levelA.lowerRelative) + "/" + Num(levelA.upperRelative) + ", 下階での絶対Z " +
+			  Num(levelA.selfZ) + ") B=\"" + Str(levelB.type) + "\"(階内相対Z " +
+			  Num(levelB.lowerRelative) + "/" + Num(levelB.upperRelative) + ", 下階での絶対Z " +
+			  Num(levelB.selfZ) + ")");
 	probe.log(std::string("P. B の階内相対Zは両階で") +
 			  (levelB.lowerRelative == levelB.upperRelative
 				   ? "**一致している**（事故と同じ条件）"
 				   : "一致していない（事故の条件ではない）"));
+
+	// 下階の各レベルのレイヤと、その「あるべき絶対Z」を控えておく。
+	// あるべき絶対Z = ストーリ高さ + 階内相対Z。実測と突き合わせるための物差し。
+	probe.log("P. 下階の各レベルのあるべき絶対Z（ストーリ高さ " + Num(lower.elevation) +
+			  " + 相対Z）:");
+	for (size_t i = 0; i < levels.size(); ++i)
+		probe.log("P.   \"" + Str(levels[i].type) +
+				  "\" 下階=" + Num(lower.elevation + levels[i].lowerRelative) +
+				  " 上階=" + Num(upper.elevation + levels[i].upperRelative));
+
+	// =======================================================================
+	probe.log("=== R0. container を下階の全レイヤに振って LayerElevation の解決Zを見る ===");
+	// **ここが 4 回目の見立ての検算。** レベル種別が何であれ container のレイヤ高さが
+	// 返るなら、eStoryObjectBound_LayerElevation は「自分が乗っているレイヤの高さ」で
+	// あって fLayerLevelType を見ていない、と言い切れる。
+	probe.log("R0. 読み方: 行（container のレイヤ）が変われば値も変わり、列（レベル種別）を"
+			  "変えても値が動かないなら、fLayerLevelType は無視されている。");
+	for (size_t i = 0; i < levels.size(); ++i)
+	{
+		MCObjectHandle layer = gSDK->GetLayerForStory(lower.handle, levels[i].type);
+		if (layer == nullptr)
+			continue;
+		TXString layerName;
+		gSDK->GetObjectName(layer, layerName);
+		std::string row;
+		for (size_t j = 0; j < levels.size(); ++j)
+			row += (j != 0 ? " | " : "") + Str(levels[j].type) + "=" +
+				   Num(gSDK->GetStoryObjectDataBoundHeight(
+					   MakeBound(MockUp::eStoryObjectBound_LayerElevation, 0, levels[j].type, 0),
+					   layer));
+		probe.log("R0. container=\"" + Str(layerName) + "\"（あるべき絶対Z " +
+				  Num(lower.elevation + levels[i].lowerRelative) + "）: " + row);
+
+		// 同じ container で fBound=Story に替えるとどうなるか（対照）。
+		std::string rowStory;
+		for (size_t j = 0; j < levels.size(); ++j)
+			rowStory +=
+				(j != 0 ? " | " : "") + Str(levels[j].type) + "=" +
+				Num(gSDK->GetStoryObjectDataBoundHeight(
+					MakeBound(MockUp::eStoryObjectBound_Story, 0, levels[j].type, 0), layer));
+		probe.log("R0.   同じ container で fBound=Story（自階）: " + rowStory);
+	}
 
 	probe.log("=== Q. VW 自身が出す選択肢（OIP ポップアップ）を全部ダンプして復号する ===");
 	// 「上階のレベルを指す」正しい書き方を、VW の口から読み取るのがねらい。
@@ -444,10 +490,27 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 	// 事故の形をそのまま作る。柱 46 本の下端は `{自階, FL, offset -40}`、上端は
 	// `{上階, 横架材天端, offset 0}` で、**自階の横架材天端もちょうど FL-40** だった
 	// ——だから上端が階を跨げていなければ両端がぴったり同じ絶対Zへ落ちる。
-	// ここでは下端を「レベルA ＋ (B の自階Z − A の自階Z)」にして、自階 B と一致させる。
-	const WorldCoord kBottomOffsetToMatchB = levelB.selfZ - levelA.selfZ;
+	//
+	// オブジェクトは**下階の B のレイヤ**（事故で言えば 1-横架材天端 と同じ高さの層）に
+	// 置く。4 回目で LayerElevation が container のレイヤ高さを返していたので、
+	// **どのレイヤに置いたかが効く**という前提で読めるようにしておく。
+	if (MCObjectHandle layerB = gSDK->GetLayerForStory(lower.handle, levelB.type))
+	{
+		container = layerB;
+		gSDK->SetCurrentLayer(container);
+		TXString layerName;
+		gSDK->GetObjectName(container, layerName);
+		probe.log("S. オブジェクトを置くレイヤ: \"" + Str(layerName) + "\"（あるべき絶対Z " +
+				  Num(lower.elevation + levelB.lowerRelative) + "）");
+	}
+
+	// 下端の offset は「A のあるべき絶対Z」と「B のあるべき絶対Z」の差。A 基準で書いて
+	// B の高さへ落とす、という事故と同じ書き方になる。
+	const WorldCoord kBottomOffsetToMatchB =
+		(lower.elevation + levelB.lowerRelative) - (lower.elevation + levelA.lowerRelative);
 	probe.log("S. 下端は \"" + Str(levelA.type) + "\" + " + Num(kBottomOffsetToMatchB) +
-			  " で、自階の \"" + Str(levelB.type) + "\"(" + Num(levelB.selfZ) + ") と一致させる。");
+			  " で、下階の \"" + Str(levelB.type) + "\"(あるべき絶対Z " +
+			  Num(lower.elevation + levelB.lowerRelative) + ") と一致させる。");
 
 	struct Case
 	{
@@ -482,8 +545,9 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 
 		// パスは「潰れていない 2 点」であればよい（PR #57 の 5: ResetObject を呼ぶなら
 		// パスの絶対Zはバウンド解決結果で上書きされる）。
-		MCObjectHandle path = MakeVerticalPath(probe, testCase.label, levelB.selfZ,
-											   levelB.selfZ + (upper.elevation - lower.elevation));
+		MCObjectHandle path =
+			MakeVerticalPath(probe, testCase.label, lower.elevation + levelB.lowerRelative,
+							 upper.elevation + levelB.upperRelative);
 		if (path == nullptr)
 			continue;
 		MCObjectHandle pio = gSDK->CreateCustomObjectPath("StructuralMember", path, nullptr);
@@ -531,8 +595,14 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 	}
 
 	probe.log("=== 読み方 ===");
-	probe.log("R で fBound=LayerElevation の行が fBoundStory によらず同じ解決Zなら、"
-			  "fBoundStory は LayerElevation では無視されている＝ヘッダのコメントどおり。");
-	probe.log("S1 が潰れ（z1-z0=0）、S2 が潰れず、S3 と S4 が同じ結果なら、issue #56 の"
-			  "「各階レイヤの相対Zが一致したときだけ潰れる」の機構が確定する。");
+	probe.log("R0: 行（container のレイヤ）で値が動き、列（レベル種別）で動かないなら、"
+			  "eStoryObjectBound_LayerElevation は「自分が乗っているレイヤの高さ」であり "
+			  "fLayerLevelType を見ていない——これが issue #56 の潰れの正体。");
+	probe.log("R: fBound=LayerElevation の行が fBoundStory によらず同じ解決Zなら、"
+			  "fBoundStory も見ていない（ヘッダのコメントどおり）。fBound=Story の行だけが "
+			  "fBoundStory とレベル種別に反応するはず。");
+	probe.log("S1 が潰れ（z1-z0=0）、S2（上端だけ fBound=Story）が潰れなければ、"
+			  "**直し方は「階を跨ぐ指定は fBound=eStoryObjectBound_Story で書く」**に決まる。");
+	probe.log("S3 と S4 が同じ結果なら、fBoundStory を変えても何も変わらないことの"
+			  "直接の証拠になる。");
 }
