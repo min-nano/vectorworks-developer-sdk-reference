@@ -167,6 +167,27 @@ namespace
 			else
 				probe.log("    [" + std::to_string(i) + "] GetStoryLayerTemplateInfo が false");
 		}
+
+		// **こちらが本命。** ISDK には Story *Layer* Template（上）とは別に
+		// Story *Level* Template の一群があり、階へレベル（＝レイヤ）を生やすのは
+		// こちら側（AddStoryLevel / AddStoryLevelFromTemplate / ResetDefaultStoryLevels）。
+		// 実機 2 回目で CreateStory がレイヤを 1 枚も作らなかったのは、Layer 側の
+		// テンプレートしか登録していなかったからではないか、というのがここの見立て。
+		const short levelTemplateCount = gSDK->GetNumStoryLevelTemplates();
+		probe.log(std::string(whenLabel) + " ストーリ**レベル**テンプレート " +
+				  std::to_string(levelTemplateCount) + " 件:");
+		for (short i = 0; i <= levelTemplateCount; ++i)
+		{
+			TXString name, levelType;
+			double scaleFactor = 0, elevationOffset = 0, defaultWallHeight = 0;
+			if (gSDK->GetStoryLevelTemplateInfo(i, name, scaleFactor, levelType, elevationOffset,
+												defaultWallHeight))
+				probe.log("    [" + std::to_string(i) + "] \"" + Str(name) + "\" レベル種別=\"" +
+						  Str(levelType) + "\" 階内相対Z=" + Num(elevationOffset) +
+						  " 既定壁高=" + Num(defaultWallHeight));
+			else
+				probe.log("    [" + std::to_string(i) + "] GetStoryLevelTemplateInfo が false");
+		}
 	}
 
 	struct StoryInfo
@@ -248,23 +269,25 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 	probe.log(std::string("P.   CreateLayerLevelType(\"") + kLevelBeamTop +
 			  "\") = " + (gSDK->CreateLayerLevelType(levelBeamTop) ? "true" : "false"));
 
-	short templateIndexFloor = -1;
-	short templateIndexBeamTop = -1;
-	TXString templateFloor("VwProbeTemplateFloor");
-	TXString templateBeamTop("VwProbeTemplateBeamTop");
-	probe.log(
-		std::string("P.   CreateStoryLayerTemplate(Floor, 階内相対Z=0) = ") +
-		(gSDK->CreateStoryLayerTemplate(templateFloor, 1.0, levelFloor, 0, 2400, templateIndexFloor)
-			 ? "true"
-			 : "false") +
-		" index=" + std::to_string(templateIndexFloor));
-	probe.log(std::string("P.   CreateStoryLayerTemplate(BeamTop, 階内相対Z=") +
-			  Num(kBeamTopRelative) + ") = " +
-			  (gSDK->CreateStoryLayerTemplate(templateBeamTop, 1.0, levelBeamTop, kBeamTopRelative,
-											  2400, templateIndexBeamTop)
+	// **Story *Level* Template のほうへ登録する。** 2 回目は Story *Layer* Template
+	// にしか登録しておらず、CreateStory はレイヤを 1 枚も作らなかった。
+	short levelTemplateIndexFloor = -1;
+	short levelTemplateIndexBeamTop = -1;
+	TXString levelTemplateFloor("VwProbeLevelFloor");
+	TXString levelTemplateBeamTop("VwProbeLevelBeamTop");
+	probe.log(std::string("P.   CreateStoryLevelTemplate(Floor, 階内相対Z=0) = ") +
+			  (gSDK->CreateStoryLevelTemplate(levelTemplateFloor, 1.0, levelFloor, 0, 2400,
+											  levelTemplateIndexFloor)
 				   ? "true"
 				   : "false") +
-			  " index=" + std::to_string(templateIndexBeamTop));
+			  " index=" + std::to_string(levelTemplateIndexFloor));
+	probe.log(std::string("P.   CreateStoryLevelTemplate(BeamTop, 階内相対Z=") +
+			  Num(kBeamTopRelative) + ") = " +
+			  (gSDK->CreateStoryLevelTemplate(levelTemplateBeamTop, 1.0, levelBeamTop,
+											  kBeamTopRelative, 2400, levelTemplateIndexBeamTop)
+				   ? "true"
+				   : "false") +
+			  " index=" + std::to_string(levelTemplateIndexBeamTop));
 
 	TXString story1Name(kStory1Name);
 	TXString story1Suffix("-L");
@@ -278,6 +301,17 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 	DumpRegistries(probe, "P. 作った後:");
 
 	std::vector<StoryInfo> stories = CollectStories(probe);
+
+	// ストーリはできている（GetNumStories が数える）のにレイヤが無いと、
+	// GetStoryOfLayer 経由でハンドルを取れず何も測れない。ResetDefaultStoryLevels で
+	// 既定のレベル（＝レイヤ）を生やせないか試す——これが通れば手が届く。
+	if (stories.empty() && gSDK->GetNumStories() > 0)
+	{
+		probe.log("P. レイヤの無いストーリしかない。ResetDefaultStoryLevels(false) を試す。");
+		probe.log(std::string("P.   ResetDefaultStoryLevels(false) = ") +
+				  (gSDK->ResetDefaultStoryLevels(false) ? "true" : "false"));
+		stories = CollectStories(probe);
+	}
 
 	// 自分で組んだ階に高さを入れる（見つかっていれば）。
 	for (size_t i = 0; i < stories.size(); ++i)
@@ -328,6 +362,30 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 	MCObjectHandle container = lower.anyLayer;
 	gSDK->SetCurrentLayer(container);
 
+	// **両階に同じレベル種別を、同じ階内相対Zで足す。** AddStoryLevel はレベルと
+	// レイヤの両方を作る（elevation は階内の相対Z）。既にあるなら false が返るはずで、
+	// そのときは SetStoryLevelElevation で相対Zだけ揃える。事故のモデルと同じ形
+	// ——「同名のレベルが両方の階に、同じ相対Zで居る」——を確実に作るための段。
+	{
+		const StoryInfo* targets[] = {&lower, &upper};
+		const TXString wantedTypes[] = {TXString(kLevelFloor), TXString(kLevelBeamTop)};
+		const WorldCoord wantedRelative[] = {0, kBeamTopRelative};
+		for (size_t t = 0; t < sizeof(targets) / sizeof(targets[0]); ++t)
+			for (size_t l = 0; l < sizeof(wantedTypes) / sizeof(wantedTypes[0]); ++l)
+			{
+				const TXString layerName = Str(targets[t]->name) + "-" + Str(wantedTypes[l]);
+				const bool added = gSDK->AddStoryLevel(targets[t]->handle, wantedTypes[l],
+													   wantedRelative[l], layerName);
+				const bool adjusted = gSDK->SetStoryLevelElevation(
+					targets[t]->handle, wantedTypes[l], wantedRelative[l]);
+				probe.log("P. AddStoryLevel(\"" + Str(targets[t]->name) + "\", \"" +
+						  Str(wantedTypes[l]) + "\", 階内相対Z=" + Num(wantedRelative[l]) +
+						  ") = " + (added ? "true" : "false") + " / SetStoryLevelElevation = " +
+						  (adjusted ? "true" : "false") + " / 読み戻し GetStoryLevelElevation = " +
+						  Num(gSDK->GetStoryLevelElevation(targets[t]->handle, wantedTypes[l])));
+			}
+	}
+
 	// 両方の階にあるレベル種別を、自階での解決Zつきで集める。**高さは決め打ちにせず測る。**
 	struct LevelInfo
 	{
@@ -351,8 +409,12 @@ VW_PROBE("story-bound-cross-story", "階を跨ぐストーリバウンドの解�
 			info.selfZ = gSDK->GetStoryObjectDataBoundHeight(
 				MakeBound(MockUp::eStoryObjectBound_LayerElevation, 0, type, 0), container);
 			levels.push_back(info);
+			// **階内相対Zは GetStoryLevelElevation が直接返す。** issue #56 の
+			// 「各階レイヤの相対Zが一致した時」がこの値のこと。両階を並べて出す。
 			probe.log("P. 両階にあるレベル種別 \"" + Str(type) +
-					  "\" 下階での解決Z=" + Num(info.selfZ));
+					  "\" 下階での解決Z=" + Num(info.selfZ) +
+					  " 階内相対Z: 下階=" + Num(gSDK->GetStoryLevelElevation(lower.handle, type)) +
+					  " 上階=" + Num(gSDK->GetStoryLevelElevation(upper.handle, type)));
 		}
 	}
 	if (levels.size() < 2)
