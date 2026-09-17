@@ -41,6 +41,35 @@
   呼び出し側が自分で持ち回る。レイヤ相対へ切り替えられるよう、絶対 Z を渡す箇所に名前を
   付けておくとよい。
 
+## 打ち切った調査: SDK だけで階（ストーリ）を用意する
+
+**結論: プラグインから階を作っても、その階へは手が届かない。** 階の要る調査は、
+**階のある図面を人に開いてもらうしかない**（2 度試して確定。VW 2026 / mac。
+[issue #65](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/65) の
+プローブが新規の空図面で走ったため、**プローブ自身に階を用意させようとした**）。
+
+実測（新規の空図面。`GetNumStories = 0` から始めて、以下は実行ログそのまま）:
+
+| 呼び出し | 戻り値 | 読み戻し |
+| --- | --- | --- |
+| `CreateStory(name, suffix)` ×2 | **`true`** | `GetNumStories` **0 → 2**。しかし `ForEachLayerN` ＋ `GetStoryOfLayer` で見える階は**0 件のまま**（＝レイヤが 1 枚も生えない） |
+| `ResetDefaultStoryLevels(false)` | **`true`** | 階は**0 件のまま** |
+| `CreateStoryLayerTemplate("調査用-横架材天端", 1.0, "横架材天端", 0, 3000, index)` | **`true`**（`index=1`。雛形 7 → 8 件） | その後に `CreateStory` しても階は**0 件のまま**——**雛形があってもレイヤは生えない** |
+| `GetNamedObject("調査用下階")` | **非 nil**（何かは引ける） | そのハンドルへ `AddStoryLevel(…)` は **`true` を返すのに**、`GetLayerForStory` は **nil**（レイヤは生えていない） |
+
+- **`CreateStory` が増やすのは数だけ。** `GetNumStories` は増えるが、**レベル（＝レイヤ）の
+  無い階**しかできず、階のハンドルは `GetStoryOfLayer` 経由でしか取れない
+  （[Parametric Objects](Parametric%20Objects.md)「ストーリを触る API」の落とし穴 1）ので、
+  **作った階に触る手段が無い**。UI の「ストーリ設定」と同じ結果にはならない。
+- **`AddStoryLevel` の `true` を信用しない。** `GetNamedObject` で引いたハンドルへ渡すと
+  `true` が返るが、レイヤは生えない（`GetLayerForStory` が nil）。**戻り値ではなく
+  `GetLayerForStory` の読み戻しで判定する**こと
+  （[Investigation Techniques](Investigation%20Techniques.md)「setter の戻り値を信用しない」）。
+- **`CreateStoryWithUI()` だけがハンドルを返す**（`ISDK.h`）が、**ダイアログが出る**ので
+  プローブや無人の処理では使えない。【ヘッダ根拠】
+- **だからプローブの側では、階の無い図面は「測れない」と返すのが正しい。**
+  `LayerElevation` へ落として測っても、階の移動は測れないので答えにならない。
+
 ## 打ち切った調査: ビューポート単位のレイヤ重ね順上書き
 
 **結論: `SetViewportLayerStackingOverride` は書けない**（2 度試して確定）。呼び出しは毎回

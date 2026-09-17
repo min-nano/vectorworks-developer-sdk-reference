@@ -53,25 +53,18 @@
 //	    S7 下階を元へ戻して `ResetObject` した後（＝階の高さを元通りにして終える）
 //
 //	* **階の高さは最後に必ず元へ戻す**（`SetStoryElevation` で読んだ値を書き戻す）。
-//	  ただし**作った部材 3 体は図面に残る**（階を自前で用意した実行では、その階と
-//	  レイヤも残る）ので、捨ててよい複製で走らせてもらうこと。
+//	  ただし**作った部材 3 体は図面に残る**ので、捨ててよい複製で走らせてもらうこと。
 //	* **物差しを 1 本持つ**: オブジェクトを作らずにバウンドを解かせる
 //	  `GetStoryObjectDataBoundHeight` を各段階で呼び、「階が実際に動いたか」を
 //	  部材とは独立に確かめる（部材が動かなかったとき、「階が動かなかった」のか
 //	  「部材が追従しなかった」のかを分けるため）。
-//	* **測れる形が図面に無ければ、プローブが自分で作る**（下の `BuildStories`）。
-//	  この調査は階が無いと測れないが、プローブはふつう**新規の空図面**で走らせる
-//	  （`probes/runtime/README.md`）——実際に空図面で走って「階が無い」で終わった
-//	  （PR #66 の 1 回目）。走らせる人へ「別の図面を開いてください」と頼むのは
-//	  仕組みの綻びなので（CLAUDE.md）、**要る形はこちらで用意する**。
-//	  **2 回目の実行で分かったこと**（空図面・実測）: `CreateStory` は `true` を返し
-//	  `GetNumStories` も 0 → 2 になるが、**レイヤが 1 枚も生えないので階のハンドルへ
-//	  手が届かない**。`ResetDefaultStoryLevels(false)`（`true` を返す）を挟んでも
-//	  届かなかった。そこで 3 回目は**先に階レイヤの雛形を登録**してから
-//	  `CreateStory` し、届かなければ**名前で引く**（`GetNamedObject`）道も試す。
-//	  どの道が通るのかがそのまま知見になるので、**1 手ごとにログへ出す**。
-//	* **`LayerElevation` へは落とさない。** 階を持たない図面で階の移動は測れないので、
-//	  自前で用意することもできなければ失敗として返す。
+//	* **階のある図面で走らせてもらうほかない。** この調査は階が無いと測れないのに、
+//	  プローブはふつう**新規の空図面**で走らせる（`probes/runtime/README.md`）ので、
+//	  まず**プローブ自身に階を用意させよう**とした。**2 度試してどちらも通らず**、
+//	  SDK だけでは階を用意できないと確定した（`Findings/Layers and Stories.md`
+//	  「打ち切った調査: SDK だけで階を用意する」）。よってここでは**階が無ければ
+//	  何も触らずに失敗として返す**——`LayerElevation` へも落とさない
+//	  （階を持たない図面で階の移動は測れないので、落としても答えにならない）。
 //
 //	【読み方】最後の「まとめ」の表がこのプローブの結論。**A の行の「パス z1-z0」**が
 //	問い 1（0 のままか、100 になるか）、**S1 と S2 の差**が問い 2（いつ変わるか）、
@@ -360,170 +353,6 @@ namespace
 		return false;
 	}
 
-	// **測れる形が図面に無ければ、プローブが自分で作る。**
-	//
-	// なぜ要るか: この調査は「階を動かすとどうなるか」なので階が要るが、プローブは
-	// ふつう**新規の空図面**で走らせる（probes/runtime/README.md）。実際に空図面で
-	// 走って「階が無いから測れない」で終わった（PR #66 の 1 回目）。走らせる人へ
-	// 「別の図面を開いてください」と頼むのは仕組みの綻びなので（CLAUDE.md）、
-	// **要る形はこちらで用意する**。
-	//
-	// **ここは道が通るかどうか自体が未知**（`CreateStory` は bool しか返さず、
-	// 階のハンドルは `GetStoryOfLayer` 経由でしか取れない——
-	// `Findings/Parametric Objects.md`「ストーリを触る API」の落とし穴 1）。だから
-	// **1 手ごとにログへ出す**。通らなかったときも「どの呼び出しで止まったか」が
-	// そのまま知見になる。
-	bool BuildStories(vwprobe::Report& probe, StoryInfo& outLower, StoryInfo& outUpper,
-					  TXString& outLevelType)
-	{
-		probe.log("P2. **測れる形が無いので、プローブが自分で階を作る**（図面を変える"
-				  "——捨ててよい複製で走らせてもらう前提）");
-
-		// ① レベル種別。空図面にも既定で 1 件はあるが、無ければ登録する。
-		std::vector<TXString> levelTypes = CollectLevelTypes();
-		if (levelTypes.empty())
-		{
-			TXString newType("調査用レベル");
-			const bool created = gSDK->CreateLayerLevelType(newType);
-			probe.log(std::string("P2. ① CreateLayerLevelType(\"調査用レベル\") = ") +
-					  (created ? "true" : "false"));
-			levelTypes = CollectLevelTypes();
-		}
-		if (levelTypes.empty())
-		{
-			probe.log("P2. ① **レベル種別を 1 件も用意できなかった**（ここで止まり）");
-			return false;
-		}
-		const TXString levelType = levelTypes[0];
-		probe.log("P2. ① 使うレベル種別=\"" + Str(levelType) + "\"（登録済み " +
-				  Int(static_cast<long long>(levelTypes.size())) + " 件の先頭）");
-
-		// ② **階を作る前に「階レイヤの雛形」を登録する。**
-		//    1 回目の実行（PR #66 / ビルド fb0f9946dd26）では `CreateStory` が
-		//    **レイヤを 1 枚も作らない**ため、階のハンドルへ手が届かなかった
-		//    （`ResetDefaultStoryLevels` を挟んでも届かない。実測）。UI で階を足すと
-		//    レイヤが生えるのは**雛形（Story Layer Template）が登録されているから**という
-		//    読みで、先に雛形を 1 つ登録してから階を作る。
-		const short templatesBefore = gSDK->GetNumStoryLayerTemplates();
-		{
-			TXString templateName = TXString("調査用-") + levelType;
-			TXString templateLevelType = levelType;
-			short index = 0;
-			const bool madeTemplate = gSDK->CreateStoryLayerTemplate(
-				templateName, 1.0, templateLevelType, 0, 3000, index);
-			probe.log(std::string("P2. ② CreateStoryLayerTemplate(\"") + Str(templateName) +
-					  "\", 1.0, \"" + Str(templateLevelType) +
-					  "\", 0, 3000) = " + (madeTemplate ? "true" : "false") + " index=" +
-					  Int(static_cast<long long>(index)) + " ／ GetNumStoryLayerTemplates " +
-					  Int(static_cast<long long>(templatesBefore)) + " → " +
-					  Int(static_cast<long long>(gSDK->GetNumStoryLayerTemplates())));
-		}
-
-		// ③ 階を 2 つ作る。**CreateStory は bool しか返さない**ので、ハンドルは後で
-		//    レイヤ経由（か名前）で取りに行く。
-		const short storiesBefore = gSDK->GetNumStories();
-		TXString lowerName("調査用下階");
-		TXString lowerSuffix("調査下");
-		TXString upperName("調査用上階");
-		TXString upperSuffix("調査上");
-		const bool madeLower = gSDK->CreateStory(lowerName, lowerSuffix);
-		const bool madeUpper = gSDK->CreateStory(upperName, upperSuffix);
-		probe.log(std::string("P2. ③ CreateStory: 下=") + (madeLower ? "true" : "false") +
-				  " 上=" + (madeUpper ? "true" : "false") + " ／ GetNumStories " +
-				  Int(static_cast<long long>(storiesBefore)) + " → " +
-				  Int(static_cast<long long>(gSDK->GetNumStories())));
-
-		// ④ ハンドルを取りに行く。**3 つの道を順に試して、通った道をログに残す**
-		//    （どれが通るのかがそのまま知見になる）。
-		std::vector<StoryInfo> stories = CollectStories(probe);
-
-		//    道 2: **名前で引く**。階は名前を持つので、`GetNamedObject` で取れる可能性が
-		//    ある（レイヤを持たない階へ手が届く唯一の道になりうる）。取れたかどうかは
-		//    **`AddStoryLevel` が通ってレイヤが生えるか**で確かめる——ハンドルの正体を
-		//    名前だけで信じない。
-		if (stories.size() < 2)
-		{
-			const TXString names[2] = {lowerName, upperName};
-			for (int n = 0; n < 2; ++n)
-			{
-				MCObjectHandle byName = gSDK->GetNamedObject(names[n]);
-				probe.log("P2. ④ 道 2: GetNamedObject(\"" + Str(names[n]) +
-						  "\") = " + (byName != nullptr ? "非 nil" : "nil"));
-				if (byName == nullptr)
-					continue;
-				const TXString layerName = names[n] + TXString("-") + levelType;
-				const bool added = gSDK->AddStoryLevel(byName, levelType, 0, layerName);
-				MCObjectHandle grown = gSDK->GetLayerForStory(byName, levelType);
-				probe.log(std::string("P2. ④ 道 2: そのハンドルへ AddStoryLevel = ") +
-						  (added ? "true" : "false") + " ／ GetLayerForStory=" +
-						  (grown != nullptr ? "取れた（**このハンドルは階だった**）"
-											: "nil（階ではないか、レベルを足せない）"));
-			}
-			stories = CollectStories(probe);
-		}
-
-		//    道 3: 既定のレベルを生やさせる（1 回目の実行では効かなかったが、雛形を
-		//    登録した後なら結果が変わるかもしれないので、順番を変えて残す）。
-		if (stories.size() < 2)
-		{
-			const bool reset = gSDK->ResetDefaultStoryLevels(false);
-			probe.log(std::string("P2. ④ 道 3: ResetDefaultStoryLevels(false) = ") +
-					  (reset ? "true" : "false"));
-			stories = CollectStories(probe);
-		}
-
-		if (stories.size() < 2)
-		{
-			probe.log("P2. ④ **階のハンドルが 2 つ取れない**（レイヤ経由・名前・既定レベルの"
-					  "3 つとも通らなかった）。`CreateStory` は階を増やす（GetNumStories は"
-					  "増える）が、**手の届く形にはならない**。ここで止まり。");
-			return false;
-		}
-
-		// ⑤ 両方の階へ同じレベル種別のレベル（＝レイヤ）を足す。既にあるなら触らない。
-		for (size_t i = 0; i < stories.size(); ++i)
-		{
-			if (gSDK->GetLayerForStory(stories[i].handle, levelType) != nullptr)
-			{
-				probe.log("P2. ⑤ \"" + Str(stories[i].name) + "\" は既に \"" + Str(levelType) +
-						  "\" のレイヤを持っている");
-				continue;
-			}
-			const TXString layerName = stories[i].name + TXString("-") + levelType;
-			const bool added = gSDK->AddStoryLevel(stories[i].handle, levelType, 0, layerName);
-			probe.log(std::string("P2. ⑤ AddStoryLevel(\"") + Str(stories[i].name) + "\", \"" +
-					  Str(levelType) + "\", 0, \"" + Str(layerName) +
-					  "\") = " + (added ? "true" : "false") + " ／ 読み戻し GetLayerForStory=" +
-					  (gSDK->GetLayerForStory(stories[i].handle, levelType) != nullptr ? "取れた"
-																					   : "nil"));
-		}
-
-		// ⑥ 階の高さを、間隔がはっきり分かる値へ置く（0 と 3000）。
-		//    **並びは高さで決まる**ので、置いてから GetStoryAbove で確かめる。
-		stories = CollectStories(probe);
-		if (stories.size() >= 2)
-		{
-			const bool setA = gSDK->SetStoryElevation(stories[0].handle, 0);
-			const bool setB = gSDK->SetStoryElevation(stories[1].handle, 3000);
-			probe.log(std::string("P2. ⑥ SetStoryElevation: \"") + Str(stories[0].name) +
-					  "\"←0 = " + (setA ? "true" : "false") + " ／ \"" + Str(stories[1].name) +
-					  "\"←3000 = " + (setB ? "true" : "false"));
-			stories = CollectStories(probe);
-		}
-
-		// ⑦ 作ったもので改めて組を探す（ここまでで測れる形になっていれば見つかる）。
-		std::vector<TXString> typesNow = CollectLevelTypes();
-		if (FindStoryPair(stories, typesNow, outLower, outUpper, outLevelType))
-		{
-			probe.log("P2. ⑦ **用意できた**: 下=\"" + Str(outLower.name) + "\"(" +
-					  Num(outLower.elevation) + ") 上=\"" + Str(outUpper.name) + "\"(" +
-					  Num(outUpper.elevation) + ") レベル種別=\"" + Str(outLevelType) + "\"");
-			return true;
-		}
-		probe.log("P2. ⑦ **組にならなかった**（階は増えたが、隣り合う 2 階が同じレベル種別を"
-				  "両方持つ形にできていない）。ここで止まり。");
-		return false;
-	}
 } // namespace
 
 VW_PROBE("story-move-after-path-replace",
@@ -531,9 +360,9 @@ VW_PROBE("story-move-after-path-replace",
 		 "0 長へ差し替えて ID 1 の fOffset に −階間隔 を焼き込まれた部材と、差し替えて"
 		 "いない対照を並べ、SetStoryElevation で上階／自階を動かして長さ・挿入点・"
 		 "バウンドのレコードを読み直す。階の高さは最後に元へ戻す。"
-		 "**図面に測れる階が無ければプローブが自分で作る**ので、どの図面でも走る"
-		 "（階のある図面ならその階で測る）。**図面を変えるので、捨ててよい複製で"
-		 "走らせること**")
+		 "**階が 2 つ以上あって同じレベル種別を両階が持つ図面**が要る（階はプローブ側では"
+		 "用意できない。Findings「打ち切った調査: SDK だけで階を用意する」）。"
+		 "**階の高さを動かすので、捨ててよい複製で走らせること**")
 {
 	// =======================================================================
 	probe.log("=== P. 測る形を決める（無ければプローブが作る） ===");
@@ -549,18 +378,16 @@ VW_PROBE("story-move-after-path-replace",
 
 		if (!FindStoryPair(stories, allLevelTypes, lower, upper, levelType))
 		{
-			// **図面に測れる形が無くても、そこで終わらせない**——プローブが自分で
-			// 階を用意して測りにいく（走らせる人に「別の図面を開いて」と頼まないため）。
-			if (!BuildStories(probe, lower, upper, levelType))
-			{
-				probe.fail("この図面には「同じレベル種別を両方が持つ隣り合う 2 階」が無く、"
-						   "**プローブが自分で用意することもできなかった**（どの呼び出しで"
-						   "止まったかは上の P2 のログ）。階が 2 つ以上ある図面——事故の"
-						   "モデル——の捨ててよい複製で走らせ直してほしい。");
-				return;
-			}
-			probe.log("P. **この実行は、プローブが作った階で測る**（元からあった形ではない）。"
-					  "階の高さ・レベル種別は上の P2 のとおり。");
+			// **階はプローブ側で用意できない**（PR #66 で 2 度試して確定。
+			// `Findings/Layers and Stories.md`「打ち切った調査: SDK だけで階を用意する」）。
+			// だから**階のある図面で走らせてもらうほかない**。図面は何も触っていない。
+			probe.fail("**この図面には階が無い**（「同じレベル種別を両方が持つ隣り合う 2 階」が"
+					   "見つからない）。階はプローブ側では用意できないと実機で確かめてある"
+					   "（`Findings/Layers and Stories.md`「打ち切った調査: SDK だけで階を"
+					   "用意する」）ので、**階が 2 つ以上ある図面——事故のモデル——の"
+					   "捨ててよい複製を開いて、もう一度走らせてください**。"
+					   "図面は何も触っていません。");
+			return;
 		}
 
 		container = gSDK->GetLayerForStory(lower.handle, levelType);
@@ -874,6 +701,5 @@ VW_PROBE("story-move-after-path-replace",
 		probe.fail("階の高さを元へ戻せなかった（上のログの「後始末」を参照）。"
 				   "この図面はもう捨ててよい複製としてしか使えない。");
 	probe.log("後始末: **作った構造材 PIO 3 体は図面に残る**（プローブは undo イベントを"
-			  "開かないため）。**階を自分で作った実行では、その階とレイヤも残る。**"
-			  "捨ててよい複製で走らせていれば、そのまま捨ててよい。");
+			  "開かないため）。捨ててよい複製で走らせていれば、そのまま捨ててよい。");
 }
