@@ -527,12 +527,15 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 落とし穴が 3 つ（すべて実測）:
 
 - **`CreateStory` はレイヤを 1 枚も作らない。** `true` を返し `GetNumStories()` も増えるが、
-  できるのは**レベルの無い空の階**で、`ForEachLayerN` からは見えない。階のハンドルは
-  `GetStoryOfLayer` 経由でしか取れないので、**`CreateStory` だけで作った階には手が届かない**。
-  レベルを足すには `AddStoryLevel`（`Story Level` 系）を使う。
+  できるのは**レベルの無い空の階**で、`ForEachLayerN` からは見えない。**ただし手が届かない
+  わけではない**——階のハンドルは **`GetNamedObject(階の名前)` で引ける**ので、そこから
+  レベルを生やせばよい。**生やす道は `CreateStoryLevelTemplate` ＋
+  `AddStoryLevelFromTemplate`**（`AddStoryLevel` では紐付かない）。手順と落とし穴は
+  [Layers and Stories](Layers%20and%20Stories.md)「階（ストーリ）を SDK から作る」。
 - **`Story Layer Template` と `Story Level` は別系統。** `GetNumStoryLayerTemplates` /
   `CreateStoryLayerTemplate` の一群と、`GetNumStoryLevelTemplates` /
-  `CreateStoryLevelTemplate` / `AddStoryLevel` … の一群がある。階へレベルを生やすのは後者。
+  `CreateStoryLevelTemplate` / `AddStoryLevelFromTemplate` … の一群がある。階へレベルを
+  生やすのは後者で、**前者を使っても `true` が返るだけでレイヤは生えない**（実測）。
 - **`GetLayerLevelTypeName` / `GetStoryLayerTemplateInfo` / `GetStoryLevelTemplateInfo` の
   添字は 1 始まり。** 添字 0 は無効（前者は空文字、後者は `false`）で、件数 N に対して
   有効なのは 1〜N。0 始まりで回すと**末尾の 1 件を毎回取りこぼす**。
