@@ -3,100 +3,62 @@
 //
 //	[issue #67] **`(0, 1e-7)` の帯に落ちた残差は、どこで生まれたのか。**
 //	呼び出し側が**厳密な整数 mm**を渡していても残差が出るのか、出るならそれは
-//	**どの段**（曲線を作る／`CreateCustomObjectPath`／その後の作り直し）で生まれ、
+//	**どの段**（曲線／`CreateCustomObjectPath`／その後の作り直し）で生まれ、
 //	**値そのもの**（mm ↔ インチの往復で戻らない値）で決まるのか。
 //
-//	## 前提（ここまでに確定していること）
+//	## 1 回目の実測（VW 2026 / mac。PR #69 のコメント）で分かったこと
 //
-//	* `ResetObject` が作り直すのは「長さ 0」か「長さ 1e-7 以上」のパスだけで、
-//	  その間の帯は温存される（#61。`Findings/Parametric Objects.md`）。**閾値の話は
-//	  もう片付いている。**
-//	* 事故（柱 197 本中 46 本が長さ 0）の個体は、生成直後に **`4.54747e-13`**
-//	  ＝ `2^-41` ＝ 3531 付近の double の 1 ULP を持っていた。
-//	* 現在の `Findings` は原因を「**両端の世界座標Zを別々に計算しており**、片方に丸めが
-//	  残った」＝**呼び出し側の算術**に帰属させている。
+//	  * **⓪ 曲線も ① `CreateCustomObjectPath` も、渡した値をビット一致で保つ。**
+//	    挿入点＝始点の絶対Z、局所パスの差＝渡した差（8 値すべて。3531 を含む）。
+//	    `CreateCustomObjectPathNoOffset` でも同じ。**つまり生成の段では変換されない。**
+//	  * **残差は ② 作り直し（regen）で生まれる。** バウンドを 1 本も書かずに
+//	    `ResetObject` して 0 長へ潰すとき、`572 → 3531` のケースだけ
+//	    **`+4.5474735088646412e-13`（＝2^-41）**が残り、他は厳密に 0 だった
+//	    ——**事故で潰れた 46 本の残差（`4.54747e-13`・上端 3531）と同じ値**。
+//	  * 残差が出た値と出なかった値を `v / 25.4 * 25.4 != v` で分けると、
+//	    **8 ケースすべてで当たった**（6374・5500 は「戻る」側で、実測も残差なし）。
+//	    SDK ヘッダの inline と同じ**逆数を掛ける形** `v * (1/25.4) * 25.4` は
+//	    6374・5500 を「戻らない」と予測するので、**そちらは外れた**。
+//	  * 残差が乗るのは**端点の絶対Z**であって局所の長さではない（長さ 13 / 1 の
+//	    ケース——どちらも往復で戻らない値——に残差が出ていない）。
 //
-//	## この帰属に合わない実測（issue #67。プラグイン側で全数）
+//	### 1 回目でこちらが踏んだ落とし穴（これも知見）
 //
-//	渡していた 2 つの world Z は**ほぼ全数が厳密な整数 mm**で、事故と同じ本数の
-//	フィクスチャでは**非整数が 1 本も無い**。「別々の式で計算したせいで片方に丸めが
-//	残った」では 197 本が 0 本と 46 本に分かれたことを説明できない。
+//	**プローブの中で予測式を計算したら、コンパイラが FMA へ縮約して別物になっていた。**
+//	`value / 25.4 * 25.4 - value` は clang の既定（`-ffp-contract=on`）で
+//	`fma(value/25.4, 25.4, -value)` になり、**丸めが 1 回減るぶん値が変わる**
+//	（3531 なら `-2.885e-13` と出る。本当の往復誤差は `-4.547e-13`）。
+//	1 回目のログの「予測B」列はこの縮約された値で、**素朴な往復ではなかった**。
+//	この版では `volatile` で中間値を毎回 double へ落として縮約を止めている。
 //
-//	一方、`4.54747e-13` は **mm をインチへ直して戻す往復**の誤差とビット単位で一致する:
+//	## この版（2 回目）で埋める穴
 //
-//	    3531 / 25.4 * 25.4 - 3531 == -4.547473508864641e-13   ← 事故の残差と同じ
-//	    572 / 25.4 * 25.4 - 572   == 0                        ← 潰れた柱の下端
-//	    2429 / 6374 / 5905        == 0                        ← 無事な柱の端点
-//
-//	ただし整数 mm の 12.6% が往復で戻らないので、**5 点の一致は偶然でも約 7% 起きる**。
-//	断定できる水準ではない——だから実機で振る。
-//
-//	## ヘッダ側で分かっていること（`sdk-grep`。実機確認とは独立）
-//
-//	    Kernel/Math/MathCoordTypes.h:
-//	      const extern double kWorldCoordsPerInch;   // 25.4
-//	      const extern double kWorldCoordsPerMM;     // 1
-//	      typedef double WorldCoord;
-//	      inline WorldCoord InchesToWorldCoord(WorldInches inches) { return inches * kWorldCoordsPerInch; }
-//	      inline double     WorldCoordToInches(WorldCoord coord)   { return coord * kInchesPerWorldCoord; }
-//	    Kernel/Math/MathCoordTypes.cpp:
-//	      kWorldCoordsPerInch  = 25.4      kWorldCoordsPerMM = 1
-//	      kInchesPerWorldCoord = 1 / kWorldCoordsPerInch    ← **逆数を先に作って掛ける**
-//
-//	つまり **`WorldCoord` の単位は常に mm**（図面の単位に依らない）。そして SDK 自身の
-//	往復は `v * (1/25.4) * 25.4` であって `v / 25.4 * 25.4` ではない。**この 2 つは同じ
-//	値にならない**——6374 と 5500 は前者では残差が出て、後者では出ない。だから
-//	**どちらの形の往復なのかまで、この 1 本で見分けられる**（下記 A 群の値の選び方）。
+//	1. **予測式を正しく計算する**（上記の縮約を止める）。両方の形を並べて出す。
+//	2. **下端（z0）側も振る**（F 群）。1 回目は z0 = 572（往復で戻る値）に固定して
+//	   いたので、「**下端が戻らない値なら残差が出るのか**」を測っていない。
+//	3. **予測を規則として試す**（G 群）。往復で戻らない値 9 つと戻る値 9 つを
+//	   1 ケース 1 行で振り、**全件で予測と実測が一致するか**を数える。
+//	   1 回目の 8 ケースでは当たったが、それだけでは「規則」と言えない。
 //
 //	## 何を測るか（1 ケース 1 オブジェクト・4 地点）
 //
 //	    ⓪  `CreateNurbsCurve` ＋ `Add3DVertex` した曲線をそのまま読み戻す
-//	    ⓪' `NurbsSetPt3D` で座標を入れ直してから読み戻す（プラグインと同じ作法）
+//	    ⓪' `NurbsSetPt3D` で座標を入れ直してから読み戻す（事故のプラグインと同じ作法）
 //	    ①  `CreateCustomObjectPath` の直後（局所パス＋挿入点＝絶対Zへ戻して比べる）
 //	    ②  `ResetObject` の直後（**バウンドを 1 本も書かない**＝潰れる経路。#56 の 4）
 //
-//	事故のプラグインが「生成直後に 197 本すべて 0 長」を見たのは、`CreateCustomObjectPath`
-//	の直後ではなく **`SetPluginObjectStyle` を挟んだ後**だった（issue #67 の自己申告）。
-//	スタイルは図面に無いかもしれないので、ここでは**同じ「作り直し（regen）」を起こす
-//	`ResetObject`** で代用する。潰れる経路であることは #56 の 4 で確定している。
+//	T 群だけ 4 地点を全文で出し、残りは 1 行にまとめる（**ログが長いと読まれない**。
+//	1 回目で ⓪・⓪'・① がどの値でもビット一致だと分かったので、以後は誤差だけ出せば足りる）。
 //
-//	**各ケースで予測を 2 つ計算して並べる**ので、ログはそのまま突き合わせとして読める:
+//	事故のプラグインが「生成直後に 197 本すべて 0 長」を見たのは `SetPluginObjectStyle` を
+//	挟んだ後で、ここで代用しているのは `ResetObject`。**どちらも作り直し（regen）**だが、
+//	同一だと確かめたわけではない——ただし 1 回目で**事故と同じ端点から同じ残差が出た**ので、
+//	残差の出どころとしては同じものを見ていると読める。
 //
-//	    予測A（SDK の形）: InchesToWorldCoord(WorldCoordToInches(v)) - v   ＝ v*(1/25.4)*25.4 - v
-//	    予測B（素朴な形）: v / 25.4 * 25.4 - v
-//
-//	## 値の選び方（A 群）——**予測 A と予測 B を割るように選んである**
-//
-//	    値      予測A（SDK）   予測B（素朴）   ねらい
-//	    572     0              0              事故で潰れた柱の下端（対照）
-//	    2429    0              0              事故で無事だった柱の上端（対照）
-//	    5905    0              0              同上
-//	    3531    ≠0             ≠0             **事故で潰れた柱の上端そのもの**
-//	    13      ≠0             ≠0             小さい値でも出るか
-//	    1       ≠0             ≠0             同上（残差は 1e-16 台。1e-7 の帯より下）
-//	    6374    ≠0             0              **予測 A と B を分ける値**（無事だった柱の上端）
-//	    5500    ≠0             0              同上
-//
-//	予測 B だけが当たるなら、事故の 5 点の一致は本物で、往復は素朴な形。
-//	予測 A だけが当たるなら、6374 の柱が無事だった説明が別に要る。
-//	**どちらも当たらない（残差が 1 つも出ない）なら、残差は単位変換では生まれていない**
-//	——そのときは「呼び出し側が厳密なら安全」であって、現在の帰属のほうが正しい。
-//
-//	## 群
-//
-//	    T   事故と同じ形（572 → 3531・断面あり）を 1 本だけ通す物差し
-//	    A   z0 = 572 固定・z1 を上の 8 値で振る（断面あり。事故と同じ作り）
-//	    B   **厳密に退化**（z0 = z1 = v）——プラグインの直し方そのもの。
-//	        **ここで残差が出たら「同じ変数を渡す」でも避けられない**ことになる
-//	    C   断面を渡さない（#61 のプローブと同じ形。断面の有無で ① が変わるか）
-//	    D   `CreateCustomObjectPathNoOffset`（`ISDK.h`。挿入点への変換を飛ばす入口）
-//	    E   同じ値を X に入れる（残差が Z 特有か、座標一般か）
-//
-//	【読み方】最後の「まとめ」の表が結論。各行の
-//	  * **残差が 0**            … その値では残差が生まれていない
-//	  * **残差 = 予測A / 予測B** … 単位の往復で説明が付く（どちらの形かも分かる）
-//	  * **そのどちらでもない**   … 別の出どころ。値をそのまま持ち帰って考える
-//	どの地点（⓪/⓪'/①/②）で初めて 0 でなくなったかが、**残差が生まれた段**である。
+//	【読み方】最後の「まとめ」と「予測の成績」がこのプローブの結論。
+//	  * **②の差が 0**        … その値では残差が生まれていない
+//	  * **②の差 ≠ 0**       … 作り直しが残差を残した（その大きさを予測と突き合わせる）
+//	  * ①の誤差は**全件 0 のはず**（0 でなければ、生成の段でも変換が入っている）
 //
 
 #include "Probe.h"
@@ -132,17 +94,23 @@ namespace
 		return Num(value) + " [" + NumBits(value) + "]";
 	}
 
-	// 予測A: **SDK 自身の往復**（MathCoordTypes.h の inline をそのまま呼ぶ。
-	// 逆数を掛ける形なので、素朴な割り算とは結果が違う値がある）。
-	double RoundTripSdk(double value)
+	// 予測1「割ってから掛ける」: issue #67 が事故の 5 点と突き合わせた形。
+	// **`volatile` は飾りではない**——これが無いと clang が `fma` 1 回へ縮約し、
+	// 丸めが 1 回減って**別の値**になる（1 回目のログの「予測B」列がそれだった）。
+	double RoundTripDivide(double value)
 	{
-		return InchesToWorldCoord(WorldCoordToInches(value)) - value;
+		volatile double inches = value / kWorldCoordsPerInch;
+		volatile double back = inches * kWorldCoordsPerInch;
+		return back - value;
 	}
 
-	// 予測B: 素朴な往復（issue #67 が事故の 5 点と突き合わせた形）。
-	double RoundTripNaive(double value)
+	// 予測2「逆数を掛けてから掛ける」: SDK ヘッダの inline と同じ形
+	// （`WorldCoordToInches` は `kInchesPerWorldCoord = 1 / 25.4` を掛ける）。
+	double RoundTripReciprocal(double value)
 	{
-		return value / 25.4 * 25.4 - value;
+		volatile double inches = value * kInchesPerWorldCoord;
+		volatile double back = inches * kWorldCoordsPerInch;
+		return back - value;
 	}
 
 	// パスの両端（**局所座標**。#56 で確定: Create は最初の点を挿入点にして相対で持つ）。
@@ -171,12 +139,12 @@ namespace
 		std::string label;
 		double passedZ0 = 0;
 		double passedZ1 = 0;
-		double predictSdk = 0;		// 予測A（z1 について）
-		double predictNaive = 0;	// 予測B（z1 について）
-		double curveDelta = 0;		// ⓪' 曲線の z1−z0
-		double createdDelta = 0;	// ① Create 直後の局所 z1−z0
-		double afterResetDelta = 0; // ② ResetObject 直後の局所 z1−z0
+		double createdError = 0;	// ① 局所の差 − 渡した差（0 のはず）
+		double afterResetDelta = 0; // ② ResetObject 直後の局所 z1−z0（＝残差）
+		bool divPredictsResidual = false;
+		bool reciprocalPredictsResidual = false;
 		std::string verdict;
+		bool measured = false;
 	};
 
 	// 断面（矩形 120 × 120 のグループ）。事故のプラグインと同じ作り
@@ -194,11 +162,11 @@ namespace
 		return group.GetThisObject();
 	}
 
-	// 曲線を作る。**プラグインと同じ作法**（Add3DVertex で足してから NurbsSetPt3D で
-	// 入れ直す）にして、⓪ と ⓪' の両方を出す——足した点がずれるのか、入れ直しても
-	// 残るのかを分けるため。
+	// 曲線を作る（事故のプラグインと同じ作法: Add3DVertex で足してから NurbsSetPt3D で
+	// 入れ直す）。1 回目で ⓪・⓪' はどの値でもビット一致だと分かったので、**ずれたときだけ**
+	// ログを出す。
 	MCObjectHandle MakeStraightPath(vwprobe::Report& probe, const std::string& prefix,
-									WorldPt3 from, WorldPt3 to)
+									WorldPt3 from, WorldPt3 to, bool verbose)
 	{
 		MCObjectHandle curve = gSDK->CreateNurbsCurve(from, false, 1);
 		if (curve == nullptr)
@@ -210,20 +178,27 @@ namespace
 
 		WorldPt3 p0, p1;
 		if (ReadCurveEndpoints(curve, p0, p1))
-			probe.log(prefix + " ⓪ 曲線（Add3DVertex 直後）: z0=" + NumBoth(p0.z) +
-					  " z1=" + NumBoth(p1.z) + " z1-z0=" + NumBoth(p1.z - p0.z));
+		{
+			if (verbose || p0.z != from.z || p1.z != to.z)
+				probe.log(prefix + " ⓪ 曲線（Add3DVertex 直後）: z0=" + NumBoth(p0.z) + " z1=" +
+						  NumBoth(p1.z) + " ／ 渡した値との差: z0=" + NumBoth(p0.z - from.z) +
+						  " z1=" + NumBoth(p1.z - to.z));
+		}
 		else
 			probe.log(prefix + " ⓪ 曲線の点が読めない（点数=" +
 					  std::to_string(static_cast<long long>(gSDK->NurbsGetNumPts(curve, 0))) +
 					  "）");
 
-		// **座標を明示的に入れ直す**（事故のプラグインと同じ作法。Add3DVertex が足した点が
-		// 渡した位置にならないことがある）。点が 2 つになっていなければ触らない。
+		// **座標を明示的に入れ直す**（Add3DVertex が足した点が渡した位置にならないことが
+		// ある）。点が 2 つになっていなければ触らない。
 		if (gSDK->NurbsGetNumPts(curve, 0) >= 2)
 		{
 			gSDK->NurbsSetPt3D(curve, 0, 0, from);
 			gSDK->NurbsSetPt3D(curve, 0, 1, to);
 		}
+		if (verbose && ReadCurveEndpoints(curve, p0, p1))
+			probe.log(prefix + " ⓪' 曲線（NurbsSetPt3D 後）: z0=" + NumBoth(p0.z) +
+					  " z1=" + NumBoth(p1.z) + " z1-z0=" + NumBoth(p1.z - p0.z));
 		return curve;
 	}
 
@@ -234,9 +209,9 @@ namespace
 } // namespace
 
 VW_PROBE("path-z-residual-origin", "厳密な整数 mm の世界座標に残差が生まれるかを測る",
-		 "CreateCustomObjectPath へ厳密な整数 mm の world Z を渡し、曲線・生成直後・"
-		 "ResetObject 直後の 3 地点で読み戻して、mm↔インチの往復で説明が付く残差が"
-		 "生まれるかを確かめる。新規の空図面で走る")
+		 "厳密な整数 mm の world Z を渡し、曲線・生成直後・作り直し直後の 3 地点で読み戻して、"
+		 "残差がどの段で生まれるか・mm↔インチの往復で説明が付くかを 30 ケースで確かめる。"
+		 "新規の空図面で走る")
 {
 	probe.log("=== この図面について ===");
 	{
@@ -251,67 +226,47 @@ VW_PROBE("path-z-residual-origin", "厳密な整数 mm の世界座標に残差�
 		if (currentLayer != nullptr)
 			gSDK->GetObjectName(currentLayer, layerName);
 		probe.log(std::string("いまのレイヤ: \"") + static_cast<const char*>(layerName) + "\"");
-	}
-
-	probe.log("=== 予測の表（この実行の double で計算した値。ここは実機に依らない） ===");
-	{
-		const double values[] = {572, 2429, 5905, 2500, 3531, 13, 1, 6374, 5500};
-		for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
-		{
-			const double v = values[i];
-			probe.log("  v=" + Num(v) +
-					  " 予測A（SDK: v*(1/25.4)*25.4−v）=" + NumBoth(RoundTripSdk(v)) +
-					  " ／ 予測B（素朴: v/25.4*25.4−v）=" + NumBoth(RoundTripNaive(v)));
-		}
-		probe.log("  ※ 予測A と 予測B が食い違う値（6374・5500）が、2 つの形を分ける。");
+		probe.log("予測の計算は volatile で FMA 縮約を止めてある（止めないと別の値になる。"
+				  "先頭コメント参照）。確かめ: 3531 の予測1 は -4.5474735088646412e-13 "
+				  "[-0x1p-41] のはず。実際= " +
+				  NumBoth(RoundTripDivide(3531)));
 	}
 
 	std::vector<Observation> observations;
 
 	// 1 ケース＝1 オブジェクト。⓪ 曲線 → ① Create 直後 → ② ResetObject（バウンド無し）。
 	auto runCase = [&](const std::string& label, double x0, double z0, double x1, double z1,
-					   bool withProfile, bool noOffset, const std::string& why)
+					   bool withProfile, bool noOffset, bool verbose, const std::string& why)
 	{
-		probe.log("--- " + label + " ---");
-		probe.log("  ねらい: " + why);
-		probe.log("  渡す世界座標: (" + Num(x0) + ", 0, " + NumBoth(z0) + ") → (" + Num(x1) +
-				  ", 0, " + NumBoth(z1) + ") ／ 渡した Z の差=" + NumBoth(z1 - z0));
-		probe.log("  予測（z1 について）: A=" + NumBoth(RoundTripSdk(z1)) +
-				  " B=" + NumBoth(RoundTripNaive(z1)) + " ／（z0 について）: A=" +
-				  NumBoth(RoundTripSdk(z0)) + " B=" + NumBoth(RoundTripNaive(z0)));
-
 		Observation obs;
 		obs.label = label;
 		obs.passedZ0 = z0;
 		obs.passedZ1 = z1;
-		obs.predictSdk = RoundTripSdk(z1);
-		obs.predictNaive = RoundTripNaive(z1);
+		obs.divPredictsResidual = RoundTripDivide(z0) != 0 || RoundTripDivide(z1) != 0;
+		obs.reciprocalPredictsResidual =
+			RoundTripReciprocal(z0) != 0 || RoundTripReciprocal(z1) != 0;
+
+		if (verbose)
+		{
+			probe.log("--- " + label + " ---");
+			probe.log("  ねらい: " + why);
+			probe.log("  渡す世界座標: (" + Num(x0) + ", 0, " + NumBoth(z0) + ") → (" + Num(x1) +
+					  ", 0, " + NumBoth(z1) + ") ／ 渡した Z の差=" + NumBoth(z1 - z0));
+			probe.log("  予測1（割る→掛ける）: z0=" + NumBoth(RoundTripDivide(z0)) +
+					  " z1=" + NumBoth(RoundTripDivide(z1)));
+			probe.log("  予測2（逆数を掛ける＝SDK の inline）: z0=" +
+					  NumBoth(RoundTripReciprocal(z0)) + " z1=" + NumBoth(RoundTripReciprocal(z1)));
+		}
 
 		MCObjectHandle curve =
-			MakeStraightPath(probe, "  ", WorldPt3(x0, 0, z0), WorldPt3(x1, 0, z1));
+			MakeStraightPath(probe, "  ", WorldPt3(x0, 0, z0), WorldPt3(x1, 0, z1), verbose);
 		if (curve == nullptr)
 			return;
-		{
-			WorldPt3 p0, p1;
-			if (ReadCurveEndpoints(curve, p0, p1))
-			{
-				obs.curveDelta = p1.z - p0.z;
-				probe.log("  ⓪' 曲線（NurbsSetPt3D 後）: z0=" + NumBoth(p0.z) +
-						  " z1=" + NumBoth(p1.z) + " z1-z0=" + NumBoth(p1.z - p0.z) +
-						  " ／ 渡した値との差: z0=" + NumBoth(p0.z - z0) +
-						  " z1=" + NumBoth(p1.z - z1));
-			}
-			else
-			{
-				probe.log("  ⓪' 曲線の点が読めない");
-				return;
-			}
-		}
 
 		MCObjectHandle profile = withProfile ? MakeProfile() : nullptr;
 		if (withProfile && profile == nullptr)
 		{
-			probe.log("  断面のグループが作れなかった（このケースは測れない）");
+			probe.log("  " + label + ": 断面のグループが作れなかった（このケースは測れない）");
 			return;
 		}
 
@@ -320,97 +275,83 @@ VW_PROBE("path-z-residual-origin", "厳密な整数 mm の世界座標に残差�
 					 : gSDK->CreateCustomObjectPath("StructuralMember", curve, profile);
 		if (pio == nullptr)
 		{
-			probe.log(std::string("  ") + EntryName(noOffset) + " が nil を返した");
+			probe.log("  " + label + ": " + EntryName(noOffset) + " が nil を返した");
 			return;
 		}
 
-		auto logStage = [&](const std::string& stage, double& outDelta)
+		// 読み戻し 1 回ぶん。verbose なら全文、そうでなければ値だけ返す。
+		auto readStage = [&](const std::string& stage, double& outDelta)
 		{
-			MCObjectHandle path = gSDK->GetCustomObjectPath(pio);
-			if (path == nullptr)
-			{
-				probe.log("  " + stage + " GetCustomObjectPath が nil を返した");
-				outDelta = std::nan("");
-				return;
-			}
-			const Sint32 pointCount = gSDK->NurbsGetNumPts(path, 0);
 			WorldPt3 p0, p1;
 			if (!ReadPathEndpoints(pio, p0, p1))
 			{
-				probe.log("  " + stage + " パスの点が読めない（点数=" +
-						  std::to_string(static_cast<long long>(pointCount)) + "）");
+				probe.log("  " + label + ": " + stage + " パスの点が読めない");
 				outDelta = std::nan("");
 				return;
 			}
 			VWParametricObj obj(pio);
 			const WorldPt3 pos = obj.GetObjectModelPos();
-			const double absZ0 = pos.z + p0.z;
-			const double absZ1 = pos.z + p1.z;
 			outDelta = p1.z - p0.z;
-			probe.log("  " + stage + " 点数=" + std::to_string(static_cast<long long>(pointCount)) +
-					  " 挿入点Z=" + NumBoth(pos.z) + " 局所 z0=" + Num(p0.z) + " z1=" + Num(p1.z));
-			probe.log("  " + stage + " **z1-z0=" + NumBoth(p1.z - p0.z) +
-					  "** 絶対Z: [0]=" + NumBoth(absZ0) + " [1]=" + NumBoth(absZ1));
-			probe.log("  " + stage + " 渡した値との差: 挿入点−z0=" + NumBoth(pos.z - z0) +
-					  " 絶対[0]−z0=" + NumBoth(absZ0 - z0) + " 絶対[1]−z1=" + NumBoth(absZ1 - z1) +
-					  " (z1-z0) の誤差=" + NumBoth((p1.z - p0.z) - (z1 - z0)));
+			if (verbose)
+			{
+				const Sint32 pointCount = gSDK->NurbsGetNumPts(gSDK->GetCustomObjectPath(pio), 0);
+				probe.log(
+					"  " + stage + " 点数=" + std::to_string(static_cast<long long>(pointCount)) +
+					" 挿入点Z=" + NumBoth(pos.z) + " 局所 z0=" + Num(p0.z) + " z1=" + Num(p1.z));
+				probe.log("  " + stage + " **z1-z0=" + NumBoth(p1.z - p0.z) + "** 絶対Z: [0]=" +
+						  NumBoth(pos.z + p0.z) + " [1]=" + NumBoth(pos.z + p1.z));
+				probe.log("  " + stage + " 渡した値との差: 挿入点−z0=" + NumBoth(pos.z - z0) +
+						  " 絶対[1]−z1=" + NumBoth((pos.z + p1.z) - z1) +
+						  " (z1-z0) の誤差=" + NumBoth((p1.z - p0.z) - (z1 - z0)));
+			}
 		};
 
-		logStage(std::string("① ") + EntryName(noOffset) + " 直後:", obs.createdDelta);
+		double createdDelta = 0;
+		readStage(std::string("① ") + EntryName(noOffset) + " 直後:", createdDelta);
+		obs.createdError = createdDelta - (z1 - z0);
 
-		probe.log("  （バウンドは 1 本も書かない＝#56 の 4 の「潰れる」経路）");
 		gSDK->ResetObject(pio);
-		logStage("② ResetObject 直後:", obs.afterResetDelta);
+		readStage("② ResetObject 直後（バウンド無し＝潰れる経路）:", obs.afterResetDelta);
+		obs.measured = true;
 
-		// 判定。**「残差が出たか」と「それは予測のどちらと一致するか」の 2 段**で見る。
-		// 比較はビット一致（この調査の主語がビットだから）。
+		// 判定。**「残差が出たか」と「予測が当たったか」の 2 段**で見る。
 		const double residual = obs.afterResetDelta;
-		const double expectedDegenerate = z1 - z0;
 		if (residual != residual)
 			obs.verdict = "パスが読めない";
-		else if (residual == expectedDegenerate && expectedDegenerate != 0)
+		else if (residual == z1 - z0 && z1 != z0)
 			obs.verdict = "潰れていない（渡した長さのまま）";
 		else if (residual == 0)
-			obs.verdict = "**残差なし（厳密に 0）**";
-		else if (residual == obs.predictSdk || residual == -obs.predictSdk)
-			obs.verdict = "**残差あり＝予測A（SDK の往復）とビット一致**";
-		else if (residual == obs.predictNaive || residual == -obs.predictNaive)
-			obs.verdict = "**残差あり＝予測B（素朴な往復）とビット一致**";
-		else if (residual == RoundTripSdk(z0) || residual == -RoundTripSdk(z0) ||
-				 residual == RoundTripNaive(z0) || residual == -RoundTripNaive(z0))
-			obs.verdict = "**残差あり＝z0 側の往復と一致**（効いているのは始点の値）";
+			obs.verdict = obs.divPredictsResidual ? "残差なし（**予測1 は残差ありと言った**）"
+												  : "残差なし（予測1 と一致）";
+		else if (residual == RoundTripDivide(z1) || residual == -RoundTripDivide(z1))
+			obs.verdict = "**残差あり＝往復誤差（上端 z1）とビット一致**";
+		else if (residual == RoundTripDivide(z0) || residual == -RoundTripDivide(z0))
+			obs.verdict = "**残差あり＝往復誤差（下端 z0）とビット一致**";
 		else
-			obs.verdict = "**残差あり。どの予測とも一致しない**";
-		probe.log("  → 判定: " + obs.verdict);
+			obs.verdict = "**残差あり。大きさはどの往復誤差とも一致しない**";
+
+		if (verbose)
+			probe.log("  → 判定: " + obs.verdict);
+		else
+			probe.log("  " + label + " | z0→z1=" + Num(z0) + "→" + Num(z1) +
+					  " | 予測1=" + (obs.divPredictsResidual ? "あり" : "なし") +
+					  " 予測2=" + (obs.reciprocalPredictsResidual ? "あり" : "なし") +
+					  " | ①の誤差=" + Num(obs.createdError) +
+					  " | **②の差=" + NumBoth(obs.afterResetDelta) + "** | " + obs.verdict);
 		observations.push_back(obs);
 	};
 
 	// =======================================================================
-	probe.log("=== T. 物差し（事故と同じ形を 1 本。572 → 3531・断面あり） ===");
-	runCase("T 事故と同じ柱（572 → 3531）", 0, 572, 0, 3531, true, false,
-			"事故で潰れた 46 本と同じ端点。ここで残差が出れば、それが事故の残差そのもの");
+	probe.log("=== T. 物差し（事故と同じ形を 1 本。572 → 3531・断面あり。ここだけ全文） ===");
+	runCase("T 事故と同じ柱（572 → 3531）", 0, 572, 0, 3531, true, false, true,
+			"事故で潰れた 46 本と同じ端点。1 回目はここで +4.5474735088646412e-13 が出た");
 
 	// =======================================================================
-	probe.log("=== A. z0=572 固定・z1 を振る（断面あり＝事故と同じ作り） ===");
+	probe.log("=== A. z0=572 固定・z1 を振る（1 回目の再現。断面あり＝事故と同じ作り） ===");
 	{
-		struct Step
-		{
-			const char* label;
-			double z1;
-			const char* why;
-		};
-		const Step steps[] = {
-			{"A-1 z1 = 2429", 2429, "予測A・B とも 0（事故で無事だった柱の上端）"},
-			{"A-2 z1 = 5905", 5905, "予測A・B とも 0（対照）"},
-			{"A-3 z1 = 3531", 3531, "**予測A・B とも ≠0。事故で潰れた柱の上端そのもの**"},
-			{"A-4 z1 = 6374", 6374, "**予測A は ≠0・予測B は 0。2 つの形を分ける値**"},
-			{"A-5 z1 = 5500", 5500, "同上（もう 1 点）"},
-			{"A-6 z1 = 2500", 2500, "予測A・B とも 0（#61 のプローブが使った基準Z）"},
-			{"A-7 z1 = 585", 585, "予測A・B とも ≠0。**差が 13**——短い材でも起きるか"},
-			{"A-8 z1 = 573", 573, "予測A・B とも ≠0。**差が 1**——最小の材"},
-		};
-		for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); ++i)
-			runCase(steps[i].label, 0, 572, 0, steps[i].z1, true, false, steps[i].why);
+		const double values[] = {2429, 5905, 3531, 6374, 5500, 2500, 585, 573};
+		for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
+			runCase("A-" + Num(values[i]), 0, 572, 0, values[i], true, false, false, "");
 	}
 
 	// =======================================================================
@@ -418,53 +359,75 @@ VW_PROBE("path-z-residual-origin", "厳密な整数 mm の世界座標に残差�
 	{
 		const double values[] = {3531, 6374, 13, 572};
 		for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
-		{
-			const double v = values[i];
-			runCase("B 退化 z0 = z1 = " + Num(v), 0, v, 0, v, true, false,
-					"**両端に同じ値**。ここで残差が出たら「同じ変数を渡す」でも避けられない"
-					"——直し方そのものが崩れる");
-		}
+			runCase("B-退化-" + Num(values[i]), 0, values[i], 0, values[i], true, false, false, "");
 	}
 
 	// =======================================================================
-	probe.log("=== C. 断面を渡さない（#61 のプローブと同じ形。断面の有無で ① が変わるか） ===");
+	probe.log("=== C/D. 断面なし・NoOffset（出どころが入口に依るか） ===");
+	runCase("C-断面なし-3531", 0, 572, 0, 3531, false, false, false, "");
+	runCase("C-断面なし-6374", 0, 572, 0, 6374, false, false, false, "");
+	runCase("D-NoOffset-3531", 0, 572, 0, 3531, true, true, false, "");
+	runCase("D-NoOffset-6374", 0, 572, 0, 6374, true, true, false, "");
+
+	// =======================================================================
+	probe.log("=== F. **下端（z0）側を振る**（1 回目は z0=572 に固定していた） ===");
+	runCase("F-1 z0=3531→z1=6374", 0, 3531, 0, 6374, true, false, false, "");
+	runCase("F-2 z0=3531→z1=2429", 0, 3531, 0, 2429, true, false, false, "");
+	runCase("F-3 z0=13→z1=572", 0, 13, 0, 572, true, false, false, "");
+	runCase("F-4 z0=13→z1=3531", 0, 13, 0, 3531, true, false, false, "");
+	runCase("F-5 z0=8002→z1=8000", 0, 8002, 0, 8000, true, false, false, "");
+
+	// =======================================================================
+	probe.log("=== G. 予測を規則として試す（z0=572 固定。前半 9 つが「往復で戻らない」値） ===");
 	{
-		const double values[] = {3531, 6374};
+		// 前半: v/25.4*25.4 != v（＝予測1 が「残差あり」と言う値）。桁を散らしてある。
+		// 後半: v/25.4*25.4 == v（同「残差なし」）。**うち 5・50・900・6374 などは
+		// 予測2（逆数を掛ける形）では「残差あり」になる**——2 つの形を分ける値。
+		const double values[] = {1, 2, 13, 103, 813, 1626, 3531, 6503, 8002,
+								 3, 5, 50, 300, 900, 2000, 4000, 6374, 8000};
 		for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
-			runCase("C 断面なし 572 → " + Num(values[i]), 0, 572, 0, values[i], false, false,
-					"#61 のプローブは断面を渡さずに測って「① は渡した差と一致」と出した。"
-					"断面（＝実体が出る作り）で結果が変わるかを見る");
+			runCase("G-" + Num(values[i]), 0, 572, 0, values[i], true, false, false, "");
 	}
-
-	// =======================================================================
-	probe.log("=== D. CreateCustomObjectPathNoOffset（挿入点への変換を飛ばす入口） ===");
-	{
-		const double values[] = {3531, 6374};
-		for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i)
-			runCase("D NoOffset 572 → " + Num(values[i]), 0, 572, 0, values[i], true, true,
-					"変換がどの段で入るかを絞る。挿入点への変換を飛ばしても残差が出るなら、"
-					"出どころは挿入点の計算ではない");
-	}
-
-	// =======================================================================
-	probe.log("=== E. 同じ値を X に入れる（残差は Z 特有か、座標一般か） ===");
-	runCase("E-1 X に 3531（Z は 572 で固定）", 0, 572, 3531, 572, true, false,
-			"往復で戻らない値を X に置く。Z の差は厳密に 0 なので、**長さが 0 でなければ "
-			"X 側にも同じことが起きている**");
-	runCase("E-2 X に 6374（Z は 572 で固定）", 0, 572, 6374, 572, true, false,
-			"同上（予測A と B を分ける値で）");
 
 	// =======================================================================
 	probe.log("=== まとめ（この表がこのプローブの結論） ===");
-	probe.log("ラベル | 渡した z0→z1 | 予測A(z1) | 予測B(z1) | ⓪'曲線の差 | ①の差 | ②の差 | 判定");
+	probe.log(
+		"ラベル | 渡した z0→z1 | 予測1（割る→掛ける） | 予測2（逆数） | ①の誤差 | ②の差 | 判定");
+	size_t divHit = 0, divMiss = 0, recHit = 0, recMiss = 0, createdDirty = 0, measured = 0;
 	for (size_t i = 0; i < observations.size(); ++i)
 	{
 		const Observation& obs = observations[i];
+		if (!obs.measured)
+			continue;
+		++measured;
+		const bool residual =
+			obs.afterResetDelta != 0 && obs.afterResetDelta == obs.afterResetDelta;
+		if (obs.createdError != 0)
+			++createdDirty;
+		// 退化（z0 == z1）は「渡した時点で差が無い」ケースなので予測の採点から外す
+		// ——どちらの予測も「端点の値が戻らない」と言うが、差が 0 なら残差の出ようがない。
+		if (obs.passedZ0 != obs.passedZ1)
+		{
+			if (obs.divPredictsResidual == residual)
+				++divHit;
+			else
+				++divMiss;
+			if (obs.reciprocalPredictsResidual == residual)
+				++recHit;
+			else
+				++recMiss;
+		}
 		probe.log(obs.label + " | " + Num(obs.passedZ0) + "→" + Num(obs.passedZ1) + " | " +
-				  Num(obs.predictSdk) + " | " + Num(obs.predictNaive) + " | " +
-				  Num(obs.curveDelta) + " | " + Num(obs.createdDelta) + " | " +
-				  Num(obs.afterResetDelta) + " | " + obs.verdict);
+				  (obs.divPredictsResidual ? "あり" : "なし") + " | " +
+				  (obs.reciprocalPredictsResidual ? "あり" : "なし") + " | " +
+				  Num(obs.createdError) + " | " + Num(obs.afterResetDelta) + " | " + obs.verdict);
 	}
-	probe.log("※ 「どの地点で初めて 0 でなくなったか」が残差の生まれた段である"
-			  "（⓪' なら曲線、① なら生成、② なら作り直し）。");
+	probe.log("=== 予測の成績（退化ケースを除く。ここが規則かどうかの判定） ===");
+	probe.log("  予測1（v / 25.4 * 25.4 != v）: 一致 " + std::to_string(divHit) + " / 不一致 " +
+			  std::to_string(divMiss));
+	probe.log("  予測2（v * (1/25.4) * 25.4 != v ＝ SDK の inline）: 一致 " +
+			  std::to_string(recHit) + " / 不一致 " + std::to_string(recMiss));
+	probe.log("  ① で渡した差からずれたケース: " + std::to_string(createdDirty) + " / " +
+			  std::to_string(measured) +
+			  "（0 なら「生成の段では変換されない」が全件で裏付けられた）");
 }
