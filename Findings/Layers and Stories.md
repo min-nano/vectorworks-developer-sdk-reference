@@ -41,34 +41,55 @@
   呼び出し側が自分で持ち回る。レイヤ相対へ切り替えられるよう、絶対 Z を渡す箇所に名前を
   付けておくとよい。
 
-## 打ち切った調査: SDK だけで階（ストーリ）を用意する
+## 階（ストーリ）を SDK から作る — レベルは**レベルテンプレート経由**で生やす
 
-**結論: プラグインから階を作っても、その階へは手が届かない。** 階の要る調査は、
-**階のある図面を人に開いてもらうしかない**（2 度試して確定。VW 2026 / mac。
-[issue #65](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/65) の
-プローブが新規の空図面で走ったため、**プローブ自身に階を用意させようとした**）。
+**階は SDK だけで作れる。** ただし**レベル（＝レイヤ）を生やす道が 2 系統あり、効くのは
+片方だけ**で、効かないほうも `true` を返すため「作れない」と誤診しやすい。実装例は
+ホームズ君プラグインの `draw/Story`（`createStories` / `CreateStoryLevelViaTemplate`）で、
+**実際にこの手順で階を作っている**。
 
-実測（新規の空図面。`GetNumStories = 0` から始めて、以下は実行ログそのまま）:
+手順（この順番に意味がある）:
 
-| 呼び出し | 戻り値 | 読み戻し |
-| --- | --- | --- |
-| `CreateStory(name, suffix)` ×2 | **`true`** | `GetNumStories` **0 → 2**。しかし `ForEachLayerN` ＋ `GetStoryOfLayer` で見える階は**0 件のまま**（＝レイヤが 1 枚も生えない） |
-| `ResetDefaultStoryLevels(false)` | **`true`** | 階は**0 件のまま** |
-| `CreateStoryLayerTemplate("調査用-横架材天端", 1.0, "横架材天端", 0, 3000, index)` | **`true`**（`index=1`。雛形 7 → 8 件） | その後に `CreateStory` しても階は**0 件のまま**——**雛形があってもレイヤは生えない** |
-| `GetNamedObject("調査用下階")` | **非 nil**（何かは引ける） | そのハンドルへ `AddStoryLevel(…)` は **`true` を返すのに**、`GetLayerForStory` は **nil**（レイヤは生えていない） |
+1. `CreateLayerLevelType(type)` で**レベル種別を先に登録する**（引数は非 const `TXString&`
+   なので名前付き lvalue を渡す。以下の `Create*` も同じ）。
+2. `CreateStory(name, suffix)` で階を作る。**戻り値は `bool` でハンドルは返らない。**
+3. **`GetNamedObject(name)` で階のハンドルを取る**（VS の `GetObject` 相当）。
+   **レベルの無い階はまだレイヤを持たない**ので `ForEachLayerN` ＋ `GetStoryOfLayer` では
+   見つからないが、**名前では引ける**。
+4. **`SetStoryElevation(story, elevation)` を、レベルを足す前に呼ぶ**。直後に設定しないと
+   「既定高さ 0 の階が複数」になり、**次の `CreateStory` が衝突して失敗し得る**。
+5. `CreateStoryLevelTemplate(name, scale, levelType, offset, wallHeight, index)` で
+   **レベルテンプレート**を作り、**`AddStoryLevelFromTemplate(story, index)`** で
+   レベルとレイヤを生やす。
+6. `GetLayerForStory(story, levelType)` でできたレイヤを取り、`SetObjectName` で名前を直す
+   ——**テンプレート経由だとレイヤ名に `CreateStory` の suffix が付く**（例 `1-FL` が
+   `1-FL-1` になる）。
 
-- **`CreateStory` が増やすのは数だけ。** `GetNumStories` は増えるが、**レベル（＝レイヤ）の
-  無い階**しかできず、階のハンドルは `GetStoryOfLayer` 経由でしか取れない
-  （[Parametric Objects](Parametric%20Objects.md)「ストーリを触る API」の落とし穴 1）ので、
-  **作った階に触る手段が無い**。UI の「ストーリ設定」と同じ結果にはならない。
-- **`AddStoryLevel` の `true` を信用しない。** `GetNamedObject` で引いたハンドルへ渡すと
-  `true` が返るが、レイヤは生えない（`GetLayerForStory` が nil）。**戻り値ではなく
-  `GetLayerForStory` の読み戻しで判定する**こと
+落とし穴（すべて実測）:
+
+- **`AddStoryLevel` ＋ `AssociateLayerWithStory` では紐付かない**（VW 2026）。UI 上
+  レイヤ→レベルの紐付けが「なし」になる。**バインドが保証されるのは
+  `CreateStoryLevelTemplate` ＋ `AddStoryLevelFromTemplate` の側**。
+- **`AddStoryLevel` の `true` を信用しない。** `GetNamedObject` で引いた階のハンドルへ
+  渡すと `true` が返るのに、`GetLayerForStory` は **nil** のまま（＝レイヤは生えていない）。
+  **戻り値ではなく `GetLayerForStory` の読み戻しで判定する**こと
   （[Investigation Techniques](Investigation%20Techniques.md)「setter の戻り値を信用しない」）。
-- **`CreateStoryWithUI()` だけがハンドルを返す**（`ISDK.h`）が、**ダイアログが出る**ので
-  プローブや無人の処理では使えない。【ヘッダ根拠】
-- **だからプローブの側では、階の無い図面は「測れない」と返すのが正しい。**
-  `LayerElevation` へ落として測っても、階の移動は測れないので答えにならない。
+- **`Story Layer Template` と `Story Level Template` を取り違えない。**
+  `CreateStoryLayerTemplate` は `true` を返し件数も増えるが、**その後に `CreateStory`
+  してもレイヤは生えない**——階へレベルを生やすのは `Story Level` 系
+  （[Parametric Objects](Parametric%20Objects.md)「ストーリを触る API」の落とし穴 2）。
+- **`ResetDefaultStoryLevels(false)` は `true` を返すが、レベルの無い階にレイヤを
+  生やしてはくれない。**
+- `CreateStoryWithUI()` はハンドルを返すが**ダイアログが出る**ので、プローブや無人の
+  処理では使えない。【ヘッダ根拠】
+
+> **この節は一度「できない」と書いて誤った。** `AddStoryLevel` と
+> `CreateStoryLayerTemplate`（Layer 系）だけを試し、どちらも `true` を返すのに
+> レイヤが生えないのを見て「SDK だけでは階を用意できない」と結論した
+> （[PR #66](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/66)）。
+> **正しい道は `Story Level` 系のテンプレートで、実装が既に存在していた。**
+> 教訓: **「できない」と書く前に、動いている実装（ホームズ君プラグイン）を当たる。**
+> 同じ名前で始まる API が 2 系統あるときは、**両方試すまで「できない」と言わない。**
 
 ## 打ち切った調査: ビューポート単位のレイヤ重ね順上書き
 
