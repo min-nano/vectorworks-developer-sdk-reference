@@ -135,10 +135,10 @@ summary() {
 #
 # 番号は**昇順に正規化**する。ビルド ID は順序に依存しない作りだが、run 名の突き合わせ
 # （下記 2）と、人が読むリリース名が安定するので揃えておく。
-prs_body="$(workfile)"
+# 一覧の取り方は ci-common.sh の open_prs 1 か所に置いてある（push のビルドと点検も
+# 同じものを使う。**ここがばらつくと、リリースの中身が引き金によって変わる**。issue #79）。
 PRS_LIST="$PR"
-if [ "$(api_json "$VW_API/pulls?state=open&per_page=100" "$prs_body")" = "200" ]; then
-	list="$(jq -r '[.[].number] | sort | map(tostring) | join(",")' "$prs_body" 2>/dev/null || true)"
+if list="$(open_prs)"; then
 	if [ -n "$list" ]; then
 		PRS_LIST="$list"
 	fi
@@ -146,7 +146,6 @@ else
 	# 取れなくても止めない（この PR だけで作る。**公開が止まるほうが困る**）。
 	echo "::warning::open な PR の一覧を取得できませんでした。PR #$PR だけで作ります。"
 fi
-rm -f "$prs_body"
 # 自分が入っていなければ足す（一覧の取得が古い・失敗したときの保険）。
 case ",$PRS_LIST," in
 	*",$PR,"*) ;;

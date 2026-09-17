@@ -12,7 +12,8 @@ name: Lint
 #                     本体のパスの組み立て＝plugin/src/PayloadHost.h、本体が殻から受け取った
 #                     ものを写しているか＝plugin/src/PayloadHostHolder.h、ダイアログに出す
 #                     文字列の長さ＝plugin/src/ProbeMenuText.h、結果を PR へ投稿する形＝
-#                     plugin/src/FeedbackParse.h とその同梱スクリプト）。SDK にも
+#                     plugin/src/FeedbackParse.h とその同梱スクリプト）と、調査 CI 側の
+#                     スクリプト（scripts/tests/）。SDK にも
 #                     プラットフォームにも依存しないので普通のコンパイラで走る。**壊れても
 #                     静かに壊れる**（更新が来ない／常に来る／再起動が空振りする／実機でだけ
 #                     落ちる）ので、mac / Windows の実ビルドとは別に、ここで確かめる。
@@ -23,7 +24,8 @@ name: Lint
 # 完了待ちは `scripts/ci-wait.sh --pr <番号>` で行う（CLAUDE.md「CI の完了を待つ」）。
 # plugin/ を触った PR ではこれに加えて probe-build.yml（mac / Windows の実ビルド）が、
 # probes/runtime/ を触った PR では probe-auto-update.yml（main のビルドを起動して
-# 完了まで待ち、リリースを更新する）が走る。
+# 完了まで待ち、リリースを更新する）が走る。PR が**閉じた**ときは
+# probe-release-guard.yml が、公開済みのリリースと open な PR を突き合わせる。
 
 on:
   push:
@@ -51,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           shellcheck --version
-          shellcheck scripts/*.sh plugin/scripts/*.sh
+          shellcheck scripts/*.sh scripts/tests/*.sh plugin/scripts/*.sh
 
   clang-format:
     runs-on: ubuntu-latest
@@ -119,6 +121,13 @@ jobs:
         run: |
           bash plugin/tests/vw-probes-feedback.test.sh
           bash plugin/tests/vw-probes-update.test.sh
+
+      # 調査 CI 側のスクリプトの単体テスト。いまは「いま open な PR は何番か」を出す
+      # ところ（scripts/ci-common.sh の open_prs）——**この 1 行がプローブのリリースに
+      # 何が入るかを決める**のに、間違っても静かに間違う（落ちた群はリリースノートの
+      # 表に載らないだけ。#79）ので、網の境目だけ差し替えて振る舞いを固定しておく。
+      - name: Run the CI script unit tests
+        run: bash scripts/tests/open-prs.test.sh
 
       # Windows 側の同梱スクリプト（.ps1）。実機は Windows だが、**ランナーには pwsh が
       # 入っている**ので、ここで構文と——mac 側と同じように——取得まわりの振る舞いを

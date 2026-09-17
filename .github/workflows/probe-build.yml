@@ -18,8 +18,11 @@ name: Probe plug-in
 #                      その PR たちの probes/runtime/ を main のものと**同居**させて
 #                      1 本のプラグインにする（マージ前に実機で確かめるため）。
 #                      **probes/runtime/ を触った PR では、これを probe-auto-update.yml
-#                      が自動で叩く**（プローブを置いたら公開まで自動で進む）。
-#   push (main)        main のプローブだけでリリースを作り直す。
+#                      が自動で叩く**。**PR が閉じたときは probe-release-guard.yml が
+#                      叩く**（下記の NOTE）。
+#   push (main)        リリースを作り直す。**同居させる顔ぶれは dispatch のときと同じ**
+#                      ——main のプローブ＋**その時点で open な PR 全部**（gather ジョブが
+#                      自分で引く。下記 NOTE「引き金でリリースの中身を変えない」）。
 #   pull_request       **ビルドが通るかの確認だけ**（公開しない）。プラグイン本体
 #                      （plugin/ とビルドの仕掛け）を触った PR で「ディスパッチしたら
 #                      コンパイルエラーだった」を防ぐための門。**probes/runtime/ だけの
@@ -29,16 +32,50 @@ name: Probe plug-in
 #
 # 公開先は転がり続けるタグ 1 つ（probes）。リリースノートに「何が入っているか」の表を
 # 必ず載せる——同居する顔ぶれは実行のたびに変わるので、そこだけが真実になる。
+#
+# NOTE: **引き金でリリースの中身を変えない**（issue #79 で踏んだ）。公開先は転がりタグ
+# 1 つなので、**そのビルドに入らなかった群は、実機のピッカーからそのまま消える**。
+# 以前は push 起動だけが `inputs.prs` を持たず、集約に PR を 1 つも渡していなかった
+# ——つまり `plugin/src/**` の直し 1 つを main へ入れるだけで、**open な PR のプローブが
+# 全部リリースから落ちた**（落ちたことはリリースノートにも出ない。表に載らないだけ
+# なので、利用者からは「入れ替えたのに出てこない」に見える）。実際に PR #78 の
+# マージで PR #77 の群が落ち、probe-release-guard が拾って作り直した
+# （それが無ければ消えたままだった）。
+# だから**どの引き金でも同じ顔ぶれ**にする——gather ジョブが push のときは「いま open な
+# PR 全部」を自分で引いて集約へ渡す（scripts/open-prs.sh。自動公開と点検が使うのと
+# 同じ実装）。顔ぶれを絞りたいときだけ、手で dispatch して `inputs.prs` を並べる。
+# **一覧が引けなければ、このジョブは失敗させる**——「取れなかった」を「open な PR は
+# 無い」と読んで公開するのが、この穴そのものだったので。
+#
+# NOTE: **push の paths には原理的に写らない次元がある**（issue #76 で踏んだ）。
+# リリースに何が入っているべきかは「main のツリー」だけでは決まらず、**その時点で
+# open な PR の集合**という、コミットを 1 つも作らずに変わるものが効いている。しかも
+# 規約（CLAUDE.md「調査のフロー」4）は「プローブは**マージする前に消す**」なので、
+# プローブを持っていた PR がマージされる瞬間、main への差分には `probes/runtime/**` が
+# 1 行も現れない——**どんな paths を並べてもここは引けない**。その次元は
+# probe-release-guard.yml が「PR が閉じたこと」を引き金に受け持つ。
+# 下の paths は**main のツリーの次元だけ**を見ればよい（そちらは正しく動いている）。
 # ---------------------------------------------------------------------------
 
+# push 起動の顔ぶれ（open な PR）は run が始まる時点では分からない（gather ジョブが
+# 引く）ので、名前には「open PR」とだけ出す。**dispatch のときの綴りは変えない**
+# ——probe-auto-update.sh / probe-release-guard.sh が、自分が起動した run をこの名前で
+# 特定している（どちらも event=workflow_dispatch の run しか見ない）。
 run-name: >-
-  probe build (${{ inputs.prs && format('PR {0} + ', inputs.prs) || '' }}${{ github.ref_name }})
+  probe build (${{ github.event_name == 'push' && 'open PR + '
+  || (inputs.prs && format('PR {0} + ', inputs.prs) || '') }}${{ github.ref_name }})
 
 on:
   workflow_dispatch:
     inputs:
       prs:
-        description: "同居させる PR 番号（カンマ区切り。空なら main のプローブだけ）"
+        # **ここは「顔ぶれを絞る」ための入口。** 空にすると main のプローブだけの
+        # リリースになる＝**いま open な PR の群はリリースから外れる**（転がりタグは
+        # 1 つなので、実機のピッカーからも消える）。絞ったつもりが無いなら空にしない。
+        # 外れたままにはならない——次に probe-release-guard（PR が閉じたとき／週 1 回）が
+        # 突き合わせて作り直す。自動（push / probe-auto-update）は必ず
+        # 「main ＋ open な PR 全部」で走る。
+        description: "同居させる PR 番号（カンマ区切り。空なら main のプローブだけ＝open な PR の群は外れる）"
         required: false
         type: string
   push:
@@ -90,6 +127,18 @@ jobs:
   gather:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      # push 起動で「いま open な PR」を引く（下の「同居させる PR を決める」）。
+      # **ジョブに permissions を書くとワークフロー側の指定は引き継がれない**ので、
+      # contents: read もここへ並べる。
+      pull-requests: read
+
+    outputs:
+      # **実際に同居させた顔ぶれ。** push 起動ではここで初めて決まる（入力は空）ので、
+      # リリース名を組む release ジョブは inputs.prs ではなくこちらを読む。
+      prs: ${{ steps.prs.outputs.prs }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -98,11 +147,35 @@ jobs:
           # push したコミット＝確認したいもの）。
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
+      # -----------------------------------------------------------------------
+      # 同居させる PR を決める。**引き金でリリースの中身を変えない**（上の NOTE）。
+      #
+      #   workflow_dispatch  入力をそのまま（顔ぶれを絞るための入口。空なら main だけ）
+      #   push (main)        **いま open な PR を全部**（dispatch されるときと同じ顔ぶれ）
+      #   pull_request       空（公開しないので、同居させる意味が無い）
+      - name: Decide which PRs to co-locate
+        id: prs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_PRS: ${{ inputs.prs }}
+        run: |
+          set -euo pipefail
+          prs="${INPUT_PRS:-}"
+          if [ "$EVENT_NAME" = "push" ]; then
+            # **取れなければここで落とす。** 「取れなかった」を「open な PR は無い」と
+            # 読んで公開すると、open な PR の群を丸ごと落としたリリースになる（#79）。
+            # 落ちても公開されているリリースはそのまま（古いが、群は欠けない）。
+            prs="$(scripts/open-prs.sh)"
+          fi
+          echo "同居させる PR: ${prs:-（なし）}"
+          echo "prs=$prs" >>"$GITHUB_OUTPUT"
+
       - name: Gather probes
         env:
           # PR タイトル・ブランチ名を引くのに使う（取れなくてもビルドは通る）。
           GH_TOKEN: ${{ github.token }}
-          PRS: ${{ inputs.prs }}
+          PRS: ${{ steps.prs.outputs.prs }}
         run: scripts/gather-probes.sh --prs "$PRS"
 
       - name: Summary
@@ -438,7 +511,9 @@ jobs:
 
     env:
       BUILD_SHA: ${{ github.sha }}
-      PRS: ${{ inputs.prs }}
+      # **gather が決めた顔ぶれ**（push 起動では inputs.prs が空でも PR が載っている）。
+      # リリース名に使うだけで、中身の真実はリリース本文の表と隠しメタデータ。
+      PRS: ${{ needs.gather.outputs.prs }}
 
     steps:
       # 本文を組むスクリプト（scripts/probe-release-notes.sh）を使うので、ここでも
