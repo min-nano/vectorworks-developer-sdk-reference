@@ -59,14 +59,17 @@
 //	  `GetStoryObjectDataBoundHeight` を各段階で呼び、「階が実際に動いたか」を
 //	  部材とは独立に確かめる（部材が動かなかったとき、「階が動かなかった」のか
 //	  「部材が追従しなかった」のかを分けるため）。
-//	* **測れる形が図面に無ければ、プローブが自分で作る**（`CreateStory` ＋
-//	  `AddStoryLevel` ＋ `SetStoryElevation`。下の `BuildStories`）。この調査は階が
-//	  無いと測れないが、プローブはふつう**新規の空図面**で走らせる
+//	* **測れる形が図面に無ければ、プローブが自分で作る**（下の `BuildStories`）。
+//	  この調査は階が無いと測れないが、プローブはふつう**新規の空図面**で走らせる
 //	  （`probes/runtime/README.md`）——実際に空図面で走って「階が無い」で終わった
 //	  （PR #66 の 1 回目）。走らせる人へ「別の図面を開いてください」と頼むのは
-//	  仕組みの綻びなので（CLAUDE.md）、**要る形はこちらで用意する**。用意する道が
-//	  通るかどうか自体が未知なので**1 手ごとにログへ出す**——通らなければ
-//	  「どの呼び出しで止まったか」がそのまま知見になる。
+//	  仕組みの綻びなので（CLAUDE.md）、**要る形はこちらで用意する**。
+//	  **2 回目の実行で分かったこと**（空図面・実測）: `CreateStory` は `true` を返し
+//	  `GetNumStories` も 0 → 2 になるが、**レイヤが 1 枚も生えないので階のハンドルへ
+//	  手が届かない**。`ResetDefaultStoryLevels(false)`（`true` を返す）を挟んでも
+//	  届かなかった。そこで 3 回目は**先に階レイヤの雛形を登録**してから
+//	  `CreateStory` し、届かなければ**名前で引く**（`GetNamedObject`）道も試す。
+//	  どの道が通るのかがそのまま知見になるので、**1 手ごとにログへ出す**。
 //	* **`LayerElevation` へは落とさない。** 階を持たない図面で階の移動は測れないので、
 //	  自前で用意することもできなければ失敗として返す。
 //
@@ -395,8 +398,29 @@ namespace
 		probe.log("P2. ① 使うレベル種別=\"" + Str(levelType) + "\"（登録済み " +
 				  Int(static_cast<long long>(levelTypes.size())) + " 件の先頭）");
 
-		// ② 階を 2 つ作る。**CreateStory は bool しか返さない**ので、ハンドルは後で
-		//    レイヤ経由で取りに行く。
+		// ② **階を作る前に「階レイヤの雛形」を登録する。**
+		//    1 回目の実行（PR #66 / ビルド fb0f9946dd26）では `CreateStory` が
+		//    **レイヤを 1 枚も作らない**ため、階のハンドルへ手が届かなかった
+		//    （`ResetDefaultStoryLevels` を挟んでも届かない。実測）。UI で階を足すと
+		//    レイヤが生えるのは**雛形（Story Layer Template）が登録されているから**という
+		//    読みで、先に雛形を 1 つ登録してから階を作る。
+		const short templatesBefore = gSDK->GetNumStoryLayerTemplates();
+		{
+			TXString templateName = TXString("調査用-") + levelType;
+			TXString templateLevelType = levelType;
+			short index = 0;
+			const bool madeTemplate = gSDK->CreateStoryLayerTemplate(
+				templateName, 1.0, templateLevelType, 0, 3000, index);
+			probe.log(std::string("P2. ② CreateStoryLayerTemplate(\"") + Str(templateName) +
+					  "\", 1.0, \"" + Str(templateLevelType) +
+					  "\", 0, 3000) = " + (madeTemplate ? "true" : "false") + " index=" +
+					  Int(static_cast<long long>(index)) + " ／ GetNumStoryLayerTemplates " +
+					  Int(static_cast<long long>(templatesBefore)) + " → " +
+					  Int(static_cast<long long>(gSDK->GetNumStoryLayerTemplates())));
+		}
+
+		// ③ 階を 2 つ作る。**CreateStory は bool しか返さない**ので、ハンドルは後で
+		//    レイヤ経由（か名前）で取りに行く。
 		const short storiesBefore = gSDK->GetNumStories();
 		TXString lowerName("調査用下階");
 		TXString lowerSuffix("調査下");
@@ -404,71 +428,99 @@ namespace
 		TXString upperSuffix("調査上");
 		const bool madeLower = gSDK->CreateStory(lowerName, lowerSuffix);
 		const bool madeUpper = gSDK->CreateStory(upperName, upperSuffix);
-		probe.log(std::string("P2. ② CreateStory: 下=") + (madeLower ? "true" : "false") +
+		probe.log(std::string("P2. ③ CreateStory: 下=") + (madeLower ? "true" : "false") +
 				  " 上=" + (madeUpper ? "true" : "false") + " ／ GetNumStories " +
 				  Int(static_cast<long long>(storiesBefore)) + " → " +
 				  Int(static_cast<long long>(gSDK->GetNumStories())));
 
-		// ③ ハンドルを取りに行く。**レベル（＝レイヤ）を持たない階は ForEachLayerN から
-		//    見えない**ので、見えなければ既定のレベルを生やしてもう一度数える。
+		// ④ ハンドルを取りに行く。**3 つの道を順に試して、通った道をログに残す**
+		//    （どれが通るのかがそのまま知見になる）。
 		std::vector<StoryInfo> stories = CollectStories(probe);
+
+		//    道 2: **名前で引く**。階は名前を持つので、`GetNamedObject` で取れる可能性が
+		//    ある（レイヤを持たない階へ手が届く唯一の道になりうる）。取れたかどうかは
+		//    **`AddStoryLevel` が通ってレイヤが生えるか**で確かめる——ハンドルの正体を
+		//    名前だけで信じない。
+		if (stories.size() < 2)
+		{
+			const TXString names[2] = {lowerName, upperName};
+			for (int n = 0; n < 2; ++n)
+			{
+				MCObjectHandle byName = gSDK->GetNamedObject(names[n]);
+				probe.log("P2. ④ 道 2: GetNamedObject(\"" + Str(names[n]) +
+						  "\") = " + (byName != nullptr ? "非 nil" : "nil"));
+				if (byName == nullptr)
+					continue;
+				const TXString layerName = names[n] + TXString("-") + levelType;
+				const bool added = gSDK->AddStoryLevel(byName, levelType, 0, layerName);
+				MCObjectHandle grown = gSDK->GetLayerForStory(byName, levelType);
+				probe.log(std::string("P2. ④ 道 2: そのハンドルへ AddStoryLevel = ") +
+						  (added ? "true" : "false") + " ／ GetLayerForStory=" +
+						  (grown != nullptr ? "取れた（**このハンドルは階だった**）"
+											: "nil（階ではないか、レベルを足せない）"));
+			}
+			stories = CollectStories(probe);
+		}
+
+		//    道 3: 既定のレベルを生やさせる（1 回目の実行では効かなかったが、雛形を
+		//    登録した後なら結果が変わるかもしれないので、順番を変えて残す）。
 		if (stories.size() < 2)
 		{
 			const bool reset = gSDK->ResetDefaultStoryLevels(false);
-			probe.log(std::string("P2. ③ レイヤ経由で 2 階そろわなかったので "
-								  "ResetDefaultStoryLevels(false) = ") +
-					  (reset ? "true" : "false") + " を呼んだ");
+			probe.log(std::string("P2. ④ 道 3: ResetDefaultStoryLevels(false) = ") +
+					  (reset ? "true" : "false"));
 			stories = CollectStories(probe);
 		}
+
 		if (stories.size() < 2)
 		{
-			probe.log("P2. ③ **階のハンドルが 2 つ取れない**（`CreateStory` で作った階には"
-					  "レイヤが無く、`GetStoryOfLayer` 経由でしか手が届かない——"
-					  "`Findings/Parametric Objects.md` の落とし穴 1 のとおり）。ここで止まり。");
+			probe.log("P2. ④ **階のハンドルが 2 つ取れない**（レイヤ経由・名前・既定レベルの"
+					  "3 つとも通らなかった）。`CreateStory` は階を増やす（GetNumStories は"
+					  "増える）が、**手の届く形にはならない**。ここで止まり。");
 			return false;
 		}
 
-		// ④ 両方の階へ同じレベル種別のレベル（＝レイヤ）を足す。既にあるなら触らない。
+		// ⑤ 両方の階へ同じレベル種別のレベル（＝レイヤ）を足す。既にあるなら触らない。
 		for (size_t i = 0; i < stories.size(); ++i)
 		{
 			if (gSDK->GetLayerForStory(stories[i].handle, levelType) != nullptr)
 			{
-				probe.log("P2. ④ \"" + Str(stories[i].name) + "\" は既に \"" + Str(levelType) +
+				probe.log("P2. ⑤ \"" + Str(stories[i].name) + "\" は既に \"" + Str(levelType) +
 						  "\" のレイヤを持っている");
 				continue;
 			}
 			const TXString layerName = stories[i].name + TXString("-") + levelType;
 			const bool added = gSDK->AddStoryLevel(stories[i].handle, levelType, 0, layerName);
-			probe.log(std::string("P2. ④ AddStoryLevel(\"") + Str(stories[i].name) + "\", \"" +
+			probe.log(std::string("P2. ⑤ AddStoryLevel(\"") + Str(stories[i].name) + "\", \"" +
 					  Str(levelType) + "\", 0, \"" + Str(layerName) +
 					  "\") = " + (added ? "true" : "false") + " ／ 読み戻し GetLayerForStory=" +
 					  (gSDK->GetLayerForStory(stories[i].handle, levelType) != nullptr ? "取れた"
 																					   : "nil"));
 		}
 
-		// ⑤ 階の高さを、間隔がはっきり分かる値へ置く（0 と 3000）。
+		// ⑥ 階の高さを、間隔がはっきり分かる値へ置く（0 と 3000）。
 		//    **並びは高さで決まる**ので、置いてから GetStoryAbove で確かめる。
 		stories = CollectStories(probe);
 		if (stories.size() >= 2)
 		{
 			const bool setA = gSDK->SetStoryElevation(stories[0].handle, 0);
 			const bool setB = gSDK->SetStoryElevation(stories[1].handle, 3000);
-			probe.log(std::string("P2. ⑤ SetStoryElevation: \"") + Str(stories[0].name) +
+			probe.log(std::string("P2. ⑥ SetStoryElevation: \"") + Str(stories[0].name) +
 					  "\"←0 = " + (setA ? "true" : "false") + " ／ \"" + Str(stories[1].name) +
 					  "\"←3000 = " + (setB ? "true" : "false"));
 			stories = CollectStories(probe);
 		}
 
-		// ⑥ 作ったもので改めて組を探す（ここまでで測れる形になっていれば見つかる）。
+		// ⑦ 作ったもので改めて組を探す（ここまでで測れる形になっていれば見つかる）。
 		std::vector<TXString> typesNow = CollectLevelTypes();
 		if (FindStoryPair(stories, typesNow, outLower, outUpper, outLevelType))
 		{
-			probe.log("P2. ⑥ **用意できた**: 下=\"" + Str(outLower.name) + "\"(" +
+			probe.log("P2. ⑦ **用意できた**: 下=\"" + Str(outLower.name) + "\"(" +
 					  Num(outLower.elevation) + ") 上=\"" + Str(outUpper.name) + "\"(" +
 					  Num(outUpper.elevation) + ") レベル種別=\"" + Str(outLevelType) + "\"");
 			return true;
 		}
-		probe.log("P2. ⑥ **組にならなかった**（階は増えたが、隣り合う 2 階が同じレベル種別を"
+		probe.log("P2. ⑦ **組にならなかった**（階は増えたが、隣り合う 2 階が同じレベル種別を"
 				  "両方持つ形にできていない）。ここで止まり。");
 		return false;
 	}
