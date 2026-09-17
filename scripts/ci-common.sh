@@ -255,6 +255,58 @@ api_message() {
 }
 
 # ---------------------------------------------------------------------------
+# いま open な PR
+# ---------------------------------------------------------------------------
+#
+# **「いま open な PR は何番か」は、プローブのリリースに何が入るべきかを決める値**で
+# ある（本体は群に分かれていて、プローブを持つ open な PR ごとに 1 本入る。
+# scripts/gather-probes.sh）。この問いを立てる場所が 3 つある——push のビルド
+# （.github/workflows/probe-build.yml）・自動公開（probe-auto-update.sh）・点検
+# （probe-release-guard.sh）。**答えがばらつくと、リリースの中身が引き金によって
+# 変わる**（issue #79: push のビルドだけが「open な PR は無い」ものとして走り、
+# open な PR の群を丸ごと落としていた）ので、取り方はここ 1 か所に置く。
+#
+# open_prs: 番号を**昇順・カンマ区切りの 1 行**で stdout へ出す（1 件も無ければ空行）。
+# 取得できなければ理由を stderr へ出して 1 を返す——**「取れなかった」を「1 件も
+# 無い」と読ませない**（読み違えると、open な PR の群を落としたビルドを公開して
+# しまう）。止まるか別の値で続けるかは、呼び出し側が決める。
+OPEN_PRS_PER_PAGE="${CI_OPEN_PRS_PER_PAGE:-100}"
+# 1 ページで足りるのが普通だが、**黙って切り捨てない**ために頁送りする。上限に達しても
+# まだ続きがあるなら、切り捨てずに失敗させる（数を取りこぼしたまま公開するより安い）。
+OPEN_PRS_MAX_PAGES="${CI_OPEN_PRS_MAX_PAGES:-10}"
+
+open_prs() {
+	local page=1 body code count all=""
+	body="$(workfile)"
+	while :; do
+		code="$(api_json "$VW_API/pulls?state=open&per_page=$OPEN_PRS_PER_PAGE&page=$page" "$body")"
+		if [ "$code" != "200" ]; then
+			echo "$CI_TOOL: open な PR の一覧を取得できませんでした（HTTP $code, page=$page）: $(api_message "$body")" >&2
+			rm -f "$body"
+			return 1
+		fi
+		count="$(jq -r 'if type == "array" then length else -1 end' "$body" 2>/dev/null)"
+		count="${count:--1}"
+		if [ "$count" -lt 0 ]; then
+			echo "$CI_TOOL: open な PR の一覧を読めませんでした（配列ではありません, page=$page）" >&2
+			rm -f "$body"
+			return 1
+		fi
+		all="$all $(jq -r '[.[].number] | map(tostring) | join(" ")' "$body" 2>/dev/null)"
+		[ "$count" -lt "$OPEN_PRS_PER_PAGE" ] && break
+		page=$((page + 1))
+		if [ "$page" -gt "$OPEN_PRS_MAX_PAGES" ]; then
+			echo "$CI_TOOL: open な PR が多すぎます（${OPEN_PRS_MAX_PAGES} 頁を超えました）。切り捨てないために失敗させます" >&2
+			rm -f "$body"
+			return 1
+		fi
+	done
+	rm -f "$body"
+	printf '%s' "$all" | tr ' ' '\n' | sed '/^$/d' | sort -n -u | tr '\n' ',' | sed 's/,$//'
+	echo
+}
+
+# ---------------------------------------------------------------------------
 # ポーリング（唯一の待機ループ）
 # ---------------------------------------------------------------------------
 #
