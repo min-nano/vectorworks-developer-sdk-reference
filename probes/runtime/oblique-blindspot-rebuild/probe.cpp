@@ -136,12 +136,13 @@ namespace
 	// `LayerElevation` のバウンドを 1 本書く（#61 と同じ書き方）。
 	bool WriteLayerElevationBound(MCObjectHandle pio, short id, double offset)
 	{
-		SStoryObjectData data;
-		data.fBound = eStoryObjectBound_LayerElevation;
+		// **型は `MockUp` 名前空間にある**（`ISDK.h`）。修飾しないと構文チェックが通らない。
+		MockUp::SStoryObjectData data;
+		data.fBound = MockUp::eStoryObjectBound_LayerElevation;
 		data.fBoundStory = 0;
 		data.fLayerLevelType = "";
 		data.fOffset = offset;
-		return gSDK->SetObjectStoryBound(pio, static_cast<TObjectBoundID>(id), data);
+		return gSDK->SetObjectStoryBound(pio, static_cast<MockUp::TObjectBoundID>(id), data);
 	}
 
 	// 1 ケース。**ResetObject を 2 回**（①潰す → ②バウンドから作り直させる）。
@@ -206,8 +207,8 @@ namespace
 		const bool wrote0 = WriteLayerElevationBound(pio, 0, kBoundOffsetLow);
 		const bool wrote1 = WriteLayerElevationBound(pio, 1, kBoundOffsetHigh);
 		obs.wroteBounds = wrote0 && wrote1;
-		obs.boundLow = gSDK->GetObjectBoundElevation(pio, static_cast<TObjectBoundID>(0));
-		obs.boundHigh = gSDK->GetObjectBoundElevation(pio, static_cast<TObjectBoundID>(1));
+		obs.boundLow = gSDK->GetObjectBoundElevation(pio, static_cast<MockUp::TObjectBoundID>(0));
+		obs.boundHigh = gSDK->GetObjectBoundElevation(pio, static_cast<MockUp::TObjectBoundID>(1));
 
 		gSDK->ResetObject(pio);
 
