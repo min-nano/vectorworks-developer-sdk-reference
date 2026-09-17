@@ -41,7 +41,7 @@
 | [Walls](Walls.md) | 壁の生成・高さ・結合（`JoinWalls`）・キャップ・2D 表現の更新 |
 | [Slabs and Extrudes](Slabs%20and%20Extrudes.md) | スラブの構成層・`VWExtrudeObj` の平行移動・`ModifySlab` の不具合（打ち切り） |
 | [Roof Faces](Roof%20Faces.md) | 屋根面オブジェクトの正しい作り方（コンストラクタは使えない・オブジェクト変数で与える） |
-| [Layers and Stories](Layers%20and%20Stories.md) | デザインレイヤの重ね順（高さの降順）・並べ替えの唯一の手段・重ね順上書きは書けない（打ち切り） |
+| [Layers and Stories](Layers%20and%20Stories.md) | デザインレイヤの重ね順（高さの降順）・並べ替えの唯一の手段・**SDK だけでは階を用意できない**（打ち切り）・重ね順上書きは書けない（打ち切り） |
 | [Viewports](Viewports.md) | ビューポートのクラス表示・2D/平面への作り直し・断面ビューポートの新規作成と範囲 |
 | [Sheet Layers and Page Layout](Sheet%20Layers%20and%20Page%20Layout.md) | 用紙と印刷可能領域の読み取り（単位の癖）・用紙の位置は読めない・置いた後に測って動かす作法 |
 | [Data Tags](Data%20Tags.md) | データタグのタグレイアウト・式・関連付け・配置の落とし穴 |
