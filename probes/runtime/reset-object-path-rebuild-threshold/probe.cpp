@@ -40,12 +40,26 @@
 //	  * 温存された値は厳密には入力と一致せず、**L + H·L²**（H＝作り直したときの長さ）に
 //	    なる。例: 1e-7 → 1.0002955562113858e-07（差 2.959e-11 = 2959 × (1e-7)²）
 //
-//	**残っていた曖昧さ 2 つを、この版で潰す。**
-//	  1. 閾値は 1e-7 と 1e-5 の間のどこか → A-05b/05c/05d（3e-7 / 1e-6 / 3e-6）で挟む。
-//	  2. E 群（差し替え）は 0・1 ULP・100 の**すべてが温存**された。「差し替え経路は判定の
-//	     外」なのか「作り直しは最初の ResetObject だけ」なのかが分かれていない
-//	     → **E-3**（差し替え前に ResetObject を通さない）と **F**（パスに触らずバウンドだけ
-//	     書き換えて 2 度目の ResetObject）の対で分ける。
+//	## 2 回目の実測（新規の空図面。LayerElevation モード。解決Z 2500 / 5500）で出たもの
+//
+//	  * **閾値はほぼ厳密に 1e-7**（図面の単位）。温存された最大が 9.9999851954635233e-08、
+//	    作り直された最小が 1.0011717677116394e-07（C-2）——**1e-7 を 1.2e-10 の幅で挟んだ**。
+//	  * 基準Zを 2500 / 3,500,000 に変えても同じ位置で切り替わる（**絶対値**。1 回目の
+//	    572 / 1,572,000 とも一致）。
+//	  * **見ているのはパスの長さ**。D-3（dx=1e-7 / dz≒1e-7。Z の差だけなら閾値の下、
+//	    長さ 1.41e-7 なら上）が**作り直された**ので、Z の差ではなく 3 次元の長さで判定している。
+//	  * **F: パスに触らずバウンドだけ書き換えて 2 度目の ResetObject → 新しい解決Zで
+//	    作り直された**（3000 → 2000）。つまり「作り直しは最初の 1 回だけ」ではない
+//	    ——E-0/E-1/E-2 を温存させているのは**差し替え経路そのもの**である。
+//
+//	**残っている穴は 1 つだけ。** E-3（ResetObject を通す前に 0 長へ差し替える）は
+//	作り直されたが、長さが **2900**（解決済みの 3000 ではなく、3000 − 作るときに渡した 100）
+//	になり、端点の絶対Zも 5400（バウンドの解決Z 5500 ではない）だった。この 100 のずれの
+//	出どころを、この版で潰す:
+//	  * E 群の各段階で**バウンドのレコードと解決Zを出す**（差し替えが黙ってバウンドを
+//	    書き換えているなら、そこに出る）。
+//	  * **E-4**（通す前に 100 へ差し替える）と **E-5**（作るときの長さを 500 にして 0 長へ
+//	    差し替える）で、ずれが「作るときに渡した長さ」に比例するかを見る。
 //
 //	## 測り方の方針
 //
@@ -183,6 +197,43 @@ namespace
 				  Num(p1.x) + ", " + Num(p1.y) + ", " + Num(p1.z) + ")");
 		probe.log(prefix + " **z1-z0=" + NumBoth(p1.z - p0.z) + "** 挿入点Z=" + Num(pos.z) +
 				  " 端点の絶対Z: [0]=" + Num(pos.z + p0.z) + " [1]=" + Num(pos.z + p1.z));
+	}
+
+	const char* BoundKindName(MockUp::EStoryObjectBound bound)
+	{
+		switch (bound)
+		{
+		case MockUp::eStoryObjectBound_LayerElevation:
+			return "LayerElevation";
+		case MockUp::eStoryObjectBound_LayerWallHeight:
+			return "LayerWallHeight";
+		case MockUp::eStoryObjectBound_Story:
+			return "Story";
+		}
+		return "?";
+	}
+
+	// **バウンドを丸ごと出す。** 差し替えや作り直しが黙ってレコードを書き換えていないかは、
+	// 解決Zだけでなく `fOffset` まで並べないと分からない。
+	void DumpBounds(vwprobe::Report& probe, const std::string& prefix, MCObjectHandle pio)
+	{
+		const size_t count = gSDK->GetObjectStoryBoundsCount(pio);
+		std::string line = prefix + " バウンド 件数=" + std::to_string(count);
+		for (size_t i = 0; i < count; ++i)
+		{
+			const MockUp::TObjectBoundID id = gSDK->GetObjectStoryBoundsAt(pio, i);
+			MockUp::SStoryObjectData data;
+			const bool got = gSDK->GetObjectStoryBound(pio, id, data);
+			line += " ／ ID=" + std::to_string(static_cast<long long>(id));
+			if (got)
+				line += " {" + std::string(BoundKindName(data.fBound)) +
+						", 階=" + std::to_string(static_cast<int>(data.fBoundStory)) + ", \"" +
+						Str(data.fLayerLevelType) + "\", offset=" + Num(data.fOffset) + "}";
+			else
+				line += " GetObjectStoryBound=false";
+			line += " 解決Z=" + Num(gSDK->GetObjectBoundElevation(pio, id));
+		}
+		probe.log(line);
 	}
 
 	MCObjectHandle MakeStraightPath(WorldPt3 from, WorldPt3 to)
@@ -545,24 +596,38 @@ VW_PROBE("reset-object-path-rebuild-threshold", "ResetObject がパスを作り�
 			int ulps;
 			double absolute;
 			bool resetBeforeReplace; // 差し替える前に一度 ResetObject を通すか
+			double createLength;	 // 作るときに渡すパスの長さ
 			const char* why;
 		};
-		// 1 回目の実測では E-0/E-1/E-2 が**すべて温存**された（100 へ差し替えても 2959 へ
-		// 作り直されなかった）。これには読み方が 2 つある:
-		//   (a) 差し替え経路は判定の外にある（呼び出し側のパスとして温存される）
-		//   (b) 作り直しは**最初の ResetObject のときだけ**で、2 回目以降は何もしない
-		// E-3 は「差し替える前に ResetObject を通さない」形——(b) なら作り直され、
-		// (a) なら温存される。**ここで 2 つが分かれる。**
+		// 2 回目までの実測で分かったこと:
+		//   * E-0/E-1/E-2（一度 ResetObject を通してから差し替える）は**すべて温存**。
+		//     100 へ差し替えても解決済みバウンドの長さへは戻らない。
+		//   * F（パスに触らずバウンドだけ書き換える）は**作り直された**。
+		//     → 「作り直しは最初の 1 回だけ」ではない。温存させているのは**差し替え経路**。
+		//   * ところが E-3（ResetObject を通す前に 0 長へ差し替える）は作り直されたが、
+		//     長さが **2900**（解決済みの 3000 ではなく、3000 − 作るときに渡した 100）に
+		//     なった。端点の絶対Zも 5400（バウンドの解決Z 5500 ではない）。
+		// **この 100 のずれがどこから来るのかが、いま唯一残っている穴**なので、ここで潰す:
+		//   * 各段階で**バウンドのレコードと解決Zを出す**（差し替えが黙ってバウンドを
+		//     書き換えているなら、ここに出る）。
+		//   * E-4 は「作るときの長さ 100 のまま、まともなパス（100）へ差し替える」。
+		//   * E-5 は「作るときの長さを 500 にして 0 長へ差し替える」——ずれが
+		//     「作るときに渡した長さ」に比例するなら、3000 − 500 = 2500 になるはず。
 		const Replacement replacements[] = {
-			{"E-0 差し替えるパスの Z の差 = 0（厳密に退化）", 0, 0, true,
+			{"E-0 差し替えるパスの Z の差 = 0（厳密に退化）", 0, 0, true, 100,
 			 "作り直されれば、差し替え経路にも「退化なら作り直す」が掛かっている"},
-			{"E-1 差し替えるパスの Z の差 = 1 ULP", 1, 0, true,
+			{"E-1 差し替えるパスの Z の差 = 1 ULP", 1, 0, true, 100,
 			 "A-01 と同じ結果なら、判定は経路に依らず「いまのパスの形」だけで決まる"},
-			{"E-2 差し替えるパスの Z の差 = 100", 0, 100, true,
+			{"E-2 差し替えるパスの Z の差 = 100", 0, 100, true, 100,
 			 "対照。まともなパスへ差し替えたあとの ResetObject は何をするか"},
-			{"E-3 ResetObject を通す前に 0 長へ差し替える", 0, 0, false,
-			 "作り直されれば「差し替え経路も判定の中」＝温存は 2 回目以降だからと分かる。"
-			 "温存されれば「差し替え経路そのものが判定の外」"},
+			{"E-3 ResetObject を通す前に 0 長へ差し替える（作るときは 100）", 0, 0, false, 100,
+			 "2 回目は 2900（＝3000 − 100）になった。バウンドのレコードを各段階で出して、"
+			 "この 100 のずれの出どころを見る"},
+			{"E-4 ResetObject を通す前に 100 へ差し替える（作るときも 100）", 0, 100, false, 100,
+			 "差し替えたパスが閾値より長いとき、最初の ResetObject は何を書くか"},
+			{"E-5 ResetObject を通す前に 0 長へ差し替える（作るときは 500）", 0, 0, false, 500,
+			 "ずれが「作るときに渡した長さ」に比例するなら 3000 − 500 になる。"
+			 "比例しないなら別の出どころ"},
 		};
 		for (size_t i = 0; i < sizeof(replacements) / sizeof(replacements[0]); ++i)
 		{
@@ -570,8 +635,9 @@ VW_PROBE("reset-object-path-rebuild-threshold", "ResetObject がパスを作り�
 			probe.log(std::string("--- ") + replacement.label + " ---");
 			probe.log(std::string("  ねらい: ") + replacement.why);
 
-			MCObjectHandle path =
-				MakeStraightPath(WorldPt3(0, 0, pathBase), WorldPt3(0, 0, pathBase + 100));
+			probe.log("  作るときに渡すパスの長さ=" + Num(replacement.createLength));
+			MCObjectHandle path = MakeStraightPath(
+				WorldPt3(0, 0, pathBase), WorldPt3(0, 0, pathBase + replacement.createLength));
 			MCObjectHandle pio =
 				path != nullptr ? gSDK->CreateCustomObjectPath("StructuralMember", path, nullptr)
 								: nullptr;
@@ -589,6 +655,7 @@ VW_PROBE("reset-object-path-rebuild-threshold", "ResetObject がパスを作り�
 			}
 			else
 				LogPath(probe, "  ③ ResetObject は通さない（作ってバウンドを書いただけ）:", pio);
+			DumpBounds(probe, "  ③", pio);
 			const double beforeReplace = PathDeltaZ(pio);
 
 			// 差し替えるのは局所座標（挿入点は動かさない）。ULP 指定のときは、事故と同じ
@@ -606,10 +673,12 @@ VW_PROBE("reset-object-path-rebuild-threshold", "ResetObject がパスを作り�
 			probe.log(std::string("  SetCustomObjectPath=") + (replaced ? "true" : "false") +
 					  " 渡した局所座標の Z の差=" + NumBoth(deltaZ));
 			LogPath(probe, "  ④ 差し替えた直後:", pio);
+			DumpBounds(probe, "  ④", pio);
 			const double afterReplace = PathDeltaZ(pio);
 
 			gSDK->ResetObject(pio);
 			LogPath(probe, "  ⑤ もう一度 ResetObject:", pio);
+			DumpBounds(probe, "  ⑤", pio);
 
 			Outcome outcome;
 			outcome.label = replacement.label;
@@ -621,14 +690,19 @@ VW_PROBE("reset-object-path-rebuild-threshold", "ResetObject がパスを作り�
 			if (after != after)
 				outcome.verdict = "パスが読めない";
 			else if (std::fabs(std::fabs(after) - std::fabs(expectedHeight)) <= 1e-6)
-				outcome.verdict = "作り直された";
+				outcome.verdict = "作り直された（解決済みバウンドの長さ）";
 			else if (after == outcome.createdDeltaZ)
 				outcome.verdict = "**温存された（作り直されていない）**";
+			else if (std::fabs(std::fabs(after) -
+							   std::fabs(expectedHeight - replacement.createLength)) <= 1e-6)
+				outcome.verdict = "**作り直されたが「解決済みの長さ − 作るときに渡した長さ」**";
 			else if (after == 0)
 				outcome.verdict = "0 へ潰れた";
 			else
 				outcome.verdict = "そのどれでもない";
-			probe.log("  → 判定: " + outcome.verdict);
+			probe.log("  → 判定: " + outcome.verdict + "（解決済みの長さ=" + Num(expectedHeight) +
+					  " / 解決済み − 作るときの長さ=" +
+					  Num(expectedHeight - replacement.createLength) + "）");
 			outcomes.push_back(outcome);
 		}
 	}
