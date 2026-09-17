@@ -20,7 +20,7 @@ Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https
 | `plugin/` | **実機確認プラグイン**（VwSdkProbes）。メニュー 1 つから、複数の PR の調査コードを同居させて実機で走らせる（[説明](plugin/README.md)） | 仕組みを変えるときだけ |
 | `probes/` | 調査用のコンパイルスニペット（[規約](probes/README.md)） | 調査中だけ。役目を終えたら消す |
 | `probes/runtime/` | **実機で走らせる調査（プローブ）**。1 調査 1 ディレクトリ（[規約](probes/runtime/README.md)） | 調査中だけ。役目を終えたら消す |
-| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`）・プローブの自動公開（`probe-auto-update`）・issue を webhook へ流す（`issue-webhook`） | — |
+| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`）・プローブの自動公開（`probe-auto-update`）・公開済みリリースの点検（`probe-release-guard`）・issue を webhook へ流す（`issue-webhook`） | — |
 | `CLAUDE.md`（本ファイル） | 作業時の規約。調査のフロー・PR とマージ・CI の待ち方 | — |
 
 ## 調査のフロー
@@ -173,6 +173,12 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
      ので、**公開されているリリースに関わる直しをしたら、走ったかを確かめる**（走らない
      なら手でディスパッチする。`scripts/probe-release-notes.sh` を `paths` に足したのは
      この取りこぼしを踏んだため）。
+   - **プローブを消してマージしたときは、`paths` は原理的に引けない**（[#76](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/76)）。
+     調査に使ったプローブは**マージする前に消す**（上記「調査のフロー」4）ので、足して
+     消した差分は squash merge で相殺され、**main への差分に `probes/runtime/**` が
+     1 行も現れない**。ここは `probe-release-guard.yml`（**PR が閉じたら**リリースと
+     open な PR を突き合わせ、ずれていたら作り直す）が受け持つので、**手でディスパッチ
+     しなくてよい**。確かめたいときはリリース本文の `probes=` を見る。
    - 手でディスパッチするのは、**走らなかったとき**と、**まだ open な PR のプローブを
      同居させたいとき**——"Probe plug-in" を `workflow_dispatch` で叩き、後者では入力 `prs` に
      番号を並べる（起動は GitHub MCP の `actions_run_trigger`。下記「CI デバッグ」と同じ手で、
@@ -219,6 +225,11 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
   - 転がりタグ `probes` は**最後に公開したビルド**を指す。プローブを持つ PR が複数
     動いていると、後から push した方で置き換わる（何が入っているかはリリースノートと
     ピッカーの出所欄に出る）。
+  - **PR が閉じたら `probe-release-guard.yml` が点検する。** リリースの隠しメタデータ
+    `inputs=` と「いま open な PR」を突き合わせ、ずれていれば "Probe plug-in" を
+    叩き直す。**プローブを消してマージしても、古いプローブがリリースに残り続けない**
+    （[#76](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/76)
+    で 3 回残った）。ずれていなければ 1 分ほどで緑になる。
 - **PR では公開せず、ビルドが通るかだけを見る**（プラグイン本体——`plugin/src/**` /
   `plugin/resources/**` / `plugin/scripts/**` / `plugin/CMakeLists.txt`——を触った PR で
   自動的に走る）。
@@ -267,6 +278,8 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
   いま確かめたいものと見分けが付かない。`probes/runtime/` が README だけになるのは
   正常な状態で、そのときのピッカーは入れ替えだけが選べる。雛形は
   [`probes/runtime/README.md`](probes/runtime/README.md) にある。
+  **消すのは PR の中でよい**——マージで公開が追い付かなくなるが、それは
+  `probe-release-guard.yml` が PR の close で受ける（上記）。
 - **プローブは undo イベントを自分では開かない**（[Findings「Undo」](Findings/Undo.md) の
   半端な記録を避けるため）。図面が戻らない前提で、新規の空図面で走らせる。
 

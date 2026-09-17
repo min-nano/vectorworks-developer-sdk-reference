@@ -1,0 +1,124 @@
+name: Probe release guard
+
+# ---------------------------------------------------------------------------
+# **公開されている転がりリリース（タグ `probes`）が、いま open な PR の顔ぶれと
+# ずれていないか**を PR が閉じるたびに点検し、ずれていたら作り直す。
+#
+# なぜ必要か（issue #76 で開いた穴）
+# ----------------------------------
+# リリースに載る本体は**群**に分かれている——main のプローブが 1 本、**その時点で
+# open な PR のプローブが PR ごとに 1 本**。つまり**「リリースに何が入っているべきか」は
+# main のツリーだけでは決まらない**。open な PR の集合という、**コミットを 1 つも
+# 作らずに変わる**ものが効いている。
+#
+# ところが作り直しの引き金は 2 つとも「ツリーが変わったこと」だった:
+#
+#   probe-build.yml の push (main)  main で `paths`（`probes/runtime/**` ほか）が動いたとき
+#   probe-auto-update.yml           PR で `probes/runtime/**` が動いたとき
+#
+# **プローブを持つ PR がマージされる瞬間に、この 2 つはどちらも引かない。** 規約
+# （CLAUDE.md「調査のフロー」4）は「調査に使ったプローブは**マージする前に消す**」で、
+# 足して消した差分は squash merge で相殺されるので、main への差分に `probes/runtime/**`
+# が 1 行も現れないからである。結果、**リリースは「消したはずのプローブを含むビルド」を
+# 指したまま**になる——#69 / #72 / #74 の 3 回とも実際にそうなった。
+#
+# 消したプローブがピッカーに並び続けると、**いま確かめたいものと見分けが付かなくなる**
+# （`probes/runtime/README.md`「常駐の煙試験は置かない」と同じ害）。しかも人は
+# 「新しいビルドに入れ替えた」つもりでいるので、**気付きにくい割に影響が実害側**である。
+#
+# そこで引き金を「ツリーが変わったこと」ではなく「**PR が閉じたこと**」に置く。
+# 中身は scripts/probe-release-guard.sh（ここは薄く保つ。他のワークフローと同じ方針）。
+#
+# 何が起きるか
+# ------------
+#   1. main の "Probe plug-in" が走っていれば終わるまで待つ（走行中のビルドが
+#      これから公開するものを、古いリリースとして読まないため）。
+#   2. リリースの隠しメタデータ `inputs=` の `pr=` の並びと、
+#      `scripts/gather-probes.sh --prs <open な PR 全部>` がいま出す `pr=` の並びを比べる。
+#   3. 一致していれば何もしない（**ふつうはここで終わる**——プローブを持たない PR の
+#      マージでは両方とも空なので 1 分ほどで緑になる）。
+#   4. 食い違っていれば "Probe plug-in" を dispatch し、**完了まで待って**この run の
+#      成否にする。作り直しが落ちたら**赤く**する——静かに古いままになるのが、この
+#      仕組みが防ぎたかったことそのものなので。
+#
+# NOTE: **`main=` は比べない。** main の sha は Findings の 1 行直しでも動くので、
+# 比べるとマージのたびに mac / Windows の実ビルドが走る。main のツリーの次元は
+# probe-build.yml の push `paths` が正しく見ている（#76 で確かめた——止まっていたのでは
+# なく、引っ掛かるものが 1 つも無かった）。ここが受け持つのは**その `paths` に原理的に
+# 写らない次元**＝ PR の顔ぶれだけである。
+#
+# NOTE: fork からの PR では GITHUB_TOKEN が読み取り専用になる（GitHub の仕様）ので
+# dispatch できない。そのときはこのジョブを走らせない（下の if）。
+# ---------------------------------------------------------------------------
+
+run-name: >-
+  probe release guard (${{ github.event_name == 'pull_request'
+    && format('PR {0} closed', github.event.pull_request.number)
+    || github.event_name }})
+
+on:
+  pull_request:
+    # **paths を付けない。** 付けたら #76 と同じ穴が開く——プローブを消してから
+    # マージされた PR の差分には `probes/runtime/**` が 1 行も無いので、どんな
+    # `paths` を並べても引っ掛からない。ここは「ツリーに何があるか」ではなく
+    # 「PR が閉じたか」で引く。
+    types: [closed]
+  # 取りこぼしの受け皿（毎週火曜 00:00 UTC ＝ 09:00 JST）。上のイベントは PR が
+  # 閉じた瞬間だけを見るので、その run 自体が落ちた・当時 API が取れなかった、を
+  # 拾えない。**週 1 回だけ改めて突き合わせる**（ずれていなければ 1 分で終わる）。
+  schedule:
+    - cron: "0 0 * * 2"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "ずれを報告するだけで、ビルドは起動しない"
+        required: false
+        default: false
+        type: boolean
+
+# 点検はリポジトリ全体について 1 つの問い（「リリースは open な PR と合っているか」）
+# なので、同時に 2 本走らせる意味が無い。**後から来たほうが正しい**（PR が 1 つ余計に
+# 閉じたぶん新しい）ので、走っている古い点検は打ち切ってよい。打ち切っても、それが
+# 起動したビルドは止まらずに公開まで進む。
+concurrency:
+  group: probe-release-guard
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # main の probe-build.yml を dispatch する。
+  actions: write
+  # open な PR の一覧を引く。
+  pull-requests: read
+
+jobs:
+  guard:
+    # fork の PR では権限が無いので走らせない（上の NOTE）。
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    # 走行中のビルドの待ちと、作り直したビルドの待ち（それぞれ既定 70 分）＋余裕。
+    # ここは最後の歯止めで、通常はスクリプトが自分で締め切る。
+    timeout-minutes: 160
+
+    steps:
+      # **main の版を使う。** 判断に使うスクリプトを PR のツリーからすり替えられない
+      # ようにするためと、マージ済みの PR では `refs/pull/<N>/merge` が消えていること
+      # があるため（既定のチェックアウトはそこを見る）。
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - name: Check the published release against the open PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          scripts/probe-release-guard.sh ${args[@]+"${args[@]}"}
