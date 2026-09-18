@@ -1133,3 +1133,39 @@ API が無い。したがって参照先の図形を動かした瞬間には PIO
 メッセージ（`IObjUpdateSupport::OnState`）で、外からこれを送る API は `ISDK` に無い。
 外からパラメータを書いた後に絵を変えたいなら `ResetObject` を呼ぶ（PIO の欄は
 作り直しのときに読まれる。[Investigation Techniques](Investigation%20Techniques.md)）。
+
+## リセット（再生成）をまとめられるか
+
+構造材を 200〜400 本置く取り込みで、1 本ごとの `ResetObject` が効いて 1 本 93〜130ms
+掛かっている（[issue #81](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/81)）。
+「置いている間だけ再生成を止めておき、最後に 1 度だけ走らせる」に組み替えられるか。
+
+### 再生成・再描画を止めておく口は SDK に無い【ヘッダ根拠】
+
+**VW 2026 SDK のヘッダと同梱の実装ソースを全文検索した結果、「止める」「遅らせる」口は
+1 つも無い。** 以下は探した先と、見つかったものの正体（**同じ名前をもう一度探さないため**に
+残す）:
+
+| 探したもの | 結果 |
+| --- | --- |
+| `ISDK.h`（3902 行）の `Batch` | `ICustomBatchConvertParams` / `CustomBatchConvert`（図形の一括変換）と `DoBatchPrintOrExport`（一括印刷・書き出し）だけ。再生成とは無関係 |
+| SDK ヘッダ全体（`Include/**/*.h`）の `Defer` | **1 件も無い** |
+| `Suspend` / `Freeze` / `DisableDrawing` / `SuspendRedraw` / `LockDrawing` / `BulkUpdate` | 無い（`EnableDrawingWorksheetPalette` はワークシートのパレット表示） |
+| `ISDK.h` の `Redraw` | `RedrawRect(const WorldRect&)` だけ——**描き直しを起こす**口で、止める口ではない。VectorScript 側も `RedrawSelection` のみ |
+| `SetPref` 相当（`SetProgramVariable` / `GetProgramVariable`）のセレクタ | `Regen` / `Redraw` / `Draw` / `Update` を名に持つセレクタはヘッダに 1 つも定義されていない |
+
+つまり **「まとめて 1 度だけ走らせる」を VW 側の機能で実現する道は無い**。
+呼び出し側が「`ResetObject` を呼ぶ回数と順序」を自分で決めるしかない。
+
+### ただし `CreateCustomObjectPath` だけは再生成を省ける（`doRegen`）【ヘッダ根拠】
+
+```cpp
+virtual MCObjectHandle CreateCustomObjectPath(
+    const TXString& name, MCObjectHandle pathHand = NULL,
+    MCObjectHandle profileGroupHand = NULL, bool doRegen = true) = 0;
+```
+
+**SDK 全体でこの引数を持つのはこの 1 本だけ**（`sdk-grep` の `doRegen|NoRegen|bRegen`）。
+既定が `true` なので、**何も指定しなければ「作った時点で 1 回」＋「`ResetObject` で 1 回」の
+計 2 回作り直している**ことになる。どちらにせよバウンドから作り直させるなら、
+作成時の 1 回は要らない。
