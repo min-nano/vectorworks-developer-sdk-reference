@@ -320,6 +320,46 @@ VW_PROBE("pio-param-table", "PIO のパラメータ表がインスタンス間�
 				   ? "4 本とも同一のフォーマットを共有している"
 				   : "**フォーマットが本ごとに違う**"));
 
+	// ローカライズ名の**出どころ**を切り分ける。GetParamLocalizedName の非 provider 経路は
+	// 「gSDK->GetLocalizedPluginParameter(種別名, universal 名)」を引くだけである
+	// （VWParametricObj.cpp）。両者が全索引で一致するなら、ローカライズ名は
+	// **「種別名 × universal 名」だけで決まる**——インスタンスにも文書にも依らない、と
+	// 言い切れる（依るのはアプリ側のローカライズ資源＝UI の言語だけ）。
+	{
+		size_t agreed = 0;
+		size_t differed = 0;
+		size_t notFound = 0;
+		std::string firstDifference;
+		for (size_t index = 0; index < tableDefault.universalNames.size(); ++index)
+		{
+			TXString fromResource;
+			const Boolean found = gSDK->GetLocalizedPluginParameter(
+				kProbeTypeName, TXString(tableDefault.universalNames[index].c_str()), fromResource);
+			if (!found)
+			{
+				++notFound;
+				continue;
+			}
+			if (Str(fromResource) == tableDefault.localizedNames[index])
+			{
+				++agreed;
+			}
+			else
+			{
+				++differed;
+				if (firstDifference.empty())
+					firstDifference = " 最初の食い違い [" + std::to_string(index) + "] " +
+									  tableDefault.universalNames[index] +
+									  ": 表=" + tableDefault.localizedNames[index] +
+									  " 資源=" + Str(fromResource);
+			}
+		}
+		probe.log("[G1] GetParamLocalizedName と GetLocalizedPluginParameter(種別名, univ 名) の"
+				  "突き合わせ: 一致=" +
+				  std::to_string(agreed) + " 相違=" + std::to_string(differed) +
+				  " 資源に無い=" + std::to_string(notFound) + firstDifference);
+	}
+
 	// -------------------------------------------------------------- G2
 	// **コストは図面を書き換える前に測る。** 落ちる目のある操作の後だと、測れずに終わる。
 	probe.log("[G2] 1 呼び出しのコストを測る（warm）");
