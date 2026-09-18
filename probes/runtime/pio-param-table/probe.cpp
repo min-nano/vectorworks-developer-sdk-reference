@@ -16,15 +16,16 @@
 //	    イベントシンクまで辿り、あれば provider->GetParamNameAt(index)、無ければ
 //	    format 名と universal 名で GetLocalizedPluginParameter を引く。
 //	    **引数はどちらも索引だけ**なので、インスタンスに依らないはず。
-//	この「はず」を実機で潰すのがこのプローブ。確かめるのは次の 5 つ。
+//	この「はず」を実機で潰すのがこのプローブ。確かめるのは次の 6 つ。
 //
-//	  G2  同じ種別の 4 本（既定 / 値違い / ポップアップ違い / 後でスタイル）で、
-//	      表（件数・universal 名・ローカライズ名の並び）が一致するか。
-//	      レコードフォーマットのハンドルが同一かどうかも見る（同一なら構造的に不変）。
-//	  G3  値を書き換えて ResetObject した後、その**同じインスタンス**の表が変わるか。
-//	  G4  別の文書で作った同じ種別の表が一致するか（キャッシュを文書で捨てるべきか）。
-//	  G5  1 呼び出しのコスト（cold / warm、universal 名 vs ローカライズ名、
-//	      フルスキャン 1 回ぶん）。キャッシュの効き目の見積もりに使う。
+//	  G1  作った直後の同じ種別 4 本で、表（件数・universal 名・ローカライズ名の並び）が
+//	      一致するか。レコードフォーマットのハンドルが同一かどうかも見る。
+//	      ついでに A の表を全文ダンプする（次に読む人がそのまま使える）。
+//	  G2  1 呼び出しのコスト（cold は G1 の先頭で、warm はここで）。universal 名 /
+//	      ローカライズ名 / フルスキャン 1 回ぶん。キャッシュの効き目の見積もりに使う。
+//	  G3  値を変えた本・ポップアップを倒した本の表が、既定の本と一致するか。
+//	  G4  同じインスタンスを書き換えて ResetObject した前後で表が変わるか。
+//	  G5  別の文書で作った同じ種別の表が一致するか（キャッシュを文書で捨てるべきか）。
 //	  G6  スタイルを当てた後の表が変わるか。**この節だけダイアログが出るかもしれない**
 //	      ので最後に置く（出たら閉じてよい。それまでの行はログに残っている）。
 //
@@ -249,7 +250,10 @@ VW_PROBE("pio-param-table", "PIO のパラメータ表がインスタンス間�
 		 "返す表を突き合わせる。1 呼び出しのコストも測る")
 {
 	// -------------------------------------------------------------- G1
-	probe.log("[G1] 種別を定義してインスタンスを作る");
+	// **順序について。** 図面を触る（値を書き換える・ResetObject する・文書を開く）ほど
+	// 落ちる目が増えるので、**落ちても惜しくない順**に並べてある——先に「A の表の全文」と
+	// 「コスト」を採り切り、その後で書き換え・別文書・スタイルへ進む。
+	probe.log("[G1] 種別を定義してインスタンスを 4 本作る");
 	// 生成時に「オブジェクトの設定」ダイアログを出さない（Findings「生成時に…」）。
 	gSDK->DefineCustomObject(kProbeTypeName, kCustomObjectPrefNever);
 
@@ -259,7 +263,6 @@ VW_PROBE("pio-param-table", "PIO のパラメータ表がインスタンス間�
 		probe.fail("CreateCustomObjectPath が nil を返した（種別 StructuralMember を作れない）");
 		return;
 	}
-	probe.log("A（既定）= " + HandleText(memberDefault));
 
 	// **表に触る前に**、いちばん最初の 1 呼び出しのコストを測る（cold）。
 	{
@@ -294,59 +297,32 @@ VW_PROBE("pio-param-table", "PIO のパラメータ表がインスタンス間�
 		probe.fail("2 本目以降の CreateCustomObjectPath が nil を返した");
 		return;
 	}
-	probe.log("B（値違い）= " + HandleText(memberValues) + " / C（ポップアップ違い）= " +
-			  HandleText(memberPopups) + " / D（後でスタイル）= " + HandleText(memberStyled));
+	probe.log("[G1] A（既定）= " + HandleText(memberDefault) + " B（値違い）= " +
+			  HandleText(memberValues) + " C（ポップアップ違い）= " + HandleText(memberPopups) +
+			  " D（後でスタイル）= " + HandleText(memberStyled));
 
-	probe.log("[G1] B の値を変える:");
-	const size_t bumped = BumpNumericParams(probe, memberValues, 8);
-	probe.log("[G1] B で変えた件数 = " + std::to_string(bumped));
-	probe.log("[G1] C のポップアップを倒す:");
-	const size_t switched = SwitchPopupParams(probe, memberPopups, 8);
-	probe.log("[G1] C で倒した件数 = " + std::to_string(switched));
-
-	probe.log(
-		"[G1] ResetObject(B)=" + std::string(gSDK->ResetObject(memberValues) ? "true" : "false") +
-		" ResetObject(C)=" + std::string(gSDK->ResetObject(memberPopups) ? "true" : "false"));
-
-	// -------------------------------------------------------------- G2
-	probe.log("[G2] 4 本の表を突き合わせる");
+	// 作った直後の 4 本を突き合わせる。**まだ何も書き換えていない**ので、ここで
+	// 食い違えば「同じ種別でも本ごとに表が違う」ことになる。
 	const ParamTable tableDefault = DumpTable(memberDefault);
-	const ParamTable tableValues = DumpTable(memberValues);
-	const ParamTable tablePopups = DumpTable(memberPopups);
-	const ParamTable tableStyled = DumpTable(memberStyled);
-
-	LogTable(probe, tableDefault, "[G2] A（既定）の表 全文");
-
-	probe.log("[G2] A vs B（値違い）: " + CompareTables(tableDefault, tableValues));
-	probe.log("[G2] A vs C（ポップアップ違い）: " + CompareTables(tableDefault, tablePopups));
-	probe.log("[G2] A vs D（未スタイル）: " + CompareTables(tableDefault, tableStyled));
-	probe.log("[G2] 選択肢の数 A vs C: " + CompareChoices(tableDefault, tablePopups));
-	probe.log("[G2] レコードフォーマットのハンドル: A=" + tableDefault.formatHandle +
-			  " B=" + tableValues.formatHandle + " C=" + tablePopups.formatHandle +
-			  " D=" + tableStyled.formatHandle + " → " +
-			  ((tableDefault.formatHandle == tableValues.formatHandle &&
-				tableDefault.formatHandle == tablePopups.formatHandle &&
-				tableDefault.formatHandle == tableStyled.formatHandle)
+	const ParamTable tableValuesPre = DumpTable(memberValues);
+	const ParamTable tablePopupsPre = DumpTable(memberPopups);
+	const ParamTable tableStyledPre = DumpTable(memberStyled);
+	LogTable(probe, tableDefault, "[G1] A（既定）の表 全文");
+	probe.log("[G1] 作った直後の A vs B: " + CompareTables(tableDefault, tableValuesPre));
+	probe.log("[G1] 作った直後の A vs C: " + CompareTables(tableDefault, tablePopupsPre));
+	probe.log("[G1] 作った直後の A vs D: " + CompareTables(tableDefault, tableStyledPre));
+	probe.log("[G1] レコードフォーマットのハンドル: A=" + tableDefault.formatHandle +
+			  " B=" + tableValuesPre.formatHandle + " C=" + tablePopupsPre.formatHandle +
+			  " D=" + tableStyledPre.formatHandle + " → " +
+			  ((tableDefault.formatHandle == tableValuesPre.formatHandle &&
+				tableDefault.formatHandle == tablePopupsPre.formatHandle &&
+				tableDefault.formatHandle == tableStyledPre.formatHandle)
 				   ? "4 本とも同一のフォーマットを共有している"
 				   : "**フォーマットが本ごとに違う**"));
 
-	// -------------------------------------------------------------- G3
-	probe.log("[G3] 同じインスタンス（A）の値を変えて ResetObject した前後で表が変わるか");
-	const size_t bumpedA = BumpNumericParams(probe, memberDefault, 4);
-	const size_t switchedA = SwitchPopupParams(probe, memberDefault, 4);
-	probe.log("[G3] A で変えた件数 = " + std::to_string(bumpedA) + " / " +
-			  std::to_string(switchedA) + "（値 / ポップアップ）ResetObject=" +
-			  std::string(gSDK->ResetObject(memberDefault) ? "true" : "false"));
-	const ParamTable tableAfterReset = DumpTable(memberDefault);
-	probe.log("[G3] A（変更前）vs A（変更後）: " + CompareTables(tableDefault, tableAfterReset));
-	probe.log("[G3] 選択肢の数 A（変更前）vs A（変更後）: " +
-			  CompareChoices(tableDefault, tableAfterReset));
-	probe.log("[G3] フォーマットのハンドル: 変更前=" + tableDefault.formatHandle +
-			  " 変更後=" + tableAfterReset.formatHandle);
-
-	// -------------------------------------------------------------- G5（G4 より先）
-	// **コストは文書を触る前に測る**（別文書を開くと測定条件が変わるため）。
-	probe.log("[G5] 1 呼び出しのコストを測る");
+	// -------------------------------------------------------------- G2
+	// **コストは図面を書き換える前に測る。** 落ちる目のある操作の後だと、測れずに終わる。
+	probe.log("[G2] 1 呼び出しのコストを測る（warm）");
 	{
 		VWParametricObj obj(memberDefault);
 		const size_t count = obj.GetParamsCount();
@@ -388,41 +364,74 @@ VW_PROBE("pio-param-table", "PIO のパラメータ表がインスタンス間�
 
 			const double scans = static_cast<double>(kRepeatScans);
 			const double calls = scans * static_cast<double>(count);
-			probe.log("[G5] パラメータ件数=" + std::to_string(count) + " 走行=" +
+			probe.log("[G2] パラメータ件数=" + std::to_string(count) + " 走行=" +
 					  std::to_string(kRepeatScans) + " 周（sink=" + std::to_string(sink) + "）");
-			probe.log("[G5] VWParametricObj 構築 + GetParamsCount: " + Num(ctorMs) + "ms / " +
+			probe.log("[G2] VWParametricObj 構築 + GetParamsCount: " + Num(ctorMs) + "ms / " +
 					  std::to_string(kRepeatCtor) +
 					  " 回 = " + Num(ctorMs * 1000.0 / static_cast<double>(kRepeatCtor)) + "us/回");
-			probe.log("[G5] GetParamName: " + Num(univMs) +
+			probe.log("[G2] GetParamName: " + Num(univMs) +
 					  "ms 合計 = " + Num(univMs * 1000.0 / calls) +
 					  "us/回、フルスキャン 1 回 = " + Num(univMs / scans) + "ms");
-			probe.log("[G5] GetParamLocalizedName: " + Num(locMs) +
+			probe.log("[G2] GetParamLocalizedName: " + Num(locMs) +
 					  "ms 合計 = " + Num(locMs * 1000.0 / calls) +
 					  "us/回、フルスキャン 1 回 = " + Num(locMs / scans) + "ms");
-			probe.log("[G5] GetParamIndex（universal 名で引く）: " + Num(indexMs) +
+			probe.log("[G2] GetParamIndex（universal 名で 1 個引く）: " + Num(indexMs) +
 					  "ms 合計 = " + Num(indexMs * 1000.0 / calls) + "us/回");
 			const double fullScanMs = locMs / scans; // ローカライズ名フルスキャン 1 回
 			const double indexCallMs = indexMs / calls; // universal 名で 1 個引く
-			probe.log("[G5] ローカライズ名のフルスキャン 1 回は、universal 名で 1 個引く"
-					  "のの約 " +
+			probe.log("[G2] ローカライズ名のフルスキャン 1 回は、universal 名で 1 個引くのの約 " +
 					  Num(fullScanMs / indexCallMs, 1) + " 倍");
 		}
 	}
 
+	// -------------------------------------------------------------- G3
+	probe.log("[G3] 値とポップアップを変えたインスタンスの表を突き合わせる");
+	probe.log("[G3] B の値を変える:");
+	const size_t bumped = BumpNumericParams(probe, memberValues, 8);
+	probe.log("[G3] B で変えた件数 = " + std::to_string(bumped));
+	probe.log("[G3] C のポップアップを倒す:");
+	const size_t switched = SwitchPopupParams(probe, memberPopups, 8);
+	probe.log("[G3] C で倒した件数 = " + std::to_string(switched));
+	probe.log(
+		"[G3] ResetObject(B)=" + std::string(gSDK->ResetObject(memberValues) ? "true" : "false") +
+		" ResetObject(C)=" + std::string(gSDK->ResetObject(memberPopups) ? "true" : "false"));
+
+	const ParamTable tableValues = DumpTable(memberValues);
+	const ParamTable tablePopups = DumpTable(memberPopups);
+	probe.log("[G3] A vs B（値違い）: " + CompareTables(tableDefault, tableValues));
+	probe.log("[G3] A vs C（ポップアップ違い）: " + CompareTables(tableDefault, tablePopups));
+	probe.log("[G3] 選択肢の数 A vs C: " + CompareChoices(tableDefault, tablePopups));
+	probe.log("[G3] フォーマットのハンドル: A=" + tableDefault.formatHandle +
+			  " B=" + tableValues.formatHandle + " C=" + tablePopups.formatHandle);
+
 	// -------------------------------------------------------------- G4
-	probe.log("[G4] 別の文書で作った同じ種別の表と突き合わせる");
+	probe.log("[G4] 同じインスタンス（A）を変えて ResetObject した前後で表が変わるか");
+	const size_t bumpedA = BumpNumericParams(probe, memberDefault, 4);
+	const size_t switchedA = SwitchPopupParams(probe, memberDefault, 4);
+	probe.log("[G4] A で変えた件数 = " + std::to_string(bumpedA) + " / " +
+			  std::to_string(switchedA) + "（値 / ポップアップ）ResetObject=" +
+			  std::string(gSDK->ResetObject(memberDefault) ? "true" : "false"));
+	const ParamTable tableAfterReset = DumpTable(memberDefault);
+	probe.log("[G4] A（変更前）vs A（変更後）: " + CompareTables(tableDefault, tableAfterReset));
+	probe.log("[G4] 選択肢の数 A（変更前）vs A（変更後）: " +
+			  CompareChoices(tableDefault, tableAfterReset));
+	probe.log("[G4] フォーマットのハンドル: 変更前=" + tableDefault.formatHandle +
+			  " 変更後=" + tableAfterReset.formatHandle);
+
+	// -------------------------------------------------------------- G5
+	probe.log("[G5] 別の文書で作った同じ種別の表と突き合わせる");
 	{
-		TVWArray_OpenFileInformation filesBefore;
+		MockUp::TVWArray_OpenFileInformation filesBefore;
 		gSDK->GetOpenFilesList(filesBefore);
 		Sint32 originalRef = -1;
 		for (size_t i = 0; i < filesBefore.GetSize(); ++i)
 			if (filesBefore[i].fIsActive)
 				originalRef = filesBefore[i].fFileRef;
-		probe.log("[G4] 開いている文書 = " + std::to_string(filesBefore.GetSize()) +
-				  " 件 いまの fileRef = " + std::to_string(originalRef));
+		probe.log("[G5] 開いている文書 = " + std::to_string(filesBefore.GetSize()) +
+				  " 件 いまの fileRef = " + std::to_string(static_cast<long>(originalRef)));
 
 		const bool opened = gSDK->OpenDocumentPath(nil, false);
-		probe.log("[G4] OpenDocumentPath(nil, false) = " + std::string(opened ? "true" : "false"));
+		probe.log("[G5] OpenDocumentPath(nil, false) = " + std::string(opened ? "true" : "false"));
 		if (opened)
 		{
 			gSDK->DefineCustomObject(kProbeTypeName, kCustomObjectPrefNever);
@@ -434,10 +443,10 @@ VW_PROBE("pio-param-table", "PIO のパラメータ表がインスタンス間�
 			else
 			{
 				const ParamTable tableOther = DumpTable(memberOther);
-				probe.log("[G4] A（文書 1）vs 別文書: " + CompareTables(tableDefault, tableOther));
-				probe.log("[G4] 選択肢の数 A vs 別文書: " +
+				probe.log("[G5] A（文書 1）vs 別文書: " + CompareTables(tableDefault, tableOther));
+				probe.log("[G5] 選択肢の数 A vs 別文書: " +
 						  CompareChoices(tableDefault, tableOther));
-				probe.log("[G4] フォーマット: 文書 1 = " + tableDefault.formatName + " " +
+				probe.log("[G5] フォーマット: 文書 1 = " + tableDefault.formatName + " " +
 						  tableDefault.formatHandle + " / 別文書 = " + tableOther.formatName + " " +
 						  tableOther.formatHandle + " → " +
 						  (tableDefault.formatHandle == tableOther.formatHandle
@@ -448,13 +457,14 @@ VW_PROBE("pio-param-table", "PIO のパラメータ表がインスタンス間�
 			// 後始末。CloseDocument は false を返しながら閉じる（Findings/Documents.md）ので、
 			// 件数で確かめる。
 			const bool closed = gSDK->CloseDocument();
-			TVWArray_OpenFileInformation filesAfter;
+			MockUp::TVWArray_OpenFileInformation filesAfter;
 			gSDK->GetOpenFilesList(filesAfter);
-			probe.log("[G4] CloseDocument() = " + std::string(closed ? "true" : "false") +
+			probe.log("[G5] CloseDocument() = " + std::string(closed ? "true" : "false") +
 					  " 開いている文書 = " + std::to_string(filesAfter.GetSize()) + " 件");
 			if (originalRef >= 0)
-				probe.log("[G4] SwitchToOpenFile(" + std::to_string(originalRef) + ") = " +
-						  std::string(gSDK->SwitchToOpenFile(originalRef) ? "true" : "false"));
+				probe.log(
+					"[G5] SwitchToOpenFile(" + std::to_string(static_cast<long>(originalRef)) +
+					") = " + std::string(gSDK->SwitchToOpenFile(originalRef) ? "true" : "false"));
 		}
 	}
 
