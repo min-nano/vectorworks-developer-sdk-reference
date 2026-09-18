@@ -1,58 +1,53 @@
 //
 //	probes/runtime/batch-reset-styled/probe.cpp
 //
-//	[issue #81] **1 本ごとの `ResetObject` を、まとめて 1 度に寄せられるか。**
+//	[issue #81] **1 本ごとの `ResetObject` を、まとめて 1 度に寄せられるか。**（2 回目）
 //
-//	取り込みの描画時間の 51〜68% を構造材（1 本 93〜130ms）が占めており、その 1 本は
-//	`CreateCustomObjectPath` → クラス → スタイル関連付け → ストーリバウンド → パラメータ →
-//	**`ResetObject`** → 読み戻し、をそのまま 200〜400 回繰り返している。ここを
-//	「全部置く → まとめて 1 度リセット → 潰れたものだけ第 2 パスで直す」に組み替えて
-//	よいかどうかを、実機で決める。
+//	## 1 回目（ビルド b3e9dd722956）で実機から取れたもの
 //
-//	## 先に CI（`sdk-grep`）で分かっていること（この走査の前提）
+//	  - **まとめて作り直す口は無い。** 置いただけの部材 5 本に対して
+//	    `ResetObject(レイヤのハンドル)` は 0 本しか作り直さず（所要 0.2ms ＝ 何もしていない）、
+//	    `RedrawRect` も 0 本だった（13.2ms）。→ **この 2 つはもう調べ直さない**ので、
+//	    この版では叩かない。
+//	  - **所要（30 本、mac）**: いまの作り（`doRegen=true` → バウンド → 1 本ごとの
+//	    `ResetObject`）は 1 本 23.6ms（作る 12.0ms ／ リセット 11.5ms ／ バウンド 0.02ms）。
+//	    `doRegen=false` にすると「作る」が 12.0ms → 0.45ms になり、1 本 11.9ms へ半減した。
+//	    **「全部置いてから第 2 パスでまとめてリセット」は 11.8ms で、半減以上の得は無い**
+//	    （リセットの回数が同じだから）。
+//	  - **ところが `doRegen=false` で作ると、後の `ResetObject` の結果が狂う。**
+//	    バウンドの span は 3000 なのに、読み戻した Z の差が **3001**（渡したパスの
+//	    長さ 1 のぶんだけ長い）になった。30 本すべてで同じ。
+//	  - **`CreatePluginStyle` ではスタイルを用意できなかった**（`GetPluginObjectStyle` が
+//	    false、`styleRef` は 0）。**issue の (b)——`UpdateStyledObjects` がジオメトリの
+//	    作り直しを兼ねるか——は測れていない。** ここがこの版の主題。
 //
-//	  - **再生成・再描画を止めておく口は SDK に無い。** `ISDK.h` 全体に `Batch` /
-//	    `Defer` / `Suspend` / `Freeze` の名を持つ関数は無く（`CustomBatchConvert` と
-//	    `DoBatchPrintOrExport` は別物）、`Defer` は SDK のヘッダ全体で 1 件も出ない。
-//	    再描画側にあるのは `RedrawRect`（**描き直しを起こす**口）だけで、止める口は無い。
-//	  - **`CreateCustomObjectPath` だけは `doRegen` を持つ**
-//	    （`CreateCustomObjectPath(name, path, profile, bool doRegen = true)`）。
-//	    SDK のヘッダ全体でこの引数を持つのはこの 1 本だけ。
-//	  - `UpdateStyledObjects(RefNumber)` の説明は VectorScript 側も
-//	    "Update all objects of the specified style." だけで、**ジオメトリの作り直しを
-//	    含むかは書かれていない**。PIO 側には `kAction_BeginStyledObjectsUpdate` /
-//	    `kAction_UpdateStyledObject` / `kAction_EndStyledObjectsUpdate` が届くと
-//	    分かっているが、それが「描画属性を流す」だけなのかは実機でしか分からない。
+//	## この版で決めること
 //
-//	## この走査で決めること
+//	  1. **スタイルを実機で用意する道を見つける**（C 群）。4 通りを順に試し、
+//	     どれが効いたかをログに残す:
+//	       R1 `GetPluginStyleForTool`（構造材ツールに設定されているスタイル）
+//	       R2 `CreatePluginStyle` → `GetPluginStyleSymbol`（**関連付けは別で、
+//	          スタイル自体はできているかもしれない**——1 回目はここを見ていない）
+//	       R3 文書の資源一覧（`BuildResourceListUnsorted(kSymDefNode, 0, ...)`）から
+//	          `IsPluginStyle` が真のものを拾う。**R2 の前後で 2 度数える**ので、
+//	          `CreatePluginStyle` が何か作ったかどうかも分かる
+//	       R4 `CreateSymbolDefinition` ＋ `SetSymbolDefSubType` を 0..12 で振り、
+//	          `IsPluginStyle` が真になる値を探す（SDK のヘッダに定数が無いため実測で探す）
+//	     どれかで `RefNumber` が取れたら、**スタイルを当てた部材を `ResetObject` 抜きで
+//	     置いて `UpdateStyledObjects` を 1 回だけ呼び**、実体が出るかを読む（issue の (b)）。
+//	  2. **`doRegen=false` の狂いの規則**（E 群）。渡す長さ（seed）を 0 / 1 / 5 / 100 と
+//	     振って、作り直しの結果が **span + seed** になるのかを見る。**seed = 0 なら
+//	     ぴたりと span になるなら、「0 長で作って `doRegen=false`」が速くて正しい作りに
+//	     なる**（作るのが 26 倍速くなるので、ここが通れば取り込みは半分の時間で済む）。
+//	     2 度目の `ResetObject` で更に伸びるか（累積するか）も見る。
+//	  3. **その作りの所要と正しさ**（D 群）。1 回目の D1（いまの作り）を物差しに、
+//	     **`doRegen=false` ＋ seed 0** を 30 本で計り、30 本とも span になるかを読む。
 //
-//	  1. **`ResetObject` を呼ばないと、ほんとうに何も起きないのか。**（A 群）
-//	     バウンドを書いただけ・作っただけの部材が、どんなパスを持っているか。
-//	  2. **1 度で全部を作り直す口はあるか。**（B 群）まとめて置いた部材に対して
-//	     - `ResetObject(レイヤのハンドル)`（VS の `ResetObject` は「どの型でも受ける」と
-//	       書かれているので、レイヤごと作り直せるなら 1 回で済む）
-//	     - `RedrawRect`（再描画の口。**ジオメトリに触らない**ことを確かめる側）
-//	     を順に叩き、パスが作り直されるかを読む。
-//	  3. **`UpdateStyledObjects` はジオメトリの作り直しを兼ねるか。**（C 群。issue の (b)）
-//	     スタイルを当てた部材を `ResetObject` 抜きで置き、`UpdateStyledObjects` を
-//	     1 回だけ呼んで、実体が出るかを読む。
-//	  4. **寄せたときに何秒縮むのか。**（D 群）1 本ごとに `ResetObject` する今の作りと、
-//	     `doRegen=false` で置いてから後でまとめて `ResetObject` する作りを、
-//	     同じ本数で計って比べる。**ここが「組み替える価値があるか」の数字**になる。
+//	## 読み方
 //
-//	## 測り方
-//
-//	部材は**鉛直**（`(0,0,0) → (0,0,1)`）で作る。**渡す長さ 1 は「死角」(0, 1e-7) の外**
-//	なので、作り直しが走れば必ずバウンドどおり（span 3000）へ書き換わる（#61 / #75）。
-//	つまり**読み戻した Z の差が 1 のままなら「作り直されていない」、3000 なら
-//	「作り直された」**と、1 つの数字で読み分けられる。
-//
-//	バウンドは `LayerElevation` の offset 2500 / 5500 を ID 0 / 1 に書く（#75 と同じ。
-//	新規の空図面で成立し、階も `_Story` バウンドも要らない）。
-//
-//	**スタイルは実機に頼らず、プローブの中で作る**（`CreatePluginStyle`）。
-//	図面にスタイルが無くても走るようにするためで、これが失敗したら C 群だけを
-//	`fail` にして、A・B・D 群の結果は残す。
+//	バウンドは `LayerElevation` の offset 2500 / 5500（span 3000）。**読み戻した Z の差が
+//	3000 なら作り直された**、渡した seed のままなら作り直されていない、それ以外
+//	（3001 など）は**狂っている**。
 //
 
 #include "Probe.h"
@@ -70,13 +65,15 @@ namespace
 	const double kBoundOffsetHigh = 5500;
 	const double kBoundSpan = kBoundOffsetHigh - kBoundOffsetLow; // 3000
 
-	// 作るときに渡す Z の差。**死角の外**なので、作り直しが走れば 3000 になる。
-	const double kSeedSpan = 1;
+	// 既定の seed（作るときに渡す Z の差）。1 回目と同じ値。
+	const double kDefaultSeed = 1;
 
-	// B / C 群の 1 群あたりの本数（読み戻しの明細を全部出せる程度に小さく）。
-	const int kProbeGroupCount = 5;
-	// D 群（時間を計る）の本数。1 本 100ms として 1 群 3 秒。4 群で 12 秒ほど。
-	const int kTimedGroupCount = 30;
+	const int kStyledGroupCount = 5; // C 群（UpdateStyledObjects）の本数
+	const int kTimedGroupCount = 30; // D 群（所要）の本数。1 回目と同じ
+
+	// 文書の資源一覧を引くときの種別と置き場（`Objs.TDType.h` の kSymDefNode、
+	// および VectorScript の BuildResourceList と同じ「0 ＝ いまの文書」）。
+	const short kSymbolDefinitionType = 16;
 
 	std::string Num(double value)
 	{
@@ -92,13 +89,11 @@ namespace
 		return std::string(buffer);
 	}
 
-	std::string Count(size_t value)
+	std::string Count(long long value)
 	{
-		return std::to_string(static_cast<long long>(value));
+		return std::to_string(value);
 	}
 
-	// 経過時間を測る（ミリ秒）。**実機の体感と比べられる数字を出すのがこの調査の柱の 1 つ**
-	// なので、内訳ごとに測って足し合わせる。
 	class Stopwatch
 	{
 	public:
@@ -116,13 +111,6 @@ namespace
 
 	private:
 		std::chrono::steady_clock::time_point fStart;
-	};
-
-	// 1 本ぶんの素性。
-	struct Member
-	{
-		MCObjectHandle handle = nullptr;
-		bool boundsWritten = false;
 	};
 
 	bool ReadPathEndpoints(MCObjectHandle pio, WorldPt3& outP0, WorldPt3& outP1)
@@ -144,36 +132,30 @@ namespace
 		return p1.z - p0.z;
 	}
 
-	// 「作り直されたか」の判定。**バウンドの span にビット一致するか**では見ない
-	// ——作り直しは 1〜2 ULP の残差を残す（#67 / #71）ので、1e-6 の窓で見る。
+	// 作り直しは 1〜2 ULP の残差を残す（#67 / #71）ので 1e-6 の窓で見る。
 	bool LooksRebuilt(double span)
 	{
 		return std::fabs(std::fabs(span) - kBoundSpan) < 1e-6;
 	}
 
-	bool LooksUntouched(double span)
-	{
-		return std::fabs(std::fabs(span) - kSeedSpan) < 1e-9;
-	}
-
-	std::string DescribeSpan(double span)
+	std::string DescribeSpan(double span, double seed)
 	{
 		if (std::isnan(span))
 			return "(パスを読めなかった)";
 		std::string text = Num(span);
 		if (LooksRebuilt(span))
-			text += "（**作り直された**）";
-		else if (LooksUntouched(span))
+			text += "（**バウンドどおり**）";
+		else if (std::fabs(std::fabs(span) - seed) < 1e-9)
 			text += "（渡したまま＝**作り直されていない**）";
+		else if (std::fabs(std::fabs(span) - (kBoundSpan + seed)) < 1e-6)
+			text += "（**span + seed ＝ 狂っている**）";
 		else
-			text += "（**どちらでもない**）";
+			text += "（**どれでもない**）";
 		return text;
 	}
 
-	// `LayerElevation` のバウンドを 1 本書く（#75 と同じ書き方）。
 	bool WriteLayerElevationBound(MCObjectHandle pio, short id, double offset)
 	{
-		// 型は `MockUp` 名前空間（`ISDK.h`）。修飾しないと構文チェックが通らない。
 		MockUp::SStoryObjectData data;
 		data.fBound = MockUp::eStoryObjectBound_LayerElevation;
 		data.fBoundStory = 0;
@@ -182,21 +164,27 @@ namespace
 		return gSDK->SetObjectStoryBound(pio, static_cast<MockUp::TObjectBoundID>(id), data);
 	}
 
-	// 構造材 PIO を 1 本作る。**`ResetObject` は呼ばない**（呼ぶかどうかが主語なので）。
-	// `doRegen` は `CreateCustomObjectPath` の第 4 引数へそのまま渡す。
-	Member CreateMember(bool doRegen, bool writeBounds)
+	struct Member
+	{
+		MCObjectHandle handle = nullptr;
+		double seed = kDefaultSeed;
+	};
+
+	// 構造材 PIO を 1 本作る。**`ResetObject` は呼ばない**。
+	Member CreateMember(bool doRegen, bool writeBounds, double seed)
 	{
 		Member member;
+		member.seed = seed;
 
 		MCObjectHandle curve = gSDK->CreateNurbsCurve(WorldPt3(0, 0, 0), false, 1);
 		if (curve == nullptr)
 			return member;
-		gSDK->Add3DVertex(curve, WorldPt3(0, 0, kSeedSpan), true);
+		gSDK->Add3DVertex(curve, WorldPt3(0, 0, seed), true);
 		// 座標を明示的に入れ直す（#67 / #74 / #75 と同じ作法）。
 		if (gSDK->NurbsGetNumPts(curve, 0) >= 2)
 		{
 			gSDK->NurbsSetPt3D(curve, 0, 0, WorldPt3(0, 0, 0));
-			gSDK->NurbsSetPt3D(curve, 0, 1, WorldPt3(0, 0, kSeedSpan));
+			gSDK->NurbsSetPt3D(curve, 0, 1, WorldPt3(0, 0, seed));
 		}
 
 		MCObjectHandle noProfile = nullptr;
@@ -206,39 +194,18 @@ namespace
 
 		if (writeBounds)
 		{
-			const bool wrote0 = WriteLayerElevationBound(member.handle, 0, kBoundOffsetLow);
-			const bool wrote1 = WriteLayerElevationBound(member.handle, 1, kBoundOffsetHigh);
-			member.boundsWritten = wrote0 && wrote1;
+			WriteLayerElevationBound(member.handle, 0, kBoundOffsetLow);
+			WriteLayerElevationBound(member.handle, 1, kBoundOffsetHigh);
 		}
 		return member;
 	}
 
-	// 群を 1 つ置く（作るだけ。`ResetObject` は呼ばない）。
-	std::vector<Member> PlaceGroup(vwprobe::Report& probe, int count, bool doRegen)
-	{
-		std::vector<Member> members;
-		for (int i = 0; i < count; ++i)
-		{
-			const Member member = CreateMember(doRegen, true);
-			if (member.handle == nullptr)
-			{
-				probe.fail("CreateCustomObjectPath が nil を返した");
-				break;
-			}
-			if (!member.boundsWritten)
-				probe.fail("SetObjectStoryBound が false を返した");
-			members.push_back(member);
-		}
-		return members;
-	}
-
-	// 群の読み戻しを 1 行にまとめる（**何本が作り直されたか**が主語）。
 	struct GroupReadback
 	{
-		size_t rebuilt = 0;
-		size_t untouched = 0;
-		size_t other = 0;
-		size_t unreadable = 0;
+		long long rebuilt = 0;	 // バウンドどおり
+		long long untouched = 0; // 渡したまま
+		long long other = 0;	 // それ以外（狂い）
+		long long unreadable = 0;
 		double firstSpan = std::nan("");
 	};
 
@@ -254,7 +221,7 @@ namespace
 				++readback.unreadable;
 			else if (LooksRebuilt(span))
 				++readback.rebuilt;
-			else if (LooksUntouched(span))
+			else if (std::fabs(std::fabs(span) - members[i].seed) < 1e-9)
 				++readback.untouched;
 			else
 				++readback.other;
@@ -266,18 +233,56 @@ namespace
 				  const std::vector<Member>& members)
 	{
 		const GroupReadback readback = ReadGroup(members);
-		probe.log("    " + what + ": " + Count(members.size()) + " 本中 **作り直された " +
-				  Count(readback.rebuilt) + " 本** ／ 渡したまま " + Count(readback.untouched) +
-				  " 本 ／ どちらでもない " + Count(readback.other) + " 本 ／ 読めなかった " +
-				  Count(readback.unreadable) + " 本");
-		probe.log("      1 本目の Z の差 = " + DescribeSpan(readback.firstSpan));
+		const double seed = members.empty() ? kDefaultSeed : members[0].seed;
+		probe.log("    " + what + ": " + Count(static_cast<long long>(members.size())) +
+				  " 本中 **バウンドどおり " + Count(readback.rebuilt) + " 本** ／ 渡したまま " +
+				  Count(readback.untouched) + " 本 ／ 狂い " + Count(readback.other) +
+				  " 本 ／ 読めなかった " + Count(readback.unreadable) + " 本");
+		probe.log("      1 本目の Z の差 = " + DescribeSpan(readback.firstSpan, seed));
+	}
+
+	// -----------------------------------------------------------------------
+	// スタイルを探す・作る（C 群の下ごしらえ）。
+
+	// 文書の中のプラグインスタイルを数えて名前を出す。**`CreatePluginStyle` の前後で
+	// 2 度呼ぶ**ので、何か増えたかどうかが分かる。
+	long long InventoryStyles(vwprobe::Report& probe, const std::string& when,
+							  RefNumber& outFirstStyleRef)
+	{
+		outFirstStyleRef = 0;
+		Sint32 numItems = 0;
+		// folderIndex は VectorScript の BuildResourceList と同じ「0 ＝ いまの文書」。
+		const Sint32 listID = gSDK->BuildResourceListUnsorted(
+			kSymbolDefinitionType, static_cast<MockUp::FolderSpecifier>(0), "", numItems);
+		long long styles = 0;
+		for (Sint32 i = 0; i < numItems; ++i)
+		{
+			MCObjectHandle resource = gSDK->GetResourceFromList(listID, i);
+			if (resource == nullptr)
+				continue;
+			if (!gSDK->IsPluginStyle(resource))
+				continue;
+			++styles;
+			TXString name;
+			gSDK->GetObjectName(resource, name);
+			const RefNumber ref = static_cast<RefNumber>(gSDK->GetObjectInternalIndex(resource));
+			if (outFirstStyleRef == 0)
+				outFirstStyleRef = ref;
+			if (styles <= 5) // 多すぎるときは頭だけ
+				probe.log("      - \"" + std::string(static_cast<const char*>(name)) +
+						  "\" ref=" + Count(static_cast<long long>(ref)) + " subType=" +
+						  Count(static_cast<long long>(gSDK->GetSymbolDefSubType(resource))));
+		}
+		probe.log("    " + when + ": シンボル定義 " + Count(static_cast<long long>(numItems)) +
+				  " 件中、プラグインスタイル " + Count(styles) + " 件");
+		return styles;
 	}
 } // namespace
 
-VW_PROBE("batch-reset-styled", "1 本ごとの ResetObject をまとめられるかを実測する",
-		 "バウンドを書いた構造材をリセット抜きで並べ、レイヤごとのリセット・再描画・"
-		 "UpdateStyledObjects で実体が出るかを読む。今の作りと "
-		 "doRegen=false ＋ 後でまとめてリセットの所要も計る。新規の空図面で走る")
+VW_PROBE("batch-reset-styled", "UpdateStyledObjects と doRegen=false を実測する",
+		 "スタイルを 4 通りで用意して UpdateStyledObjects が"
+		 "ジオメトリを作り直すかを読む。doRegen=false の狂い（span + seed）の規則と、"
+		 "seed 0 なら正しく速いのかも測る。新規の空図面で走る")
 {
 	probe.log("=== この図面について ===");
 	{
@@ -286,263 +291,299 @@ VW_PROBE("batch-reset-styled", "1 本ごとの ResetObject をまとめられる
 		if (currentLayer != nullptr)
 			gSDK->GetObjectName(currentLayer, layerName);
 		probe.log(std::string("いまのレイヤ: \"") + static_cast<const char*>(layerName) + "\"");
-		probe.log("渡すパスの Z の差 = " + Num(kSeedSpan) + "（死角の外）／ バウンドの span = " +
-				  Num(kBoundSpan) + "（作り直されればこちらになる）");
+		probe.log("バウンドの span = " + Num(kBoundSpan) +
+				  "（作り直されればこの値になる）／ 1 回目で分かったことは冒頭のコメント");
 	}
 
 	// =======================================================================
-	// A. 物差し。**バウンドを書いただけでは何も起きない**ことと、
-	//    **`ResetObject` 1 回で作り直される**ことを先に確かめる。
-	//    ここが崩れていれば、以下の群は読んではいけない。
-	probe.log("=== A. 物差し（リセット無しでは作り直されない／リセット 1 回で作り直される） ===");
+	// A. 物差し（1 回目と同じ。ここが崩れていたら以下は読まない）。
+	probe.log("=== A. 物差し（リセット無し → 作り直されない／ResetObject 1 回 → span） ===");
 	{
-		const Member regenOn = CreateMember(true, true);
-		if (regenOn.handle == nullptr)
+		const Member control = CreateMember(true, true, kDefaultSeed);
+		if (control.handle == nullptr)
 		{
-			probe.fail("A: doRegen=true の部材を作れなかった");
+			probe.fail("A: 部材を作れなかった");
 		}
 		else
 		{
-			probe.log("  A1 doRegen=true で作ってバウンドを書いただけ（リセット無し）");
-			probe.log("    Z の差 = " + DescribeSpan(ReadSpan(regenOn.handle)));
-			gSDK->ResetObject(regenOn.handle);
-			probe.log("  A2 同じ部材に ResetObject を 1 回");
-			probe.log("    Z の差 = " + DescribeSpan(ReadSpan(regenOn.handle)));
-		}
-
-		const Member regenOff = CreateMember(false, true);
-		if (regenOff.handle == nullptr)
-		{
-			probe.fail("A: doRegen=false の部材を作れなかった");
-		}
-		else
-		{
-			probe.log("  A3 **doRegen=false** で作ってバウンドを書いただけ（リセット無し）");
-			probe.log("    Z の差 = " + DescribeSpan(ReadSpan(regenOff.handle)));
-			gSDK->ResetObject(regenOff.handle);
-			probe.log("  A4 同じ部材に ResetObject を 1 回");
-			probe.log("    Z の差 = " + DescribeSpan(ReadSpan(regenOff.handle)) +
-					  "（A2 と同じなら、**作るときの regen を省いても後から取り返せる**）");
+			probe.log("    リセット前: Z の差 = " +
+					  DescribeSpan(ReadSpan(control.handle), control.seed));
+			gSDK->ResetObject(control.handle);
+			probe.log("    ResetObject 1 回の後: Z の差 = " +
+					  DescribeSpan(ReadSpan(control.handle), control.seed));
 		}
 	}
 
 	// =======================================================================
-	// B. **1 度で全部を作り直す口はあるか。** 置いただけの群に対して、
-	//    レイヤごとのリセットと再描画を順に叩く。
-	probe.log("=== B. まとめて作り直す口を叩く（置いただけの群に対して） ===");
+	// C. **UpdateStyledObjects（issue の (b)）。** まずスタイルを用意する。
+	probe.log("=== C. UpdateStyledObjects（issue の (b)。スタイルを 4 通りで探す） ===");
+	RefNumber styleRef = 0;
+	std::string styleRoute;
 	{
-		probe.log("  B1 ResetObject(レイヤのハンドル)");
-		std::vector<Member> layerGroup = PlaceGroup(probe, kProbeGroupCount, false);
-		LogGroup(probe, "叩く前", layerGroup);
-		MCObjectHandle currentLayer = gSDK->GetCurrentLayer();
-		if (currentLayer == nullptr)
+		// --- R1: 構造材ツールに設定されているスタイル ---
 		{
-			probe.fail("B1: GetCurrentLayer が nil を返した");
-		}
-		else
-		{
-			Stopwatch watch;
-			gSDK->ResetObject(currentLayer);
-			const double elapsed = watch.elapsedMs();
-			LogGroup(probe, "ResetObject(レイヤ) の後", layerGroup);
-			probe.log("      所要 " + Ms(elapsed) + " ms");
-		}
-
-		probe.log("  B2 RedrawRect（再描画の口。**ジオメトリに触らない**ことを確かめる側）");
-		std::vector<Member> redrawGroup = PlaceGroup(probe, kProbeGroupCount, false);
-		LogGroup(probe, "叩く前", redrawGroup);
-		{
-			WorldRect wide;
-			wide.left = -1000000;
-			wide.top = 1000000;
-			wide.right = 1000000;
-			wide.bottom = -1000000;
-			Stopwatch watch;
-			gSDK->RedrawRect(wide);
-			const double elapsed = watch.elapsedMs();
-			LogGroup(probe, "RedrawRect の後", redrawGroup);
-			probe.log("      所要 " + Ms(elapsed) + " ms");
-		}
-	}
-
-	// =======================================================================
-	// C. **`UpdateStyledObjects` はジオメトリの作り直しを兼ねるか**（issue の (b)）。
-	//    スタイルはこのプローブの中で作る（`CreatePluginStyle`）。
-	probe.log("=== C. UpdateStyledObjects（issue の (b)） ===");
-	{
-		// スタイルの元になる 1 本。**作り直してからスタイルにする**（実体のある部材から
-		// スタイルを作るため）。
-		const Member seed = CreateMember(true, true);
-		RefNumber styleRef = 0;
-		bool haveStyle = false;
-		if (seed.handle == nullptr)
-		{
-			probe.fail("C: スタイルの元にする部材を作れなかった");
-		}
-		else
-		{
-			gSDK->ResetObject(seed.handle);
-			probe.log("  C1 CreatePluginStyle を呼ぶ（**ここでダイアログが出たら、"
-					  "この行が最後のログになる**）");
-			gSDK->CreatePluginStyle(seed.handle);
-			const Boolean got = gSDK->GetPluginObjectStyle(seed.handle, styleRef);
-			haveStyle = (got != 0) && (styleRef != 0);
-			probe.log("    GetPluginObjectStyle → " + std::string(got ? "true" : "false") +
-					  " ／ styleRef = " + Count(static_cast<size_t>(styleRef)) +
-					  (haveStyle ? "" : "（**スタイルを作れなかった**）"));
-		}
-
-		if (!haveStyle)
-		{
-			probe.fail("C: スタイルを用意できなかったので UpdateStyledObjects を測れていない");
-		}
-		else
-		{
-			probe.log("  C2 スタイルを当てた部材を **ResetObject 抜き**で " +
-					  Count(static_cast<size_t>(kProbeGroupCount)) + " 本置く");
-			std::vector<Member> styled;
-			for (int i = 0; i < kProbeGroupCount; ++i)
+			RefNumber toolStyle = 0;
+			const bool got = gSDK->GetPluginStyleForTool("StructuralMember", toolStyle);
+			probe.log("  R1 GetPluginStyleForTool(\"StructuralMember\") → " +
+					  std::string(got ? "true" : "false") +
+					  " ／ ref=" + Count(static_cast<long long>(toolStyle)));
+			if (got && toolStyle != 0)
 			{
-				Member member = CreateMember(false, false);
-				if (member.handle == nullptr)
-				{
-					probe.fail("C2: 部材を作れなかった");
-					break;
-				}
-				// **スタイルを当ててからバウンドを書く**（実プラグインと同じ順序）。
-				if (!gSDK->SetPluginObjectStyle(member.handle, styleRef))
-					probe.fail("C2: SetPluginObjectStyle が false を返した");
-				const bool wrote0 = WriteLayerElevationBound(member.handle, 0, kBoundOffsetLow);
-				const bool wrote1 = WriteLayerElevationBound(member.handle, 1, kBoundOffsetHigh);
-				member.boundsWritten = wrote0 && wrote1;
-				if (!member.boundsWritten)
-					probe.fail("C2: SetObjectStoryBound が false を返した");
-				styled.push_back(member);
+				styleRef = toolStyle;
+				styleRoute = "R1 ツールの既定スタイル";
 			}
-			LogGroup(probe, "UpdateStyledObjects の前", styled);
-
-			probe.log("  C3 UpdateStyledObjects を 1 回だけ呼ぶ");
-			Stopwatch watch;
-			gSDK->UpdateStyledObjects(styleRef);
-			const double elapsed = watch.elapsedMs();
-			LogGroup(probe, "UpdateStyledObjects の後", styled);
-			probe.log("      所要 " + Ms(elapsed) + " ms（" + Count(styled.size()) + " 本ぶん）");
-
-			// **作り直されなかったなら、その後の ResetObject では出るのか**を続けて見る
-			// ——「UpdateStyledObjects を呼んだ後は ResetObject が効かなくなる」という
-			// 最悪の筋（順序に依る）を潰しておくため。
-			probe.log("  C4 続けて 1 本ごとの ResetObject（効き目が残っているかの確認）");
-			for (size_t i = 0; i < styled.size(); ++i)
-				gSDK->ResetObject(styled[i].handle);
-			LogGroup(probe, "ResetObject の後", styled);
 		}
+
+		// --- R3(前半): いま文書にあるプラグインスタイルを数える ---
+		RefNumber existing = 0;
+		probe.log("  R3 文書の資源一覧（CreatePluginStyle の前）");
+		InventoryStyles(probe, "前", existing);
+		if (styleRef == 0 && existing != 0)
+		{
+			styleRef = existing;
+			styleRoute = "R3 文書に元からあったスタイル";
+		}
+
+		// --- R2: CreatePluginStyle を呼び、**関連付けとは別に**スタイルができたかを見る ---
+		{
+			const Member seed = CreateMember(true, true, kDefaultSeed);
+			if (seed.handle == nullptr)
+			{
+				probe.fail("C: スタイルの元にする部材を作れなかった");
+			}
+			else
+			{
+				gSDK->ResetObject(seed.handle);
+				probe.log("  R2 CreatePluginStyle を呼ぶ（ダイアログが出たらこの行が最後になる）");
+				gSDK->CreatePluginStyle(seed.handle);
+
+				RefNumber associated = 0;
+				const Boolean got = gSDK->GetPluginObjectStyle(seed.handle, associated);
+				MCObjectHandle styleSymbol = nullptr;
+				const bool gotSymbol = gSDK->GetPluginStyleSymbol(seed.handle, styleSymbol);
+				probe.log("    GetPluginObjectStyle → " + std::string(got ? "true" : "false") +
+						  " ／ ref=" + Count(static_cast<long long>(associated)) +
+						  " ／ GetPluginStyleSymbol → " +
+						  std::string(gotSymbol ? "true" : "false") +
+						  " ／ シンボル=" + std::string(styleSymbol != nullptr ? "あり" : "nil"));
+				if (styleRef == 0 && got && associated != 0)
+				{
+					styleRef = associated;
+					styleRoute = "R2 CreatePluginStyle（関連付けまで効いた）";
+				}
+				else if (styleRef == 0 && styleSymbol != nullptr)
+				{
+					styleRef = static_cast<RefNumber>(gSDK->GetObjectInternalIndex(styleSymbol));
+					styleRoute = "R2 CreatePluginStyle（シンボルから ref を引いた）";
+				}
+			}
+
+			// --- R3(後半): CreatePluginStyle で増えたか ---
+			RefNumber afterRef = 0;
+			probe.log("  R3 文書の資源一覧（CreatePluginStyle の後）");
+			InventoryStyles(probe, "後", afterRef);
+			if (styleRef == 0 && afterRef != 0)
+			{
+				styleRef = afterRef;
+				styleRoute = "R3 CreatePluginStyle が作ったスタイル";
+			}
+		}
+
+		// --- R4: シンボル定義を作り、subType を振って IsPluginStyle が真になる値を探す ---
+		if (styleRef == 0)
+		{
+			TXString name("試験プラグインスタイル");
+			MCObjectHandle symDef = gSDK->CreateSymbolDefinition(name);
+			probe.log("  R4 CreateSymbolDefinition → " +
+					  std::string(symDef != nullptr ? "できた" : "**nil**"));
+			if (symDef != nullptr)
+			{
+				const Sint32 originalSubType = gSDK->GetSymbolDefSubType(symDef);
+				probe.log("    作った直後: subType=" +
+						  Count(static_cast<long long>(originalSubType)) + " ／ IsPluginStyle=" +
+						  std::string(gSDK->IsPluginStyle(symDef) ? "true" : "false"));
+				std::string hits;
+				for (Sint32 candidate = 0; candidate <= 12; ++candidate)
+				{
+					gSDK->SetSymbolDefSubType(symDef, candidate);
+					if (gSDK->IsPluginStyle(symDef))
+					{
+						hits +=
+							(hits.empty() ? "" : ", ") + Count(static_cast<long long>(candidate));
+						if (styleRef == 0)
+						{
+							styleRef = static_cast<RefNumber>(gSDK->GetObjectInternalIndex(symDef));
+							styleRoute = "R4 subType=" + Count(static_cast<long long>(candidate)) +
+										 " を書いたシンボル定義";
+						}
+					}
+				}
+				probe.log("    IsPluginStyle が真になった subType: " +
+						  (hits.empty() ? std::string("**無し**") : hits));
+				if (hits.empty())
+					gSDK->SetSymbolDefSubType(symDef, originalSubType);
+			}
+		}
+
+		probe.log("  → 使うスタイル: " +
+				  (styleRef == 0
+					   ? std::string("**用意できなかった**")
+					   : styleRoute + " ／ ref=" + Count(static_cast<long long>(styleRef))));
+	}
+
+	if (styleRef == 0)
+	{
+		probe.fail("C: スタイルを用意できなかったので UpdateStyledObjects を測れていない");
+	}
+	else
+	{
+		probe.log("  C1 スタイルを当てた部材を **ResetObject 抜き**で " + Count(kStyledGroupCount) +
+				  " 本置く");
+		std::vector<Member> styled;
+		long long associated = 0;
+		for (int i = 0; i < kStyledGroupCount; ++i)
+		{
+			Member member = CreateMember(true, false, kDefaultSeed);
+			if (member.handle == nullptr)
+			{
+				probe.fail("C1: 部材を作れなかった");
+				break;
+			}
+			// **スタイルを当ててからバウンドを書く**（実プラグインと同じ順序）。
+			if (gSDK->SetPluginObjectStyle(member.handle, styleRef))
+				++associated;
+			WriteLayerElevationBound(member.handle, 0, kBoundOffsetLow);
+			WriteLayerElevationBound(member.handle, 1, kBoundOffsetHigh);
+			styled.push_back(member);
+		}
+		probe.log("    SetPluginObjectStyle が true を返した本数: " + Count(associated) + " / " +
+				  Count(static_cast<long long>(styled.size())));
+		{
+			// 読み戻して、ほんとうに当たっているかを見る（setter の戻り値を信じない）。
+			RefNumber readBack = 0;
+			if (!styled.empty())
+				gSDK->GetPluginObjectStyle(styled[0].handle, readBack);
+			probe.log(
+				"    1 本目の GetPluginObjectStyle → ref=" +
+				Count(static_cast<long long>(readBack)) +
+				std::string(readBack == styleRef ? "（当たっている）" : "（**当たっていない**）"));
+		}
+		LogGroup(probe, "UpdateStyledObjects の前", styled);
+
+		probe.log("  C2 UpdateStyledObjects を 1 回だけ呼ぶ");
+		Stopwatch watch;
+		gSDK->UpdateStyledObjects(styleRef);
+		const double elapsed = watch.elapsedMs();
+		LogGroup(probe, "UpdateStyledObjects の後", styled);
+		probe.log("      所要 " + Ms(elapsed) + " ms（" +
+				  Count(static_cast<long long>(styled.size())) + " 本ぶん）");
+		probe.log("      → **バウンドどおりが 0 本なら、UpdateStyledObjects は"
+				  "ジオメトリを作り直さない**（issue の (b) の答え）");
+
+		probe.log("  C3 続けて 1 本ごとの ResetObject（効き目が残っているかの確認）");
+		for (size_t i = 0; i < styled.size(); ++i)
+			gSDK->ResetObject(styled[i].handle);
+		LogGroup(probe, "ResetObject の後", styled);
 	}
 
 	// =======================================================================
-	// D. **寄せたときに何秒縮むのか。** 同じ本数で、今の作りと寄せた作りを計る。
-	probe.log("=== D. 所要を計る（" + Count(static_cast<size_t>(kTimedGroupCount)) +
-			  " 本ずつ。数字は実機のこの図面でのもの） ===");
+	// E. **`doRegen=false` の狂いの規則。** seed を振って「span + seed」かを見る。
+	probe.log("=== E. doRegen=false の狂い（seed を振る。span + seed になるか） ===");
 	{
-		// D1: いまの作り。1 本ごとに 作る（doRegen=true）→ バウンド → ResetObject。
+		const double seeds[] = {0, 1, 5, 100};
+		for (size_t i = 0; i < sizeof(seeds) / sizeof(seeds[0]); ++i)
 		{
-			double createMs = 0, boundMs = 0, resetMs = 0;
+			const double seed = seeds[i];
+			Member member = CreateMember(false, true, seed);
+			if (member.handle == nullptr)
+			{
+				probe.fail("E: 部材を作れなかった（seed=" + Num(seed) + "）");
+				continue;
+			}
+			gSDK->ResetObject(member.handle);
+			const double first = ReadSpan(member.handle);
+			gSDK->ResetObject(member.handle);
+			const double second = ReadSpan(member.handle);
+			probe.log("  seed=" + Num(seed) + " ／ 1 度目 " + DescribeSpan(first, seed) +
+					  " ／ 2 度目 " + DescribeSpan(second, seed) +
+					  "（2 度目で伸びるなら**累積する**）");
+
+			// 同じ seed を doRegen=true でも通して、差が `doRegen` だけによることを示す。
+			Member control = CreateMember(true, true, seed);
+			if (control.handle != nullptr)
+			{
+				gSDK->ResetObject(control.handle);
+				probe.log("    （物差し: 同じ seed を doRegen=true で作ると " +
+						  DescribeSpan(ReadSpan(control.handle), seed) + "）");
+			}
+		}
+		probe.log("  → **seed=0 の行が「バウンドどおり」なら、"
+				  "「0 長で作って doRegen=false」が速くて正しい作りになる**");
+	}
+
+	// =======================================================================
+	// D. 所要。1 回目の D1（いまの作り）を物差しに、seed 0 ＋ doRegen=false を測る。
+	probe.log("=== D. 所要（" + Count(kTimedGroupCount) + " 本ずつ） ===");
+	{
+		// D1: いまの作り（1 回目と同じ条件。この実機・この図面での物差し）。
+		{
+			double createMs = 0, resetMs = 0;
 			Stopwatch total;
 			for (int i = 0; i < kTimedGroupCount; ++i)
 			{
 				Stopwatch watch;
-				Member member = CreateMember(true, false);
+				Member member = CreateMember(true, false, kDefaultSeed);
 				createMs += watch.elapsedMs();
 				if (member.handle == nullptr)
 				{
 					probe.fail("D1: 部材を作れなかった");
 					break;
 				}
-				watch.restart();
 				WriteLayerElevationBound(member.handle, 0, kBoundOffsetLow);
 				WriteLayerElevationBound(member.handle, 1, kBoundOffsetHigh);
-				boundMs += watch.elapsedMs();
 				watch.restart();
 				gSDK->ResetObject(member.handle);
 				resetMs += watch.elapsedMs();
 			}
 			const double totalMs = total.elapsedMs();
-			probe.log("  D1 いまの作り（doRegen=true → バウンド → 1 本ごとに ResetObject）");
+			probe.log("  D1 いまの作り（doRegen=true, seed=" + Num(kDefaultSeed) +
+					  " → バウンド → 1 本ごとに ResetObject）");
 			probe.log("    合計 " + Ms(totalMs) + " ms ／ 1 本 " + Ms(totalMs / kTimedGroupCount) +
-					  " ms");
-			probe.log("    内訳: 作る " + Ms(createMs) + " ms ／ バウンド " + Ms(boundMs) +
-					  " ms ／ リセット " + Ms(resetMs) + " ms");
+					  " ms（作る " + Ms(createMs) + " ms ／ リセット " + Ms(resetMs) + " ms）");
 		}
 
-		// D2: 作るときの regen だけを省く（1 本ごとのリセットは残す）。
+		// D2: **doRegen=false ＋ seed 0**。速さと正しさを同時に見る。
 		{
-			double createMs = 0, boundMs = 0, resetMs = 0;
+			std::vector<Member> members;
+			double createMs = 0, resetMs = 0;
 			Stopwatch total;
 			for (int i = 0; i < kTimedGroupCount; ++i)
 			{
 				Stopwatch watch;
-				Member member = CreateMember(false, false);
+				Member member = CreateMember(false, false, 0);
 				createMs += watch.elapsedMs();
 				if (member.handle == nullptr)
 				{
 					probe.fail("D2: 部材を作れなかった");
 					break;
 				}
-				watch.restart();
 				WriteLayerElevationBound(member.handle, 0, kBoundOffsetLow);
 				WriteLayerElevationBound(member.handle, 1, kBoundOffsetHigh);
-				boundMs += watch.elapsedMs();
 				watch.restart();
 				gSDK->ResetObject(member.handle);
 				resetMs += watch.elapsedMs();
+				members.push_back(member);
 			}
 			const double totalMs = total.elapsedMs();
-			probe.log("  D2 **doRegen=false** ＋ 1 本ごとに ResetObject");
+			probe.log("  D2 **doRegen=false ＋ seed 0**（速くて正しいかを見る）");
 			probe.log("    合計 " + Ms(totalMs) + " ms ／ 1 本 " + Ms(totalMs / kTimedGroupCount) +
-					  " ms");
-			probe.log("    内訳: 作る " + Ms(createMs) + " ms ／ バウンド " + Ms(boundMs) +
-					  " ms ／ リセット " + Ms(resetMs) + " ms");
-			probe.log("    ↑ D1 と比べて「作る」が縮んでいれば、**作成時にも regen が"
-					  "走っていた**ということ");
-		}
-
-		// D3: 全部置いてから、まとめて 1 パスでリセットする（issue が提案している形）。
-		{
-			std::vector<Member> members;
-			double placeMs = 0, resetMs = 0;
-			Stopwatch total;
-			{
-				Stopwatch watch;
-				for (int i = 0; i < kTimedGroupCount; ++i)
-				{
-					Member member = CreateMember(false, false);
-					if (member.handle == nullptr)
-					{
-						probe.fail("D3: 部材を作れなかった");
-						break;
-					}
-					WriteLayerElevationBound(member.handle, 0, kBoundOffsetLow);
-					WriteLayerElevationBound(member.handle, 1, kBoundOffsetHigh);
-					members.push_back(member);
-				}
-				placeMs = watch.elapsedMs();
-				watch.restart();
-				for (size_t i = 0; i < members.size(); ++i)
-					gSDK->ResetObject(members[i].handle);
-				resetMs = watch.elapsedMs();
-			}
-			const double totalMs = total.elapsedMs();
-			probe.log("  D3 **全部置いてから、まとめて 1 パスで ResetObject**");
-			probe.log("    合計 " + Ms(totalMs) + " ms ／ 1 本 " + Ms(totalMs / kTimedGroupCount) +
-					  " ms");
-			probe.log("    内訳: 置く " + Ms(placeMs) + " ms ／ 第 2 パスのリセット " +
-					  Ms(resetMs) + " ms");
-			LogGroup(probe, "D3 の読み戻し", members);
-			probe.log("    ↑ D2 と同じくらいなら、**「後でまとめて」自体に得は無い**"
-					  "（リセットの回数が同じなので）。縮んでいれば得がある");
+					  " ms（作る " + Ms(createMs) + " ms ／ リセット " + Ms(resetMs) + " ms）");
+			LogGroup(probe, "D2 の読み戻し", members);
+			probe.log("    → **30 本ともバウンドどおりなら、この作りに替えてよい**");
 		}
 	}
 
 	probe.log("=== まとめ ===");
-	probe.log("  読む順: A（物差し）→ B（まとめて作り直す口）→ C（UpdateStyledObjects）"
-			  "→ D（所要）。A が崩れていたら以下は読まない");
+	probe.log("  読む順: A（物差し）→ C（UpdateStyledObjects ＝ issue の (b)）"
+			  "→ E（doRegen=false の規則）→ D（所要）");
 }
