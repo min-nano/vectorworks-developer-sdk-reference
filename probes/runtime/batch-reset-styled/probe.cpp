@@ -253,7 +253,7 @@ namespace
 		Sint32 numItems = 0;
 		// folderIndex は VectorScript の BuildResourceList と同じ「0 ＝ いまの文書」。
 		const Sint32 listID = gSDK->BuildResourceListUnsorted(
-			kSymbolDefinitionType, static_cast<MockUp::FolderSpecifier>(0), "", numItems);
+			kSymbolDefinitionType, static_cast<FolderSpecifier>(0), "", numItems);
 		long long styles = 0;
 		for (Sint32 i = 0; i < numItems; ++i)
 		{
