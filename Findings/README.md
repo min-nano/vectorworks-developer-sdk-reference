@@ -50,6 +50,7 @@
 | [Undo](Undo.md) | undo イベントの開き方・登録の作法・戻らないもの |
 | [Progress and Diagnostics](Progress%20and%20Diagnostics.md) | 進捗ダイアログ・`DoYield`・例外境界・VW バージョンは取れない |
 | [Layout Dialogs](Layout%20Dialogs.md) | レイアウトダイアログ（`VWDialog`）の大きさ・コントロール・イベントの作法・**モードレスなパレット（`IExtensionWebPalette`。未確認）** |
+| [File and Folder Dialogs](File%20and%20Folder%20Dialogs.md) | OS のファイル／フォルダ選択ダイアログ。**フォルダ選択は `IFolderChooserDialog` で開ける**・キャンセルの戻り値・受け取るパスは末尾に区切りが付く UTF-8 の絶対パス・`IFileIdentifier::GetFolder` は同じ文字列を返す |
 | [TXString](TXString.md) | 文字列型。`const char*` / `std::string` からの暗黙変換・**リテラルで多重定義が曖昧になる**・UTF-8 の出し入れ |
 | [Plug-in Modules](Plug-in%20Modules.md) | プラグインモジュールの読み込みと入れ替え。起動時にしか読まれない・VCOM の初期化はモジュールごと・SDK をリンクするモジュールが必ず定義する 2 つ・**本体を外部モジュールへ出せば再起動なしで入れ替えられる**（mac 実測） |
 | [Documents](Documents.md) | 図面（文書）を開く・作る。**コマンド実行中に空の新規文書を開いて描画先を移せる**（実機確認済み）・複数文書を `SwitchToOpenFile` で行き来できる・**テンプレートからの新規作成専用 API は無い**・**未保存の変更がある文書は `CloseDocument()` で閉じられない** |
