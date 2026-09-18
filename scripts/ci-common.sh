@@ -474,3 +474,120 @@ wait_run() {
 			;;
 	esac
 }
+
+# ---------------------------------------------------------------------------
+# 待ち行列を奪われたら、後続の run を待ち直す
+# ---------------------------------------------------------------------------
+#
+# GitHub の concurrency は 1 グループにつき **「走行中 1 本＋待機 1 本」しか置かない**。
+# `cancel-in-progress: false` が守るのは走行中の 1 本だけなので、**3 本目が来ると
+# 待機していた 2 本目が cancelled になる**。probe-build.yml の dispatch はどれも
+# ref=main で同じグループに入るため、プローブを持つ PR が 3 本同時に動くと必ず
+# どれかが奪われる（issue #89 で実際に 2 度踏んだ）。
+#
+# **奪われたのは待ち行列だけで、中身は失われていない。** 奪った側のビルドは
+# 「main ＋ その時点で open な PR 全部」を載せる（scripts/gather-probes.sh）ので、
+# 奪われた側が作ろうとしたものはそこに入っている。しかも**後続の run は必ず自分の
+# dispatch より後に集約する**（run id は作られた順に増えるので、後続の gather は
+# 自分が dispatch した時刻＝自分の push より後に走る）ので、**自分の最新のコミットも
+# 載る**。だから正しい振る舞いは「後続を待ち直す」ことであって、「ビルドが落ちた」と
+# 報告することではない。**cancelled はコンパイル失敗では決してない**（失敗なら
+# conclusion は failure で返る）。
+#
+# wait_run_or_successor <run-id> <ワークフローのファイル名> <ブランチ> <jq の選択式> [jq への引数…]
+#
+#   結果は **WAIT_CONCLUSION（conclusion）と WAIT_RUN_ID（最後に待った run）** に入る。
+#   **コマンド置換（`x="$(wait_run_or_successor …)"`）で受けないこと**——サブシェルでは
+#   待ち直した run の id が呼び出し側へ返らず、呼び出し側が古い run の URL を出す。
+#   戻り値は wait_run と同じで、conclusion を観測できたら 0、見届けられなかったら 1。
+#
+#   選択式は「新しい順の workflow_runs」の 1 件に対して評価され、jq 変数 `$since`
+#   （自分の run id・文字列）が使える。**自分の代わりになる run だけを選ぶ条件**を
+#   書くこと——顔ぶれを絞って手で叩いた dispatch を待っても、自分のプローブは載らない。
+#
+# **有限時間で必ず返る**のは wait_run と同じ。待ち直しは MAX_HANDOFFS 回まで、
+# 総待機時間は最初の TIMEOUT を越えない（周回ごとに残り時間へ詰めるので、呼び出し側の
+# ウォッチドッグの見積もりも変えなくてよい）。
+MAX_HANDOFFS="${CI_MAX_HANDOFFS:-4}"
+WAIT_CONCLUSION=""
+# shellcheck disable=SC2034 # source した側（と待ち直しの周回）が読む。
+WAIT_RUN_ID=""
+
+# 後続を選ぶ条件は**ここに 2 つだけ**置く（probe-auto-update.sh / probe-release-guard.sh /
+# 単体テストが同じものを使う。散らすと「テストは通るのに本番の条件が違う」になる）。
+# どちらも probe-build.yml の run-name の綴りに依存している:
+#
+#   dispatch  "probe build (PR 83,84 + main)"
+#   push      "probe build (open PR + main)"  … open な PR を全部載せる（issue #79）
+#
+# shellcheck disable=SC2034,SC2016 # source した側が使う。$since / $re は jq の変数。
+# SUCCESSOR_CARRIES_PR: 「この PR を載せる run」を選ぶ（--arg re に successor_title_re の
+# 出力を渡す）。push のビルドは open な PR を全部載せるので無条件に認める。
+SUCCESSOR_CARRIES_PR='(.id > ($since | tonumber)) and ((.event == "push") or (.display_title | test($re)))'
+# shellcheck disable=SC2034,SC2016 # source した側が使う。$since / $t は jq の変数。
+# SUCCESSOR_SAME_TITLE: 「同じ顔ぶれを作る run」を選ぶ（--arg t に期待する run 名）。
+SUCCESSOR_SAME_TITLE='(.id > ($since | tonumber)) and ((.event == "push") or (.display_title == $t))'
+
+# successor_title_re <PR 番号>: run 名の PR の並び（"(PR 83,84,88 +"）にその番号が
+# **1 つの要素として**入っているかを見る正規表現を出す。番号の一部に一致させない
+# （84 を探して 8 や 884 を掴まない）のが要点なので、区切りまで含めて書く。
+successor_title_re() {
+	printf '\\(PR ([0-9]+,)*%s(,[0-9]+)* \\+' "$1"
+}
+
+wait_run_or_successor() {
+	local run_id="$1" wf="$2" branch="$3" filter="$4"
+	shift 4
+	local hops=0 rc=0 next code body started outer remaining
+	started="$(date +%s)"
+	outer="$TIMEOUT"
+	body="$(workfile)"
+
+	while true; do
+		# shellcheck disable=SC2034 # 呼び出し側が「どの run を待ったか」を読む。
+		WAIT_RUN_ID="$run_id"
+		WAIT_CONCLUSION="$(wait_run "$run_id")"
+		rc="$?"
+		[ "$WAIT_CONCLUSION" = "cancelled" ] || break
+
+		if [ "$hops" -ge "$MAX_HANDOFFS" ]; then
+			echo "$CI_TOOL: cancelled が ${MAX_HANDOFFS} 回続いたので待ち直しを打ち切ります" >&2
+			break
+		fi
+
+		# 後続を探す。event は問わない（push のビルドも「main ＋ open な PR 全部」を
+		# 載せるので、奪った相手が push なら push を待つのが正しい）。
+		next=""
+		code="$(api_json "$VW_API/actions/workflows/$wf/runs?branch=$branch&per_page=50" "$body")"
+		if [ "$code" = "200" ]; then
+			next="$(jq -r "$@" --arg since "$run_id" \
+				"first(.workflow_runs[] | select($filter) | .id) // empty" "$body" 2>/dev/null)"
+		else
+			echo "$CI_TOOL: 後続の run を探せませんでした（HTTP $code）" >&2
+		fi
+		if [ -z "$next" ]; then
+			echo "$CI_TOOL: run $run_id は cancelled ですが、代わりに待てる後続が見付かりません（人が止めた可能性）" >&2
+			break
+		fi
+
+		# 残り時間へ詰める。**総待機は最初の TIMEOUT を越えない**（越えると呼び出し側の
+		# ウォッチドッグが先に発火して、理由の分からない死に方をする）。
+		remaining="$((outer - ($(date +%s) - started)))"
+		if [ "$remaining" -lt 60 ]; then
+			echo "$CI_TOOL: 待ち直す時間が残っていません（残り ${remaining}s）" >&2
+			WAIT_CONCLUSION="timed-out-waiting"
+			rc=1
+			break
+		fi
+		TIMEOUT="$remaining"
+
+		hops="$((hops + 1))"
+		echo "$CI_TOOL: run $run_id は待ち行列を奪われました（cancelled）。後続の run $next を待ち直します（${hops}/${MAX_HANDOFFS}。残り ${remaining}s）" >&2
+		echo "$CI_TOOL: → https://github.com/$VW_REPO/actions/runs/$next" >&2
+		run_id="$next"
+	done
+
+	TIMEOUT="$outer"
+	rm -f "$body"
+	return "$rc"
+}
