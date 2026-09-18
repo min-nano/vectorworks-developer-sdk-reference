@@ -3,34 +3,32 @@
 //
 //	[issue #82] PIO のパラメータ表（GetParamsCount / GetParamName /
 //	GetParamLocalizedName）が、同じ種別のインスタンスなら常に同一かを実測する。
-//	取り込みプラグイン側の `ResolveParamName`（universal 名で引けなかったら表を端から
-//	GetParamLocalizedName で舐める）の結果を**種別ごとに 1 度だけ解決してキャッシュして
-//	よいか**を決めるための調査。
+//	`ResolveParamName` の結果を**種別ごとに 1 度だけ解決してキャッシュしてよいか**を
+//	決めるための調査。
 //
-//	SDK の実装を読んで分かっている機構（VWParametricObj.cpp）:
-//	  * GetParamsCount / GetParamName は**インスタンスに付いたパラメータレコード**
-//	    （aux list 上の、parametric ビットの立った format を持つ record）から採る。
-//	    format は PIO 種別ごと・文書ごとの 1 つのはず——なら表は種別ごとに不変。
-//	  * GetParamLocalizedName は 1 呼び出しごとに IExtendedProps を作り、対象オブジェクト
-//	    から CodeRefID → FileIndex → IExtension → IID_ParametricParamsProvider の
-//	    イベントシンクまで辿り、あれば provider->GetParamNameAt(index)、無ければ
-//	    format 名と universal 名で GetLocalizedPluginParameter を引く。
-//	    **引数はどちらも索引だけ**なので、インスタンスに依らないはず。
-//	この「はず」を実機で潰すのがこのプローブ。確かめるのは次の 6 つ。
+//	**これは 2 回目の版である。** 1 回目（PR #84 のコメントに全文が残っている）で、
+//	値違い・ポップアップ違い・同じ本の書き換え・別文書の 4 通りは**すべて表が一致**し、
+//	コストも採れた。**残ったのは「スタイルを当てた本」だけ**で、そこだけ答えが出なかった:
 //
-//	  G1  作った直後の同じ種別 4 本で、表（件数・universal 名・ローカライズ名の並び）が
-//	      一致するか。レコードフォーマットのハンドルが同一かどうかも見る。
-//	      ついでに A の表を全文ダンプする（次に読む人がそのまま使える）。
-//	  G2  1 呼び出しのコスト（cold は G1 の先頭で、warm はここで）。universal 名 /
-//	      ローカライズ名 / フルスキャン 1 回ぶん。キャッシュの効き目の見積もりに使う。
-//	  G3  値を変えた本・ポップアップを倒した本の表が、既定の本と一致するか。
-//	  G4  同じインスタンスを書き換えて ResetObject した前後で表が変わるか。
-//	  G5  別の文書で作った同じ種別の表が一致するか（キャッシュを文書で捨てるべきか）。
-//	  G6  スタイルを当てた後の表が変わるか。**この節だけダイアログが出るかもしれない**
-//	      ので最後に置く（出たら閉じてよい。それまでの行はログに残っている）。
+//	  * `gSDK->CreatePluginStyle(h)` は**スタイル名を尋ねるダイアログを出す**
+//	    （実測 49818ms＝人を待っていた）。
+//	  * **戻ったときには渡したハンドルが無効になっている**（同じハンドルで
+//	    GetParamsCount が 0、レコードフォーマットのハンドルが 0x0）。
+//	    つまり「スタイルを当てた後のそのオブジェクト」を同じハンドルでは読めない。
 //
-//	新規の空図面で走らせる。構造材（StructuralMember）を 5 本と、確認用の別文書を
-//	1 つ作る（別文書は最後に閉じる）。
+//	そこでこの版は、スタイルを作った**後で図面から拾い直し**、さらに
+//	**そのスタイルを新しい本へ当て直して**（`VWParametricObj::SetStyle`。ダイアログ無し）
+//	表を突き合わせる。これで「スタイルの有無で表が変わるか」に決着が付く。
+//
+//	  G1  基準の本 A を作り、表の署名（件数＋全名前）を採る。
+//	  G2  本 E を作り、`CreatePluginStyle(E)` を呼ぶ。**ここでダイアログが出る**ので、
+//	      **既定の名前のまま「OK」を押す**（キャンセルするとスタイルが作られず、
+//	      この調査は答えが出ない）。
+//	  G3  図面の構造材を全部拾い直し、1 本ずつ「スタイル番号」と表を A と突き合わせる。
+//	  G4  見つかったスタイルを**新しい本 F へ当て**、`ResetObject` してから表を
+//	      A と突き合わせる（ダイアログを通らない経路での確認）。
+//
+//	新規の空図面で走らせる。
 //
 
 #include "Probe.h"
@@ -41,7 +39,6 @@
 
 #include <chrono>
 #include <cstdio>
-#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -49,7 +46,6 @@ namespace
 {
 	using SteadyClock = std::chrono::steady_clock;
 
-	// 調べる種別。取り込みプラグインで実際に問題になっているものを使う。
 	const char* const kProbeTypeName = "StructuralMember";
 
 	std::string Str(const TXString& s)
@@ -76,15 +72,12 @@ namespace
 		return std::chrono::duration<double, std::milli>(SteadyClock::now() - since).count();
 	}
 
-	// -------------------------------------------------------------------
-	// パラメータ表 1 枚ぶん。比較はこの構造体どうしで行う。
+	// パラメータ表 1 枚ぶん（比較に要るものだけ）。
 	struct ParamTable
 	{
 		std::vector<std::string> universalNames;
 		std::vector<std::string> localizedNames;
 		std::vector<size_t> choiceCounts;
-		std::vector<std::string> values;
-		std::string formatName;
 		std::string formatHandle;
 	};
 
@@ -93,9 +86,7 @@ namespace
 		ParamTable table;
 		VWParametricObj obj(hObject);
 
-		VWRecordFormatObj format = obj.GetRecordFormat();
-		table.formatName = Str(format.GetFormatName());
-		table.formatHandle = HandleText(static_cast<MCObjectHandle>(format));
+		table.formatHandle = HandleText(static_cast<MCObjectHandle>(obj.GetRecordFormat()));
 
 		const size_t count = obj.GetParamsCount();
 		for (size_t index = 0; index < count; ++index)
@@ -105,65 +96,39 @@ namespace
 
 			TXStringSTLArray choices;
 			table.choiceCounts.push_back(obj.GetParamChoices(index, choices) ? choices.size() : 0);
-			table.values.push_back(Str(obj.GetParamAsString(index)));
 		}
 		return table;
 	}
 
-	// 2 枚の表の食い違いを人が読める 1 行にする。**値は比べない**（値は変えて回って
-	// いるので違って当たり前。見たいのは件数・並び・名前）。
+	// 表の食い違いを 1 行にする（名前と選択肢の数まで見る。値は見ない）。
 	std::string CompareTables(const ParamTable& lhs, const ParamTable& rhs)
 	{
 		if (lhs.universalNames.size() != rhs.universalNames.size())
-			return "件数が違う（" + std::to_string(lhs.universalNames.size()) + " 対 " +
+			return "**件数が違う**（" + std::to_string(lhs.universalNames.size()) + " 対 " +
 				   std::to_string(rhs.universalNames.size()) + "）";
 
 		std::string diffs;
 		size_t diffCount = 0;
 		for (size_t index = 0; index < lhs.universalNames.size(); ++index)
 		{
-			const bool sameUniversal = lhs.universalNames[index] == rhs.universalNames[index];
-			const bool sameLocalized = lhs.localizedNames[index] == rhs.localizedNames[index];
-			if (sameUniversal && sameLocalized)
+			if (lhs.universalNames[index] == rhs.universalNames[index] &&
+				lhs.localizedNames[index] == rhs.localizedNames[index] &&
+				lhs.choiceCounts[index] == rhs.choiceCounts[index])
 				continue;
 
 			++diffCount;
 			if (diffCount <= 5)
-			{
 				diffs += " [" + std::to_string(index) + "] " + lhs.universalNames[index] + "/" +
-						 lhs.localizedNames[index] + " → " + rhs.universalNames[index] + "/" +
-						 rhs.localizedNames[index];
-			}
+						 lhs.localizedNames[index] + "/" + std::to_string(lhs.choiceCounts[index]) +
+						 " → " + rhs.universalNames[index] + "/" + rhs.localizedNames[index] + "/" +
+						 std::to_string(rhs.choiceCounts[index]);
 		}
 		if (diffCount == 0)
 			return "一致（件数 " + std::to_string(lhs.universalNames.size()) +
-				   "・universal 名もローカライズ名も全索引で同じ）";
-		return "相違 " + std::to_string(diffCount) + " 件:" + diffs;
+				   "・universal 名もローカライズ名も選択肢の数も全索引で同じ）";
+		return "**相違 " + std::to_string(diffCount) + " 件**:" + diffs;
 	}
 
-	// 選択肢（ポップアップ）の顔ぶれまで比べる。並びが値に依存しないかを見るため。
-	std::string CompareChoices(const ParamTable& lhs, const ParamTable& rhs)
-	{
-		if (lhs.choiceCounts.size() != rhs.choiceCounts.size())
-			return "件数が違うので比較不能";
-
-		std::string diffs;
-		size_t diffCount = 0;
-		for (size_t index = 0; index < lhs.choiceCounts.size(); ++index)
-		{
-			if (lhs.choiceCounts[index] == rhs.choiceCounts[index])
-				continue;
-			++diffCount;
-			if (diffCount <= 5)
-				diffs += " [" + std::to_string(index) + "] " +
-						 std::to_string(lhs.choiceCounts[index]) + " → " +
-						 std::to_string(rhs.choiceCounts[index]);
-		}
-		return diffCount == 0 ? "一致（全索引で選択肢の数が同じ）"
-							  : "相違 " + std::to_string(diffCount) + " 件:" + diffs;
-	}
-
-	// -------------------------------------------------------------------
 	// 構造材を 1 本作る。パスは 2D ポリライン（Findings「パスの型を間違えると…」）。
 	MCObjectHandle CreateMember(double offsetY)
 	{
@@ -174,368 +139,139 @@ namespace
 											true);
 	}
 
-	// 数値として読めるパラメータの値を書き換える（「値が違うインスタンス」を作る）。
-	// 変えた件数を返す。
-	size_t BumpNumericParams(::vwprobe::Report& probe, MCObjectHandle hObject, size_t maxCount)
+	// いまのレイヤに載っている構造材を全部拾う（CreatePluginStyle でハンドルが無効に
+	// なっても、図面からは拾い直せる——それを確かめるのがこの関数）。
+	std::vector<MCObjectHandle> CollectMembers()
 	{
-		VWParametricObj obj(hObject);
-		const size_t count = obj.GetParamsCount();
-		size_t bumped = 0;
-		for (size_t index = 0; index < count && bumped < maxCount; ++index)
+		std::vector<MCObjectHandle> found;
+		MCObjectHandle layer = gSDK->GetCurrentLayer();
+		if (layer == nil)
+			return found;
+
+		for (MCObjectHandle h = gSDK->FirstMemberObj(layer); h != nil; h = gSDK->NextObject(h))
 		{
-			TXStringSTLArray choices;
-			if (obj.GetParamChoices(index, choices) && choices.size() > 1)
-				continue; // ポップアップは別のインスタンスで扱う
-
-			const std::string value = Str(obj.GetParamAsString(index));
-			if (value.empty())
+			if (!VWParametricObj::IsParametricObject(h))
 				continue;
-
-			char* end = nullptr;
-			const double parsed = std::strtod(value.c_str(), &end);
-			if (end == nullptr || *end != '\0')
-				continue; // 数値として読めないものは触らない
-
-			const std::string next = Num(parsed * 2.0 + 13.0);
-			obj.SetParamAsString(index, TXString(next.c_str()));
-			probe.log("  値を変えた [" + std::to_string(index) + "] " +
-					  Str(obj.GetParamName(index)) + ": " + value + " → " + next);
-			++bumped;
+			VWParametricObj obj(h);
+			if (Str(obj.GetParametricName()) == kProbeTypeName)
+				found.push_back(h);
 		}
-		return bumped;
-	}
-
-	// ポップアップを別の選択肢へ倒す（「断面形状で別の形を選んだ」に当たるインスタンス）。
-	size_t SwitchPopupParams(::vwprobe::Report& probe, MCObjectHandle hObject, size_t maxCount)
-	{
-		VWParametricObj obj(hObject);
-		const size_t count = obj.GetParamsCount();
-		size_t changed = 0;
-		for (size_t index = 0; index < count && changed < maxCount; ++index)
-		{
-			TXStringSTLArray choices;
-			if (!obj.GetParamChoices(index, choices) || choices.size() < 2)
-				continue;
-
-			const std::string before = Str(obj.GetParamAsString(index));
-			const std::string after = Str(choices[choices.size() - 1]);
-			if (before == after)
-				continue;
-
-			obj.SetParamAsString(index, TXString(after.c_str()));
-			probe.log("  ポップアップを倒した [" + std::to_string(index) + "] " +
-					  Str(obj.GetParamName(index)) + "（選択肢 " + std::to_string(choices.size()) +
-					  " 個）: " + before + " → " + after);
-			++changed;
-		}
-		return changed;
-	}
-
-	void LogTable(::vwprobe::Report& probe, const ParamTable& table, const char* label)
-	{
-		probe.log(std::string(label) + ": 件数=" + std::to_string(table.universalNames.size()) +
-				  " format=" + table.formatName + " formatHandle=" + table.formatHandle);
-		for (size_t index = 0; index < table.universalNames.size(); ++index)
-		{
-			probe.log("  [" + std::to_string(index) + "] univ=" + table.universalNames[index] +
-					  " loc=" + table.localizedNames[index] + " choices=" +
-					  std::to_string(table.choiceCounts[index]) + " value=" + table.values[index]);
-		}
+		return found;
 	}
 } // namespace
 
-VW_PROBE("pio-param-table", "PIO のパラメータ表がインスタンス間で不変かを確かめる",
-		 "同じ種別（StructuralMember）のインスタンスを値違い・ポップアップ違い・別文書・"
-		 "スタイル付きで作り、GetParamsCount / GetParamName / GetParamLocalizedName の"
-		 "返す表を突き合わせる。1 呼び出しのコストも測る")
+VW_PROBE("pio-param-table", "スタイルを当てた PIO のパラメータ表を確かめる",
+		 "スタイルを作って当て直し、GetParamsCount / GetParamName / "
+		 "GetParamLocalizedName の返す表がスタイルの有無で変わるかを突き合わせる"
+		 "（途中でスタイル名のダイアログが出るので、既定のまま OK を押す）")
 {
 	// -------------------------------------------------------------- G1
-	// **順序について。** 図面を触る（値を書き換える・ResetObject する・文書を開く）ほど
-	// 落ちる目が増えるので、**落ちても惜しくない順**に並べてある——先に「A の表の全文」と
-	// 「コスト」を採り切り、その後で書き換え・別文書・スタイルへ進む。
-	probe.log("[G1] 種別を定義してインスタンスを 4 本作る");
-	// 生成時に「オブジェクトの設定」ダイアログを出さない（Findings「生成時に…」）。
+	probe.log("[G1] 基準の本 A を作る");
 	gSDK->DefineCustomObject(kProbeTypeName, kCustomObjectPrefNever);
 
-	MCObjectHandle memberDefault = CreateMember(0.0);
-	if (memberDefault == nil)
+	MCObjectHandle memberBase = CreateMember(0.0);
+	if (memberBase == nil)
 	{
 		probe.fail("CreateCustomObjectPath が nil を返した（種別 StructuralMember を作れない）");
 		return;
 	}
-
-	// **表に触る前に**、いちばん最初の 1 呼び出しのコストを測る（cold）。
+	const ParamTable tableBase = DumpTable(memberBase);
+	probe.log("[G1] A = " + HandleText(memberBase) +
+			  " 件数=" + std::to_string(tableBase.universalNames.size()) +
+			  " formatHandle=" + tableBase.formatHandle);
 	{
-		const SteadyClock::time_point startCtor = SteadyClock::now();
-		VWParametricObj obj(memberDefault);
-		const double ctorMs = ElapsedMs(startCtor);
-
-		const SteadyClock::time_point startCount = SteadyClock::now();
-		const size_t count = obj.GetParamsCount();
-		const double countMs = ElapsedMs(startCount);
-
-		const SteadyClock::time_point startUniv = SteadyClock::now();
-		const TXString univName = obj.GetParamName(0);
-		const double univMs = ElapsedMs(startUniv);
-
-		const SteadyClock::time_point startLoc = SteadyClock::now();
-		const TXString locName = obj.GetParamLocalizedName(0);
-		const double locMs = ElapsedMs(startLoc);
-
-		probe.log("[G1] cold（この走行での最初の 1 呼び出し）: VWParametricObj 構築=" +
-				  Num(ctorMs) + "ms GetParamsCount=" + Num(countMs) + "ms（件数 " +
-				  std::to_string(count) + "） GetParamName(0)=" + Num(univMs) +
-				  "ms GetParamLocalizedName(0)=" + Num(locMs) + "ms");
-		probe.log("[G1] [0] univ=" + Str(univName) + " loc=" + Str(locName));
-	}
-
-	MCObjectHandle memberValues = CreateMember(1000.0);
-	MCObjectHandle memberPopups = CreateMember(2000.0);
-	MCObjectHandle memberStyled = CreateMember(3000.0);
-	if (memberValues == nil || memberPopups == nil || memberStyled == nil)
-	{
-		probe.fail("2 本目以降の CreateCustomObjectPath が nil を返した");
-		return;
-	}
-	probe.log("[G1] A（既定）= " + HandleText(memberDefault) + " B（値違い）= " +
-			  HandleText(memberValues) + " C（ポップアップ違い）= " + HandleText(memberPopups) +
-			  " D（後でスタイル）= " + HandleText(memberStyled));
-
-	// 作った直後の 4 本を突き合わせる。**まだ何も書き換えていない**ので、ここで
-	// 食い違えば「同じ種別でも本ごとに表が違う」ことになる。
-	const ParamTable tableDefault = DumpTable(memberDefault);
-	const ParamTable tableValuesPre = DumpTable(memberValues);
-	const ParamTable tablePopupsPre = DumpTable(memberPopups);
-	const ParamTable tableStyledPre = DumpTable(memberStyled);
-	LogTable(probe, tableDefault, "[G1] A（既定）の表 全文");
-	probe.log("[G1] 作った直後の A vs B: " + CompareTables(tableDefault, tableValuesPre));
-	probe.log("[G1] 作った直後の A vs C: " + CompareTables(tableDefault, tablePopupsPre));
-	probe.log("[G1] 作った直後の A vs D: " + CompareTables(tableDefault, tableStyledPre));
-	probe.log("[G1] レコードフォーマットのハンドル: A=" + tableDefault.formatHandle +
-			  " B=" + tableValuesPre.formatHandle + " C=" + tablePopupsPre.formatHandle +
-			  " D=" + tableStyledPre.formatHandle + " → " +
-			  ((tableDefault.formatHandle == tableValuesPre.formatHandle &&
-				tableDefault.formatHandle == tablePopupsPre.formatHandle &&
-				tableDefault.formatHandle == tableStyledPre.formatHandle)
-				   ? "4 本とも同一のフォーマットを共有している"
-				   : "**フォーマットが本ごとに違う**"));
-
-	// ローカライズ名の**出どころ**を切り分ける。GetParamLocalizedName の非 provider 経路は
-	// 「gSDK->GetLocalizedPluginParameter(種別名, universal 名)」を引くだけである
-	// （VWParametricObj.cpp）。両者が全索引で一致するなら、ローカライズ名は
-	// **「種別名 × universal 名」だけで決まる**——インスタンスにも文書にも依らない、と
-	// 言い切れる（依るのはアプリ側のローカライズ資源＝UI の言語だけ）。
-	{
-		size_t agreed = 0;
-		size_t differed = 0;
-		size_t notFound = 0;
-		std::string firstDifference;
-		for (size_t index = 0; index < tableDefault.universalNames.size(); ++index)
-		{
-			TXString fromResource;
-			const Boolean found = gSDK->GetLocalizedPluginParameter(
-				kProbeTypeName, TXString(tableDefault.universalNames[index].c_str()), fromResource);
-			if (!found)
-			{
-				++notFound;
-				continue;
-			}
-			if (Str(fromResource) == tableDefault.localizedNames[index])
-			{
-				++agreed;
-			}
-			else
-			{
-				++differed;
-				if (firstDifference.empty())
-					firstDifference = " 最初の食い違い [" + std::to_string(index) + "] " +
-									  tableDefault.universalNames[index] +
-									  ": 表=" + tableDefault.localizedNames[index] +
-									  " 資源=" + Str(fromResource);
-			}
-		}
-		probe.log("[G1] GetParamLocalizedName と GetLocalizedPluginParameter(種別名, univ 名) の"
-				  "突き合わせ: 一致=" +
-				  std::to_string(agreed) + " 相違=" + std::to_string(differed) +
-				  " 資源に無い=" + std::to_string(notFound) + firstDifference);
+		VWParametricObj obj(memberBase);
+		probe.log("[G1] A のスタイル: refNumber=" +
+				  std::to_string(static_cast<long>(obj.GetStyleRefNumber())) +
+				  " styleHandle=" + HandleText(obj.GetStyleHandle()));
 	}
 
 	// -------------------------------------------------------------- G2
-	// **コストは図面を書き換える前に測る。** 落ちる目のある操作の後だと、測れずに終わる。
-	probe.log("[G2] 1 呼び出しのコストを測る（warm）");
+	MCObjectHandle memberForStyle = CreateMember(1000.0);
+	if (memberForStyle == nil)
 	{
-		VWParametricObj obj(memberDefault);
-		const size_t count = obj.GetParamsCount();
-		if (count == 0)
-		{
-			probe.fail("パラメータが 0 件なのでコストを測れない");
-		}
-		else
-		{
-			const size_t kRepeatCtor = 2000;
-			const size_t kRepeatScans = 50;
-			size_t sink = 0;
+		probe.fail("2 本目の CreateCustomObjectPath が nil を返した");
+		return;
+	}
+	probe.log("[G2] E = " + HandleText(memberForStyle) + " → CreatePluginStyle を呼ぶ");
+	probe.log("[G2] **ここでスタイル名を尋ねるダイアログが出ます。既定の名前のまま「OK」を"
+			  "押してください**（キャンセルするとスタイルが作られず、この調査は答えが"
+			  "出ません）");
 
-			const SteadyClock::time_point startCtor = SteadyClock::now();
-			for (size_t i = 0; i < kRepeatCtor; ++i)
-			{
-				VWParametricObj each(memberDefault);
-				sink += each.GetParamsCount();
-			}
-			const double ctorMs = ElapsedMs(startCtor);
+	const SteadyClock::time_point startStyle = SteadyClock::now();
+	gSDK->CreatePluginStyle(memberForStyle);
+	const double styleMs = ElapsedMs(startStyle);
+	probe.log("[G2] CreatePluginStyle から戻った（所要 " + Num(styleMs) +
+			  "ms。1000ms を超えていれば人を待っていた＝ダイアログが出た）");
 
-			const SteadyClock::time_point startUniv = SteadyClock::now();
-			for (size_t rep = 0; rep < kRepeatScans; ++rep)
-				for (size_t index = 0; index < count; ++index)
-					sink += obj.GetParamName(index).GetLength();
-			const double univMs = ElapsedMs(startUniv);
-
-			const SteadyClock::time_point startLoc = SteadyClock::now();
-			for (size_t rep = 0; rep < kRepeatScans; ++rep)
-				for (size_t index = 0; index < count; ++index)
-					sink += obj.GetParamLocalizedName(index).GetLength();
-			const double locMs = ElapsedMs(startLoc);
-
-			const SteadyClock::time_point startIndex = SteadyClock::now();
-			for (size_t rep = 0; rep < kRepeatScans; ++rep)
-				for (size_t index = 0; index < count; ++index)
-					sink += obj.GetParamIndex(TXString(tableDefault.universalNames[index].c_str()));
-			const double indexMs = ElapsedMs(startIndex);
-
-			const double scans = static_cast<double>(kRepeatScans);
-			const double calls = scans * static_cast<double>(count);
-			probe.log("[G2] パラメータ件数=" + std::to_string(count) + " 走行=" +
-					  std::to_string(kRepeatScans) + " 周（sink=" + std::to_string(sink) + "）");
-			probe.log("[G2] VWParametricObj 構築 + GetParamsCount: " + Num(ctorMs) + "ms / " +
-					  std::to_string(kRepeatCtor) +
-					  " 回 = " + Num(ctorMs * 1000.0 / static_cast<double>(kRepeatCtor)) + "us/回");
-			probe.log("[G2] GetParamName: " + Num(univMs) +
-					  "ms 合計 = " + Num(univMs * 1000.0 / calls) +
-					  "us/回、フルスキャン 1 回 = " + Num(univMs / scans) + "ms");
-			probe.log("[G2] GetParamLocalizedName: " + Num(locMs) +
-					  "ms 合計 = " + Num(locMs * 1000.0 / calls) +
-					  "us/回、フルスキャン 1 回 = " + Num(locMs / scans) + "ms");
-			probe.log("[G2] GetParamIndex（universal 名で 1 個引く）: " + Num(indexMs) +
-					  "ms 合計 = " + Num(indexMs * 1000.0 / calls) + "us/回");
-			const double fullScanMs = locMs / scans; // ローカライズ名フルスキャン 1 回
-			const double indexCallMs = indexMs / calls; // universal 名で 1 個引く
-			probe.log("[G2] ローカライズ名のフルスキャン 1 回は、universal 名で 1 個引くのの約 " +
-					  Num(fullScanMs / indexCallMs, 1) + " 倍");
-		}
+	// 渡したハンドルがどうなったか（1 回目の版で無効になっていた）。
+	{
+		VWParametricObj obj(memberForStyle);
+		probe.log(
+			"[G2] 渡したハンドル E は今: 件数=" + std::to_string(obj.GetParamsCount()) +
+			" formatHandle=" + HandleText(static_cast<MCObjectHandle>(obj.GetRecordFormat())) +
+			" → " + (obj.GetParamsCount() == 0 ? "**無効になっている**" : "まだ読める"));
 	}
 
 	// -------------------------------------------------------------- G3
-	probe.log("[G3] 値とポップアップを変えたインスタンスの表を突き合わせる");
-	probe.log("[G3] B の値を変える:");
-	const size_t bumped = BumpNumericParams(probe, memberValues, 8);
-	probe.log("[G3] B で変えた件数 = " + std::to_string(bumped));
-	probe.log("[G3] C のポップアップを倒す:");
-	const size_t switched = SwitchPopupParams(probe, memberPopups, 8);
-	probe.log("[G3] C で倒した件数 = " + std::to_string(switched));
-	probe.log(
-		"[G3] ResetObject(B)=" + std::string(gSDK->ResetObject(memberValues) ? "true" : "false") +
-		" ResetObject(C)=" + std::string(gSDK->ResetObject(memberPopups) ? "true" : "false"));
+	probe.log("[G3] 図面から構造材を拾い直して突き合わせる");
+	RefNumber foundStyleRef = 0;
+	std::vector<MCObjectHandle> members = CollectMembers();
+	probe.log("[G3] 拾えた構造材 = " + std::to_string(members.size()) + " 本");
+	for (size_t i = 0; i < members.size(); ++i)
+	{
+		VWParametricObj obj(members[i]);
+		const RefNumber styleRef = obj.GetStyleRefNumber();
+		if (styleRef > 0 && foundStyleRef == 0)
+			foundStyleRef = styleRef;
 
-	const ParamTable tableValues = DumpTable(memberValues);
-	const ParamTable tablePopups = DumpTable(memberPopups);
-	probe.log("[G3] A vs B（値違い）: " + CompareTables(tableDefault, tableValues));
-	probe.log("[G3] A vs C（ポップアップ違い）: " + CompareTables(tableDefault, tablePopups));
-	probe.log("[G3] 選択肢の数 A vs C: " + CompareChoices(tableDefault, tablePopups));
-	probe.log("[G3] フォーマットのハンドル: A=" + tableDefault.formatHandle +
-			  " B=" + tableValues.formatHandle + " C=" + tablePopups.formatHandle);
+		const ParamTable table = DumpTable(members[i]);
+		probe.log("[G3] [" + std::to_string(i) + "] " + HandleText(members[i]) +
+				  " styleRef=" + std::to_string(static_cast<long>(styleRef)) + " styleHandle=" +
+				  HandleText(obj.GetStyleHandle()) + " formatHandle=" + table.formatHandle +
+				  " / A と: " + CompareTables(tableBase, table));
+	}
 
 	// -------------------------------------------------------------- G4
-	probe.log("[G4] 同じインスタンス（A）を変えて ResetObject した前後で表が変わるか");
-	const size_t bumpedA = BumpNumericParams(probe, memberDefault, 4);
-	const size_t switchedA = SwitchPopupParams(probe, memberDefault, 4);
-	probe.log("[G4] A で変えた件数 = " + std::to_string(bumpedA) + " / " +
-			  std::to_string(switchedA) + "（値 / ポップアップ）ResetObject=" +
-			  std::string(gSDK->ResetObject(memberDefault) ? "true" : "false"));
-	const ParamTable tableAfterReset = DumpTable(memberDefault);
-	probe.log("[G4] A（変更前）vs A（変更後）: " + CompareTables(tableDefault, tableAfterReset));
-	probe.log("[G4] 選択肢の数 A（変更前）vs A（変更後）: " +
-			  CompareChoices(tableDefault, tableAfterReset));
-	probe.log("[G4] フォーマットのハンドル: 変更前=" + tableDefault.formatHandle +
-			  " 変更後=" + tableAfterReset.formatHandle);
-
-	// -------------------------------------------------------------- G5
-	probe.log("[G5] 別の文書で作った同じ種別の表と突き合わせる");
+	if (foundStyleRef == 0)
 	{
-		MockUp::TVWArray_OpenFileInformation filesBefore;
-		gSDK->GetOpenFilesList(filesBefore);
-		Sint32 originalRef = -1;
-		for (size_t i = 0; i < filesBefore.GetSize(); ++i)
-			if (filesBefore[i].fIsActive)
-				originalRef = filesBefore[i].fFileRef;
-		probe.log("[G5] 開いている文書 = " + std::to_string(filesBefore.GetSize()) +
-				  " 件 いまの fileRef = " + std::to_string(static_cast<long>(originalRef)));
-
-		const bool opened = gSDK->OpenDocumentPath(nil, false);
-		probe.log("[G5] OpenDocumentPath(nil, false) = " + std::string(opened ? "true" : "false"));
-		if (opened)
-		{
-			gSDK->DefineCustomObject(kProbeTypeName, kCustomObjectPrefNever);
-			MCObjectHandle memberOther = CreateMember(0.0);
-			if (memberOther == nil)
-			{
-				probe.fail("別文書で CreateCustomObjectPath が nil を返した");
-			}
-			else
-			{
-				const ParamTable tableOther = DumpTable(memberOther);
-				probe.log("[G5] A（文書 1）vs 別文書: " + CompareTables(tableDefault, tableOther));
-				probe.log("[G5] 選択肢の数 A vs 別文書: " +
-						  CompareChoices(tableDefault, tableOther));
-				probe.log("[G5] フォーマット: 文書 1 = " + tableDefault.formatName + " " +
-						  tableDefault.formatHandle + " / 別文書 = " + tableOther.formatName + " " +
-						  tableOther.formatHandle + " → " +
-						  (tableDefault.formatHandle == tableOther.formatHandle
-							   ? "**同一ハンドル**"
-							   : "別のハンドル（文書ごとに別のフォーマット実体）"));
-			}
-
-			// 後始末。CloseDocument は false を返しながら閉じる（Findings/Documents.md）ので、
-			// 件数で確かめる。
-			const bool closed = gSDK->CloseDocument();
-			MockUp::TVWArray_OpenFileInformation filesAfter;
-			gSDK->GetOpenFilesList(filesAfter);
-			probe.log("[G5] CloseDocument() = " + std::string(closed ? "true" : "false") +
-					  " 開いている文書 = " + std::to_string(filesAfter.GetSize()) + " 件");
-			if (originalRef >= 0)
-				probe.log(
-					"[G5] SwitchToOpenFile(" + std::to_string(static_cast<long>(originalRef)) +
-					") = " + std::string(gSDK->SwitchToOpenFile(originalRef) ? "true" : "false"));
-		}
+		probe.fail("スタイルの付いた構造材が見つからなかった（ダイアログをキャンセルした"
+				   "か、CreatePluginStyle がスタイルを作らなかった）。G4 は走らせられない");
+		probe.log("おわり");
+		return;
 	}
 
-	// -------------------------------------------------------------- G6
-	probe.log("[G6] スタイルを当てた後の表（**ここでダイアログが出ることがある**）");
+	probe.log(
+		"[G4] 見つかったスタイル refNumber=" + std::to_string(static_cast<long>(foundStyleRef)) +
+		" を新しい本 F へ当てる（ダイアログを通らない経路）");
+	MCObjectHandle memberStyled = CreateMember(2000.0);
+	if (memberStyled == nil)
 	{
-		RefNumber styleBefore = 0;
-		const Boolean hadStyle = gSDK->GetPluginObjectStyle(memberStyled, styleBefore);
-		probe.log(
-			"[G6] 当てる前: GetPluginObjectStyle = " + std::string(hadStyle ? "true" : "false") +
-			" ref=" + std::to_string(static_cast<long>(styleBefore)));
-
-		const SteadyClock::time_point startStyle = SteadyClock::now();
-		gSDK->CreatePluginStyle(memberStyled);
-		const double styleMs = ElapsedMs(startStyle);
-
-		RefNumber styleAfter = 0;
-		const Boolean hasStyleNow = gSDK->GetPluginObjectStyle(memberStyled, styleAfter);
-		probe.log("[G6] CreatePluginStyle 所要 = " + Num(styleMs) +
-				  "ms（1000ms を超えていたら人を待っている＝ダイアログが出た）");
-		probe.log(
-			"[G6] 当てた後: GetPluginObjectStyle = " + std::string(hasStyleNow ? "true" : "false") +
-			" ref=" + std::to_string(static_cast<long>(styleAfter)));
-
-		const ParamTable tableStyledAfter = DumpTable(memberStyled);
-		probe.log("[G6] A（スタイル無し）vs D（スタイルを当てた後）: " +
-				  CompareTables(tableDefault, tableStyledAfter));
-		probe.log("[G6] 選択肢の数 A vs D: " + CompareChoices(tableDefault, tableStyledAfter));
-		probe.log("[G6] フォーマットのハンドル: A=" + tableDefault.formatHandle +
-				  " D=" + tableStyledAfter.formatHandle);
+		probe.fail("F の CreateCustomObjectPath が nil を返した");
+		probe.log("おわり");
+		return;
 	}
+	const ParamTable tableBeforeStyle = DumpTable(memberStyled);
+	probe.log("[G4] F（当てる前）= " + HandleText(memberStyled) +
+			  " / A と: " + CompareTables(tableBase, tableBeforeStyle));
+
+	{
+		VWParametricObj obj(memberStyled);
+		obj.SetStyle(foundStyleRef);
+	}
+	const bool reset = gSDK->ResetObject(memberStyled);
+
+	VWParametricObj styledObj(memberStyled);
+	const ParamTable tableAfterStyle = DumpTable(memberStyled);
+	probe.log("[G4] SetStyle 後: ResetObject=" + std::string(reset ? "true" : "false") +
+			  " styleRef=" + std::to_string(static_cast<long>(styledObj.GetStyleRefNumber())) +
+			  " styleHandle=" + HandleText(styledObj.GetStyleHandle()) +
+			  " formatHandle=" + tableAfterStyle.formatHandle);
+	probe.log("[G4] A（スタイル無し）vs F（スタイルを当てた後）: " +
+			  CompareTables(tableBase, tableAfterStyle));
+	if (styledObj.GetStyleRefNumber() == 0)
+		probe.fail("F にスタイルが付かなかった（SetStyle が効いていない）ので、"
+				   "「スタイルを当てた表」の比較にならない");
 
 	probe.log("おわり");
 }
