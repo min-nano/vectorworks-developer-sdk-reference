@@ -102,10 +102,7 @@ namespace
 	class Stopwatch
 	{
 	public:
-		Stopwatch()
-			: fStart(std::chrono::steady_clock::now())
-		{
-		}
+		Stopwatch() : fStart(std::chrono::steady_clock::now()) {}
 		void restart()
 		{
 			fStart = std::chrono::steady_clock::now();
@@ -401,8 +398,8 @@ VW_PROBE("batch-reset-styled", "1 本ごとの ResetObject をまとめられる
 		}
 		else
 		{
-			probe.log("  C2 スタイルを当てた部材を **ResetObject 抜き**で "
-					  + Count(static_cast<size_t>(kProbeGroupCount)) + " 本置く");
+			probe.log("  C2 スタイルを当てた部材を **ResetObject 抜き**で " +
+					  Count(static_cast<size_t>(kProbeGroupCount)) + " 本置く");
 			std::vector<Member> styled;
 			for (int i = 0; i < kProbeGroupCount; ++i)
 			{
@@ -429,8 +426,7 @@ VW_PROBE("batch-reset-styled", "1 本ごとの ResetObject をまとめられる
 			gSDK->UpdateStyledObjects(styleRef);
 			const double elapsed = watch.elapsedMs();
 			LogGroup(probe, "UpdateStyledObjects の後", styled);
-			probe.log("      所要 " + Ms(elapsed) + " ms（" +
-					  Count(styled.size()) + " 本ぶん）");
+			probe.log("      所要 " + Ms(elapsed) + " ms（" + Count(styled.size()) + " 本ぶん）");
 
 			// **作り直されなかったなら、その後の ResetObject では出るのか**を続けて見る
 			// ——「UpdateStyledObjects を呼んだ後は ResetObject が効かなくなる」という
@@ -471,8 +467,8 @@ VW_PROBE("batch-reset-styled", "1 本ごとの ResetObject をまとめられる
 			}
 			const double totalMs = total.elapsedMs();
 			probe.log("  D1 いまの作り（doRegen=true → バウンド → 1 本ごとに ResetObject）");
-			probe.log("    合計 " + Ms(totalMs) + " ms ／ 1 本 " +
-					  Ms(totalMs / kTimedGroupCount) + " ms");
+			probe.log("    合計 " + Ms(totalMs) + " ms ／ 1 本 " + Ms(totalMs / kTimedGroupCount) +
+					  " ms");
 			probe.log("    内訳: 作る " + Ms(createMs) + " ms ／ バウンド " + Ms(boundMs) +
 					  " ms ／ リセット " + Ms(resetMs) + " ms");
 		}
@@ -501,8 +497,8 @@ VW_PROBE("batch-reset-styled", "1 本ごとの ResetObject をまとめられる
 			}
 			const double totalMs = total.elapsedMs();
 			probe.log("  D2 **doRegen=false** ＋ 1 本ごとに ResetObject");
-			probe.log("    合計 " + Ms(totalMs) + " ms ／ 1 本 " +
-					  Ms(totalMs / kTimedGroupCount) + " ms");
+			probe.log("    合計 " + Ms(totalMs) + " ms ／ 1 本 " + Ms(totalMs / kTimedGroupCount) +
+					  " ms");
 			probe.log("    内訳: 作る " + Ms(createMs) + " ms ／ バウンド " + Ms(boundMs) +
 					  " ms ／ リセット " + Ms(resetMs) + " ms");
 			probe.log("    ↑ D1 と比べて「作る」が縮んでいれば、**作成時にも regen が"
@@ -536,8 +532,8 @@ VW_PROBE("batch-reset-styled", "1 本ごとの ResetObject をまとめられる
 			}
 			const double totalMs = total.elapsedMs();
 			probe.log("  D3 **全部置いてから、まとめて 1 パスで ResetObject**");
-			probe.log("    合計 " + Ms(totalMs) + " ms ／ 1 本 " +
-					  Ms(totalMs / kTimedGroupCount) + " ms");
+			probe.log("    合計 " + Ms(totalMs) + " ms ／ 1 本 " + Ms(totalMs / kTimedGroupCount) +
+					  " ms");
 			probe.log("    内訳: 置く " + Ms(placeMs) + " ms ／ 第 2 パスのリセット " +
 					  Ms(resetMs) + " ms");
 			LogGroup(probe, "D3 の読み戻し", members);
