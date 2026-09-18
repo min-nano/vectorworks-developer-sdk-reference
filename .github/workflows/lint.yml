@@ -122,12 +122,20 @@ jobs:
           bash plugin/tests/vw-probes-feedback.test.sh
           bash plugin/tests/vw-probes-update.test.sh
 
-      # 調査 CI 側のスクリプトの単体テスト。いまは「いま open な PR は何番か」を出す
-      # ところ（scripts/ci-common.sh の open_prs）——**この 1 行がプローブのリリースに
-      # 何が入るかを決める**のに、間違っても静かに間違う（落ちた群はリリースノートの
-      # 表に載らないだけ。#79）ので、網の境目だけ差し替えて振る舞いを固定しておく。
+      # 調査 CI 側のスクリプトの単体テスト。**どちらも「静かに間違う」場所**なので、
+      # 網の境目（api_json）だけ差し替えて振る舞いを固定してある。
+      #
+      #   open-prs       「いま open な PR は何番か」（scripts/ci-common.sh の open_prs）。
+      #                  **この 1 行がプローブのリリースに何が入るかを決める**のに、
+      #                  落ちた群はリリースノートの表に載らないだけで済んでしまう（#79）。
+      #   wait-successor 「待ち行列を奪われたら後続の run を待ち直す」（同 wait_run_or_successor）。
+      #                  間違えると **cancelled を「プローブがコンパイルできていない」と
+      #                  報告して PR を赤くする**（#89）か、自分のプローブが載らない
+      #                  ビルドを待って緑にしてしまう。
       - name: Run the CI script unit tests
-        run: bash scripts/tests/open-prs.test.sh
+        run: |
+          bash scripts/tests/open-prs.test.sh
+          bash scripts/tests/wait-successor.test.sh
 
       # Windows 側の同梱スクリプト（.ps1）。実機は Windows だが、**ランナーには pwsh が
       # 入っている**ので、ここで構文と——mac 側と同じように——取得まわりの振る舞いを

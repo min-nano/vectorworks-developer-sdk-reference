@@ -232,6 +232,14 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
     （[#79](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/79)）。
   - **自分の群がコンパイルできなければ、その PR のチェックが赤くなる**（公開そのものは
     成功していても）。判断はリリース本文の `payloads=` を読んで行う。
+  - **ビルドが `cancelled` で終わるのはコンパイル失敗ではない**（失敗なら `failure`）。
+    dispatch はどれも `ref=main` で同じ concurrency グループに入り、GitHub はそこに
+    「走行中 1 本＋待機 1 本」しか置かないので、**プローブを持つ PR が 3 本同時に動くと
+    待機していたビルドが奪われる**（[#89](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/89)）。
+    奪った側のビルドにも自分のプローブは入っている（どのビルドも「main ＋ open な PR
+    全部」）ので、待機は**後続の run へ乗り換えて待ち直す**（`ci-common.sh` の
+    `wait_run_or_successor`）。赤くなるのは、待ち直せる後続も無いとき——人が止めた
+    見込みのときだけで、そのときは push し直せばよい。**自分のプローブを疑わない。**
   - 転がりタグ `probes` は**最後に公開したビルド**を指す。プローブを持つ PR が複数
     動いていると、後から push した方で置き換わる（何が入っているかはリリースノートと
     ピッカーの出所欄に出る）。
