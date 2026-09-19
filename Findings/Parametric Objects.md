@@ -962,6 +962,160 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 （実装例: ホームズ君プラグインの `draw/DrawUtil` にある `ResolveParamName` /
 `SetParamRealChecked`——名前を解決してから書き、読み戻して一致を確かめるラッパー）。
 
+### 名前の解決は「種別 × 文書」ごとに 1 度でよい——表はインスタンスに依らない
+
+[issue #82](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/82) で
+実機確認（VW 2026 / mac。構造材ツール `StructuralMember` を対象に
+`probes/runtime/pio-param-table/` を走らせた実測。以下の数値は同プローブの実行ログそのまま）。
+
+**結論: `GetParamsCount` / `GetParamName(i)` / `GetParamLocalizedName(i)` が返す表は、
+同じ種別・同じ文書のインスタンスなら常に同一である。** したがって `ResolveParamName` の
+ように**表を舐めて名前を解決する処理は、種別ごとに 1 度だけ解決してキャッシュしてよい**。
+鍵は「種別 × 文書」にし、**文書が変わったら捨てる**（下記）。
+
+#### 何を変えても表は動かなかった（実測）
+
+構造材（`StructuralMember`）のパラメータは **181 件**。次のどれでも、**件数・並び・
+universal 名・ローカライズ名・ポップアップの選択肢の数が全索引で一致**した。
+
+| 比べたもの | 結果 |
+| --- | --- |
+| 作った直後の 4 本（同じ文書・同じ種別） | 一致。**レコードフォーマットのハンドルも 4 本とも同一**（`0xaf6c54b00`） |
+| 値を変えた本（`MajorBreadth` など 8 件を書き換えて `ResetObject`） | 一致 |
+| ポップアップを倒した本（`MemberType` / `StructuralUse` / `EndCondition` / `AxisAlign` など 8 件） | 一致（**選択肢の数も**） |
+| 同じ本を書き換えて `ResetObject` した前後 | 一致 |
+| **別の文書**で作った同じ種別 | 一致。ただし**フォーマットの実体は別**（`0xaf6c54b00` 対 `0xae1178500`） |
+
+**表の出どころを考えれば動きようがない**（【ソース根拠】
+`SDKLib/Source/VWSDK/VWFC/VWObjects/VWParametricObj.cpp`）:
+
+- **`GetParamsCount` / `GetParamName(i)`** は、インスタンスの aux list から見つけた
+  **パラメータレコード**（parametric ビットの立った format を持つ record）のフィールド数と
+  フィールド名である（`GetNameOfField` は **1 始まり**なので内部で `+1` している）。
+  その**フォーマットは種別ごとに 1 つ**なので、件数も並びも値では変わらない。
+- **`GetParamLocalizedName(i)`** は、1 呼び出しごとに `IExtendedProps` を作り、対象
+  オブジェクトから `GetCodeRefID` → `GetFileIndex` → `GetExtension` →
+  `IID_ParametricParamsProvider` のイベントシンクまで辿る。provider があれば
+  `provider->GetParamNameAt(i)`、無ければフォーマット名と universal 名で
+  `gSDK->GetLocalizedPluginParameter(pluginName, paramName, out)` を引き、それも無ければ
+  `GetParamName(i)` へ落ちる。**どちらの経路も引数は索引（と種別）だけ**で、
+  インスタンス固有の値は使っていない——オブジェクトを渡すのは**どのプラグインのものかを
+  引く**ためだけである。
+
+#### ローカライズ名はアプリの資源から来る（文書ではない）
+
+`GetParamLocalizedName(i)` の結果を
+`gSDK->GetLocalizedPluginParameter("StructuralMember", universal 名)` と全索引で
+突き合わせたところ、**181 件中 179 件が一致**、相違 0 件、**資源に無いものが 2 件**
+（`MemberMergeInSections` / `CoverMergeInSections`）だった。
+
+- つまりローカライズ名を左右するのは**索引と種別、そして UI の言語**だけで、
+  インスタンスにも文書にも依らない。
+- **資源に無い 2 件は、universal 名へ落ちずに空文字が返った。** ローカライズ名で
+  引き当てる実装は、**空のローカライズ名を一致と数えない**こと（探している名前が空だと
+  全件が当たる）。
+
+#### キャッシュはいつ捨てるか
+
+- **文書が変わったら捨てる。** universal 名と件数は**文書の中のレコードフォーマット**から
+  来る。上の実測では別文書でも中身は一致したが、**文書にはその文書が作られた時点の
+  フォーマットが焼き込まれている**（下記「パラメータの既定値は『文書』に記録される」）ので、
+  **古い文書が古い顔ぶれを持っている可能性は捨てられない**。鍵に文書を入れる。
+- **UI の言語が変わったら捨てる**（ローカライズ名を鍵に使っているなら）。言語はアプリ側の
+  設定で、**取り込み 1 回の実行中に変わることはない**。
+- したがって**コマンド 1 回の実行に閉じたキャッシュなら、捨てる条件を考えなくてよい**——
+  その間に文書も言語も変わらない。プロセスをまたいで持ち越すときだけ、上の 2 つを見る。
+
+#### コスト（VW 2026 / mac。181 件の構造材で実測）
+
+| 呼び出し | 1 回あたり | フルスキャン 1 回（181 件） |
+| --- | --- | --- |
+| `VWParametricObj` 構築 ＋ `GetParamsCount` | 0.333us | — |
+| `GetParamName(i)` | 0.197us | 0.036ms |
+| `GetParamLocalizedName(i)` | 0.435us | **0.079ms** |
+| `GetParamIndex(universal 名)` | **4.236us** | — |
+
+- **ローカライズ名で 1 件引くのは安い**（0.435us）。**フルスキャンでも 0.079ms** で、
+  部材 1 本につき 4 回落ちても 0.32ms、400 本で 0.13 秒にしかならない。
+  **「描画時間の 51〜68% がここ」という見立て（issue #82）は、この経路の実測では
+  説明が付かない**——取り込みプラグイン側で内訳を測り直す価値がある。
+- **高いのは universal 名で引く呼び出しのほう**（4.236us。ローカライズ名 1 件の約 10 倍）。
+  **名前から索引を引く経路は表の線形探索**なので、表の後ろにあるパラメータほど高い
+  （上の 4.236us は索引 0〜180 を順に引いた平均）。`GetParamReal(univ 名)` のように
+  **名前で読み書きする呼び出しは毎回これを払う**——**キャッシュすべきは「解決した名前」
+  ではなく「解決した索引」**である。
+- 最初の 1 回（cold）は `GetParamLocalizedName` が 0.004ms（warm の約 10 倍）、
+  `GetParamsCount` が 0.029ms。一度暖まれば上表の値になる。
+
+#### 構造材（`StructuralMember`）のパラメータ表（VW 2026 / mac・日本語 UI）
+
+**名前が引けるものだけを抜き出した**（索引はプローブの実行ログそのまま。
+`loc` が `__NNA_DO_NOT_CHANGE` のものは省いたが、**表からは消えていない**ので索引は飛ぶ）。
+`choices` はポップアップの選択肢の数（0 ならポップアップではない）。
+
+| 索引 | universal 名 | ローカライズ名 | choices |
+| --- | --- | --- | --- |
+| 1 | `MemberID` | 構造材 ID | 0 |
+| 2 | `MemberType` | 構造材タイプ | 4 |
+| 3 | `ProfileShape` | 断面の形状 | 0 |
+| 4 | `ProfileSeries` | 断面の種類 | 0 |
+| 5 | `ProfileSize` | 断面のサイズ | 0 |
+| 6 | `ProfileSymbol` | シンボル（形状） | 0 |
+| 7 | `MajorBreadth` | 主幅 | 0 |
+| 8 | `MinorBreadth` | 副幅 | 0 |
+| 9 | `MajorDepth` | 主高さ | 0 |
+| 10 | `MinorDepth` | 副高さ | 0 |
+| 11 | `StructuralUse` | 構造用途 | 18 |
+| 12 | `OtherStructuralUse` | その他の構造用途 | 0 |
+| 13 | `ProfileAngle` | 断面の回転角度 | 0 |
+| 14 | `LastProfileAngle` | 断面の回転角度 | 0 |
+| 15 | `UseLayerCutPlaneElev` | レイヤの切断面高さを使用 | 0 |
+| 16 | `CutPlaneElev` | 切断面の高さ | 0 |
+| 17 | `EndCondition` | 終端の処理 | 4 |
+| 18 | `EndOffset` | オフセット | 0 |
+| 19 | `EndMiter` | 傾斜角度 | 0 |
+| 20 | `EndBevel` | 水平面の角度 | 0 |
+| 21 | `StartCondition` | 始端の処理 | 4 |
+| 22 | `StartOffset` | オフセット | 0 |
+| 23 | `StartMiter` | 傾斜角度 | 0 |
+| 24 | `StartBevel` | 水平面の角度 | 0 |
+| 25 | `AxisAlign` | 配置基準 | 9 |
+| 26 | `OffsetY` | Y'方向オフセット | 0 |
+| 27 | `OffsetZ` | Z'方向オフセット | 0 |
+| 28 | `DialogStartElevationReference` | 始端高さ基準 | 3 |
+| 29 | `DialogStartElevation` | 始端高さオフセット | 0 |
+| 30 | `DialogEndElevationReference` | 終端高さ基準 | 3 |
+| 31 | `DialogEndElevation` | 終端高さオフセット | 0 |
+| 32 | `StartElevation` | 始端高さオフセット | 0 |
+| 33 | `EndElevation` | 終端高さオフセット | 0 |
+| 34–36 | `CoverTop` / `CoverTopThickness` / `CoverTopOffset` | 上側被覆 / 厚み / オフセット | 0 |
+| 37–39 | `CoverBottom` / `CoverBottomThickness` / `CoverBottomOffset` | 下側被覆 / 厚み / オフセット | 0 |
+| 40–42 | `CoverRight` / `CoverRightThickness` / `CoverRightOffset` | 右側被覆 / 厚み / オフセット | 0 |
+| 43–45 | `CoverLeft` / `CoverLeftThickness` / `CoverLeftOffset` | 左側被覆 / 厚み / オフセット | 0 |
+| 46 | `CoverMaterial` | 被覆材マテリアル | 0 |
+| 47 | `MemberMaterial` | 構造体マテリアル | 0 |
+| 153 | `CenterPointMarker` | センターマークを使用 | 0 |
+| 159 | `CenterPointLength` | 長さ | 0 |
+| 160 | `CenterPointGap` | 間隔 | 0 |
+| 169 | `MemberMergeInSections` | **（空）** | 0 |
+| 170 | `CoverMergeInSections` | **（空）** | 0 |
+| 177 | `StartCap` | 始端部 | 0 |
+| 178 | `EndCap` | 終端部 | 0 |
+| 179 | `AttributesMode` | 使用する属性設定: | 4 |
+| 180 | `AttributesMode3D` | 使用する属性設定: | 4 |
+
+省いた索引の中身:
+
+- **0**（`__version`）と **48〜152**、**154〜158**、**161〜168**、**171〜176** は
+  ローカライズ名が `__NNA_DO_NOT_CHANGE`。48〜152 は 2D 表現の属性
+  （`MemberPenStyle_Above` … `CapsLineWeight_Below` のように
+  `_Above` / `_At` / `_Below` の 3 面ぶん）、161〜168 は 3D の属性。
+- **171〜176 に `traversalDone` / `traversalRoot` / `B` / `B1` / `D` / `D1` がある。**
+  `B`（173）と `D`（175）は、作った直後の値が `MajorBreadth`（300）/ `MajorDepth`（600）と
+  同じだった。**`B` / `D` / `StartOffset` はいずれも universal 名として実在する**ので、
+  これらが universal 名で引けずローカライズ名の経路へ落ちているなら、**落ちる理由は
+  「名前が無いこと」ではない**。
+
 ## パラメータの既定値は「文書」に記録される
 
 自作 PIO のパラメータ既定値（`SParametricParamDef` に書いた値）は、**その PIO を初めて
