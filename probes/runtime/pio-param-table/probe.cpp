@@ -6,29 +6,30 @@
 //	`ResolveParamName` の結果を**種別ごとに 1 度だけ解決してキャッシュしてよいか**を
 //	決めるための調査。
 //
-//	**これは 3 回目の版である。** 1 回目で、値違い・ポップアップ違い・同じ本の書き換え・
-//	別文書の 4 通りは**すべて表が一致**し、コストも採れた（結果は PR #84 のコメント）。
-//	**残っているのは「スタイルを当てた本」だけ。**
+//	**これは 4 回目の版である。** 1 回目で、値違い・ポップアップ違い・同じ本の
+//	書き換え・別文書の 4 通りは**すべて表が一致**し、コストも採れた。3 回目で
+//	図面の辿り方が確かめられ、**スタイルを当てた本の表も一致**した——が、
+//	**当てたスタイルが構造材用だったのかを確かめていない**（資源から拾った
+//	最初の 1 本を使っており、それは文書に元からあった別種別のスタイルでありうる。
+//	`SetStyle` は `IsPluginStyle` しか見ないので、別種別でも通ってしまう）。
 //
-//	2 回目で分かったこと:
-//	  * `gSDK->CreatePluginStyle(h)` は**ダイアログを出し**（9363ms 人を待った）、
-//	    **戻ったときには渡したハンドルが無効**（件数 0 / フォーマット 0x0）。
-//	  * **そのあと図面から構造材を拾い直そうとしたら 0 本だった**——スタイルを当てて
-//	    いない基準の本 A まで見つからないので、**拾い方（GetCurrentLayer →
-//	    FirstMemberObj）が違う**と見るのが自然。ここを潰さないと先へ進めない。
+//	3 回目で分かったこと（この版の作りの前提）:
+//	  * 図面の辿り方は **`FirstMemberObj(レイヤ)` ＋ `NextObject` で正しい**
+//	    （A の親・親レイヤ・いまのレイヤは同じ handle。3 通りとも A を拾えた）。
+//	  * **`CreatePluginStyle` を呼ぶと、図面にあった構造材が型 86 から型 21 へ
+//	    変わり、パラメトリックオブジェクトではなくなる**（渡したハンドルが無効に
+//	    なるのもこれ）。1・2 回目の「拾えた構造材 = 0 本」は正しい観測だった。
+//	  * ダイアログは**スタイル名ではなく「スタイル資源を置くフォルダ」**を尋ねる。
 //
-//	そこでこの版は、
-//	  G1  基準の本 A を作り、**A がどこに居るのか**を A 自身から聞く
-//	      （ParentObject / GetParentLayer / いまのレイヤ）。**ダイアログの前に**
-//	      3 通りの辿り方で拾えるかを確かめ、全部ログへ出す。
-//	  G2  **ダイアログを通らない道を先に試す**——`GetPluginStyleForTool` で
-//	      既にあるスタイルを引き、取れたらそれを新しい本へ当てて表を突き合わせる。
-//	  G3  取れなかったときだけ `CreatePluginStyle`（**ここで「フォルダ選択」の
-//	      ダイアログが出る**——尋ねているのは名前ではなく**スタイル資源を置くフォルダ**
-//	      で、選択されたまま OK を押せばよい）。そのあと
-//	      **シンボル定義（資源）側から `IsPluginStyle` でスタイルを探す**
-//	      ——どのフォルダへ置かれても見つかるように。合わせて全レイヤからも
-//	      構造材を拾い直し、見つかったスタイルを新しい本へ当てて表を突き合わせる。
+//	そこでこの版は、**スタイルの一覧を作る前と後で突き合わせ、増えた 1 本を使う**。
+//	増えた 1 本は**その構造材から作られたスタイル**なので、種別を問い合わせなくても
+//	「構造材用のスタイル」だと言い切れる。
+//
+//	  G1  基準の本 A を作り、表と、いま図面にあるプラグインスタイルを全部控える。
+//	  G2  `CreatePluginStyle`（**「フォルダ選択」が出る。選ばれているまま OK**）。
+//	  G3  スタイルの一覧を採り直し、**増えた 1 本**を新しい本へ当てて表を突き合わせる。
+//	      増えていなければ、3 回目と同じく既にあった 1 本で当ててみて、**どちらで
+//	      確かめたのかをログに明記する**。
 //
 //	新規の空図面で走らせる。
 //
@@ -173,56 +174,49 @@ namespace
 		return members;
 	}
 
-	// 全レイヤを回って構造材を集める（ForEachLayerN はレイヤ列挙の唯一の手段——
-	// Findings「ストーリを触る API」）。
-	std::vector<MCObjectHandle> CollectMembersFromAllLayers(::vwprobe::Report& probe)
-	{
-		std::vector<MCObjectHandle> all;
-		size_t layerCount = 0;
-		gSDK->ForEachLayerN(
-			[&](MCObjectHandle layer)
-			{
-				++layerCount;
-				const std::string label = "レイヤ " + std::to_string(layerCount);
-				std::vector<MCObjectHandle> found = WalkContainer(probe, layer, label.c_str());
-				all.insert(all.end(), found.begin(), found.end());
-			});
-		probe.log("  レイヤ " + std::to_string(layerCount) + " 枚から構造材 " +
-				  std::to_string(all.size()) + " 本");
-		return all;
-	}
-
-	// **資源（シンボル定義）側からプラグインスタイルを探す。** CreatePluginStyle が
+	// **資源（シンボル定義）側のプラグインスタイルを全部集める。** CreatePluginStyle が
 	// 尋ねてくるのは「どのフォルダへ置くか」なので、置き場所は利用者が選ぶ——
-	// どこへ置かれても見つかるように、シンボルライブラリを入れ子ごと辿る。
-	RefNumber FindPluginStyleInResources(::vwprobe::Report& probe, MCObjectHandle container,
-										 int depth, size_t& visited)
+	// どこへ置かれても拾えるように、シンボルライブラリを入れ子ごと辿る。
+	void CollectPluginStyles(MCObjectHandle container, int depth, size_t& visited,
+							 std::vector<RefNumber>& outRefs, std::vector<std::string>& outNames)
 	{
-		if (container == nil || depth > 4 || visited > 2000)
-			return 0;
+		if (container == nil || depth > 4 || visited > 4000)
+			return;
 
-		for (MCObjectHandle h = gSDK->FirstMemberObj(container); h != nil && visited < 2000;
+		for (MCObjectHandle h = gSDK->FirstMemberObj(container); h != nil && visited < 4000;
 			 h = gSDK->NextObject(h))
 		{
 			++visited;
 			if (gSDK->IsPluginStyle(h))
 			{
-				TXString name;
-				gSDK->GetObjectName(h, name);
 				const RefNumber ref = gSDK->GetObjectInternalIndex(h);
-				probe.log("  スタイルを見つけた: " + HandleText(h) + " 名前=" + Str(name) +
-						  " ref=" + std::to_string(static_cast<long>(ref)) +
-						  " 深さ=" + std::to_string(depth));
 				if (ref > 0)
-					return ref;
+				{
+					TXString name;
+					gSDK->GetObjectName(h, name);
+					outRefs.push_back(ref);
+					outNames.push_back(Str(name));
+				}
 			}
-
-			// 入れ子（フォルダ・シンボル定義）の中も見る。
-			const RefNumber inner = FindPluginStyleInResources(probe, h, depth + 1, visited);
-			if (inner > 0)
-				return inner;
+			CollectPluginStyles(h, depth + 1, visited, outRefs, outNames);
 		}
-		return 0;
+	}
+
+	// 一覧を採って、件数と中身をログへ出す。
+	std::vector<RefNumber> ListPluginStyles(::vwprobe::Report& probe, const char* label)
+	{
+		std::vector<RefNumber> refs;
+		std::vector<std::string> names;
+		size_t visited = 0;
+		CollectPluginStyles(gSDK->GetSymbolLibraryHeader(), 0, visited, refs, names);
+
+		std::string listing;
+		for (size_t i = 0; i < refs.size() && i < 20; ++i)
+			listing += " " + names[i] + "(" + std::to_string(static_cast<long>(refs[i])) + ")";
+		probe.log(std::string(label) + ": プラグインスタイル " + std::to_string(refs.size()) +
+				  " 本（見たシンボル定義 " + std::to_string(visited) +
+				  " 件）:" + (listing.empty() ? " （無し）" : listing));
+		return refs;
 	}
 
 	// スタイル番号を新しい本へ当てて、表を基準と突き合わせる。
@@ -261,11 +255,12 @@ namespace
 } // namespace
 
 VW_PROBE("pio-param-table", "スタイルを当てた PIO のパラメータ表を確かめる",
-		 "図面の辿り方を確かめたうえで、スタイルを当てた構造材と当てていない構造材の"
-		 "パラメータ表を突き合わせる（既にスタイルがあればダイアログは出ない）")
+		 "スタイルを作る前と後で一覧を突き合わせ、**増えた 1 本＝その構造材から作られた"
+		 "スタイル**を新しい本へ当てて、パラメータ表が変わるかを確かめる"
+		 "（途中で「フォルダ選択」が出るので、選ばれているまま OK）")
 {
 	// -------------------------------------------------------------- G1
-	probe.log("[G1] 基準の本 A を作り、A がどこに居るのかを確かめる");
+	probe.log("[G1] 基準の本 A と、いま図面にあるスタイルを控える");
 	gSDK->DefineCustomObject(kProbeTypeName, kCustomObjectPrefNever);
 
 	MCObjectHandle memberBase = CreateMember(0.0);
@@ -277,103 +272,107 @@ VW_PROBE("pio-param-table", "スタイルを当てた PIO のパラメータ表�
 	const ParamTable tableBase = DumpTable(memberBase);
 	probe.log("[G1] A = " + HandleText(memberBase) +
 			  " 件数=" + std::to_string(tableBase.universalNames.size()) +
-			  " formatHandle=" + tableBase.formatHandle);
+			  " formatHandle=" + tableBase.formatHandle + " styleRef=" +
+			  std::to_string(static_cast<long>(VWParametricObj(memberBase).GetStyleRefNumber())));
+	WalkContainer(probe, gSDK->GetCurrentLayer(), "いまのレイヤ（作る前）");
 
-	MCObjectHandle parentOfA = gSDK->ParentObject(memberBase);
-	MCObjectHandle layerOfA = VWParametricObj(memberBase).GetParentLayer();
-	MCObjectHandle current = gSDK->GetCurrentLayer();
-	probe.log(
-		"[G1] A の親 = " + HandleText(parentOfA) + "（型 " +
-		std::to_string(static_cast<int>(parentOfA != nil ? gSDK->GetObjectTypeN(parentOfA) : 0)) +
-		"） A の親レイヤ = " + HandleText(layerOfA) + " いまのレイヤ = " + HandleText(current) +
-		" → 親レイヤといまのレイヤは" + (layerOfA == current ? "同じ" : "**違う**"));
-
-	probe.log("[G1] 3 通りの辿り方で A を拾えるか（**ダイアログの前に**確かめる）:");
-	WalkContainer(probe, current, "いまのレイヤ");
-	WalkContainer(probe, layerOfA, "A の親レイヤ");
-	WalkContainer(probe, parentOfA, "A の親");
-	std::vector<MCObjectHandle> viaLayers = CollectMembersFromAllLayers(probe);
-	if (viaLayers.empty())
-		probe.log("[G1] **どの辿り方でも A を拾えていない**——拾い方が間違っている");
+	const std::vector<RefNumber> stylesBefore = ListPluginStyles(probe, "[G1] 作る前");
 
 	// -------------------------------------------------------------- G2
-	probe.log("[G2] ダイアログを通らない道: GetPluginStyleForTool で既にあるスタイルを引く");
-	RefNumber toolStyleRef = 0;
-	const bool gotToolStyle = gSDK->GetPluginStyleForTool(kProbeTypeName, toolStyleRef);
-	MCObjectHandle toolStyle = toolStyleRef > 0 ? gSDK->InternalIndexToHandle(toolStyleRef) : nil;
-	probe.log("[G2] GetPluginStyleForTool(\"StructuralMember\") = " +
-			  std::string(gotToolStyle ? "true" : "false") +
-			  " ref=" + std::to_string(static_cast<long>(toolStyleRef)) +
-			  " handle=" + HandleText(toolStyle) + " IsPluginStyle=" +
-			  std::string(toolStyle != nil && gSDK->IsPluginStyle(toolStyle) ? "true" : "false"));
-
-	if (toolStyle != nil && gSDK->IsPluginStyle(toolStyle))
-	{
-		CompareStyledMember(probe, tableBase, toolStyleRef, "[G2]");
-		probe.log("おわり（ダイアログを通らずに済んだ）");
-		return;
-	}
-
-	// -------------------------------------------------------------- G3
-	probe.log("[G3] スタイルが無いので作る。**ここで「フォルダ選択」のダイアログが出ます**"
+	probe.log("[G2] スタイルを作る。**ここで「フォルダ選択」のダイアログが出ます**"
 			  "——尋ねているのは名前ではなく**スタイルを置くフォルダ**なので、"
-			  "**選ばれているまま「OK」を押してください**（どのフォルダでも構いません）。"
-			  "キャンセルするとスタイルが作られません");
+			  "**選ばれているまま「OK」を押してください**（どのフォルダでも構いません）");
 	MCObjectHandle memberForStyle = CreateMember(1000.0);
 	if (memberForStyle == nil)
 	{
 		probe.fail("スタイルの元にする本を作れなかった");
 		return;
 	}
-	probe.log("[G3] E = " + HandleText(memberForStyle) + " → CreatePluginStyle を呼ぶ");
 
 	const SteadyClock::time_point startStyle = SteadyClock::now();
 	gSDK->CreatePluginStyle(memberForStyle);
 	const double styleMs = ElapsedMs(startStyle);
-	probe.log("[G3] CreatePluginStyle から戻った（所要 " + Num(styleMs) +
+	probe.log("[G2] CreatePluginStyle から戻った（所要 " + Num(styleMs) +
 			  "ms。1000ms を超えていれば人を待っていた＝ダイアログが出た）");
-	probe.log("[G3] 渡したハンドル E は今: 件数=" +
-			  std::to_string(VWParametricObj(memberForStyle).GetParamsCount()));
+	probe.log("[G2] 渡したハンドル E = " + HandleText(memberForStyle) +
+			  " は今: 件数=" + std::to_string(VWParametricObj(memberForStyle).GetParamsCount()));
+	WalkContainer(probe, gSDK->GetCurrentLayer(), "いまのレイヤ（作った後）");
 
-	probe.log("[G3] 資源（シンボル定義）側からスタイルを探す:");
-	size_t visited = 0;
-	const RefNumber styleInResources =
-		FindPluginStyleInResources(probe, gSDK->GetSymbolLibraryHeader(), 0, visited);
-	probe.log("[G3] 見たシンボル定義 = " + std::to_string(visited) +
-			  " 件 スタイル ref=" + std::to_string(static_cast<long>(styleInResources)));
+	// -------------------------------------------------------------- G3
+	const std::vector<RefNumber> stylesAfter = ListPluginStyles(probe, "[G3] 作った後");
 
-	probe.log("[G3] 作った後にもう一度、全レイヤから拾い直す:");
-	std::vector<MCObjectHandle> after = CollectMembersFromAllLayers(probe);
-	RefNumber foundStyle = 0;
-	for (size_t i = 0; i < after.size(); ++i)
+	RefNumber newStyle = 0;
+	for (size_t i = 0; i < stylesAfter.size(); ++i)
 	{
-		VWParametricObj obj(after[i]);
-		const RefNumber ref = obj.GetStyleRefNumber();
-		probe.log("[G3] [" + std::to_string(i) + "] " + HandleText(after[i]) +
-				  " styleRef=" + std::to_string(static_cast<long>(ref)) +
-				  " styleHandle=" + HandleText(obj.GetStyleHandle()) +
-				  " / A と: " + CompareTables(tableBase, DumpTable(after[i])));
-		if (ref > 0 && foundStyle == 0)
-			foundStyle = ref;
+		bool seenBefore = false;
+		for (size_t j = 0; j < stylesBefore.size(); ++j)
+			if (stylesBefore[j] == stylesAfter[i])
+				seenBefore = true;
+		if (!seenBefore)
+		{
+			newStyle = stylesAfter[i];
+			break;
+		}
 	}
 
-	// ツールの既定としても引き直してみる（作った直後なら入っているかもしれない）。
-	RefNumber afterToolRef = 0;
-	gSDK->GetPluginStyleForTool(kProbeTypeName, afterToolRef);
-	probe.log("[G3] 作った後の GetPluginStyleForTool = " +
-			  std::to_string(static_cast<long>(afterToolRef)));
-	if (foundStyle == 0)
-		foundStyle = afterToolRef;
-	if (foundStyle == 0)
-		foundStyle = styleInResources;
-
-	if (foundStyle == 0)
+	const char* provenance = nullptr;
+	RefNumber useStyle = 0;
+	if (newStyle > 0)
 	{
-		probe.fail("スタイルを掴めなかった（ダイアログをキャンセルしたか、"
+		useStyle = newStyle;
+		provenance = "**増えた 1 本**（＝この構造材から作られたスタイル）";
+	}
+	else if (!stylesAfter.empty())
+	{
+		useStyle = stylesAfter[0];
+		provenance = "**増えた本が無かったので、元からあった 1 本**（種別は不明）";
+	}
+
+	if (useStyle == 0)
+	{
+		probe.fail("プラグインスタイルが 1 本も無い（ダイアログをキャンセルしたか、"
 				   "CreatePluginStyle がスタイルを作らなかった）");
 		probe.log("おわり");
 		return;
 	}
-	CompareStyledMember(probe, tableBase, foundStyle, "[G3]");
+	probe.log("[G3] 当てるスタイル ref=" + std::to_string(static_cast<long>(useStyle)) +
+			  " 出所: " + provenance);
+
+	MCObjectHandle styled = CreateMember(2000.0);
+	if (styled == nil)
+	{
+		probe.fail("スタイルを当てる本を作れなかった");
+		probe.log("おわり");
+		return;
+	}
+	const ParamTable beforeStyle = DumpTable(styled);
+	probe.log("[G3] 当てる前 " + HandleText(styled) + ": " + CompareTables(tableBase, beforeStyle));
+
+	{
+		VWParametricObj obj(styled);
+		obj.SetStyle(useStyle);
+	}
+	const bool reset = gSDK->ResetObject(styled);
+
+	VWParametricObj styledObj(styled);
+	const RefNumber nowRef = styledObj.GetStyleRefNumber();
+	MCObjectHandle symDef = nil;
+	const bool gotSym = gSDK->GetPluginStyleSymbol(styled, symDef);
+	const ParamTable afterStyle = DumpTable(styled);
+	probe.log("[G3] 当てた後: ResetObject=" + std::string(reset ? "true" : "false") +
+			  " styleRef=" + std::to_string(static_cast<long>(nowRef)) +
+			  " styleHandle=" + HandleText(styledObj.GetStyleHandle()) +
+			  " GetPluginStyleSymbol=" + std::string(gotSym ? "true" : "false") + " " +
+			  HandleText(symDef) + " formatHandle=" + afterStyle.formatHandle);
+	probe.log("[G3] **A（スタイル無し）vs これ（スタイルあり）**: " +
+			  CompareTables(tableBase, afterStyle));
+
+	if (nowRef == 0)
+		probe.fail("SetStyle が効かなかった（styleRef が 0 のまま）ので、"
+				   "「スタイルを当てた表」の比較になっていない");
+	else if (newStyle == 0)
+		probe.fail("増えたスタイルが見つからなかったので、当てたスタイルが構造材用か"
+				   "どうかが分からない（比較そのものは上のとおり）");
+
 	probe.log("おわり");
 }
