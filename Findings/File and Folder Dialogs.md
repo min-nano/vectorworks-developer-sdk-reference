@@ -174,13 +174,17 @@ GetName  = [20260529_遠山信夫アトリエ_安藤邸]      ← こちらは�
 上の 2 つのフォルダ（フォルダ選択の結果・ファイルの親）どちらも、
 `GetAttributes` は `VCOMError=0` を返しながら **`fbDirectory=no`**（`fbCanRead=yes` /
 `fbCanWrite=yes`）だった。**「フォルダかどうか」の判定に `fbDirectory` を使ってはいけない。**
-実在の確認は `ExistsOnDisk`（こちらは `yes` を返した）で行う。
+実在の確認は `ExistsOnDisk` で行う——ただし**戻り値ではなく出力引数のほうを見る**
+（実在しなくても戻り値は `0` を返す。[File and Folder Identifiers](File%20and%20Folder%20Identifiers.md)）。
 
-**測ったのは Google ドライブ（`~/Library/CloudStorage/GoogleDrive-…`）の共有ドライブ配下の
-フォルダ 2 つだけ**なので、「ローカルディスクの普通のフォルダでも `no` なのか」は
-この調査では測っていない（#85 の範囲外の拾い物なので、
-[issue #87](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/87) へ
-切り出した）。どちらにせよ**当てにしない**のが正解である。
+**これはダイアログに固有の話でも、測った場所に固有の話でもない。**
+[issue #87](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/87) で
+掴み方と場所を散らした 34 件（ローカル・VW の導入先・その場で作った新品・
+`EnumerateContents` が配ったもの・クラウドストレージ配下）を測り直したところ、
+**フォルダ 30 件・ファイル 4 件のすべてで `fbDirectory=false`** だった。
+`fbDirectory` は**常に `false`** だと思ってよい（macOS 実測。Windows は未確認）。
+識別子そのものの話は
+[File and Folder Identifiers](File%20and%20Folder%20Identifiers.md) にまとめてある。
 
 ## 使い分け
 
