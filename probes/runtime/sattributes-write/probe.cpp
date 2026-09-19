@@ -35,8 +35,12 @@
 //	  1) `SetAttributes` は何を返すか。成功を返すなら、`GetAttributes` で**読み戻せる**か。
 //	     11 旗を**1 つずつ反転して書いては読み戻し**、どれが反映されるかを旗ごとに出す。
 //	  2) `fbDirectory` に true を書いたらどうなるか（上の総当たりに含まれる）。
-//	  3) 書けたように見えたとき、**実際の権限も変わっているか**（読み取り専用に
-//	     したフォルダの中に、本当に作れなくなるか）。
+//	  3) 書けたように見えたとき、**ディスクは本当に変わったか**。読み戻しだけでは
+//	     「SDK が覚えているだけ」と区別が付かないので、**POSIX の `stat` で権限
+//	     ビット（`st_mode`）と BSD の旗（`st_flags`）を旗ごとに前後で比べ**、
+//	     読み取り専用にしたファイルへ**実際に 1 バイト追記してみて拒まれるか**まで
+//	     確かめる。これで「無視された旗」と「書かれたが読み戻しに出ない旗」も
+//	     分かれる。
 //	  4) 実在しない対象への `SetAttributes` は何を返すか。
 //	  5) **「立つはずの標本」を OS 側で作って測る**（macOS）。`chmod` で権限を落とし、
 //	     `chflags` で UF_HIDDEN / UF_IMMUTABLE / SF_ARCHIVED を立てて、
@@ -61,6 +65,7 @@
 
 #if GS_MAC
 #	include <cerrno>
+#	include <cstdio>
 #	include <cstring>
 #	include <sys/stat.h>
 #	include <unistd.h>
@@ -156,6 +161,61 @@ namespace
 		list += name;
 	}
 
+#if GS_MAC
+	// -----------------------------------------------------------------------
+	// **ディスク側の見え方。** SAttributes を読み戻すだけでは「SDK が覚えている
+	// だけ」と「本当にディスクが変わった」を区別できないので、POSIX の stat で
+	// 権限ビット（st_mode）と BSD の旗（st_flags）を直接見る。
+	std::string StatWord(const std::string& path)
+	{
+		struct stat info = {};
+		if (::stat(path.c_str(), &info) != 0)
+			return std::string("stat 失敗 errno=") + std::to_string((long)errno) + " " +
+				   std::strerror(errno);
+
+		char buffer[64] = {};
+		std::snprintf(buffer, sizeof(buffer), "mode=%04o flags=0x%08x",
+					  (unsigned)(info.st_mode & 07777), (unsigned)info.st_flags);
+		return std::string(buffer);
+	}
+
+#endif
+
+	// **本当に書けなくなったか。** 権限ビットが変わっていても、実際に拒まれるかは
+	// 別の話なので、追記を 1 バイト試して確かめる（OS を問わない）。
+	std::string TryAppendWord(const std::string& path)
+	{
+		std::ofstream out(path.c_str(), std::ios::binary | std::ios::app);
+		if (!out.is_open())
+			return std::string("拒まれた（開けない）");
+		out << "x";
+		out.flush();
+		return out.good() ? std::string("できた") : std::string("拒まれた（書けない）");
+	}
+
+	// ディスク側の見え方を 1 行にする（OS を問わない口）。パスが空なら「見ない」。
+	std::string DiskWord(const std::string& path)
+	{
+		if (path.empty())
+			return std::string();
+#if GS_MAC
+		return StatWord(path);
+#else
+		return std::string("（この OS では見ていない）");
+#endif
+	}
+
+	// 書く前後でディスク側が動いたかを 1 行書く。**動かなかったことも書く**
+	// ——「無視された」と「書かれたが読み戻しに出ない」を分けるのがこの行の役目。
+	void LogDiskChange(::vwprobe::Report& probe, const std::string& path, const std::string& before)
+	{
+		if (path.empty() || before.empty())
+			return;
+		const std::string after = DiskWord(path);
+		probe.log("      ディスク: 前=" + before + " 後=" + after + " → " +
+				  (before == after ? "変わらない" : "変わった"));
+	}
+
 	// -----------------------------------------------------------------------
 	// 対象 1 つを測って 1 行書く（フォルダ用とファイル用で呼ぶ関数名が違うだけ）。
 	VCOMError LogFolder(::vwprobe::Report& probe, const std::string& label,
@@ -209,7 +269,7 @@ namespace
 	// 綴りが同じなのでテンプレートで両方を回せる。
 	template <typename TIdent>
 	void RoundTripFlags(::vwprobe::Report& probe, const std::string& who, TIdent* ident,
-						Tally& tally)
+						Tally& tally, const std::string& diskPath)
 	{
 		if (ident == nullptr)
 		{
@@ -240,6 +300,8 @@ namespace
 			probe.log("  [" + name + "] " + YesNo(base.*member) + " → " + YesNo(want.*member) +
 					  " を書く");
 
+			const std::string diskBefore = DiskWord(diskPath);
+
 			const VCOMError setErr = ident->SetAttributes(want);
 
 			SAttributes back = {};
@@ -250,6 +312,11 @@ namespace
 					  " その旗=" + YesNo(back.*member) + " → " +
 					  (applied ? "反映された" : "反映されない"));
 			probe.log("      初期値との差: " + DiffWord(base, back));
+
+			// **ディスクは本当に変わったか。** 読み戻しに出ない旗（fbHidden など）が
+			// 「無視された」のか「書かれたが読み戻しに出ないだけ」なのかは、
+			// ここを見ないと決まらない。
+			LogDiskChange(probe, diskPath, diskBefore);
 
 			++tally.setCalls;
 			if (VCOM_SUCCEEDED(setErr))
@@ -387,7 +454,7 @@ VW_PROBE("sattributes-write", "SetAttributes で書き戻せるか・残りの�
 	// 1) 本命その 1——フォルダの SetAttributes 往復。
 	probe.log("1) SetAttributes の往復（フォルダ。11 旗を 1 つずつ反転して書く）");
 	IFolderIdentifier* const workFolderRaw = workFolder;
-	RoundTripFlags(probe, "作業フォルダ", workFolderRaw, tally);
+	RoundTripFlags(probe, "作業フォルダ", workFolderRaw, tally, workFolderPath);
 
 	// -----------------------------------------------------------------------
 	// 2) 本命その 2——ファイルの SetAttributes 往復。フォルダと**同じ並び**で出す。
@@ -395,16 +462,51 @@ VW_PROBE("sattributes-write", "SetAttributes で書き戻せるか・残りの�
 	if (haveFile)
 	{
 		IFileIdentifier* const workFileRaw = workFile;
-		RoundTripFlags(probe, "作業ファイル", workFileRaw, tally);
+		RoundTripFlags(probe, "作業ファイル", workFileRaw, tally, workFilePath);
 	}
 	else
 		probe.log("  作業ファイルを作れなかったので飛ばす");
 
 	// -----------------------------------------------------------------------
-	// 3) 「書けた」ように見えたとき、**実際の権限も変わっているか**。
-	//    読み取り専用にしたフォルダの中へ、本当に作れなくなるかを試す。
-	//    （SetAttributes が成功を返すだけで何もしていないなら、ここは作れてしまう）
-	probe.log("3) 読み取り専用にしたフォルダの中へ、本当に作れなくなるか");
+	// 3) 「書けた」ように見えたとき、**本当に書けなくなるか**。
+	//    ここが本命の詰め——`SetAttributes` が成功を返し、`GetAttributes` にも
+	//    出たとして、それが「SDK が覚えているだけ」なら実務では使えない。
+	//    **実際に 1 バイト追記してみて拒まれるか**で決める。
+	probe.log("3) 読み取り専用にしたファイルへ、本当に書けなくなるか");
+	if (haveFile)
+	{
+		SAttributes base = {};
+		const VCOMError baseErr = workFile->GetAttributes(base);
+
+		probe.log("  書く前: " + DiskWord(workFilePath) + " 追記=" + (TryAppendWord(workFilePath)));
+
+		SAttributes readOnly = base;
+		readOnly.fbReadOnly = true;
+		readOnly.fbCanWrite = false;
+		const VCOMError setErr = workFile->SetAttributes(readOnly);
+
+		SAttributes back = {};
+		workFile->GetAttributes(back);
+		probe.log("  fbReadOnly=yes / fbCanWrite=no を書いた: SetAttributes=" + ErrWord(setErr) +
+				  " 読み戻し fbReadOnly=" + YesNo(back.fbReadOnly) +
+				  " fbCanWrite=" + YesNo(back.fbCanWrite));
+		probe.log("  書いた後: " + DiskWord(workFilePath) +
+				  " 追記=" + (TryAppendWord(workFilePath)));
+
+		// 元へ戻して、書けるように戻るかまで見る（戻らなければ後片付けが効かない）。
+		if (VCOM_SUCCEEDED(baseErr))
+			workFile->SetAttributes(base);
+		probe.log("  初期値へ戻した後: " + DiskWord(workFilePath) +
+				  " 追記=" + (TryAppendWord(workFilePath)));
+	}
+	else
+	{
+		probe.log("  作業ファイルを作れなかったので飛ばす");
+	}
+
+	// -----------------------------------------------------------------------
+	// 3b) 同じことをフォルダでも（子を作れるかで見る）。
+	probe.log("3b) 読み取り専用にしたフォルダの中へ、本当に作れなくなるか");
 	{
 		SAttributes base = {};
 		const VCOMError baseErr = workFolder->GetAttributes(base);
