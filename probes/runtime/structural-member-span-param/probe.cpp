@@ -335,7 +335,7 @@ VW_PROBE("structural-member-span-param",
 		VWPolygon2DObj poly;
 		poly.AddVertex(0.0, 0.0);
 		poly.AddVertex(kHorizontalLength, 0.0);
-		horizontalPath = poly.GetObjectHandle();
+		horizontalPath = poly.GetThisObject();
 	}
 	if (horizontalPath == nil)
 	{
