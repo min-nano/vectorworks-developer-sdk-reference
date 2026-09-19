@@ -1035,6 +1035,90 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 描くなら、パスの始端を支持点ではなく**軒先**にし、その位置・高さ・バウンド offset を
 自分で計算する必要がある。
 
+## 打ち切った調査: 構造材 PIO から「スパン」「部材長」をパラメータで読む
+
+**結論: 構造材 PIO（`StructuralMember`）のパラメータ表に、部材長にもスパンにも当たるものは
+1 件も無い。パラメータ側から部材の長さを読む道は存在しない**——[issue #95](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/95)。
+実体の長さは **`GetCustomObjectPath` で読み戻したパスの両端の距離**で測る（上記
+「高さ・実体を最終的に決めるのは…」の「検算できる。ただし読むのは『作り直しの後』」）。
+**鉛直材なら `StartElevation` / `EndElevation` の差でも測れるが、水平材は両端の Z が
+等しいのが正常**なので、その差は 0 になる——**水平材・斜め材で使えるのはパスの読み戻し
+だけ**である。
+
+### 「無い」と言い切れる根拠（3 つが独立に同じ答えを出している）
+
+1. **パラメータ表の全数列挙（実機）。** 構造材 PIO のパラメータは **181 件**で、
+   その全件の universal 名・ローカライズ名は
+   [issue #82](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/82)
+   の実機実行（VW 2026 / mac・日本語 UI。
+   [実行ログ全文](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/84#issuecomment-5737168941)）で
+   拾ってある（上記「名前の解決は『種別 × 文書』ごとに 1 度でよい」の表）。
+   **`Span` も、部材の軸方向の長さに当たるものも、181 件のどこにも無い。**
+   長さらしい名前は**断面の寸法**（`MajorBreadth` 主幅 / `MinorBreadth` 副幅 /
+   `MajorDepth` 主高さ / `MinorDepth` 副高さ、および同じ値を持つ `B` / `B1` / `D` / `D1`）と
+   **高さ方向のオフセット**（`StartElevation` / `EndElevation` / `StartOffset` /
+   `EndOffset`）だけで、どれも部材長ではない。
+   **同じ種別のインスタンスなら表は常に同一**（値を変えても・ポップアップを倒しても・
+   別文書でも・スタイルを当てても一致）なので、**「別の本なら在るかもしれない」は無い**。
+2. **SDK の全数検索【ヘッダ根拠】。** VW 2026 SDK（mac）の `SDKLib` 全体——`Include` の
+   ヘッダと、同梱の VWFC 実装ソース `Source` の両方——を `[Ss]pan` で検索しても、
+   構造材に関わるものは 1 件も出ない。出るのは
+   `SetObjectAsSpanWallBreak`（**壁を跨ぐシンボルのブレーク**。構造材とは無関係）と
+   `nlohmann/json` の `span_input_adapter`、あとはコメント中の "spanning" だけ
+   （[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35422406982)）。
+   **部材長を返すオブジェクト変数も無い**——`ObjectVariables.h` の `ov*Length*` は
+   寸法の補助線長（`ovDimCustStartWitLength` 等）と塗りの軸長（`ovFillIAxisLength` 等）
+   だけである
+   （[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35422680180)）。
+3. **実運用での全数確認（実機）。** ホームズ君 IFC 取り込みプラグインで
+   `ResolveParamNameAmong(pio, {"Span"}, {"スパン"})` が、**横架材 266 本・垂木 54 本の
+   全数で解決しなかった**（universal 名でもローカライズ名でも引けない。
+   [あちらの PR #124](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/124)）。
+   絵は正しく描けている本での結果なので、「描けていないから引けない」ではない。
+
+### `CenterPointLength(長さ)` は部材長ではない——**センターマークの長さである**【推定】
+
+「長さ」を名前に含むパラメータを全数列挙すると `CenterPointLength(長さ)` の 1 件だけが
+当たるので、**ここが最も踏みやすい罠**である。**これは部材長ではない。**
+
+- **実測が否定している。** 実長 **5333mm** の柱で `CenterPointLength` は **100**
+  （[あちらの PR #124](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/124)）。
+  パラメータ表の既定値も **100**（相方の `CenterPointGap` は 10）で、**部材長と連動していない**。
+- **表の並びが素性を示している。** 索引 153〜160 は
+  `CenterPointMarker`（センターマークを使用）・`CenterPointMarkerClass` …
+  `CenterPointMarkerWeight` と続き、その直後が **159 `CenterPointLength`（長さ）**、
+  **160 `CenterPointGap`（間隔）**である。**この「長さ」は
+  センターマーク（作図記号）の線の長さ**で、部材の長さとは関係が無い【推定】。
+- **教訓: ローカライズ名だけで当てない。** 「長さ」で引き当てたものが部材長とは限らない。
+  **引き当てたら値を実測と突き合わせる**（1 本でも桁が合わなければ別物）。
+
+### では OIP の「スパン」欄は何か——**パラメータではなく計算値**【推定】
+
+OIP には「スパン」の欄が見えている（上記「パスの型を間違えると…」に
+「OIP は『スパン 0 / 長さ 0』」の記録がある）のに、**パラメータ表にその名前が無い**。
+PIO はパラメータに紐づかない欄を OIP へ出せるので、**この欄はパスから毎回計算して
+表示しているだけ**で、**読み書きできる値としては存在しない**と見るのが整合的である
+【推定】。**目視でしか見えないものなので、これ以上は実機でも取りに行けない**——
+そして**取りに行く必要も無い**（読む道が無いことは 1〜3 で確定しており、
+欄の正体が何であっても実装は変わらない）。
+
+### 代わりにどう測るか
+
+```
+MCObjectHandle path = gSDK->GetCustomObjectPath(pio);   // 作り直しの「後」に読む
+// 鉛直材（NURBS）: NurbsCurveGetNumPieces / NurbsGetNumPts / NurbsGetPt3D で両端を取る
+// 水平材（2D ポリライン）: VWPolygon2DObj の GetVertexCount / GetVertexPoint(i)
+```
+
+- **読むのは `ResetObject` の後**（パスはバウンドから作り直される。上記
+  「高さ・実体を最終的に決めるのは…」）。生成直後に読んでも渡した値が返るだけで、
+  実体の長さにはなっていない。
+- **`ResetObject` が触るのは Z の差だけで、水平成分は渡したパスのままビット一致で残る**
+  （上記「鉛直でないパスでは…」「水平成分が 1e-7 以上ある部材は…」）。だから
+  **両端の距離は水平材でも斜め材でもそのまま部材長として読める**。
+- 「実体を持っているか」を数えたいだけなら、**見るべきは鉛直材だけでよい**——水平成分が
+  1e-7 以上ある部材は 0 長の死角に落ちない（上記「水平成分が 1e-7 以上ある部材は…」）。
+
 ## 構造材同士の「自動結合」を作る API は無い【ヘッダ根拠】
 
 構造材ツールには **自動結合（Auto Join Members）** モードがあり、この状態で置いた構造材同士は
