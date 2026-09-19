@@ -67,34 +67,62 @@ namespace
 	{
 		switch (style)
 		{
-			case kFieldLongInt: return "整数";
-			case kFieldBoolean: return "真偽";
-			case kFieldReal: return "実数";
-			case kFieldText: return "文字列";
-			case kFieldCoordDisp: return "座標（距離）";
-			case kFieldPopUp: return "ポップアップ";
-			case kFieldRadio: return "ラジオ";
-			case kFieldCoordLocX: return "座標X";
-			case kFieldCoordLocY: return "座標Y";
-			case kFieldStaticText: return "静的テキスト";
-			case kFieldControlPoint: return "コントロールポイント";
-			case kFieldDimStdPopUp: return "寸法規格ポップアップ";
-			case kFieldPrecisionPopUp: return "精度ポップアップ";
-			case kFieldClassesPopup: return "クラスポップアップ";
-			case kFieldLayersPopup: return "レイヤポップアップ";
-			case kFieldAngle: return "角度";
-			case kFieldArea: return "面積";
-			case kFieldVolume: return "体積";
-			case kFieldClass: return "クラス";
-			case kFieldBuildingMaterial: return "建材";
-			case kFieldFill: return "塗り";
-			case kFieldPenStyle: return "線種";
-			case kFieldPenWeight: return "線の太さ";
-			case kFieldColor: return "色";
-			case kFieldTexture: return "テクスチャ";
-			case kFieldSymDef: return "シンボル定義";
-			case kFieldDimUnitPopUp: return "寸法単位ポップアップ";
-			default: break;
+		case kFieldLongInt:
+			return "整数";
+		case kFieldBoolean:
+			return "真偽";
+		case kFieldReal:
+			return "実数";
+		case kFieldText:
+			return "文字列";
+		case kFieldCoordDisp:
+			return "座標（距離）";
+		case kFieldPopUp:
+			return "ポップアップ";
+		case kFieldRadio:
+			return "ラジオ";
+		case kFieldCoordLocX:
+			return "座標X";
+		case kFieldCoordLocY:
+			return "座標Y";
+		case kFieldStaticText:
+			return "静的テキスト";
+		case kFieldControlPoint:
+			return "コントロールポイント";
+		case kFieldDimStdPopUp:
+			return "寸法規格ポップアップ";
+		case kFieldPrecisionPopUp:
+			return "精度ポップアップ";
+		case kFieldClassesPopup:
+			return "クラスポップアップ";
+		case kFieldLayersPopup:
+			return "レイヤポップアップ";
+		case kFieldAngle:
+			return "角度";
+		case kFieldArea:
+			return "面積";
+		case kFieldVolume:
+			return "体積";
+		case kFieldClass:
+			return "クラス";
+		case kFieldBuildingMaterial:
+			return "建材";
+		case kFieldFill:
+			return "塗り";
+		case kFieldPenStyle:
+			return "線種";
+		case kFieldPenWeight:
+			return "線の太さ";
+		case kFieldColor:
+			return "色";
+		case kFieldTexture:
+			return "テクスチャ";
+		case kFieldSymDef:
+			return "シンボル定義";
+		case kFieldDimUnitPopUp:
+			return "寸法単位ポップアップ";
+		default:
+			break;
 		}
 		return "不明(" + std::to_string(static_cast<int>(style)) + ")";
 	}
@@ -135,20 +163,20 @@ namespace
 		probe.log(std::string("===== ") + label + " のパラメータ全数 =====");
 
 		VWParametricObj pio(object);
-		probe.log("PIO 名: " + Utf8(pio.GetParametricName())
-				  + " / ローカライズ名: " + Utf8(pio.GetLocalizedParametricName()));
+		probe.log("PIO 名: " + Utf8(pio.GetParametricName()) +
+				  " / ローカライズ名: " + Utf8(pio.GetLocalizedParametricName()));
 
 		const size_t count = pio.GetParamsCount();
 		probe.log("パラメータ数: " + std::to_string(count));
 		if (count == 0)
 		{
 			probe.fail(std::string(label) + ": パラメータが 1 件も取れなかった"
-					   "（列挙そのものが効いていない見込み）");
+											"（列挙そのものが効いていない見込み）");
 			return;
 		}
 
-		std::vector<std::string> nameHits;	 // 名前が「スパン / Span / 長」に触れるもの
-		std::vector<std::string> valueHits;	 // 値が部材長と一致するもの
+		std::vector<std::string> nameHits; // 名前が「スパン / Span / 長」に触れるもの
+		std::vector<std::string> valueHits; // 値が部材長と一致するもの
 
 		for (size_t i = 0; i < count; ++i)
 		{
@@ -184,20 +212,20 @@ namespace
 			{
 			}
 
-			probe.log("[" + std::to_string(i) + "] " + universal + "(" + localized + ") 型="
-					  + style + " 値=" + value);
+			probe.log("[" + std::to_string(i) + "] " + universal + "(" + localized +
+					  ") 型=" + style + " 値=" + value);
 
-			if (ContainsUtf8(universal, "Span") || ContainsUtf8(universal, "span")
-				|| ContainsUtf8(universal, "Length") || ContainsUtf8(universal, "Len")
-				|| ContainsUtf8(localized, "スパン") || ContainsUtf8(localized, "長")
-				|| ContainsUtf8(localized, "丈"))
+			if (ContainsUtf8(universal, "Span") || ContainsUtf8(universal, "span") ||
+				ContainsUtf8(universal, "Length") || ContainsUtf8(universal, "Len") ||
+				ContainsUtf8(localized, "スパン") || ContainsUtf8(localized, "長") ||
+				ContainsUtf8(localized, "丈"))
 			{
 				nameHits.push_back(universal + "(" + localized + ")=" + value);
 			}
 
 			double numeric = 0.0;
-			if (ParseNumber(value, numeric)
-				&& std::fabs(numeric - expectedLength) <= kMatchTolerance)
+			if (ParseNumber(value, numeric) &&
+				std::fabs(numeric - expectedLength) <= kMatchTolerance)
 			{
 				valueHits.push_back(universal + "(" + localized + ")=" + value);
 			}
@@ -211,8 +239,8 @@ namespace
 			probe.log("名前が「スパン / Span / 長さ」に触れるパラメータ: 1 件も無い");
 		else
 		{
-			probe.log("名前が「スパン / Span / 長さ」に触れるパラメータ: "
-					  + std::to_string(nameHits.size()) + " 件");
+			probe.log("名前が「スパン / Span / 長さ」に触れるパラメータ: " +
+					  std::to_string(nameHits.size()) + " 件");
 			for (const std::string& hit : nameHits)
 				probe.log("  * " + hit);
 		}
@@ -222,8 +250,8 @@ namespace
 					  "（＝パラメータ側に部材長を読む道は無い）");
 		else
 		{
-			probe.log("値が部材長と一致するパラメータ: " + std::to_string(valueHits.size())
-					  + " 件");
+			probe.log("値が部材長と一致するパラメータ: " + std::to_string(valueHits.size()) +
+					  " 件");
 			for (const std::string& hit : valueHits)
 				probe.log("  * " + hit);
 		}
@@ -241,8 +269,8 @@ namespace
 		}
 
 		const short pathType = gSDK->GetObjectTypeN(path);
-		probe.log(std::string(label) + ": パスのオブジェクト種別="
-				  + std::to_string(static_cast<int>(pathType)));
+		probe.log(std::string(label) +
+				  ": パスのオブジェクト種別=" + std::to_string(static_cast<int>(pathType)));
 
 		// NURBS として読めるならそちらで測る（鉛直材）。
 		const Sint32 pieces = gSDK->NurbsCurveGetNumPieces(path);
@@ -251,19 +279,19 @@ namespace
 			for (Sint32 piece = 0; piece < pieces; ++piece)
 			{
 				const Sint32 points = gSDK->NurbsGetNumPts(path, piece);
-				probe.log(std::string(label) + ": NURBS piece" + std::to_string(piece) + " は "
-						  + std::to_string(points) + " 点");
+				probe.log(std::string(label) + ": NURBS piece" + std::to_string(piece) + " は " +
+						  std::to_string(points) + " 点");
 				if (points < 2)
 					continue;
 
 				WorldPt3 first(0, 0, 0);
 				WorldPt3 last(0, 0, 0);
-				if (gSDK->NurbsGetPt3D(path, piece, 0, first)
-					&& gSDK->NurbsGetPt3D(path, piece, points - 1, last))
+				if (gSDK->NurbsGetPt3D(path, piece, 0, first) &&
+					gSDK->NurbsGetPt3D(path, piece, points - 1, last))
 				{
-					probe.log(std::string(label) + ": 両端 (" + Num(first.x) + ", " + Num(first.y)
-							  + ", " + Num(first.z) + ") → (" + Num(last.x) + ", " + Num(last.y)
-							  + ", " + Num(last.z) + ") 距離=" + Num(Distance(first, last)));
+					probe.log(std::string(label) + ": 両端 (" + Num(first.x) + ", " + Num(first.y) +
+							  ", " + Num(first.z) + ") → (" + Num(last.x) + ", " + Num(last.y) +
+							  ", " + Num(last.z) + ") 距離=" + Num(Distance(first, last)));
 				}
 			}
 			return;
@@ -285,12 +313,12 @@ namespace
 			const VWPoint2D last = poly.GetVertexPoint(vertices - 1);
 			const double dx = last.x - first.x;
 			const double dy = last.y - first.y;
-			probe.log(std::string(label) + ": 両端 (" + Num(first.x) + ", " + Num(first.y)
-					  + ") → (" + Num(last.x) + ", " + Num(last.y)
-					  + ") 距離=" + Num(std::sqrt(dx * dx + dy * dy)));
+			probe.log(std::string(label) + ": 両端 (" + Num(first.x) + ", " + Num(first.y) +
+					  ") → (" + Num(last.x) + ", " + Num(last.y) +
+					  ") 距離=" + Num(std::sqrt(dx * dx + dy * dy)));
 		}
 	}
-}
+} // namespace
 
 VW_PROBE("structural-member-span-param",
 		 "構造材 PIO のパラメータを全数列挙する（スパン／部材長は在るか）",
