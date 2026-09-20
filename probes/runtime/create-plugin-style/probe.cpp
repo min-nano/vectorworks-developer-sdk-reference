@@ -3,29 +3,33 @@
 //
 //	[issue #98] `gSDK->CreatePluginStyle(hObj)` が何をする呼び出しなのかを実機で確かめる。
 //
-//	issue #82 の調査で 4 度呼んで、次のことが実測で分かっている（VW 2026 / mac）:
-//	「フォルダ選択」ダイアログが出る・戻ると渡したハンドルが無効になる・文書の
-//	プラグインスタイルは 1 本も増えない・図面にあった構造材が型 86 から型 21 へ変わる
-//	（**呼び出しに渡していない本まで**）。SDK のヘッダ検索で、型の正体までは分かった:
+//	**これは 2 回目の版。** 1 回目（PR #99 のコメント）で次まで決着した:
 //
-//	    kParametricNode = 86（PIO） / kPolylineNode = 21（ポリライン）
-//	    kUndoPlaceholderNode = 90 / kTermNode = 0（オブジェクトではない）
+//	  * 呼ぶと **PIO が全部ポリライン（型 21 = `kPolylineNode`）に作り替えられる**。
+//	    渡した本も、渡していない本も、選択していない本も区別なく。PIO でない図形
+//	    （型 5 の多角形）は**同じハンドルのまま無傷**。＝**選択は関係ない**。
+//	  * **資源は 1 つも増えない。** 資源ツリーを丸ごと数えて 535 → 537 件、増えた 2 件は
+//	    どちらもプローブ自身が作ったシンボル定義とその空レコード。プラグインスタイルは
+//	    9 本のまま、`GetPluginStyleForTool` も `ref=0` のまま。
+//	  * **シンボル定義のサブタイプ ＝ PIO の内部 ID** は裏付いた（構造材インスタンスの
+//	    内部 ID 537 ＝ 文書にあった構造材スタイル 2 本の subType 537）。
 //
-//	つまり**構造材がポリラインになっている**——「PIO が消えてパスだけが残った」のか
-//	「まったく別の何かが置かれた」のかは、頂点を読んで突き合わせれば機械で分かる。
-//	そこでこのプローブは次の 4 つを、目視に頼らず**ログの数字だけで**決めにいく。
+//	**取りに行けば取れるのに取れなかったものが 3 つ**残ったので、この版で取りに行く。
 //
-//	  Q1 型 21 になったものは何か（頂点数・頂点座標を、作ったときのパスと突き合わせる）
-//	  Q2 変わるのはどれか（**渡した本 / 渡していない本 / 選択した本 / PIO でない図形**を
-//	     並べて置き、どれが変わるかを見る）
-//	  Q3 スタイルは本当に増えていないのか（**資源ツリーを丸ごと**——フォルダの中まで——
-//	     呼ぶ前と後で数え、差分を出す）
-//	  Q4 ダイアログを通らずに SDK だけでスタイルを作れるか
-//	     （`CreateSymbolDefinition` ＋ `SetSymbolDefSubType` ＋ 中へ PIO ＋
-//	      `SetAllPluginStyleParameters`。**Q4 は Q1〜Q3 より先に、壊れる前に走らせる**）
+//	  A ポリラインの中身が読めなかった。`VWPolygon2DObj::IsPolygon2DObject` は
+//	    `kPolygonNode` / `kBoxNode` にしか true を返さず、型 21 は素通りしていた。
+//	    → **`gSDK->CountVertices` / `gSDK->GetVertex` を直に使い、外接も併せて出す**。
+//	    「PIO のパスが残ったのか、描かれていた輪郭なのか」をここで決める。
+//	  B 置いた PIO が構造材だけだったので、**「同じ種別だけ」か「PIO 全部」か**が割れない。
+//	    → **別種別の PIO を 1 つ混ぜる**。
+//	  C ダイアログを通らない道（G3）が失敗した理由が曖昧だった。`AddObjectToContainer` は
+//	    true を返したのに、最後にシンボル定義は空で、`SetSymbolDefSubType` の読み戻しは 0。
+//	    「そもそも入らなかった」のか「入った後 `CreatePluginStyle` に抜かれた」のかが
+//	    区別できていない。→ **1 手ごとに中身を数え、G3 の直後にも図面を撮る**。
 //
-//	**ダイアログが 1 回出る**（G4）。利用者にはフォルダを 1 つ選んで OK を押して
-//	もらう（キャンセルしてもよい——そのときも結果は残る）。新規の空図面で走らせること。
+//	**ダイアログが 1 回出る**（G5。「フォルダの指定」——文書の資源フォルダを選ばせる画面）。
+//	フォルダを 1 つ選んで OK を押してください（キャンセルでも結果は残ります）。
+//	**新規の空図面で走らせること**（図面は壊れます。それが調べたいことです）。
 //
 
 #include "Probe.h"
@@ -42,8 +46,11 @@ namespace
 {
 	const char* const kMemberTypeName = "StructuralMember";
 
-	// 作る構造材のパス（両端の座標）。**後でポリラインの頂点と突き合わせる**ので、
-	// 1 本ごとに違う値にしておく。
+	// 別種別の PIO（B）。上から順に作ってみて、最初に作れたものを使う。
+	const char* const kOtherPioCandidates[] = {"Data Tag", "GridAxis", "Drawing Label2"};
+
+	// 作る構造材のパス（両端の座標）。**後でポリラインの外接・頂点と突き合わせる**ので、
+	// 1 本ごとに y を分けておく。
 	const double kMemberStartX = 0.0;
 	const double kMemberEndX = 3000.0;
 
@@ -66,7 +73,7 @@ namespace
 		return std::string(buf);
 	}
 
-	// 型番号に SDK の名前を添える（Objs.TDType.h の定数。読み違えを防ぐため）。
+	// 型番号に SDK の名前を添える（`Objs.TDType.h` の定数。読み違えを防ぐため）。
 	std::string TypeText(short type)
 	{
 		const char* name = "?";
@@ -81,6 +88,9 @@ namespace
 		case kSymDefNode:
 			name = "kSymDefNode/シンボル定義";
 			break;
+		case kPolygonNode:
+			name = "kPolygonNode/多角形";
+			break;
 		case kPolylineNode:
 			name = "kPolylineNode/ポリライン";
 			break;
@@ -93,40 +103,60 @@ namespace
 		case kFolderNode:
 			name = "kFolderNode/フォルダ";
 			break;
+		case kSymbolNode:
+			name = "kSymbolNode/シンボル";
+			break;
 		default:
 			break;
 		}
 		return std::to_string(static_cast<int>(type)) + "(" + name + ")";
 	}
 
+	// ---------------------------------------------------------------- 形を読む
+
+	// 外接。**どの本だったか**を y で言い当てるために出す（作った y は 0/1000/…）。
+	std::string BoundsText(MCObjectHandle h)
+	{
+		WorldRect bounds;
+		if (!gSDK->GetObjectBounds(h, bounds))
+			return " 外接=読めず";
+		return " 外接=[x " + Num(bounds.left) + "〜" + Num(bounds.right) + " / y " +
+			   Num(bounds.bottom) + "〜" + Num(bounds.top) + "]";
+	}
+
+	// 頂点。**`VWPolygon2DObj` の判定は型 21 を弾く**ので、ISDK の口を直に叩く
+	// （`CountVertices` / `GetVertex` は多角形にもポリラインにも効く）。
+	std::string VertexText(MCObjectHandle h)
+	{
+		const short count = gSDK->CountVertices(h);
+		if (count <= 0)
+			return "";
+
+		std::string text = " 頂点=" + std::to_string(static_cast<int>(count)) + " [";
+		for (short index = 1; index <= count && index <= 10; ++index)
+		{
+			WorldPt pt;
+			VertexType vertexType = vtCorner;
+			WorldCoord arcRadius = 0;
+			gSDK->GetVertex(h, index, pt, vertexType, arcRadius);
+			text += " (" + Num(pt.x) + "," + Num(pt.y) + ")";
+		}
+		if (count > 10)
+			text += " …";
+		return text + " ]";
+	}
+
 	// ---------------------------------------------------------------- 図面の中身
 
-	// 図面に置かれたオブジェクト 1 つぶんの素性。**呼ぶ前と後で同じ形で採る**。
 	struct DrawingItem
 	{
 		MCObjectHandle handle = nil;
 		short type = 0;
-		std::string pioName; // PIO のときだけ
+		std::string pioName;
 		RefNumber styleRef = 0;
 		bool selected = false;
-		std::string vertices; // ポリラインのときだけ（頂点数と座標）
+		std::string shape;
 	};
-
-	std::string DescribeVertices(MCObjectHandle h)
-	{
-		if (!VWPolygon2DObj::IsPolygon2DObject(h))
-			return "";
-
-		VWPolygon2DObj poly(h);
-		const size_t count = poly.GetVertexCount();
-		std::string text = " 頂点=" + std::to_string(count) + " [";
-		for (size_t index = 0; index < count && index < 8; ++index)
-		{
-			const VWPoint2D pt = poly.GetVertexPoint(index);
-			text += " (" + Num(pt.x) + "," + Num(pt.y) + ")";
-		}
-		return text + " ]";
-	}
 
 	std::vector<DrawingItem> DumpDrawing(MCObjectHandle container)
 	{
@@ -149,7 +179,8 @@ namespace
 				item.pioName = Str(obj.GetParametricName());
 				item.styleRef = obj.GetStyleRefNumber();
 			}
-			item.vertices = DescribeVertices(h);
+			if (item.type != kTermNode && item.type != kUndoPlaceholderNode)
+				item.shape = BoundsText(h) + VertexText(h);
 			items.push_back(item);
 		}
 		return items;
@@ -165,21 +196,36 @@ namespace
 			probe.log(tag + " [" + std::to_string(index) + "] " + HandleText(item.handle) + " 型=" +
 					  TypeText(item.type) + (item.pioName.empty() ? "" : " PIO=" + item.pioName) +
 					  " styleRef=" + std::to_string(static_cast<long>(item.styleRef)) +
-					  (item.selected ? " **選択**" : " 非選択") + item.vertices);
+					  (item.selected ? " **選択**" : " 非選択") + item.shape);
 		}
+	}
+
+	// シンボル定義の中身を型番号で並べる（空の定義は型 0 のレコードを 1 つ持つ
+	// ——Findings「シンボル」。**「非 nil だから入った」と読まないため**）。
+	std::string MembersText(MCObjectHandle container)
+	{
+		std::string text;
+		size_t guard = 0;
+		for (MCObjectHandle m = gSDK->FirstMemberObj(container); m != nil && guard < 30;
+			 m = gSDK->NextObject(m))
+		{
+			++guard;
+			text += " " + TypeText(gSDK->GetObjectTypeN(m));
+			if (VWParametricObj::IsParametricObject(m))
+				text += "=" + Str(VWParametricObj(m).GetParametricName());
+		}
+		return text.empty() ? " （空）" : text;
 	}
 
 	// ---------------------------------------------------------------- 資源ツリー
 
-	// 資源（シンボル定義・フォルダ）1 件ぶん。**プラグインスタイルだけでなく全部**
-	// 並べる——「スタイルはフォルダの中へ入ったのでは」を潰すため。
 	struct ResourceItem
 	{
-		std::string path; // フォルダを辿った名前（"親/子"）
+		std::string path;
 		short type = 0;
 		bool isPluginStyle = false;
 		RefNumber ref = 0;
-		Sint32 subType = 0; // シンボル定義のサブタイプ ＝ PIO の内部 ID（>0 でスタイル対応）
+		Sint32 subType = 0;
 		std::string innerPio;
 	};
 
@@ -242,7 +288,6 @@ namespace
 		return count;
 	}
 
-	// 資源ツリーの差分（パスで突き合わせる）。**増えた／消えたものを 1 行ずつ**出す。
 	void LogResourceDiff(vwprobe::Report& probe, const std::string& tag,
 						 const std::vector<ResourceItem>& before,
 						 const std::vector<ResourceItem>& after)
@@ -301,17 +346,17 @@ namespace
 	}
 } // namespace
 
-VW_PROBE("create-plugin-style", "CreatePluginStyle が何をするのかを確かめる",
-		 "構造材を 4 つの立場（渡す／渡さない／選択するだけ／PIO でない）で置き、"
-		 "CreatePluginStyle を 1 度呼んで、図面と資源ツリーの差分を採る"
-		 "（**フォルダ選択ダイアログが 1 回出る**。新規の空図面で走らせること）")
+VW_PROBE("create-plugin-style", "CreatePluginStyle が何をするのかを確かめる（2 回目）",
+		 "構造材 3 本と別種別の PIO 1 つと PIO でない多角形を置き、CreatePluginStyle を"
+		 "1 度呼んで、できたポリラインの頂点・外接と資源ツリーの差分を採る"
+		 "（**「フォルダの指定」ダイアログが 1 回出る**。新規の空図面で走らせること）")
 {
 	gSDK->DefineCustomObject(kMemberTypeName, kCustomObjectPrefNever);
 
 	// -------------------------------------------------------------- G1 現場
-	probe.log("[G1] 構造材を 3 本と、PIO でないポリラインを 1 本置く");
+	probe.log("[G1] 構造材 3 本・別種別の PIO 1 つ・PIO でない多角形 1 つを置く");
 
-	MCObjectHandle memberPassed = CreateMember(0.0);	   // 渡す本
+	MCObjectHandle memberPassed = CreateMember(0.0);	   // 渡す本（選択）
 	MCObjectHandle memberUntouched = CreateMember(1000.0); // 渡さない・選択しない本
 	MCObjectHandle memberSelected = CreateMember(2000.0);  // 渡さないが選択する本
 	if (memberPassed == nil || memberUntouched == nil || memberSelected == nil)
@@ -325,33 +370,54 @@ VW_PROBE("create-plugin-style", "CreatePluginStyle が何をするのかを確�
 	if (layer == nil)
 		layer = gSDK->GetActiveLayer();
 
-	// PIO でない対照。**PIO だけが作り替えられるのか**を見るために置く。
+	// B: 別種別の PIO。**「同じ種別だけ」か「PIO 全部」か**を割るために置く。
+	MCObjectHandle otherPio = nil;
+	std::string otherPioName;
+	for (size_t index = 0; index < sizeof(kOtherPioCandidates) / sizeof(kOtherPioCandidates[0]);
+		 ++index)
+	{
+		const char* const candidate = kOtherPioCandidates[index];
+		// 設定ダイアログが出ないように、作る前に定義しておく
+		// （Findings「生成時に『オブジェクトの設定』ダイアログが出る」）。
+		gSDK->DefineCustomObject(candidate, kCustomObjectPrefNever);
+		otherPio = gSDK->CreateCustomObject(candidate, WorldPt(6000.0, 0.0), 0.0, true);
+		if (otherPio != nil)
+		{
+			otherPioName = candidate;
+			break;
+		}
+	}
+	probe.log("[G1] 別種別の PIO = " + (otherPio == nil
+											? std::string("**作れなかった**（候補を全部試した）")
+											: otherPioName + " " + HandleText(otherPio)));
+
+	// PIO でない対照（型 5 の多角形）。
 	VWPolygon2DObj control;
 	control.AddVertex(kMemberStartX, 3000.0);
 	control.AddVertex(kMemberEndX, 3000.0);
 	const MCObjectHandle controlHandle = static_cast<MCObjectHandle>(control);
-	// 構築しただけで図面に入っていなければ、レイヤへ入れる（入っていれば何もしない）。
 	if (controlHandle != nil && gSDK->ParentObject(controlHandle) == nil)
 		gSDK->AddObjectToContainer(controlHandle, layer);
 
-	// 選択は「渡す本」と「渡さないが選択する本」の 2 つだけ。
 	gSDK->SelectObject(memberPassed, true);
 	gSDK->SelectObject(memberSelected, true);
 	gSDK->SelectObject(memberUntouched, false);
 	gSDK->SelectObject(controlHandle, false);
+	if (otherPio != nil)
+		gSDK->SelectObject(otherPio, false);
 
 	probe.log("[G1] 渡す本=" + HandleText(memberPassed) +
-			  "（選択）"
+			  "（選択・y=0）"
 			  " 渡さない本=" +
 			  HandleText(memberUntouched) +
-			  "（非選択）"
+			  "（非選択・y=1000）"
 			  " 選択だけの本=" +
 			  HandleText(memberSelected) +
-			  "（選択）"
-			  " PIO でないポリライン=" +
-			  HandleText(controlHandle) + "（非選択）");
-	probe.log("[G1] 作ったパスの両端は (" + Num(kMemberStartX) + ", y) 〜 (" + Num(kMemberEndX) +
-			  ", y)。y は 0 / 1000 / 2000 / 3000");
+			  "（選択・y=2000）"
+			  " PIO でない多角形=" +
+			  HandleText(controlHandle) + "（非選択・y=3000）");
+	probe.log("[G1] 構造材のパスは (0, y) 〜 (3000, y) の 2 頂点。**作り替えられたものの"
+			  "頂点がこれと一致すればパスが残ったということ**");
 
 	// -------------------------------------------------------------- G2 呼ぶ前
 	probe.log("[G2] 呼ぶ前のスナップショット");
@@ -376,14 +442,9 @@ VW_PROBE("create-plugin-style", "CreatePluginStyle が何をするのかを確�
 	probe.log("[G2] GetPluginStyleForTool(\"StructuralMember\") = " + StyleForToolText());
 
 	// -------------------------------------------------------------- G3 ダイアログを通らない道
-	// **壊れる前に**試す。SDK だけでプラグインスタイルを組み立てられるか。
-	probe.log("[G3] ダイアログを通らずにスタイルを作れるかを試す");
+	// **壊れる前に**試す。1 手ごとに読み戻して、どこで落ちるのかを名指しする（C）。
+	probe.log("[G3] ダイアログを通らずにスタイルを作れるかを試す（1 手ごとに読み戻す）");
 
-	// シンボル定義のサブタイプ ＝ その PIO の内部 ID（VWSymbolDefObj::HasPluginStyleSupport は
-	// subType > 0 だけを見る。VWSymbolDefObj::PluginStyleObjectID はその値をそのまま返す）。
-	// **内部 ID はインスタンスから取れる**（VWParametricObj::GetInternalID は static）。
-	// 文書に元からある構造材用スタイルの subType とも突き合わせる——**一致すれば
-	// 「サブタイプ＝PIO の内部 ID」が実測で裏付く**。
 	const Sint32 memberSubType = static_cast<Sint32>(VWParametricObj::GetInternalID(memberPassed));
 	Sint32 subTypeOfExistingStyle = 0;
 	for (size_t index = 0; index < resourcesBefore.size(); ++index)
@@ -393,50 +454,71 @@ VW_PROBE("create-plugin-style", "CreatePluginStyle が何をするのかを確�
 	probe.log(
 		"[G3] 構造材インスタンスの内部 ID = " + std::to_string(static_cast<long>(memberSubType)) +
 		" / 文書にあった構造材スタイルの subType = " +
-		std::to_string(static_cast<long>(subTypeOfExistingStyle)) + "（一致するか）");
+		std::to_string(static_cast<long>(subTypeOfExistingStyle)));
 
+	MCObjectHandle hSymDef = nil;
 	if (memberSubType > 0)
 	{
 		TXString newStyleName("VwSdkProbes 試作スタイル");
-		MCObjectHandle hSymDef = gSDK->CreateSymbolDefinition(newStyleName);
-		probe.log("[G3] CreateSymbolDefinition = " + HandleText(hSymDef) +
-				  " 名前=" + Str(newStyleName));
-		if (hSymDef != nil)
+		hSymDef = gSDK->CreateSymbolDefinition(newStyleName);
+		probe.log("[G3] ① CreateSymbolDefinition = " + HandleText(hSymDef) + " 名前=" +
+				  Str(newStyleName) + " 中身:" + (hSymDef == nil ? " —" : MembersText(hSymDef)));
+	}
+	if (hSymDef != nil)
+	{
+		MCObjectHandle inner = CreateMember(4000.0);
+		const bool moved = inner != nil && gSDK->AddObjectToContainer(inner, hSymDef);
+		probe.log("[G3] ② AddObjectToContainer=" + std::string(moved ? "true" : "false") +
+				  " 定義の中身:" + MembersText(hSymDef) + " / 入れた PIO の親=" +
+				  HandleText(inner == nil ? nil : gSDK->ParentObject(inner)) +
+				  "（定義=" + HandleText(hSymDef) + " と同じか）");
+
+		gSDK->ResetObject(hSymDef);
+		probe.log("[G3] ③ ResetObject の後 定義の中身:" + MembersText(hSymDef) +
+				  BoundsText(hSymDef));
+
+		// **ここが本命**——サブタイプ（＝PIO の内部 ID）を書いて読み戻す。
+		gSDK->SetSymbolDefSubType(hSymDef, memberSubType);
+		probe.log("[G3] ④ SetSymbolDefSubType(" + std::to_string(static_cast<long>(memberSubType)) +
+				  ") → 読み戻し=" +
+				  std::to_string(static_cast<long>(gSDK->GetSymbolDefSubType(hSymDef))) +
+				  " **IsPluginStyle=" + (gSDK->IsPluginStyle(hSymDef) ? "true" : "false") + "**");
+
+		gSDK->SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByStyle);
+		const RefNumber newRef = gSDK->GetObjectInternalIndex(hSymDef);
+		probe.log("[G3] ⑤ SetAllPluginStyleParameters の後 subType=" +
+				  std::to_string(static_cast<long>(gSDK->GetSymbolDefSubType(hSymDef))) +
+				  " ref=" + std::to_string(static_cast<long>(newRef)) +
+				  " **IsPluginStyle=" + (gSDK->IsPluginStyle(hSymDef) ? "true" : "false") + "**");
+
+		MCObjectHandle trial = CreateMember(5000.0);
+		if (trial != nil && newRef != 0)
 		{
-			MCObjectHandle inner = CreateMember(4000.0);
-			const bool moved = inner != nil && gSDK->AddObjectToContainer(inner, hSymDef);
-			gSDK->SetSymbolDefSubType(hSymDef, memberSubType);
-			gSDK->SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByStyle);
-			// 定義は中身を入れたら作り直す（Findings「シンボル」）。
-			gSDK->ResetObject(hSymDef);
-
-			const RefNumber newRef = gSDK->GetObjectInternalIndex(hSymDef);
+			VWParametricObj(trial).SetStyle(newRef);
+			gSDK->ResetObject(trial);
 			probe.log(
-				"[G3] 中へ PIO を入れた=" + std::string(moved ? "true" : "false") + " subType=" +
-				std::to_string(static_cast<long>(gSDK->GetSymbolDefSubType(hSymDef))) +
-				" ref=" + std::to_string(static_cast<long>(newRef)) +
-				" **IsPluginStyle=" + (gSDK->IsPluginStyle(hSymDef) ? "true" : "false") + "**");
-
-			// 作ったものを本当に当てられるか（当たれば styleRef が 0 でなくなる）。
-			MCObjectHandle trial = CreateMember(5000.0);
-			if (trial != nil && newRef != 0)
-			{
-				VWParametricObj(trial).SetStyle(newRef);
-				gSDK->ResetObject(trial);
-				probe.log(
-					"[G3] 作ったスタイルを新しい本へ当てた: styleRef=" +
-					std::to_string(static_cast<long>(VWParametricObj(trial).GetStyleRefNumber())));
-			}
+				"[G3] ⑥ 作ったものを新しい本へ当てた: styleRef=" +
+				std::to_string(static_cast<long>(VWParametricObj(trial).GetStyleRefNumber())));
 		}
+	}
+	else if (memberSubType > 0)
+	{
+		probe.log("[G3] シンボル定義を作れなかった（名前が使われている？）");
 	}
 	else
 	{
 		probe.log("[G3] 内部 ID が 0 だった（この道は試せない）");
 	}
 
+	// **G3 の直後にも図面を撮る**——「定義へ入れた本が図面から消えたか」を、
+	// CreatePluginStyle を呼ぶ前に確かめておく（C）。
+	probe.log("[G3] ここまでの図面（CreatePluginStyle を呼ぶ前）");
+	const std::vector<DrawingItem> drawingAfterBuild = DumpDrawing(layer);
+	LogDrawing(probe, "[G3]", drawingAfterBuild);
+
 	// -------------------------------------------------------------- G4 本題
-	probe.log("[G4] これから CreatePluginStyle を 1 度だけ呼ぶ。**ダイアログが出る**ので、"
-			  "フォルダを 1 つ選んで OK を押してください（キャンセルでもよい）");
+	probe.log("[G4] これから CreatePluginStyle を 1 度だけ呼ぶ。**「フォルダの指定」"
+			  "ダイアログが出る**ので、フォルダを 1 つ選んで OK を押してください");
 	probe.log("[G4] 渡すのは " + HandleText(memberPassed) + " だけ");
 
 	gSDK->CreatePluginStyle(memberPassed);
@@ -448,6 +530,10 @@ VW_PROBE("create-plugin-style", "CreatePluginStyle が何をするのかを確�
 	const std::vector<DrawingItem> drawingAfter = DumpDrawing(layer);
 	LogDrawing(probe, "[G5]", drawingAfter);
 
+	if (hSymDef != nil)
+		probe.log("[G5] G3 で作ったシンボル定義の中身:" + MembersText(hSymDef) + " subType=" +
+				  std::to_string(static_cast<long>(gSDK->GetSymbolDefSubType(hSymDef))));
+
 	size_t visitedAfter = 0;
 	const std::vector<ResourceItem> resourcesAfter = DumpResources(visitedAfter);
 	probe.log("[G5] 資源 " + std::to_string(resourcesAfter.size()) +
@@ -456,13 +542,19 @@ VW_PROBE("create-plugin-style", "CreatePluginStyle が何をするのかを確�
 	LogResourceDiff(probe, "[G5]", resourcesBefore, resourcesAfter);
 	probe.log("[G5] GetPluginStyleForTool(\"StructuralMember\") = " + StyleForToolText());
 
-	// 渡した本／渡さない本／選択だけの本／PIO でない図形が、それぞれどうなったか。
-	// **ハンドルで突き合わせる**——同じハンドルが生きていれば作り替えではない。
-	const char* const kLabels[] = {"渡した本", "渡さない本", "選択だけの本",
-								   "PIO でないポリライン"};
-	MCObjectHandle targets[] = {memberPassed, memberUntouched, memberSelected, controlHandle};
-	for (size_t index = 0; index < 4; ++index)
+	// 立場ごとの結末を 1 行ずつ。**ハンドルで突き合わせる**。
+	const char* const kLabels[] = {"渡した本（選択）", "渡さない本（非選択）",
+								   "選択だけの本（選択）", "別種別の PIO（非選択）",
+								   "PIO でない多角形（非選択）"};
+	MCObjectHandle targets[] = {memberPassed, memberUntouched, memberSelected, otherPio,
+								controlHandle};
+	for (size_t index = 0; index < 5; ++index)
 	{
+		if (targets[index] == nil)
+		{
+			probe.log("[G5] " + std::string(kLabels[index]) + ": 置けなかったので判定なし");
+			continue;
+		}
 		bool stillThere = false;
 		for (size_t a = 0; a < drawingAfter.size(); ++a)
 			if (drawingAfter[a].handle == targets[index])
