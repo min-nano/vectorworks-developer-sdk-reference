@@ -407,6 +407,8 @@ VW_PROBE("create-plugin-style", "CreatePluginStyle が何をするのかを確�
 			const bool moved = inner != nil && gSDK->AddObjectToContainer(inner, hSymDef);
 			gSDK->SetSymbolDefSubType(hSymDef, memberSubType);
 			gSDK->SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByStyle);
+			// 定義は中身を入れたら作り直す（Findings「シンボル」）。
+			gSDK->ResetObject(hSymDef);
 
 			const RefNumber newRef = gSDK->GetObjectInternalIndex(hSymDef);
 			probe.log(
