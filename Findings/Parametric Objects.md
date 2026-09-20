@@ -997,6 +997,133 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 - **スタイル名 → RefNumber を名前で引く呼び出しは無い。** `GetNamedObject` ＋
   `GetObjectInternalIndex` で引く。
 
+### **`CreatePluginStyle` を呼んではいけない**——スタイルは作られず、文書中の PIO が全滅する
+
+`gSDK->CreatePluginStyle(MCObjectHandle hObj)` は、名前に反して**スタイルを作らない**。
+実際に起きるのは**文書にあるプラグインオブジェクトの全滅**である
+（[issue #98](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/98)。
+VW 2026 / mac・新規の空図面で 2 度実行。以下は実行ログそのまま）。
+
+| 呼ぶと何が起きるか | 実測 |
+| --- | --- |
+| **ダイアログを出して人を待つ** | 「**フォルダの指定**」——文書の資源フォルダ（`名称未設定 1` ＋各スタイルフォルダ）を選ばせる画面。**スタイル名は尋ねない**。所要は人次第（1.7〜282 秒） |
+| **文書の PIO が全部消える** | **渡した本も、渡していない本も、選択していない本も、別種別の PIO も**——例外なし。**シンボル定義の中へ入れておいた PIO まで**消える |
+| **パスを持つ PIO は「パスのポリライン」だけが残る** | 残るのは型 21（`kPolylineNode`）。**頂点は渡したパスそのもの**（下表） |
+| **点で入る PIO は何も残さない** | `Data Tag` は跡形も無く消えた（置き換わりの図形すら無い） |
+| **PIO でない図形は無傷** | 型 5（`kPolygonNode`）の多角形は**同じハンドルのまま**、頂点も外接もそのまま |
+| **残ったポリラインは全部「選択」状態になる** | 呼ぶ前の選択状態とは無関係 |
+| **資源は 1 つも増えない** | 資源ツリーを丸ごと数えて 535 → 537 件。増えた 2 件は**どちらもプローブ自身が作ったシンボル定義とその空レコード**。プラグインスタイルは 9 本のまま |
+| **渡したハンドルは無効になる** | 戻った直後に `GetParamsCount()` が 0、`GetRecordFormat()` が `0x0` |
+| `GetPluginStyleForTool` | 呼ぶ前も後も `true` / `ref=0`（下記「戻り値を成否と読まない」） |
+
+**「パスだけが残った」と言い切れるのは、頂点と外接を突き合わせたから。** 構造材は
+`(0, y)`〜`(3000, y)` の 2 頂点のパスから作ってあり、呼ぶ前の PIO は断面のぶん高さを
+持っていた。呼んだ後に残ったものは、**高さ 0 の 2 頂点ポリライン**である。
+
+| 本（作った y） | 呼ぶ前（型 86 の PIO）の外接 | 呼んだ後（型 21）の外接と頂点 |
+| --- | --- | --- |
+| y=0（渡した・選択） | `x 0〜3000 / y -82.804〜82.804` | `x 0〜3000 / y 0〜0`・頂点 2 `(0,0) (3000,0)` |
+| y=1000（渡さない・非選択） | `x 0〜3000 / y 917.196〜1082.804` | `x 0〜3000 / y 1000〜1000`・頂点 2 `(0,1000) (3000,1000)` |
+| y=2000（渡さない・選択） | `x 0〜3000 / y 1917.196〜2082.804` | `x 0〜3000 / y 2000〜2000`・頂点 2 `(0,2000) (3000,2000)` |
+| y=4000（**シンボル定義の中**） | 定義の中に PIO として居た | **図面へ落ちてきて**同じく高さ 0 の 2 頂点 |
+| y=5000（スタイルを当てた本） | `styleRef=113` を持っていた | 同じく高さ 0 の 2 頂点・`styleRef=0` |
+| y=3000（PIO でない多角形） | — | **無傷**（同じハンドル・同じ頂点） |
+
+- **選択は関係ない。** 「選択されているものが対象」という読みは実測が否定する——
+  **非選択の本も消えた**。逆に、残った多角形が残ったのは非選択だったからではなく、
+  **PIO でないから**である（消えた 4 つには非選択のものが 2 つ含まれる）。
+- **種別も関係ない。** `StructuralMember` 3 本と `Data Tag` 1 つを同居させて呼ぶと
+  **両方とも**消えた。「同じ種別のインスタンスを全部作り替える」ではなく
+  **「文書の PIO を全部壊す」**である。
+- **シンボル定義の中まで届く。** 呼ぶ前の定義の中身は
+  `86(kParametricNode)=StructuralMember 0(kTermNode)`、呼んだ後は `0(kTermNode)` だけ
+  ——**定義は空になり、中に居た PIO のパスが図面に現れた**。
+- **undo で戻せるとは限らない。** プローブは undo イベントを開いていないので、この実測は
+  「戻せない状態から見た結果」である。**実装で呼んでよい場面は無い**と考えてよい。
+
+**【ソース根拠】なぜこうなるのか。** `ISDK.h` の宣言は
+`virtual void CreatePluginStyle(MCObjectHandle hObj) = 0;` で**戻り値が無い**
+（成否も、できたスタイルの RefNumber も返らない）。VW 側はこの口から PIO へ
+`ParametricCreatePluginStyle`（`MiniCadCallBacks.h` の `kAction = 61`。運ぶのは
+**シンボル定義のハンドル**）を投げ、続けて `kAction_FinalizeCreateStyle`（63）を投げる
+（`VWExtensionParametric.cpp:1328`）。**VWFC の既定実装は
+`OnCreatePluginStyle` が `kObjectEventNotImplemented` を返す**（同 1874 行）。
+つまりこの口は「**PIO 側の `OnCreatePluginStyle` を呼ぶための UI 経路**」であって、
+スタイルを組み立てる口ではない。**自作 PIO でこのイベントを実装する気が無いなら、
+この呼び出しに用は無い。**
+
+### スタイルは SDK だけで作れる——**シンボル定義のサブタイプに PIO の内部 ID を書く**
+
+ダイアログを 1 つも出さずにプラグインスタイルを用意できる。**実機で、作ったスタイルを
+別の本へ当てて `styleRef` が付くところまで確かめてある**（同 issue #98）。
+
+```cpp
+TXString        name("新しいスタイル");
+MCObjectHandle  hSymDef = gSDK->CreateSymbolDefinition(name);  // 名前が使われていれば nil
+MCObjectHandle  seed    = /* その種別の PIO を 1 つ作る */;
+
+gSDK->AddObjectToContainer(seed, hSymDef);   // 中へ「その種別の PIO を 1 つ」入れる
+gSDK->ResetObject(hSymDef);                  // ★ サブタイプを書く**前に**通す（下記）
+gSDK->SetSymbolDefSubType(hSymDef, VWParametricObj::GetInternalID(seed));
+gSDK->SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByStyle);
+
+const RefNumber ref = gSDK->GetObjectInternalIndex(hSymDef);
+VWParametricObj(target).SetStyle(ref);       // 当たる（styleRef が ref になる）
+```
+
+実測（VW 2026 / mac）:
+
+```
+① CreateSymbolDefinition        中身: 0(kTermNode)                     ← 空の定義
+② AddObjectToContainer=true     中身: 86(kParametricNode)=StructuralMember 0(kTermNode)
+                                入れた PIO の親 = 定義のハンドルと一致
+③ ResetObject の後              外接=[x 0〜3000 / y 3917.196〜4082.804]  ← 外接が付く
+④ SetSymbolDefSubType(537)  →   読み戻し=537  **IsPluginStyle=true**
+⑤ SetAllPluginStyleParameters   subType=537 ref=113  IsPluginStyle=true
+⑥ 別の本へ SetStyle(113)     →   styleRef=113                            ← 当たった
+```
+
+- **`ResetObject` はサブタイプを書く前に通す。** 順序を入れ替えた版
+  （`Add` → `SetSymbolDefSubType` → `SetAllPluginStyleParameters` → `ResetObject`）では、
+  **`SetSymbolDefSubType(537)` の読み戻しが `0`**、`IsPluginStyle=false`、当てても
+  `styleRef=0` だった。**書けたことを読み戻さずに信じない**
+  （[Findings「調査の作法」](Investigation%20Techniques.md)の setter の話がそのまま当たる）。
+  外接の無い定義が絵として成立しないのは
+  [Findings「シンボル」](Symbols.md)の「定義を組み立てる」と同じ話である。
+- **サブタイプ ＝ その PIO の内部 ID。** 【ソース根拠】`VWSymbolDefObj::HasPluginStyleSupport()`
+  は `GetSymbolDefSubType() > 0` だけを見、`PluginStyleObjectID()` はその値をそのまま返す。
+  内部 ID は**インスタンスから** `VWParametricObj::GetInternalID(h)`（static）で取れる。
+  文書にあったスタイルを読んで突き合わせると、**種別ごとに一致した**（実測）:
+
+  | PIO | 内部 ID（＝スタイルのサブタイプ） |
+  | --- | --- |
+  | `StructuralMember` | 537（インスタンスから取った値と、文書のスタイル 2 本の subType が一致） |
+  | `Title Block Border` | 552 |
+  | `Data Tag` | 599 |
+  | `Drawing Label2` | 642 |
+  | `Section Line2` | 645 |
+  | `GridAxis` | 647 |
+  | `GraphicLegend` | 658 |
+
+- **`IsPluginStyle` はサブタイプだけでなく中身も見る。** 上の ⑤ で `true` だった同じ定義が、
+  **中の PIO が消えた後**は `subType=537` のままでも `false` に変わった（`CreatePluginStyle`
+  に中身を壊された定義を、呼んだ後にもう一度読んだ実測）。**「サブタイプを書けばスタイル」
+  ではない——その種別の PIO が 1 つ入っていることが要る。**
+- **`GetPluginStyleForTool` の戻り値を「スタイルがあるか」と読まない。** 文書に構造材用の
+  スタイルが 2 本ある状態でも、**自分でスタイルを作った直後でも**、
+  `GetPluginStyleForTool("StructuralMember")` は **`true` を返しつつ `ref=0`**
+  だった。これが返すのは「**そのツールにいま設定されているスタイル**」であって、
+  文書にスタイルが在るかではない。**戻り値ではなく `ref` を見る。**
+- **フォルダへ入れたいなら**【ソース根拠】`VWFC::Tools::VWStyleSupport::GetStylesFolder(名前)`
+  （無ければ `CreateSymbolFolder` で作る）と `MoveStyleToFolder(スタイル, フォルダ)`
+  （`AddObjectToContainer` で移す）がそのまま使える。**フォルダは見た目の整理で、
+  スタイルとして効くかには関係しない**（上の手順はフォルダへ入れずに当たっている）。
+- パラメータ 1 つずつの由来を決めたいなら `SetPluginStyleParameterType(定義, 名前, 種別)` /
+  `AddItemToPluginStyle` を使う（種別は `kPluginStyleParameter_ByInstance` /
+  `_ByStyle` / `_AllwaysByInstance` / `_ByCatalog` / `_ByMixed`。`MiniCadCallBacks.h`）。
+  由来表の置き場はシンボル定義のタグ付きデータ（`'PSMP'`）である
+  【ソース根拠】`VWStyleSupport::InitFromSymbolDefinition`。
+
 ## プロファイル（断面）グループは空でないことを確かめる
 
 空の断面は「オブジェクトはあるのに描かれない」を招く。生成後に読み戻して数え、
