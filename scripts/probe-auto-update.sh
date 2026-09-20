@@ -21,6 +21,9 @@
 #   2. 起動した run を特定して**完了まで待ち**、その結果をこのスクリプトの終了
 #      ステータスにする。呼び出し元がジョブなので、**PR のチェックとして赤くなる**
 #      ——「自動公開したつもりが実はコンパイルエラーだった」を PR 上で気付ける。
+#      **待ち行列を奪われた（cancelled）ときだけは赤くせず、後続の run を待ち直す**
+#      ——奪った側のビルドにもこの PR のプローブが入っているので、それは失敗ではない
+#      （issue #89。仕組みは ci-common.sh の wait_run_or_successor）。
 #   3. 成功したら PR へコメントを 1 つ置く（2 回目以降は**同じコメントを書き換える**
 #      ので、push のたびに増えない）。
 #
@@ -66,7 +69,8 @@
 #   GITHUB_STEP_SUMMARY       あればジョブの要約にも書く
 #   その他の共通設定（HTTP の上限・生存出力の間隔など）は ci-common.sh を参照。
 #
-# 終了ステータス: ビルドと公開が成功したら 0、それ以外（失敗・締切超過・API 断念）は 1。
+# 終了ステータス: ビルドと公開が成功したら 0、それ以外（失敗・締切超過・API 断念・
+# 待ち直す後続も無い cancelled）は 1。
 # 使い方の誤りや dispatch の失敗は 2。
 #
 set -uo pipefail
@@ -203,17 +207,46 @@ if [ "$WAIT" -eq 0 ]; then
 	exit 0
 fi
 
-conclusion="$(wait_run "$run_id")"
+# **待ち行列を奪われたら待ち直す**（issue #89）。dispatch はどれも ref=main なので
+# probe-build.yml の concurrency グループは 1 つ。GitHub はそこに「走行中 1 本＋待機
+# 1 本」しか置かないため、**プローブを持つ PR が 3 本同時に動くと、待機していた run が
+# cancelled になる**。奪った側のビルドには**この PR のプローブも入る**（どのビルドも
+# 「main ＋ open な PR 全部」を載せる）ので、正しい振る舞いは後続を待ち直すこと。
+#
+# 後続として認めるのは「自分より新しい」かつ「この PR を載せる」run だけ:
+#
+#   * push のビルド … run 名は "probe build (open PR + main)"。open な PR を全部載せる。
+#   * dispatch     … run 名に並ぶ PR 番号にこの PR が入っているもの。**顔ぶれを絞って
+#                    手で叩かれたビルドは認めない**——待っても自分のプローブは載らない。
+# 条件そのものは ci-common.sh（SUCCESSOR_CARRIES_PR / successor_title_re）に置いてある
+# ——単体テスト（scripts/tests/wait-successor.test.sh）が**本番と同じ条件**を試せるように。
+wait_run_or_successor "$run_id" "$WORKFLOW_FILE" "$REF" "$SUCCESSOR_CARRIES_PR" \
+	--arg re "$(successor_title_re "$PR")"
+conclusion="$WAIT_CONCLUSION"
+if [ "$WAIT_RUN_ID" != "$run_id" ]; then
+	# 待ち直した先が結果の出どころ。**以後の案内は新しい run を指す**（古い run を
+	# 出すと「cancelled の run を見ろ」と言うことになり、読んだ人が混乱する）。
+	run_id="$WAIT_RUN_ID"
+	run_url="https://github.com/$VW_REPO/actions/runs/$run_id"
+	echo "待ち直した run: $run_url"
+fi
 echo "conclusion=$conclusion"
 
 if [ "$conclusion" != "success" ]; then
-	# 見届けられなかった（timed-out-waiting / api-error）のか、ビルドが落ちたのかを
-	# 呼び出し側が区別できるよう、文言を分ける。どちらも赤にする——「公開できたか
-	# 分からない」を緑にすると、古いプラグインのまま実機で走らせてしまう。
+	# 見届けられなかった（timed-out-waiting / api-error）のか、待ち行列を奪われた
+	# （cancelled）のか、ビルドが落ちた（failure）のかで文言を分ける。**どれも赤にする**
+	# ——「公開できたか分からない」を緑にすると、古いプラグインのまま実機で走らせてしまう。
 	case "$conclusion" in
 		timed-out-waiting | api-error)
 			echo "::error::プローブの自動更新: ビルドの結果を見届けられませんでした（${conclusion}）。$run_url を見てください。"
 			summary "プローブの自動更新: **結果を見届けられませんでした**（${conclusion}）。[run]($run_url)"
+			;;
+		cancelled)
+			# **cancelled はコンパイル失敗では決してない**（失敗なら failure で返る）。
+			# 「待ち行列を奪われた」か「人が止めた」のどちらかで、前者はここへ来る前に
+			# 待ち直している。つまりここは後続も見付からなかったとき＝人が止めた見込み。
+			echo "::error::プローブの自動更新: ビルドが cancelled で終わりました（**プローブのコンパイル失敗ではありません**——待ち行列を奪われたか、人が止めたかです。issue #89）。待ち直せる後続も見付かりませんでした。もう一度 push するか、Actions の \"Probe plug-in\" を dispatch してください。$run_url"
+			summary "プローブの自動更新: **ビルドが cancelled**（コンパイル失敗ではありません。待ち行列を奪われたか、人が止めたか）。[run]($run_url)"
 			;;
 		*)
 			echo "::error::プローブの自動更新: ビルドが $conclusion で終わりました。$run_url を見てください（プローブがコンパイルできていない可能性が高い）。"

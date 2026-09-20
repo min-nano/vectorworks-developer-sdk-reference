@@ -339,10 +339,30 @@ if [ "$WAIT" -eq 0 ]; then
 	exit 0
 fi
 
-conclusion="$(wait_run "$run_id")"
+# **待ち行列を奪われたら待ち直す**（issue #89）。probe-build.yml の dispatch はどれも
+# ref=main で同じ concurrency グループに入り、GitHub はそこに「走行中 1 本＋待機 1 本」
+# しか置かない——3 本目が来ると、待機していたこの run が cancelled になる。奪った側の
+# ビルドも「main ＋ open な PR 全部」を作る（＝この点検が欲しかったものと同じ）ので、
+# 後続を待ち直せばよい。後続として認めるのは「自分より新しい」かつ「同じ顔ぶれを作る」
+# run だけ——push のビルド（run 名 "probe build (open PR + main)"）と、同じ run 名の
+# dispatch。**顔ぶれを絞って手で叩かれたビルドは認めない**（ずれが直らない）。
+# 条件そのものは ci-common.sh（SUCCESSOR_SAME_TITLE）に置いてある。
+wait_run_or_successor "$run_id" "$WORKFLOW_FILE" "$REF" "$SUCCESSOR_SAME_TITLE" \
+	--arg t "$run_title"
+conclusion="$WAIT_CONCLUSION"
+if [ "$WAIT_RUN_ID" != "$run_id" ]; then
+	run_id="$WAIT_RUN_ID"
+	run_url="https://github.com/$VW_REPO/actions/runs/$run_id"
+	echo "待ち直した run: $run_url"
+fi
 echo "conclusion=$conclusion"
 
 if [ "$conclusion" != "success" ]; then
+	# **cancelled はコンパイル失敗では決してない**（失敗なら failure で返る）。待ち行列を
+	# 奪われたのなら上で待ち直しているので、ここへ来た cancelled は「人が止めた」見込み。
+	if [ "$conclusion" = "cancelled" ]; then
+		echo "::notice::cancelled はビルドの失敗ではありません（待ち行列を奪われたか、人が止めたか。issue #89）。待ち直せる後続も見付かりませんでした。"
+	fi
 	# **緑にしない。** 「消したはずのプローブが載ったままのリリース」を誰も知らないまま
 	# 実機で走らせることになるのが、この仕組みが防ぎたかったことそのものである。
 	echo "::error::リリースの作り直しが $conclusion で終わりました。$run_url を見てください。"

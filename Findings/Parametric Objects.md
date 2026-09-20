@@ -1176,9 +1176,12 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
 
 ## プラグインスタイル
 
-- **当てただけでは描画属性が流れない。** `SetPluginObjectStyle` は関連付けまでしか
+- **当てただけでは何も流れない。** `SetPluginObjectStyle` は関連付けまでしか
   行わないので、対象を全部置いてから **`UpdateStyledObjects` を 1 回**呼ぶ。
   スタイルを当てない PIO（データタグ・グラフィック凡例）にはそもそも要らない。
+  **`UpdateStyledObjects` が流すのは描画属性だけではない——ジオメトリの作り直しまで行う**
+  ので、スタイルを当てた PIO では 1 本ごとの `ResetObject` を省ける（速さは変わらない。
+  下記「リセット（再生成）をまとめられるか」）。
 - **スタイル名 → RefNumber を名前で引く呼び出しは無い。** `GetNamedObject` ＋
   `GetObjectInternalIndex` で引く。
 
@@ -1219,6 +1222,90 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
 構造材ツール（`StructuralMember`）は**パスがそのまま材の範囲**。垂木などを構造材ツールで
 描くなら、パスの始端を支持点ではなく**軒先**にし、その位置・高さ・バウンド offset を
 自分で計算する必要がある。
+
+## 打ち切った調査: 構造材 PIO から「スパン」「部材長」をパラメータで読む
+
+**結論: 構造材 PIO（`StructuralMember`）のパラメータ表に、部材長にもスパンにも当たるものは
+1 件も無い。パラメータ側から部材の長さを読む道は存在しない**——[issue #95](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/95)。
+実体の長さは **`GetCustomObjectPath` で読み戻したパスの両端の距離**で測る（上記
+「高さ・実体を最終的に決めるのは…」の「検算できる。ただし読むのは『作り直しの後』」）。
+**鉛直材なら `StartElevation` / `EndElevation` の差でも測れるが、水平材は両端の Z が
+等しいのが正常**なので、その差は 0 になる——**水平材・斜め材で使えるのはパスの読み戻し
+だけ**である。
+
+### 「無い」と言い切れる根拠（3 つが独立に同じ答えを出している）
+
+1. **パラメータ表の全数列挙（実機）。** 構造材 PIO のパラメータは **181 件**で、
+   その全件の universal 名・ローカライズ名は
+   [issue #82](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/82)
+   の実機実行（VW 2026 / mac・日本語 UI。
+   [実行ログ全文](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/84#issuecomment-5737168941)）で
+   拾ってある（上記「名前の解決は『種別 × 文書』ごとに 1 度でよい」の表）。
+   **`Span` も、部材の軸方向の長さに当たるものも、181 件のどこにも無い。**
+   長さらしい名前は**断面の寸法**（`MajorBreadth` 主幅 / `MinorBreadth` 副幅 /
+   `MajorDepth` 主高さ / `MinorDepth` 副高さ、および同じ値を持つ `B` / `B1` / `D` / `D1`）と
+   **高さ方向のオフセット**（`StartElevation` / `EndElevation` / `StartOffset` /
+   `EndOffset`）だけで、どれも部材長ではない。
+   **同じ種別のインスタンスなら表は常に同一**（値を変えても・ポップアップを倒しても・
+   別文書でも・スタイルを当てても一致）なので、**「別の本なら在るかもしれない」は無い**。
+2. **SDK の全数検索【ヘッダ根拠】。** VW 2026 SDK（mac）の `SDKLib` 全体——`Include` の
+   ヘッダと、同梱の VWFC 実装ソース `Source` の両方——を `[Ss]pan` で検索しても、
+   構造材に関わるものは 1 件も出ない。出るのは
+   `SetObjectAsSpanWallBreak`（**壁を跨ぐシンボルのブレーク**。構造材とは無関係）と
+   `nlohmann/json` の `span_input_adapter`、あとはコメント中の "spanning" だけ
+   （[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35422406982)）。
+   **部材長を返すオブジェクト変数も無い**——`ObjectVariables.h` の `ov*Length*` は
+   寸法の補助線長（`ovDimCustStartWitLength` 等）と塗りの軸長（`ovFillIAxisLength` 等）
+   だけである
+   （[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35422680180)）。
+3. **実運用での全数確認（実機）。** ホームズ君 IFC 取り込みプラグインで
+   `ResolveParamNameAmong(pio, {"Span"}, {"スパン"})` が、**横架材 266 本・垂木 54 本の
+   全数で解決しなかった**（universal 名でもローカライズ名でも引けない。
+   [あちらの PR #124](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/124)）。
+   絵は正しく描けている本での結果なので、「描けていないから引けない」ではない。
+
+### `CenterPointLength(長さ)` は部材長ではない——**センターマークの長さである**【推定】
+
+「長さ」を名前に含むパラメータを全数列挙すると `CenterPointLength(長さ)` の 1 件だけが
+当たるので、**ここが最も踏みやすい罠**である。**これは部材長ではない。**
+
+- **実測が否定している。** 実長 **5333mm** の柱で `CenterPointLength` は **100**
+  （[あちらの PR #124](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/124)）。
+  パラメータ表の既定値も **100**（相方の `CenterPointGap` は 10）で、**部材長と連動していない**。
+- **表の並びが素性を示している。** 索引 153〜160 は
+  `CenterPointMarker`（センターマークを使用）・`CenterPointMarkerClass` …
+  `CenterPointMarkerWeight` と続き、その直後が **159 `CenterPointLength`（長さ）**、
+  **160 `CenterPointGap`（間隔）**である。**この「長さ」は
+  センターマーク（作図記号）の線の長さ**で、部材の長さとは関係が無い【推定】。
+- **教訓: ローカライズ名だけで当てない。** 「長さ」で引き当てたものが部材長とは限らない。
+  **引き当てたら値を実測と突き合わせる**（1 本でも桁が合わなければ別物）。
+
+### では OIP の「スパン」欄は何か——**パラメータではなく計算値**【推定】
+
+OIP には「スパン」の欄が見えている（上記「パスの型を間違えると…」に
+「OIP は『スパン 0 / 長さ 0』」の記録がある）のに、**パラメータ表にその名前が無い**。
+PIO はパラメータに紐づかない欄を OIP へ出せるので、**この欄はパスから毎回計算して
+表示しているだけ**で、**読み書きできる値としては存在しない**と見るのが整合的である
+【推定】。**目視でしか見えないものなので、これ以上は実機でも取りに行けない**——
+そして**取りに行く必要も無い**（読む道が無いことは 1〜3 で確定しており、
+欄の正体が何であっても実装は変わらない）。
+
+### 代わりにどう測るか
+
+```
+MCObjectHandle path = gSDK->GetCustomObjectPath(pio);   // 作り直しの「後」に読む
+// 鉛直材（NURBS）: NurbsCurveGetNumPieces / NurbsGetNumPts / NurbsGetPt3D で両端を取る
+// 水平材（2D ポリライン）: VWPolygon2DObj の GetVertexCount / GetVertexPoint(i)
+```
+
+- **読むのは `ResetObject` の後**（パスはバウンドから作り直される。上記
+  「高さ・実体を最終的に決めるのは…」）。生成直後に読んでも渡した値が返るだけで、
+  実体の長さにはなっていない。
+- **`ResetObject` が触るのは Z の差だけで、水平成分は渡したパスのままビット一致で残る**
+  （上記「鉛直でないパスでは…」「水平成分が 1e-7 以上ある部材は…」）。だから
+  **両端の距離は水平材でも斜め材でもそのまま部材長として読める**。
+- 「実体を持っているか」を数えたいだけなら、**見るべきは鉛直材だけでよい**——水平成分が
+  1e-7 以上ある部材は 0 長の死角に落ちない（上記「水平成分が 1e-7 以上ある部材は…」）。
 
 ## 構造材同士の「自動結合」を作る API は無い【ヘッダ根拠】
 
@@ -1321,3 +1408,119 @@ API が無い。したがって参照先の図形を動かした瞬間には PIO
 メッセージ（`IObjUpdateSupport::OnState`）で、外からこれを送る API は `ISDK` に無い。
 外からパラメータを書いた後に絵を変えたいなら `ResetObject` を呼ぶ（PIO の欄は
 作り直しのときに読まれる。[Investigation Techniques](Investigation%20Techniques.md)）。
+
+## リセット（再生成）をまとめられるか——**まとめても速くならない。減らせるのは「回数」だけ**
+
+構造材を 200〜400 本置く取り込みで、1 本ごとの `ResetObject` が効いて 1 本 93〜130ms
+掛かっている（[issue #81](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/81)）。
+「置いている間だけ再生成を止めておき、最後に 1 度だけ走らせる」に組み替えられるか。
+**VW 2026 / mac の実機で測って、答えは出た**（`probes/runtime/batch-reset-styled/`。
+以下の数値はすべてその実行ログ。新規の空図面・構造材 PIO 30 本）。
+
+**結論を 3 行で**:
+
+1. **止める口も、まとめて 1 度で全部を作り直す口も無い**（下記 2 節）。
+2. **`UpdateStyledObjects` はジオメトリの作り直しまで行う**ので、スタイルを当てた PIO では
+   1 本ごとの `ResetObject` を省いて 1 回に寄せられる。**ただし所要はほぼ同じ**
+   （12.4ms/本 対 11.5ms/本）——**作り直しの費用は 1 本ごとに掛かり、寄せても消えない**。
+3. **効くのは「作り直しの回数を 2 回から 1 回に減らす」ほう。**
+   `CreateCustomObjectPath(..., doRegen=false)` ＋ **0 長のパス**で作ると、
+   1 本 23.6ms → **11.9ms** になった（下記「`doRegen=false` は…」）。
+
+### 再生成・再描画を止めておく口は SDK に無い【ヘッダ根拠】
+
+**VW 2026 SDK のヘッダと同梱の実装ソースを全文検索した結果、「止める」「遅らせる」口は
+1 つも無い。** 以下は探した先と、見つかったものの正体（**同じ名前をもう一度探さないため**に
+残す）:
+
+| 探したもの | 結果 |
+| --- | --- |
+| `ISDK.h`（3902 行）の `Batch` | `ICustomBatchConvertParams` / `CustomBatchConvert`（図形の一括変換）と `DoBatchPrintOrExport`（一括印刷・書き出し）だけ。再生成とは無関係 |
+| SDK ヘッダ全体（`Include/**/*.h`）の `Defer` | **1 件も無い** |
+| `Suspend` / `Freeze` / `DisableDrawing` / `SuspendRedraw` / `LockDrawing` / `BulkUpdate` | 無い（`EnableDrawingWorksheetPalette` はワークシートのパレット表示） |
+| `ISDK.h` の `Redraw` | `RedrawRect(const WorldRect&)` だけ——**描き直しを起こす**口で、止める口ではない。VectorScript 側も `RedrawSelection` のみ |
+| `SetPref` 相当（`SetProgramVariable` / `GetProgramVariable`）のセレクタ | `Regen` / `Redraw` / `Draw` / `Update` を名に持つセレクタはヘッダに 1 つも定義されていない |
+
+つまり **「まとめて 1 度だけ走らせる」を VW 側の機能で実現する道は無い**。
+呼び出し側が「`ResetObject` を呼ぶ回数と順序」を自分で決めるしかない。
+
+### ただし `CreateCustomObjectPath` だけは再生成を省ける（`doRegen`）【ヘッダ根拠】
+
+```cpp
+virtual MCObjectHandle CreateCustomObjectPath(
+    const TXString& name, MCObjectHandle pathHand = NULL,
+    MCObjectHandle profileGroupHand = NULL, bool doRegen = true) = 0;
+```
+
+**SDK 全体でこの引数を持つのはこの 1 本だけ**（`sdk-grep` の `doRegen|NoRegen|bRegen`）。
+既定が `true` なので、**何も指定しなければ「作った時点で 1 回」＋「`ResetObject` で 1 回」の
+計 2 回作り直している**——実機の内訳がそれを裏づけた（下記）。
+
+### まとめて全部を作り直す口も無い（レイヤへの `ResetObject` も再描画も効かない）
+
+バウンドを書いただけ（`ResetObject` を呼んでいない）の構造材 5 本を置いて叩いた結果:
+
+| 叩いたもの | 作り直された本数 | 所要 |
+| --- | --- | --- |
+| `ResetObject(レイヤのハンドル)` | **0 / 5** | 0.2ms（＝何もしていない） |
+| `RedrawRect`（図面全体を覆う矩形） | **0 / 5** | 13.2ms |
+
+VectorScript の `ResetObject` は「どの型でも受ける」と書かれている（実際レイヤを渡しても
+落ちない）が、**中の PIO までは作り直さない**。再描画は名前のとおり描き直すだけで、
+ジオメトリには触らない。**この 2 つはもう試さない。**
+
+### `UpdateStyledObjects` はジオメトリの作り直しまで行う（issue #81 の (b)）
+
+**スタイルを当てた PIO を `ResetObject` 抜きで 5 本置き、`UpdateStyledObjects` を 1 回だけ
+呼ぶと、5 本ともバウンドどおりに作り直された**（渡したパスの Z 差 1 → 解決済みバウンドの
+span 3000）。つまり「[プラグインスタイル](#プラグインスタイル)」の節にある
+「対象を全部置いてから `UpdateStyledObjects` を 1 回」は、**描画属性を流すだけでなく
+実体まで作る**。
+
+- **解決済みストーリバウンドから作り直す機構は、`ResetObject` のときと同じように働く**
+  （issue #81 の 3）。順序も「スタイルを当てる → バウンドを書く → `UpdateStyledObjects`」で
+  成立した。その後に 1 本ごとの `ResetObject` を重ねても値は変わらない（5 本とも 3000 のまま）。
+- **ただし速くはならない。** 5 本で 61.8ms ＝ **12.4ms/本**で、1 本ごとの `ResetObject`
+  （11.5ms/本）と同じ。**作り直しの費用は 1 本ごとに掛かる**ので、「1 回の呼び出しに
+  寄せる」こと自体には得が無い。
+- **対象はそのスタイルを当てた全オブジェクト**（VectorScript の説明も
+  "Update all objects of the specified style."）。取り込みの途中で何度も呼ぶと、
+  **そのたびに既に置いた全件を舐める**ことになる。寄せるなら最後に 1 回だけにする。
+
+### `doRegen=false` は速い。ただし**0 長のパスで作る**こと（さもないと span + 元の長さになる）
+
+**`doRegen=false` で作ると、その後の最初の `ResetObject` が「バウンドの span ＋ 作るときに
+渡したパスの長さ」を返す。** 実測（バウンドの span は 3000）:
+
+| 作るときに渡した Z の差 | 1 度目の `ResetObject` 後 | 2 度目の後 | `doRegen=true` なら |
+| --- | --- | --- | --- |
+| 0 | **3000**（正しい） | 3000 | 3000 |
+| 1 | 3001 | **3000** | 3000 |
+| 5 | 3005 | **3000** | 3000 |
+| 100 | 3100 | **3000** | 3000 |
+
+読み方:
+
+- **狂いは「渡した長さ」そのぶん**で、累積はしない——**2 度目の `ResetObject` で必ず正しい
+  値に収まる**（が、それでは回数が減らず速くならない）。
+- **渡すパスを厳密に 0 長にすれば、1 度目から正しい。** 30 本で検証して 30 本とも 3000
+  だった。**0 長は「作り直される側」**なので死角には落ちない（上記
+  「`ResetObject` がバウンドから作り直すのは…」）。
+- **バウンドを必ず両端とも書いて `ResetObject`（または `UpdateStyledObjects`）まで
+  呼ぶ経路が前提**（上記「実務上の指針」）。その経路を外れるなら、パスの値がそのまま
+  実体になるので 0 長で作ってはいけない。
+
+### 実測（構造材 PIO 30 本 / VW 2026 / mac / 新規の空図面）
+
+| 作り | 1 本あたり | 内訳（30 本ぶんの合計） | 読み戻し |
+| --- | --- | --- | --- |
+| いまの作り（`doRegen=true`・長さ 1 のパス → バウンド → 1 本ごとの `ResetObject`） | **23.6ms** | 作る 363.8ms ／ リセット 344.2ms ／ バウンド 0.7ms | 全件バウンドどおり |
+| **`doRegen=false` ＋ 0 長のパス** → バウンド → 1 本ごとの `ResetObject` | **11.9ms** | 作る 13.8ms ／ リセット 344.0ms | **30 / 30 バウンドどおり** |
+| `doRegen=false`（長さ 1）で全部置いてから、第 2 パスでまとめて `ResetObject` | 11.8ms | 置く 9.0ms ／ リセット 346.4ms | **全件 3001 ＝ 狂い**（0 長で作れば直る） |
+
+- **作り直し 1 回がおよそ 11.5ms**で、それが費用のほぼ全部。バウンドを書くのは
+  0.02ms/本で無視してよい。
+- **だから「まとめる」ではなく「2 回を 1 回にする」が効く**——既定のままだと作成時と
+  `ResetObject` で 2 回作り直している。`doRegen=false` ＋ 0 長で**描画時間はほぼ半分**になる。
+- **第 2 パスへ寄せても速くならない**（リセットの回数が同じなので当然）。寄せる価値が
+  あるのは「潰れた部材だけを第 2 パスで直す」のように**回数そのものを減らせるとき**だけ。

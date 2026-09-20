@@ -58,9 +58,11 @@ name: Probe plug-in
 # ---------------------------------------------------------------------------
 
 # push 起動の顔ぶれ（open な PR）は run が始まる時点では分からない（gather ジョブが
-# 引く）ので、名前には「open PR」とだけ出す。**dispatch のときの綴りは変えない**
-# ——probe-auto-update.sh / probe-release-guard.sh が、自分が起動した run をこの名前で
-# 特定している（どちらも event=workflow_dispatch の run しか見ない）。
+# 引く）ので、名前には「open PR」とだけ出す。**ここの綴りは dispatch も push も
+# 変えない**——probe-auto-update.sh / probe-release-guard.sh が、自分が起動した run を
+# この名前で特定し（そちらは event=workflow_dispatch だけを見る）、**待ち行列を
+# 奪われたときに乗り換える後続もこの名前で選ぶ**（issue #89。そちらは push の
+# "probe build (open PR + main)" も後続として認める——open な PR を全部載せるので）。
 run-name: >-
   probe build (${{ github.event_name == 'push' && 'open PR + '
   || (inputs.prs && format('PR {0} + ', inputs.prs) || '') }}${{ github.ref_name }})
@@ -115,6 +117,18 @@ permissions:
 
 # 1 つの ref につき 1 本。PR では新しい push が走行中のビルドを止める（古いコミットの
 # 確認用ビルドに意味は無い）。main / dispatch は止めない——それぞれが公開まで走り切る。
+#
+# NOTE: **`cancel-in-progress: false` が守るのは走行中の 1 本だけ**（issue #89）。
+# GitHub は 1 グループにつき「走行中 1 本＋待機 1 本」しか置かないので、**3 本目が
+# 来ると待機していた 2 本目が cancelled になる**。dispatch はどれも ref=main なので
+# 同じグループに入り、プローブを持つ PR が 3 本同時に動くと必ず誰かが奪われる。
+# **これは直さない**——奪われた側と奪った側は同じもの（main ＋ その時点で open な
+# PR 全部）を作るので、待機を 2 本以上抱えても無駄なビルドが増えるだけである。
+# 奪われた側の待機（scripts/probe-auto-update.sh / probe-release-guard.sh）が
+# **後続の run へ乗り換えて待ち直す**（ci-common.sh の wait_run_or_successor）。
+# グループを `inputs.prs` で分ける手もあるが、そうすると顔ぶれの違うビルドが並走して
+# **転がりタグ `probes` の取り合い**になる（後に終わったほうが勝つので、古い顔ぶれが
+# 最後に公開されうる）ため採らない。
 concurrency:
   group: probe-build-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

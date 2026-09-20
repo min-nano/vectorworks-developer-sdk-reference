@@ -261,6 +261,7 @@ undo: before building=no
 | 進捗ダイアログ | 同上 |
 | 完了ダイアログ（折り畳んだログ欄付き） | 同上 |
 | ファイル選択 | VCOM の `IFileChooserDialog` / `IFileIdentifier` |
+| フォルダ選択 | VCOM の `IFolderChooserDialog` / `IFolderIdentifier`（[File and Folder Dialogs](File%20and%20Folder%20Dialogs.md)。実機確認プラグインのプローブで実測） |
 
 **`.vwr` は殻の側にしか無くてよい。** 本体は `DefaultPluginVWRIdentifier` を定義するだけで
 リソースを引かない（上記「SDK の静的ライブラリをリンクするモジュールは、この 2 つを
