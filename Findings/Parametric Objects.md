@@ -1556,6 +1556,11 @@ API が無い。したがって参照先の図形を動かした瞬間には PIO
    `CreateCustomObjectPath(..., doRegen=false)` ＋ **0 長のパス**で作ると、
    1 本 23.6ms → **11.9ms** になった（下記「`doRegen=false` は…」）。
 
+**作り直しを起こすのは `ResetObject` だけではない。** 描画属性を「クラスに従わせる」書き込み
+（`SetPColorsByClass` 等）と `SetObjectClass` も、**PIO では 1 回ごとに作り直しを起こす**
+（構造材 PIO で 1 回 9ms。非 PIO では無料）。**そちらは「文書の既定を先に立てて、per-object の
+書き込みを呼ばない」ことで丸ごと避けられる**——[Attributes and Classes](Attributes%20and%20Classes.md)。
+
 ### 再生成・再描画を止めておく口は SDK に無い【ヘッダ根拠】
 
 **VW 2026 SDK のヘッダと同梱の実装ソースを全文検索した結果、「止める」「遅らせる」口は
