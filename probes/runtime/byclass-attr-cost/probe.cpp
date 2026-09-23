@@ -38,7 +38,7 @@ namespace
 	const int kProbeAttrCount = 7;
 
 	const char* const kProbeAttrNames[kProbeAttrCount] = {
-		"PColors (ペン色)", "FColors (面色)",		 "LW (線の太さ)", "PPat (線種)",
+		"PColors (ペン色)",	 "FColors (面色)",	 "LW (線の太さ)",	  "PPat (線種)",
 		"FPat (面パターン)", "Arrow (マーカー)", "Opacity (不透明度)"};
 
 	double MsBetween(ProbeClock::time_point from, ProbeClock::time_point to)
@@ -64,13 +64,27 @@ namespace
 	{
 		switch (index)
 		{
-		case 0: gSDK->SetPColorsByClass(object); break;
-		case 1: gSDK->SetFColorsByClass(object); break;
-		case 2: gSDK->SetLWByClass(object); break;
-		case 3: gSDK->SetPPatByClass(object); break;
-		case 4: gSDK->SetFPatByClass(object); break;
-		case 5: gSDK->SetArrowByClass(object); break;
-		default: gSDK->SetOpacityByClass(object); break;
+		case 0:
+			gSDK->SetPColorsByClass(object);
+			break;
+		case 1:
+			gSDK->SetFColorsByClass(object);
+			break;
+		case 2:
+			gSDK->SetLWByClass(object);
+			break;
+		case 3:
+			gSDK->SetPPatByClass(object);
+			break;
+		case 4:
+			gSDK->SetFPatByClass(object);
+			break;
+		case 5:
+			gSDK->SetArrowByClass(object);
+			break;
+		default:
+			gSDK->SetOpacityByClass(object);
+			break;
 		}
 	}
 
@@ -78,13 +92,20 @@ namespace
 	{
 		switch (index)
 		{
-		case 0: return gSDK->GetPColorsByClass(object);
-		case 1: return gSDK->GetFColorsByClass(object);
-		case 2: return gSDK->GetLWByClass(object);
-		case 3: return gSDK->GetPPatByClass(object);
-		case 4: return gSDK->GetFPatByClass(object);
-		case 5: return gSDK->GetArrowByClass(object);
-		default: return gSDK->GetOpacityByClass(object);
+		case 0:
+			return gSDK->GetPColorsByClass(object);
+		case 1:
+			return gSDK->GetFColorsByClass(object);
+		case 2:
+			return gSDK->GetLWByClass(object);
+		case 3:
+			return gSDK->GetPPatByClass(object);
+		case 4:
+			return gSDK->GetFPatByClass(object);
+		case 5:
+			return gSDK->GetArrowByClass(object);
+		default:
+			return gSDK->GetOpacityByClass(object);
 		}
 	}
 
@@ -92,13 +113,27 @@ namespace
 	{
 		switch (index)
 		{
-		case 0: gSDK->SetDefaultPColorsByClass(); break;
-		case 1: gSDK->SetDefaultFColorsByClass(); break;
-		case 2: gSDK->SetDefaultLWByClass(); break;
-		case 3: gSDK->SetDefaultPPatByClass(); break;
-		case 4: gSDK->SetDefaultFPatByClass(); break;
-		case 5: gSDK->SetDefaultArrowByClass(); break;
-		default: gSDK->SetDefaultOpacityByClass(); break;
+		case 0:
+			gSDK->SetDefaultPColorsByClass();
+			break;
+		case 1:
+			gSDK->SetDefaultFColorsByClass();
+			break;
+		case 2:
+			gSDK->SetDefaultLWByClass();
+			break;
+		case 3:
+			gSDK->SetDefaultPPatByClass();
+			break;
+		case 4:
+			gSDK->SetDefaultFPatByClass();
+			break;
+		case 5:
+			gSDK->SetDefaultArrowByClass();
+			break;
+		default:
+			gSDK->SetDefaultOpacityByClass();
+			break;
 		}
 	}
 
@@ -106,13 +141,20 @@ namespace
 	{
 		switch (index)
 		{
-		case 0: return gSDK->GetDefaultPColorsByClass();
-		case 1: return gSDK->GetDefaultFColorsByClass();
-		case 2: return gSDK->GetDefaultLWByClass();
-		case 3: return gSDK->GetDefaultPPatByClass();
-		case 4: return gSDK->GetDefaultFPatByClass();
-		case 5: return gSDK->GetDefaultArrowByClass();
-		default: return gSDK->GetDefaultOpacityByClass();
+		case 0:
+			return gSDK->GetDefaultPColorsByClass();
+		case 1:
+			return gSDK->GetDefaultFColorsByClass();
+		case 2:
+			return gSDK->GetDefaultLWByClass();
+		case 3:
+			return gSDK->GetDefaultPPatByClass();
+		case 4:
+			return gSDK->GetDefaultFPatByClass();
+		case 5:
+			return gSDK->GetDefaultArrowByClass();
+		default:
+			return gSDK->GetDefaultOpacityByClass();
 		}
 	}
 
@@ -350,8 +392,7 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 				++made;
 		if (made == 0)
 		{
-			probe.fail(std::string("既定つきでオブジェクトを作れなかった: ") +
-					   KindName(kinds[k]));
+			probe.fail(std::string("既定つきでオブジェクトを作れなかった: ") + KindName(kinds[k]));
 			continue;
 		}
 
@@ -375,7 +416,8 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 		probe.log(std::string("既定のクラスで生まれた数: ") + std::to_string(inClass) + " / " +
 				  std::to_string(made));
 		probe.log("");
-		probe.log("| 属性 | 生まれつき by-class だった数 | 省いた per-object の書き込みを今から呼ぶと |");
+		probe.log(
+			"| 属性 | 生まれつき by-class だった数 | 省いた per-object の書き込みを今から呼ぶと |");
 		probe.log("| --- | ---: | ---: |");
 		for (int a = 0; a < kProbeAttrCount; ++a)
 		{
