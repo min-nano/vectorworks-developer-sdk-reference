@@ -60,6 +60,12 @@ struct SAttributes
 | `GS_WIN` / `GS_MAC` / `_WINDOWS` / `__APPLE__` による分岐 | 0 件 | 0 件 |
 | `SAttributes` の 11 旗の並び・`Get`/`SetAttributes` の宣言位置 | `IFolderIdentifier.h:14`／`:109,110`・`IFileIdentifier.h:36,37` | 同じ行・同じ並び |
 
+**これは この 2 ファイルに限った話ではない。** SDK 全体（`SDKLib/` の 961 ファイル）を
+同じやり方で突き合わせると、**CR を落とした集約ハッシュが両プラットフォームで完全に一致する**
+（`a859b31735d9572d2b7c967aa3512a19`。ディレクトリ単位でも全 19 群が一致）——
+つまり**Windows 版 SDK と macOS 版 SDK は、配られるファイルとしては同じものである**
+（詳細は [調査の作法](Investigation%20Techniques.md)「Windows 版 SDK を引き直しても同じものしか出ない」）。
+
 したがって**「Windows では旗の意味が違うのか」も、ヘッダからは一切分からない**。
 `fbHidden` / `fbSystem` / `fbArchive` / `fbEncrypted` は Windows のファイル属性
 （`FILE_ATTRIBUTE_HIDDEN` / `_SYSTEM` / `_ARCHIVE` / `_ENCRYPTED`）そのものの名前だが、

@@ -371,8 +371,12 @@ Windows の実ビルドと同じだけ時間がかかる）。出力に並ぶチ
 | `compile` | `probes/` のスニペット 1 ファイルを SDK ヘッダに対して構文チェック（mac 専用。リンクはしない） | ソースのパス（例 `probes/example.cpp`） |
 | `shell` | 任意の bash（`--script`）。逃げ道 | — |
 
-`--platform` は `mac`（既定）/ `windows` / `linux`。`windows` は Windows 版 SDK ヘッダを
-引きたいときだけ。`linux` は SDK を用意しないので `shell` 専用。
+`--platform` は `mac`（既定）/ `windows` / `linux`。`linux` は SDK を用意しないので
+`shell` 専用。**`windows` で引き直しても中身は変わらない**——Windows 版 SDK と macOS 版
+SDK は `SDKLib/` の 961 ファイルすべてが改行コードを除いて同一であり、`Include/OnlyWin` も
+`Include/OnlyMac` も両方に入っている（実測。[Findings「調査の作法」](Findings/Investigation%20Techniques.md)）。
+**「Windows ではどうなっているか」を `sdk-grep` / `sdk-ls` で引き直さないこと**
+——プラットフォーム差は実機でしか出ない。
 
 **SDK は VWFC の実装ソースを同梱している。** `SDKLib/Source/VWSDK/VWFC/…` に
 `VWFC::VWUI` / `VWFC::Tools` の `.cpp` が丸ごと入っており、`sdk-grep` / `sdk-ls` の
