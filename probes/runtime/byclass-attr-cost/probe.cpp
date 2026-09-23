@@ -2,21 +2,35 @@
 //	probes/runtime/byclass-attr-cost/probe.cpp
 //
 //	[issue #94] 描画属性を「クラスに従う」にする 7 つの書き込み（SetPColorsByClass 等）の
-//	費用が何で決まるのかを実測する。取り込み側の実測では 6 つが 1 回 3.6ms 掛かる一方、
-//	`SetArrowByClass` だけがほぼ 0ms だった。
+//	費用が何で決まるのかを実測する。
+//
+//	**第 2 周。** 第 1 周（矩形・球で測った）の結果は次のとおりで、2 つ分かって
+//	1 つ外れた:
+//	  - **文書の既定（SetDefaultClass / SetDefault*ByClass）は効く。** 先に立てておくと、
+//	    生まれたオブジェクトは 30/30 が既定のクラスに属し、7 属性とも 30/30 が
+//	    by-class だった——per-object の書き込みを 1 つも呼ばずに。
+//	  - **SetObjectClass だけでは属性は by-instance のまま**（前提は今も正しい）。
+//	  - **しかし費用が再現しなかった。** 矩形も球も 7 つとも 0.00ms で、取り込み側の
+//	    3.6ms が出ない。**「実体（3D ソリッド）を持つほど高い」という読みは外れ**
+//	    ——球は実体を持つのに無料だった。また**マーカーだけ既定で by-class という
+//	    読みも外れ**（第 1 周では 7 つとも既定は no だった）。
+//
+//	残った問い（issue の 1）は「**では何が 3.6ms を生んでいるのか**」で、issue の
+//	内訳が答えを指している——**構造材 PIO で 10ms、データタグで 0.3ms、34 倍**。
+//	効いているのは「実体を持つか」ではなく「**PIO か**」ではないか。だからこの周は
+//	**構造材 PIO（StructuralMember）で測る**。矩形は対照として残す。
 //
 //	確かめること:
-//	  (1) **費用は「書いたこと」ではなく「状態が変わったこと」に掛かるのか。**
-//	      同じ書き込みを 2 度続け、2 度目が無料かを見る。これは
-//	      「`SetArrowByClass` だけ無料なのは、マーカーが文書の既定で既に by-class で、
-//	      1 度目から『変わらない書き込み』だからだ」という読みの検証でもある
-//	      ——だから最初に文書の既定 7 つを読んで記録する。
-//	  (2) **文書の既定（`SetDefaultClass` / `SetDefault*ByClass`）を先に立てておくと、
-//	      生まれたオブジェクトが最初から by-class になり、per-object の 8 つを省けるか。**
-//	  (3) 「`SetObjectClass` だけでは属性は by-instance のまま」という前提は今も正しいか。
-//
-//	2 種類のオブジェクトで測る——軽い 2D（矩形）と 3D 実体を持つもの（球）。
-//	取り込み側の実測では「実体を持つオブジェクトほど高い」傾向が出ていたため。
+//	  (1) **PIO なら費用が再現するか。** 再現するなら、費用は「属性の書き込み」ではなく
+//	      **それが引き起こす PIO の作り直し**に掛かっている。
+//	  (2) **そのとき Arrow だけ安いか。** 取り込み側の非対称（6 つが 3.6ms、Arrow は
+//	      0ms）が PIO で再現すれば、「どの属性が再生成を起こすか」の切り分けになる。
+//	  (3) **2 度目は安いか**（費用は「変化」に掛かるのか「書き込み」に掛かるのか）。
+//	      第 1 周は 1 度目から 0.00ms だったので切り分けられなかった。
+//	  (4) **PIO でも文書の既定で省けるか**（第 1 周で効いたのは非 PIO だけ）。
+//	  (5) 第 1 周の副産物: `SetDefaultOpacityByClass()` を呼んだのに
+//	      `GetDefaultOpacityByClass()` が no を返した（なのに生まれた物は by-class）。
+//	      2 旗版 `GetDefaultOpacityByClassN` で読み直して、読み戻しの穴かを確かめる。
 //
 //	新規の空図面で走らせる（プローブは undo イベントを自分では開かない）。
 //
@@ -31,8 +45,8 @@ namespace
 {
 	using ProbeClock = std::chrono::steady_clock;
 
-	// このプローブが 1 つの群で作るオブジェクトの数。per-call の費用を平均で出すため。
-	const int kProbeObjectCount = 30;
+	// PIO は 1 つが重い見込みなので少なめに。矩形の対照も同数にして比べられるようにする。
+	const int kProbeObjectCount = 20;
 
 	// 「クラスに従わせる」7 つ。**並びは固定**で、以下の表の行に対応する。
 	const int kProbeAttrCount = 7;
@@ -57,8 +71,6 @@ namespace
 	{
 		return value != 0 ? "yes" : "no";
 	}
-
-	// --- 7 つの口を添字で呼ぶ（表を回すため） ------------------------------
 
 	void SetAttrByClass(int index, MCObjectHandle object)
 	{
@@ -158,21 +170,22 @@ namespace
 		}
 	}
 
-	// --- 測る対象のオブジェクト ------------------------------------------
+	// --- 測る対象 --------------------------------------------------------
+	//
+	// **構造材 PIO**（取り込み側で 10ms/呼び出しが出ていた当のもの）と、対照の矩形。
+	// PIO は鉛直材の作法で作る——`CreateNurbsCurve` ＋ `Add3DVertex` で下端 → 上端の
+	// 2 点を渡す（[Findings「Parametric Objects」](Findings/Parametric%20Objects.md)）。
 
-	// 2 種類作る。**軽い 2D（矩形）と 3D 実体を持つもの（球）**——取り込み側の実測で
-	// 「実体を持つオブジェクトほど 1 呼び出しが高い」傾向が出ていたので、その差が
-	// by-class の書き込みにも出るかを見る。どちらも 1 呼び出しで作れるので、
-	// 作りの違い（パス・プロファイル）が測定に混ざらない。
 	enum class ObjectKind
 	{
-		Rectangle,
-		Sphere
+		StructuralMemberPio,
+		Rectangle
 	};
 
 	const char* KindName(ObjectKind kind)
 	{
-		return kind == ObjectKind::Rectangle ? "矩形 (2D)" : "球 (3D 実体)";
+		return kind == ObjectKind::StructuralMemberPio ? "構造材 PIO (StructuralMember)"
+													   : "矩形 (2D・対照)";
 	}
 
 	MCObjectHandle CreateOne(ObjectKind kind, int serial)
@@ -184,11 +197,15 @@ namespace
 			WorldRect bounds(x, step, x + step, 0);
 			return gSDK->CreateRectangle(bounds);
 		}
-		WorldPt3 center(x, 0, 0);
-		return gSDK->CreateSphere(center, step / 2);
+
+		// 鉛直材: 下端 → 上端の 2 点を持つ NURBS をパスにする。
+		MCObjectHandle path = gSDK->CreateNurbsCurve(WorldPt3(x, 0, 0), true, 3);
+		if (path == nil)
+			return nil;
+		gSDK->Add3DVertex(path, WorldPt3(x, 0, 3000));
+		return gSDK->CreateCustomObjectPath("StructuralMember", path, nil, true);
 	}
 
-	// 1 つの群（1 種類のオブジェクト）を測った結果。
 	struct GroupResult
 	{
 		double createMs = 0;
@@ -201,7 +218,6 @@ namespace
 		int made = 0;
 	};
 
-	// 見出し行 + 1 行 1 属性の表を書く。
 	void LogAttrTable(vwprobe::Report& probe, const GroupResult& result)
 	{
 		probe.log("| 属性 | 生成直後 | SetObjectClass 後 | 1 度目 | 書込後 | 2 度目 |");
@@ -226,16 +242,14 @@ namespace
 	}
 } // namespace
 
-VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測する",
-		 "7 つの Set*ByClass の費用が『状態の変化』に掛かるのかを 2 度書きで切り分け、"
-		 "文書の既定（SetDefault*ByClass）で per-object の書き込みを省けるかを確かめる")
+VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を PIO で実測する",
+		 "第 2 周。構造材 PIO で 3.6ms が再現するか・Arrow だけ安いか・2 度目は安いか・"
+		 "PIO でも文書の既定で省けるかを確かめる（第 1 周の矩形／球では全部 0.00ms だった）")
 {
 	// =====================================================================
-	// 0. 文書の既定を、何も触る前に読む。
-	//    **`SetArrowByClass` だけ無料なのはなぜか**の答えがここに出る見込み
-	//    （マーカーだけ既定で by-class なら、1 度目から「変わらない書き込み」になる）。
+	// 0. 触る前の文書の既定。
 	// =====================================================================
-	probe.log("## 0. 触る前の文書の既定（SetDefault*ByClass の読み戻し）");
+	probe.log("## 0. 触る前の文書の既定");
 	probe.log("");
 	probe.log("| 属性 | 既定で by-class か |");
 	probe.log("| --- | --- |");
@@ -248,30 +262,30 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 		row += " |";
 		probe.log(row);
 	}
-	const InternalIndex defaultClassAtStart = gSDK->GetDefaultClass();
-	probe.log("");
-	probe.log(std::string("GetDefaultClass() = ") + std::to_string(defaultClassAtStart));
+	{
+		// 第 1 周で SetDefaultOpacityByClass() の読み戻しだけが食い違った。
+		// 2 旗版で読み直す（不透明度はペンと面で 2 旗ある）。
+		Boolean penByClass = 0;
+		Boolean fillByClass = 0;
+		gSDK->GetDefaultOpacityByClassN(penByClass, fillByClass);
+		probe.log(std::string("GetDefaultOpacityByClassN: pen=") + YesNo(penByClass) +
+				  " fill=" + YesNo(fillByClass));
+	}
+	probe.log(std::string("GetDefaultClass() = ") + std::to_string(gSDK->GetDefaultClass()));
 	probe.log("");
 
-	// 測定用のクラスを 2 つ作る。1 つは per-object で与える用、
-	// もう 1 つは `SetDefaultClass` で「生まれつき」与える用。
 	const InternalIndex perObjectClass = gSDK->AddClass("VwProbe-94-個別");
 	const InternalIndex bornWithClass = gSDK->AddClass("VwProbe-94-既定");
-	probe.log(std::string("AddClass: 個別用 = ") + std::to_string(perObjectClass) +
-			  " / 既定用 = " + std::to_string(bornWithClass));
 	if (perObjectClass == 0 || bornWithClass == 0)
 	{
 		probe.fail("AddClass がクラスを作れなかった（索引 0）");
 		return;
 	}
-	probe.log("");
 
-	const ObjectKind kinds[2] = {ObjectKind::Rectangle, ObjectKind::Sphere};
+	const ObjectKind kinds[2] = {ObjectKind::StructuralMemberPio, ObjectKind::Rectangle};
 
 	// =====================================================================
-	// 1. いまの作り（per-object で 8 つ）を測る。
-	//    ついでに 2 度目の同じ書き込みを測り、**費用が「変化」に掛かるのか
-	//    「書き込み」に掛かるのか**を切り分ける。
+	// 1. いまの作り（per-object で 8 つ）。**PIO で費用が再現するかが山場。**
 	// =====================================================================
 	probe.log("## 1. いまの作り: SetObjectClass ＋ 7 つを per-object で");
 	probe.log("");
@@ -284,7 +298,6 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 		GroupResult result;
 		MCObjectHandle objects[kProbeObjectCount] = {};
 
-		// --- 作る ---
 		ProbeClock::time_point mark = ProbeClock::now();
 		for (int i = 0; i < kProbeObjectCount; ++i)
 			objects[i] = CreateOne(kinds[k], i);
@@ -293,17 +306,22 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 		for (int i = 0; i < kProbeObjectCount; ++i)
 			if (objects[i] != nil)
 				++result.made;
+
+		probe.log(std::string("### ") + KindName(kinds[k]) + "（" + std::to_string(result.made) +
+				  " / " + std::to_string(kProbeObjectCount) + " 個できた）");
+		probe.log("");
 		if (result.made == 0)
 		{
+			// PIO が作れなくても矩形の対照は続ける（fail は処理を止めない）。
 			probe.fail(std::string("オブジェクトを 1 つも作れなかった: ") + KindName(kinds[k]));
+			probe.log("**作れなかったので、この群は測れていない。**");
+			probe.log("");
 			continue;
 		}
 
-		// --- 生成直後の by-class 状態（文書の既定がそのまま出るはず） ---
 		for (int a = 0; a < kProbeAttrCount; ++a)
 			result.atBirth[a] = GetAttrByClass(a, objects[0]);
 
-		// --- SetObjectClass だけを与える（(3) の前提の確認） ---
 		mark = ProbeClock::now();
 		for (int i = 0; i < kProbeObjectCount; ++i)
 			if (objects[i] != nil)
@@ -313,7 +331,6 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 		for (int a = 0; a < kProbeAttrCount; ++a)
 			result.afterSetClass[a] = GetAttrByClass(a, objects[0]);
 
-		// --- 7 つを 1 度目 ---
 		for (int a = 0; a < kProbeAttrCount; ++a)
 		{
 			mark = ProbeClock::now();
@@ -326,7 +343,7 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 		for (int a = 0; a < kProbeAttrCount; ++a)
 			result.afterFirstPass[a] = GetAttrByClass(a, objects[0]);
 
-		// --- 7 つを 2 度目（**状態は既に by-class なので、変わらない書き込み**） ---
+		// 2 度目: 状態は既に by-class なので「変わらない書き込み」になる。
 		for (int a = 0; a < kProbeAttrCount; ++a)
 		{
 			mark = ProbeClock::now();
@@ -336,32 +353,32 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 			result.secondPassMs[a] = MsBetween(mark, ProbeClock::now());
 		}
 
-		probe.log(std::string("### ") + KindName(kinds[k]) + "（" + std::to_string(result.made) +
-				  " 個）");
-		probe.log("");
 		probe.log(std::string("作る: ") + FormatMs(result.createMs / result.made) +
 				  "ms/個 ／ SetObjectClass: " + FormatMs(result.classMs / result.made) + "ms/回");
 		probe.log("");
 		LogAttrTable(probe, result);
 		probe.log("");
+
+		// 比較の軸: 6 つの平均と Arrow の差（取り込み側の非対称が再現したか）。
+		double sixSum = 0;
+		for (int a = 0; a < kProbeAttrCount; ++a)
+			if (a != 5)
+				sixSum += result.firstPassMs[a];
+		probe.log(std::string("Arrow 以外 6 つの平均: ") + FormatMs(sixSum / 6.0 / result.made) +
+				  "ms/回 ／ Arrow: " + FormatMs(result.firstPassMs[5] / result.made) + "ms/回");
+		probe.log("");
 	}
 
 	// =====================================================================
-	// 2. 文書の既定を立ててから作る（(2)）。
-	//    **per-object の書き込みを 1 つも呼ばずに** by-class になるか。
+	// 2. 文書の既定を先に立てて作る。**PIO でも省けるか。**
 	// =====================================================================
 	probe.log("## 2. 文書の既定を先に立て、per-object の書き込みを 1 つも呼ばずに作る");
 	probe.log("");
 
-	ProbeClock::time_point defaultsMark = ProbeClock::now();
 	gSDK->SetDefaultClass(bornWithClass);
 	for (int a = 0; a < kProbeAttrCount; ++a)
 		SetDefaultAttrByClass(a);
-	const double defaultsMs = MsBetween(defaultsMark, ProbeClock::now());
 
-	probe.log(std::string("既定を立てるのに掛かった時間（8 回ぶん合計）: ") + FormatMs(defaultsMs) +
-			  "ms");
-	probe.log("");
 	probe.log("| 属性 | 既定を立てた後の GetDefault*ByClass |");
 	probe.log("| --- | --- |");
 	for (int a = 0; a < kProbeAttrCount; ++a)
@@ -373,8 +390,13 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 		row += " |";
 		probe.log(row);
 	}
-	probe.log(std::string("GetDefaultClass() = ") + std::to_string(gSDK->GetDefaultClass()) +
-			  "（立てた値は " + std::to_string(bornWithClass) + "）");
+	{
+		Boolean penByClass = 0;
+		Boolean fillByClass = 0;
+		gSDK->GetDefaultOpacityByClassN(penByClass, fillByClass);
+		probe.log(std::string("GetDefaultOpacityByClassN: pen=") + YesNo(penByClass) +
+				  " fill=" + YesNo(fillByClass));
+	}
 	probe.log("");
 
 	for (int k = 0; k < 2; ++k)
@@ -390,13 +412,18 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 		for (int i = 0; i < kProbeObjectCount; ++i)
 			if (objects[i] != nil)
 				++made;
+
+		probe.log(std::string("### ") + KindName(kinds[k]) + "（" + std::to_string(made) + " / " +
+				  std::to_string(kProbeObjectCount) + " 個できた）");
+		probe.log("");
 		if (made == 0)
 		{
 			probe.fail(std::string("既定つきでオブジェクトを作れなかった: ") + KindName(kinds[k]));
+			probe.log("**作れなかったので、この群は測れていない。**");
+			probe.log("");
 			continue;
 		}
 
-		// **全件**を数える（1 個目だけ見て判断しない）。
 		int inClass = 0;
 		int fullyByClass[kProbeAttrCount] = {};
 		for (int i = 0; i < kProbeObjectCount; ++i)
@@ -410,19 +437,14 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 					++fullyByClass[a];
 		}
 
-		probe.log(std::string("### ") + KindName(kinds[k]) + "（" + std::to_string(made) + " 個）");
-		probe.log("");
 		probe.log(std::string("作る: ") + FormatMs(createMs / made) + "ms/個");
 		probe.log(std::string("既定のクラスで生まれた数: ") + std::to_string(inClass) + " / " +
 				  std::to_string(made));
 		probe.log("");
-		probe.log(
-			"| 属性 | 生まれつき by-class だった数 | 省いた per-object の書き込みを今から呼ぶと |");
+		probe.log("| 属性 | 生まれつき by-class だった数 | 省いた書き込みを今から呼ぶと |");
 		probe.log("| --- | ---: | ---: |");
 		for (int a = 0; a < kProbeAttrCount; ++a)
 		{
-			// 既に by-class のはずのものへ改めて書く——**無料なら「変わらない書き込みは
-			// 無料」が確定**し、1 の 2 度目の結果と合わせて機構が決まる。
 			mark = ProbeClock::now();
 			for (int i = 0; i < kProbeObjectCount; ++i)
 				if (objects[i] != nil)
@@ -445,10 +467,10 @@ VW_PROBE("byclass-attr-cost", "by-class 属性の書き込み費用を実測す�
 
 	probe.log("## 読み方");
 	probe.log("");
-	probe.log("- 0 の表で Arrow だけ yes なら、`SetArrowByClass` が無料なのは"
-			  "「既に by-class ＝ 変わらない書き込み」だからである。");
-	probe.log("- 1 の表で「2 度目」が 1 度目よりずっと安いなら、費用は"
-			  "**書き込みそのものではなく状態の変化**に掛かっている。");
-	probe.log("- 2 で「生まれつき by-class だった数」が全件なら、**文書の既定を先に立てれば"
-			  "per-object の 7 つは要らない**。");
+	probe.log("- 1 の構造材 PIO で 6 つが高く Arrow が安ければ、**費用は属性の書き込みではなく"
+			  "それが起こす PIO の作り直し**で、取り込み側の非対称もそれで説明が付く。");
+	probe.log("- PIO でも 7 つとも 0.00ms なら、**費用はオブジェクトの種類ではなく"
+			  "取り込み時の文書の状態**（規模・スタイル・階など）から来ている。");
+	probe.log("- 1 で「2 度目」が 1 度目よりずっと安ければ、費用は**状態の変化**に掛かっている。");
+	probe.log("- 2 で PIO も全件 by-class なら、**PIO でも per-object の 8 つは要らない**。");
 }
