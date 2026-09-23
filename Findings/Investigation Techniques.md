@@ -86,6 +86,24 @@
   プローブに置いた。結果、(3) が確定して「危ない値の話は仮数だけの話」に縮み、
   走査の意味がはっきりした。**闇雲に点を増やす走査は、点が増えるだけで終わる。**
 
+- **Windows 版 SDK を引き直しても同じものしか出ない。** `ci-debug` の
+  `--platform windows` と `--platform mac` が用意する SDK は、**`SDKLib/` の 961
+  ファイルすべてが改行コードを除いて同一**である（CR を落とした集約ハッシュが
+  `a859b31735d9572d2b7c967aa3512a19` で一致。ディレクトリ単位でも全 19 群が一致。
+  [windows](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35883156877) /
+  [mac](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35883177907)）。
+  **`Include/OnlyWin` も `Include/OnlyMac` も、どちらの SDK にも両方入っている**
+  （13 ファイル / 27 ファイル）。したがって「Windows ではどうなっているか」を
+  `sdk-grep` / `sdk-ls` で引き直しても、**mac で引いたのと 1 文字も違わない答えが返る**
+  ——`--platform windows` は**中身を変えない**。プラットフォーム差を知りたいなら
+  実機で測るしかない（実例: [ファイル・フォルダの識別子](File%20and%20Folder%20Identifiers.md)
+  の `SAttributes`）。
+  - **比べるときは `tr -d '\r'` を使わない。** macOS の BSD `tr` は UTF-8 でない
+    バイトを含むファイルで `Illegal byte sequence` を出して**そのファイルだけ空に
+    してしまう**ので、GNU `tr` の Windows 側と比べると**差が無いのに差が出る**
+    （実際に 961 ファイル中 6 ファイルで踏み、4 つのディレクトリが「違う」と出た）。
+    `perl -0777` で読んで `s/\r//g` すれば両方で同じ挙動になる。
+
 ## 運用
 
 - **実機の出力にはビルドの素性を添える。** 「その出力がどのビルドのものか」が分からないと

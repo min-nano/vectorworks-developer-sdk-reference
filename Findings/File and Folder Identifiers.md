@@ -50,6 +50,32 @@ struct SAttributes
 （`sdk-grep` で確認）。中身を詰めるのは Vectorworks 本体側なので、**ヘッダを読んでも
 何が入るかは分からない**。以下はすべて実機で測った値である。
 
+**Windows 版 SDK のヘッダも、macOS 版と改行コードしか違わない。** `ci-debug` で
+両プラットフォームの SDK を引き、`Interfaces/VectorWorks/Filing/IFolderIdentifier.h`
+（132 行）と `IFileIdentifier.h`（62 行）を突き合わせた
+（[windows](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35410377167) /
+[mac](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35410383253)）。
+
+| 比べたもの | macOS 版 SDK | Windows 版 SDK |
+| --- | --- | --- |
+| 改行コード | LF（CR は 0 行） | **CRLF**（132 行 / 63 行が CR 付き） |
+| CR を落とした md5（`IFolderIdentifier.h` / `IFileIdentifier.h`） | `d3b3c129…` / `165f1f75…` | **同じ値** |
+| `GS_WIN` / `GS_MAC` / `_WINDOWS` / `__APPLE__` による分岐 | 0 件 | 0 件 |
+| `SAttributes` の 11 旗の並び・`Get`/`SetAttributes` の宣言位置 | `IFolderIdentifier.h:14`／`:109,110`・`IFileIdentifier.h:36,37` | 同じ行・同じ並び |
+
+**これは この 2 ファイルに限った話ではない。** SDK 全体（`SDKLib/` の 961 ファイル）を
+同じやり方で突き合わせると、**CR を落とした集約ハッシュが両プラットフォームで完全に一致する**
+（`a859b31735d9572d2b7c967aa3512a19`。ディレクトリ単位でも全 19 群が一致）——
+つまり**Windows 版 SDK と macOS 版 SDK は、配られるファイルとしては同じものである**
+（詳細は [調査の作法](Investigation%20Techniques.md)「Windows 版 SDK を引き直しても同じものしか出ない」）。
+
+したがって**「Windows では旗の意味が違うのか」も、ヘッダからは一切分からない**。
+`fbHidden` / `fbSystem` / `fbArchive` / `fbEncrypted` は Windows のファイル属性
+（`FILE_ATTRIBUTE_HIDDEN` / `_SYSTEM` / `_ARCHIVE` / `_ENCRYPTED`）そのものの名前だが、
+**その対応を書いたものは SDK の側に 1 行も無い**——値を詰めるのは Vectorworks 本体で、
+本体は SDK に付いてこないからである。**プラットフォーム差は Windows 実機で測るしかなく、
+`sdk-grep` / `sdk-ls` を引き直しても答えは出ない**（[issue #93](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/93)）。
+
 ## 実機で確かめたこと（VW 2026 / macOS / Apple Silicon）
 
 **プラグインのメニューコマンドの中（`DoInterface` の中）から、外部モジュールへ出した
@@ -388,3 +414,8 @@ Windows 実機が要るため
 
 ここが確かめられると、「この 4 つは Windows 専用の概念で、macOS では死んでいる」と
 **プラットフォーム差として言い切れる**ようになる。
+
+**ヘッダ側の道は潰してある。** Windows 版 SDK と macOS 版 SDK は**配られるファイルとして
+同一**なので（上記「`SAttributes` の中身（ヘッダ）」）、**`sdk-grep` / `sdk-ls` を
+`--platform windows` で引き直しても答えは出ない——引き直さないこと。** 残っているのは
+**Windows 実機でプローブを 1 つ走らせる 1 手だけ**である。
