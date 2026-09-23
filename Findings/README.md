@@ -37,6 +37,7 @@
 | --- | --- |
 | [VectorScript to SDK Mapping](VectorScript%20to%20SDK%20Mapping.md) | VectorScript（`vs.*`）の名前と ISDK の対応・非対応の一覧。**着手前にまず引く** |
 | [Parametric Objects](Parametric%20Objects.md) | PIO 全般。パスの型・ストーリバウンド・パラメータ名（**表は種別ごとに不変＝解決は 1 度でよい**・呼び出しのコスト）・設定ダイアログ抑止・スタイル・ポップアップの値・構造材の自動結合（作る API は無い）・**構造材のスパン／部材長はパラメータで読めない**（長さはパスの両端で測る）・自作 PIO の作法・**リセットをまとめられるか**（まとめても速くならない／`doRegen=false` ＋ 0 長で半分） |
+| [Attributes and Classes](Attributes%20and%20Classes.md) | 描画属性を「クラスに従わせる」口と費用。**書き込みは無料、高いのは PIO の作り直し**（マーカーだけ作り直しを起こさない）・**費用は「変化」に掛かる**（2 度目は無料）・**文書の既定を先に立てれば per-object の 8 つは要らない**（マーカーだけ継承されない）・一括呼び出しは無い・`GetDefaultOpacityByClass` は読み戻しに使えない |
 | [Symbols](Symbols.md) | シンボル配置の 2 つの作法（レイヤへ入れ直す・非 nil を成功と見ない）・高さ合わせ・**定義を組み立てる**（中身を入れたら `ResetObject`）・用紙基準の大きさ・インスタンスの反転（負の倍率） |
 | [Walls](Walls.md) | 壁の生成・高さ・結合（`JoinWalls`）・キャップ・2D 表現の更新 |
 | [Slabs and Extrudes](Slabs%20and%20Extrudes.md) | スラブの構成層・`VWExtrudeObj` の平行移動・`ModifySlab` の不具合（打ち切り） |
