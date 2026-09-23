@@ -36,7 +36,7 @@
 | ファイル | 中身 |
 | --- | --- |
 | [VectorScript to SDK Mapping](VectorScript%20to%20SDK%20Mapping.md) | VectorScript（`vs.*`）の名前と ISDK の対応・非対応の一覧。**着手前にまず引く** |
-| [Parametric Objects](Parametric%20Objects.md) | PIO 全般。パスの型・ストーリバウンド・パラメータ名・設定ダイアログ抑止・スタイル・ポップアップの値・構造材の自動結合（作る API は無い）・自作 PIO の作法・**リセットをまとめられるか**（まとめても速くならない／`doRegen=false` ＋ 0 長で半分） |
+| [Parametric Objects](Parametric%20Objects.md) | PIO 全般。パスの型・ストーリバウンド・パラメータ名（**表は種別ごとに不変＝解決は 1 度でよい**・呼び出しのコスト）・設定ダイアログ抑止・**スタイル**（SDK だけで作れる／`CreatePluginStyle` は呼んではいけない）・ポップアップの値・構造材の自動結合（作る API は無い）・**構造材のスパン／部材長はパラメータで読めない**（長さはパスの両端で測る）・自作 PIO の作法・**リセットをまとめられるか**（まとめても速くならない／`doRegen=false` ＋ 0 長で半分） |
 | [Symbols](Symbols.md) | シンボル配置の 2 つの作法（レイヤへ入れ直す・非 nil を成功と見ない）・高さ合わせ・**定義を組み立てる**（中身を入れたら `ResetObject`）・用紙基準の大きさ・インスタンスの反転（負の倍率） |
 | [Walls](Walls.md) | 壁の生成・高さ・結合（`JoinWalls`）・キャップ・2D 表現の更新 |
 | [Slabs and Extrudes](Slabs%20and%20Extrudes.md) | スラブの構成層・`VWExtrudeObj` の平行移動・`ModifySlab` の不具合（打ち切り） |
@@ -51,7 +51,7 @@
 | [Progress and Diagnostics](Progress%20and%20Diagnostics.md) | 進捗ダイアログ・`DoYield`・例外境界・VW バージョンは取れない |
 | [Layout Dialogs](Layout%20Dialogs.md) | レイアウトダイアログ（`VWDialog`）の大きさ・コントロール・イベントの作法・**モードレスなパレット（`IExtensionWebPalette`。未確認）** |
 | [File and Folder Dialogs](File%20and%20Folder%20Dialogs.md) | OS のファイル／フォルダ選択ダイアログ。**フォルダ選択は `IFolderChooserDialog` で開ける**・キャンセルの戻り値・受け取るパスは末尾に区切りが付く UTF-8 の絶対パス・`IFileIdentifier::GetFolder` は同じ文字列を返す |
-| [File and Folder Identifiers](File%20and%20Folder%20Identifiers.md) | `IFileIdentifier` / `IFolderIdentifier` そのもの。**`GetAttributes` の `fbDirectory` は常に `false`**（種類の判定に使えない）・`fbReadOnly` / `fbCanWrite` は生きている・`ExistsOnDisk` は戻り値ではなく出力引数を見る・`EnumerateContents` の振り分けは信用できる |
+| [File and Folder Identifiers](File%20and%20Folder%20Identifiers.md) | `IFileIdentifier` / `IFolderIdentifier` そのもの。**`GetAttributes` の `fbDirectory` は常に `false`**（種類の判定に使えない）・`fbReadOnly` / `fbCanWrite` は生きている・**`SetAttributes` はフォルダでは未実装、ファイルでは権限だけが書ける**・`ExistsOnDisk` は戻り値ではなく出力引数を見る・`EnumerateContents` の振り分けは信用できる |
 | [TXString](TXString.md) | 文字列型。`const char*` / `std::string` からの暗黙変換・**リテラルで多重定義が曖昧になる**・UTF-8 の出し入れ |
 | [Plug-in Modules](Plug-in%20Modules.md) | プラグインモジュールの読み込みと入れ替え。起動時にしか読まれない・VCOM の初期化はモジュールごと・SDK をリンクするモジュールが必ず定義する 2 つ・**本体を外部モジュールへ出せば再起動なしで入れ替えられる**（mac 実測） |
 | [Documents](Documents.md) | 図面（文書）を開く・作る。**コマンド実行中に空の新規文書を開いて描画先を移せる**（実機確認済み）・複数文書を `SwitchToOpenFile` で行き来できる・**テンプレートからの新規作成専用 API は無い**・**未保存の変更がある文書は `CloseDocument()` で閉じられない** |

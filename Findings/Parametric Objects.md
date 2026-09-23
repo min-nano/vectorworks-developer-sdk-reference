@@ -962,6 +962,196 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 （実装例: ホームズ君プラグインの `draw/DrawUtil` にある `ResolveParamName` /
 `SetParamRealChecked`——名前を解決してから書き、読み戻して一致を確かめるラッパー）。
 
+### 名前の解決は「種別 × 文書」ごとに 1 度でよい——表はインスタンスに依らない
+
+[issue #82](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/82) で
+実機確認（VW 2026 / mac。構造材ツール `StructuralMember` を対象にプローブを
+走らせた実測。以下の数値は実行ログそのまま）。
+
+**結論: `GetParamsCount` / `GetParamName(i)` / `GetParamLocalizedName(i)` が返す表は、
+同じ種別・同じ文書のインスタンスなら常に同一である**——値が違っても、ポップアップで
+別の項目を選んでも、**スタイルを当てても**、`ResetObject` を挟んでも変わらない。
+したがって `ResolveParamName` のように**表を舐めて名前を解決する処理は、種別ごとに
+1 度だけ解決してキャッシュしてよい**。鍵は「種別 × 文書」にし、**文書が変わったら
+捨てる**（下記）。
+
+#### 何を変えても表は動かなかった（実測）
+
+構造材（`StructuralMember`）のパラメータは **181 件**。次のどれでも、**件数・並び・
+universal 名・ローカライズ名・ポップアップの選択肢の数が全索引で一致**した。
+
+| 比べたもの | 結果 |
+| --- | --- |
+| 作った直後の 4 本（同じ文書・同じ種別） | 一致。**レコードフォーマットのハンドルも 4 本とも同一**（`0xaf6c54b00`） |
+| 値を変えた本（`MajorBreadth` など 8 件を書き換えて `ResetObject`） | 一致 |
+| ポップアップを倒した本（`MemberType` / `StructuralUse` / `EndCondition` / `AxisAlign` など 8 件） | 一致（**選択肢の数も**） |
+| 同じ本を書き換えて `ResetObject` した前後 | 一致 |
+| **別の文書**で作った同じ種別 | 一致。ただし**フォーマットの実体は別**（`0xaf6c54b00` 対 `0xae1178500`） |
+| **スタイルを当てた本**（構造材用のスタイル `木質構造材_柱・束` / `木質構造材_横架材` を `SetStyle` ＋ `ResetObject`） | 一致（**フォーマットのハンドルもスタイル無しと同一**）。2 度の走行で同じ結果 |
+
+**表の出どころを考えれば動きようがない**（【ソース根拠】
+`SDKLib/Source/VWSDK/VWFC/VWObjects/VWParametricObj.cpp`）:
+
+- **`GetParamsCount` / `GetParamName(i)`** は、インスタンスの aux list から見つけた
+  **パラメータレコード**（parametric ビットの立った format を持つ record）のフィールド数と
+  フィールド名である（`GetNameOfField` は **1 始まり**なので内部で `+1` している）。
+  その**フォーマットは種別ごとに 1 つ**なので、件数も並びも値では変わらない。
+- **`GetParamLocalizedName(i)`** は、1 呼び出しごとに `IExtendedProps` を作り、対象
+  オブジェクトから `GetCodeRefID` → `GetFileIndex` → `GetExtension` →
+  `IID_ParametricParamsProvider` のイベントシンクまで辿る。provider があれば
+  `provider->GetParamNameAt(i)`、無ければフォーマット名と universal 名で
+  `gSDK->GetLocalizedPluginParameter(pluginName, paramName, out)` を引き、それも無ければ
+  `GetParamName(i)` へ落ちる。**どちらの経路も引数は索引（と種別）だけ**で、
+  インスタンス固有の値は使っていない——オブジェクトを渡すのは**どのプラグインのものかを
+  引く**ためだけである。
+
+#### スタイルを当てても表は変わらない
+
+**当てたのが「その種別のスタイル」であることまで確かめてある。** 文書にあった
+プラグインスタイル 9 本の素性を**スタイルのシンボル定義の中身から**読み取り
+（中に入っている PIO の universal 名を見る）、`StructuralMember` のものだけを選んで
+当てた:
+
+```
+[G2] [2] 木質構造材_柱・束 ref=89 中の PIO=StructuralMember 中身の型: 86(StructuralMember) 0
+[G2] [3] 木質構造材_横架材 ref=87 中の PIO=StructuralMember 中身の型: 86(StructuralMember) 0
+[G3] 木質構造材_柱・束(89) を当てた: ResetObject=true styleRef=89 formatHandle=0xb1fdd8400
+[G3]   → A（スタイル無し）vs これ: 一致（件数 181・…全索引で同じ）
+```
+
+- **スタイルの素性は、そのスタイルのシンボル定義を `FirstMemberObj` で辿れば分かる**
+  ——中に**その種別の PIO が 1 つ**入っている（型 86）。`SetStyle` /
+  `SetPluginObjectStyle` は `IsPluginStyle` しか見ないので**別種別のスタイルでも
+  通ってしまう**（実際、`Data Tag` のスタイルを構造材へ当てたら `styleRef` が
+  付いた）。**「当てられた」を「その種別のスタイルだった」と読み替えない。**
+- **当てただけではパラメータの値は流れない**（変わった値 0 件）。これは下記
+  「プラグインスタイル」の「当てただけでは描画属性が流れない」と同じ話で、
+  値を流すには `UpdateStyledObjects` が要る。**このプローブは
+  `UpdateStyledObjects` を呼んでいない**が、表（件数・名前・選択肢）の出どころは
+  レコードフォーマットであって値ではないので、結論は変わらない。
+- **スタイルを用意するのに `CreatePluginStyle` は使えなかった**——呼ぶとダイアログ
+  （「フォルダの指定」）が出るのに**文書のスタイルは 1 本も増えず**、渡したハンドルは
+  無効になり、**図面にあった構造材が型 86 から型 21 へ変わった**（渡していない本まで）。
+  この呼び出しの正体は下記「**`CreatePluginStyle` を呼んではいけない**」で決着している
+  （[issue #98](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/98)）
+  ——**スタイルを作らずに文書の PIO を全滅させる呼び出し**だった。**この調査では文書に
+  元からあるスタイルを使えば済んだ**が、自分でスタイルを用意したいなら下記
+  「スタイルは SDK だけで作れる」の手順を使う。
+
+#### ローカライズ名はアプリの資源から来る（文書ではない）
+
+`GetParamLocalizedName(i)` の結果を
+`gSDK->GetLocalizedPluginParameter("StructuralMember", universal 名)` と全索引で
+突き合わせたところ、**181 件中 179 件が一致**、相違 0 件、**資源に無いものが 2 件**
+（`MemberMergeInSections` / `CoverMergeInSections`）だった。
+
+- つまりローカライズ名を左右するのは**索引と種別、そして UI の言語**だけで、
+  インスタンスにも文書にも依らない。
+- **資源に無い 2 件は、universal 名へ落ちずに空文字が返った。** ローカライズ名で
+  引き当てる実装は、**空のローカライズ名を一致と数えない**こと（探している名前が空だと
+  全件が当たる）。
+
+#### キャッシュはいつ捨てるか
+
+- **文書が変わったら捨てる。** universal 名と件数は**文書の中のレコードフォーマット**から
+  来る。上の実測では別文書でも中身は一致したが、**文書にはその文書が作られた時点の
+  フォーマットが焼き込まれている**（下記「パラメータの既定値は『文書』に記録される」）ので、
+  **古い文書が古い顔ぶれを持っている可能性は捨てられない**。鍵に文書を入れる。
+- **UI の言語が変わったら捨てる**（ローカライズ名を鍵に使っているなら）。言語はアプリ側の
+  設定で、**取り込み 1 回の実行中に変わることはない**。
+- したがって**コマンド 1 回の実行に閉じたキャッシュなら、捨てる条件を考えなくてよい**——
+  その間に文書も言語も変わらない。プロセスをまたいで持ち越すときだけ、上の 2 つを見る。
+
+#### コスト（VW 2026 / mac。181 件の構造材で実測）
+
+| 呼び出し | 1 回あたり | フルスキャン 1 回（181 件） |
+| --- | --- | --- |
+| `VWParametricObj` 構築 ＋ `GetParamsCount` | 0.333us | — |
+| `GetParamName(i)` | 0.197us | 0.036ms |
+| `GetParamLocalizedName(i)` | 0.435us | **0.079ms** |
+| `GetParamIndex(universal 名)` | **4.236us** | — |
+
+- **ローカライズ名で 1 件引くのは安い**（0.435us）。**フルスキャンでも 0.079ms** で、
+  部材 1 本につき 4 回落ちても 0.32ms、400 本で 0.13 秒にしかならない。
+  **「描画時間の 51〜68% がここ」という見立て（issue #82）は、この経路の実測では
+  説明が付かない**——取り込みプラグイン側で内訳を測り直す価値がある。
+- **高いのは universal 名で引く呼び出しのほう**（4.236us。ローカライズ名 1 件の約 10 倍）。
+  **名前から索引を引く経路は表の線形探索**なので、表の後ろにあるパラメータほど高い
+  （上の 4.236us は索引 0〜180 を順に引いた平均）。`GetParamReal(univ 名)` のように
+  **名前で読み書きする呼び出しは毎回これを払う**——**キャッシュすべきは「解決した名前」
+  ではなく「解決した索引」**である。
+- 最初の 1 回（cold）は `GetParamLocalizedName` が 0.004ms（warm の約 10 倍）、
+  `GetParamsCount` が 0.029ms。一度暖まれば上表の値になる。
+
+#### 構造材（`StructuralMember`）のパラメータ表（VW 2026 / mac・日本語 UI）
+
+**名前が引けるものだけを抜き出した**（索引はプローブの実行ログそのまま。
+`loc` が `__NNA_DO_NOT_CHANGE` のものは省いたが、**表からは消えていない**ので索引は飛ぶ）。
+`choices` はポップアップの選択肢の数（0 ならポップアップではない）。
+
+| 索引 | universal 名 | ローカライズ名 | choices |
+| --- | --- | --- | --- |
+| 1 | `MemberID` | 構造材 ID | 0 |
+| 2 | `MemberType` | 構造材タイプ | 4 |
+| 3 | `ProfileShape` | 断面の形状 | 0 |
+| 4 | `ProfileSeries` | 断面の種類 | 0 |
+| 5 | `ProfileSize` | 断面のサイズ | 0 |
+| 6 | `ProfileSymbol` | シンボル（形状） | 0 |
+| 7 | `MajorBreadth` | 主幅 | 0 |
+| 8 | `MinorBreadth` | 副幅 | 0 |
+| 9 | `MajorDepth` | 主高さ | 0 |
+| 10 | `MinorDepth` | 副高さ | 0 |
+| 11 | `StructuralUse` | 構造用途 | 18 |
+| 12 | `OtherStructuralUse` | その他の構造用途 | 0 |
+| 13 | `ProfileAngle` | 断面の回転角度 | 0 |
+| 14 | `LastProfileAngle` | 断面の回転角度 | 0 |
+| 15 | `UseLayerCutPlaneElev` | レイヤの切断面高さを使用 | 0 |
+| 16 | `CutPlaneElev` | 切断面の高さ | 0 |
+| 17 | `EndCondition` | 終端の処理 | 4 |
+| 18 | `EndOffset` | オフセット | 0 |
+| 19 | `EndMiter` | 傾斜角度 | 0 |
+| 20 | `EndBevel` | 水平面の角度 | 0 |
+| 21 | `StartCondition` | 始端の処理 | 4 |
+| 22 | `StartOffset` | オフセット | 0 |
+| 23 | `StartMiter` | 傾斜角度 | 0 |
+| 24 | `StartBevel` | 水平面の角度 | 0 |
+| 25 | `AxisAlign` | 配置基準 | 9 |
+| 26 | `OffsetY` | Y'方向オフセット | 0 |
+| 27 | `OffsetZ` | Z'方向オフセット | 0 |
+| 28 | `DialogStartElevationReference` | 始端高さ基準 | 3 |
+| 29 | `DialogStartElevation` | 始端高さオフセット | 0 |
+| 30 | `DialogEndElevationReference` | 終端高さ基準 | 3 |
+| 31 | `DialogEndElevation` | 終端高さオフセット | 0 |
+| 32 | `StartElevation` | 始端高さオフセット | 0 |
+| 33 | `EndElevation` | 終端高さオフセット | 0 |
+| 34–36 | `CoverTop` / `CoverTopThickness` / `CoverTopOffset` | 上側被覆 / 厚み / オフセット | 0 |
+| 37–39 | `CoverBottom` / `CoverBottomThickness` / `CoverBottomOffset` | 下側被覆 / 厚み / オフセット | 0 |
+| 40–42 | `CoverRight` / `CoverRightThickness` / `CoverRightOffset` | 右側被覆 / 厚み / オフセット | 0 |
+| 43–45 | `CoverLeft` / `CoverLeftThickness` / `CoverLeftOffset` | 左側被覆 / 厚み / オフセット | 0 |
+| 46 | `CoverMaterial` | 被覆材マテリアル | 0 |
+| 47 | `MemberMaterial` | 構造体マテリアル | 0 |
+| 153 | `CenterPointMarker` | センターマークを使用 | 0 |
+| 159 | `CenterPointLength` | 長さ | 0 |
+| 160 | `CenterPointGap` | 間隔 | 0 |
+| 169 | `MemberMergeInSections` | **（空）** | 0 |
+| 170 | `CoverMergeInSections` | **（空）** | 0 |
+| 177 | `StartCap` | 始端部 | 0 |
+| 178 | `EndCap` | 終端部 | 0 |
+| 179 | `AttributesMode` | 使用する属性設定: | 4 |
+| 180 | `AttributesMode3D` | 使用する属性設定: | 4 |
+
+省いた索引の中身:
+
+- **0**（`__version`）と **48〜152**、**154〜158**、**161〜168**、**171〜176** は
+  ローカライズ名が `__NNA_DO_NOT_CHANGE`。48〜152 は 2D 表現の属性
+  （`MemberPenStyle_Above` … `CapsLineWeight_Below` のように
+  `_Above` / `_At` / `_Below` の 3 面ぶん）、161〜168 は 3D の属性。
+- **171〜176 に `traversalDone` / `traversalRoot` / `B` / `B1` / `D` / `D1` がある。**
+  `B`（173）と `D`（175）は、作った直後の値が `MajorBreadth`（300）/ `MajorDepth`（600）と
+  同じだった。**`B` / `D` / `StartOffset` はいずれも universal 名として実在する**ので、
+  これらが universal 名で引けずローカライズ名の経路へ落ちているなら、**落ちる理由は
+  「名前が無いこと」ではない**。
+
 ## パラメータの既定値は「文書」に記録される
 
 自作 PIO のパラメータ既定値（`SParametricParamDef` に書いた値）は、**その PIO を初めて
@@ -996,6 +1186,133 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
   下記「リセット（再生成）をまとめられるか」）。
 - **スタイル名 → RefNumber を名前で引く呼び出しは無い。** `GetNamedObject` ＋
   `GetObjectInternalIndex` で引く。
+
+### **`CreatePluginStyle` を呼んではいけない**——スタイルは作られず、文書中の PIO が全滅する
+
+`gSDK->CreatePluginStyle(MCObjectHandle hObj)` は、名前に反して**スタイルを作らない**。
+実際に起きるのは**文書にあるプラグインオブジェクトの全滅**である
+（[issue #98](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/98)。
+VW 2026 / mac・新規の空図面で 2 度実行。以下は実行ログそのまま）。
+
+| 呼ぶと何が起きるか | 実測 |
+| --- | --- |
+| **ダイアログを出して人を待つ** | 「**フォルダの指定**」——文書の資源フォルダ（`名称未設定 1` ＋各スタイルフォルダ）を選ばせる画面。**スタイル名は尋ねない**。所要は人次第（1.7〜282 秒） |
+| **文書の PIO が全部消える** | **渡した本も、渡していない本も、選択していない本も、別種別の PIO も**——例外なし。**シンボル定義の中へ入れておいた PIO まで**消える |
+| **パスを持つ PIO は「パスのポリライン」だけが残る** | 残るのは型 21（`kPolylineNode`）。**頂点は渡したパスそのもの**（下表） |
+| **点で入る PIO は何も残さない** | `Data Tag` は跡形も無く消えた（置き換わりの図形すら無い） |
+| **PIO でない図形は無傷** | 型 5（`kPolygonNode`）の多角形は**同じハンドルのまま**、頂点も外接もそのまま |
+| **残ったポリラインは全部「選択」状態になる** | 呼ぶ前の選択状態とは無関係 |
+| **資源は 1 つも増えない** | 資源ツリーを丸ごと数えて 535 → 537 件。増えた 2 件は**どちらもプローブ自身が作ったシンボル定義とその空レコード**。プラグインスタイルは 9 本のまま |
+| **渡したハンドルは無効になる** | 戻った直後に `GetParamsCount()` が 0、`GetRecordFormat()` が `0x0` |
+| `GetPluginStyleForTool` | 呼ぶ前も後も `true` / `ref=0`（下記「戻り値を成否と読まない」） |
+
+**「パスだけが残った」と言い切れるのは、頂点と外接を突き合わせたから。** 構造材は
+`(0, y)`〜`(3000, y)` の 2 頂点のパスから作ってあり、呼ぶ前の PIO は断面のぶん高さを
+持っていた。呼んだ後に残ったものは、**高さ 0 の 2 頂点ポリライン**である。
+
+| 本（作った y） | 呼ぶ前（型 86 の PIO）の外接 | 呼んだ後（型 21）の外接と頂点 |
+| --- | --- | --- |
+| y=0（渡した・選択） | `x 0〜3000 / y -82.804〜82.804` | `x 0〜3000 / y 0〜0`・頂点 2 `(0,0) (3000,0)` |
+| y=1000（渡さない・非選択） | `x 0〜3000 / y 917.196〜1082.804` | `x 0〜3000 / y 1000〜1000`・頂点 2 `(0,1000) (3000,1000)` |
+| y=2000（渡さない・選択） | `x 0〜3000 / y 1917.196〜2082.804` | `x 0〜3000 / y 2000〜2000`・頂点 2 `(0,2000) (3000,2000)` |
+| y=4000（**シンボル定義の中**） | 定義の中に PIO として居た | **図面へ落ちてきて**同じく高さ 0 の 2 頂点 |
+| y=5000（スタイルを当てた本） | `styleRef=113` を持っていた | 同じく高さ 0 の 2 頂点・`styleRef=0` |
+| y=3000（PIO でない多角形） | — | **無傷**（同じハンドル・同じ頂点） |
+
+- **選択は関係ない。** 「選択されているものが対象」という読みは実測が否定する——
+  **非選択の本も消えた**。逆に、残った多角形が残ったのは非選択だったからではなく、
+  **PIO でないから**である（消えた 4 つには非選択のものが 2 つ含まれる）。
+- **種別も関係ない。** `StructuralMember` 3 本と `Data Tag` 1 つを同居させて呼ぶと
+  **両方とも**消えた。「同じ種別のインスタンスを全部作り替える」ではなく
+  **「文書の PIO を全部壊す」**である。
+- **シンボル定義の中まで届く。** 呼ぶ前の定義の中身は
+  `86(kParametricNode)=StructuralMember 0(kTermNode)`、呼んだ後は `0(kTermNode)` だけ
+  ——**定義は空になり、中に居た PIO のパスが図面に現れた**。
+- **undo で戻せるとは限らない。** プローブは undo イベントを開いていないので、この実測は
+  「戻せない状態から見た結果」である。**実装で呼んでよい場面は無い**と考えてよい。
+
+**【ソース根拠】なぜこうなるのか。** `ISDK.h` の宣言は
+`virtual void CreatePluginStyle(MCObjectHandle hObj) = 0;` で**戻り値が無い**
+（成否も、できたスタイルの RefNumber も返らない）。VW 側はこの口から PIO へ
+`ParametricCreatePluginStyle`（`MiniCadCallBacks.h` の `kAction = 61`。運ぶのは
+**シンボル定義のハンドル**）を投げ、続けて `kAction_FinalizeCreateStyle`（63）を投げる
+（`VWExtensionParametric.cpp:1328`）。**VWFC の既定実装は
+`OnCreatePluginStyle` が `kObjectEventNotImplemented` を返す**（同 1874 行）。
+つまりこの口は「**PIO 側の `OnCreatePluginStyle` を呼ぶための UI 経路**」であって、
+スタイルを組み立てる口ではない。**自作 PIO でこのイベントを実装する気が無いなら、
+この呼び出しに用は無い。**
+
+### スタイルは SDK だけで作れる——**シンボル定義のサブタイプに PIO の内部 ID を書く**
+
+ダイアログを 1 つも出さずにプラグインスタイルを用意できる。**実機で、作ったスタイルを
+別の本へ当てて `styleRef` が付くところまで確かめてある**（同 issue #98）。
+
+```cpp
+TXString        name("新しいスタイル");
+MCObjectHandle  hSymDef = gSDK->CreateSymbolDefinition(name);  // 名前が使われていれば nil
+MCObjectHandle  seed    = /* その種別の PIO を 1 つ作る */;
+
+gSDK->AddObjectToContainer(seed, hSymDef);   // 中へ「その種別の PIO を 1 つ」入れる
+gSDK->ResetObject(hSymDef);                  // ★ サブタイプを書く**前に**通す（下記）
+gSDK->SetSymbolDefSubType(hSymDef, VWParametricObj::GetInternalID(seed));
+gSDK->SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByStyle);
+
+const RefNumber ref = gSDK->GetObjectInternalIndex(hSymDef);
+VWParametricObj(target).SetStyle(ref);       // 当たる（styleRef が ref になる）
+```
+
+実測（VW 2026 / mac）:
+
+```
+① CreateSymbolDefinition        中身: 0(kTermNode)                     ← 空の定義
+② AddObjectToContainer=true     中身: 86(kParametricNode)=StructuralMember 0(kTermNode)
+                                入れた PIO の親 = 定義のハンドルと一致
+③ ResetObject の後              外接=[x 0〜3000 / y 3917.196〜4082.804]  ← 外接が付く
+④ SetSymbolDefSubType(537)  →   読み戻し=537  **IsPluginStyle=true**
+⑤ SetAllPluginStyleParameters   subType=537 ref=113  IsPluginStyle=true
+⑥ 別の本へ SetStyle(113)     →   styleRef=113                            ← 当たった
+```
+
+- **`ResetObject` はサブタイプを書く前に通す。** 順序を入れ替えた版
+  （`Add` → `SetSymbolDefSubType` → `SetAllPluginStyleParameters` → `ResetObject`）では、
+  **`SetSymbolDefSubType(537)` の読み戻しが `0`**、`IsPluginStyle=false`、当てても
+  `styleRef=0` だった。**書けたことを読み戻さずに信じない**
+  （[Findings「調査の作法」](Investigation%20Techniques.md)の setter の話がそのまま当たる）。
+  外接の無い定義が絵として成立しないのは
+  [Findings「シンボル」](Symbols.md)の「定義を組み立てる」と同じ話である。
+- **サブタイプ ＝ その PIO の内部 ID。** 【ソース根拠】`VWSymbolDefObj::HasPluginStyleSupport()`
+  は `GetSymbolDefSubType() > 0` だけを見、`PluginStyleObjectID()` はその値をそのまま返す。
+  内部 ID は**インスタンスから** `VWParametricObj::GetInternalID(h)`（static）で取れる。
+  文書にあったスタイルを読んで突き合わせると、**種別ごとに一致した**（実測）:
+
+  | PIO | 内部 ID（＝スタイルのサブタイプ） |
+  | --- | --- |
+  | `StructuralMember` | 537（インスタンスから取った値と、文書のスタイル 2 本の subType が一致） |
+  | `Title Block Border` | 552 |
+  | `Data Tag` | 599 |
+  | `Drawing Label2` | 642 |
+  | `Section Line2` | 645 |
+  | `GridAxis` | 647 |
+  | `GraphicLegend` | 658 |
+
+- **`IsPluginStyle` はサブタイプだけでなく中身も見る。** 上の ⑤ で `true` だった同じ定義が、
+  **中の PIO が消えた後**は `subType=537` のままでも `false` に変わった（`CreatePluginStyle`
+  に中身を壊された定義を、呼んだ後にもう一度読んだ実測）。**「サブタイプを書けばスタイル」
+  ではない——その種別の PIO が 1 つ入っていることが要る。**
+- **`GetPluginStyleForTool` の戻り値を「スタイルがあるか」と読まない。** 文書に構造材用の
+  スタイルが 2 本ある状態でも、**自分でスタイルを作った直後でも**、
+  `GetPluginStyleForTool("StructuralMember")` は **`true` を返しつつ `ref=0`**
+  だった。これが返すのは「**そのツールにいま設定されているスタイル**」であって、
+  文書にスタイルが在るかではない。**戻り値ではなく `ref` を見る。**
+- **フォルダへ入れたいなら**【ソース根拠】`VWFC::Tools::VWStyleSupport::GetStylesFolder(名前)`
+  （無ければ `CreateSymbolFolder` で作る）と `MoveStyleToFolder(スタイル, フォルダ)`
+  （`AddObjectToContainer` で移す）がそのまま使える。**フォルダは見た目の整理で、
+  スタイルとして効くかには関係しない**（上の手順はフォルダへ入れずに当たっている）。
+- パラメータ 1 つずつの由来を決めたいなら `SetPluginStyleParameterType(定義, 名前, 種別)` /
+  `AddItemToPluginStyle` を使う（種別は `kPluginStyleParameter_ByInstance` /
+  `_ByStyle` / `_AllwaysByInstance` / `_ByCatalog` / `_ByMixed`。`MiniCadCallBacks.h`）。
+  由来表の置き場はシンボル定義のタグ付きデータ（`'PSMP'`）である
+  【ソース根拠】`VWStyleSupport::InitFromSymbolDefinition`。
 
 ## プロファイル（断面）グループは空でないことを確かめる
 
@@ -1034,6 +1351,90 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 構造材ツール（`StructuralMember`）は**パスがそのまま材の範囲**。垂木などを構造材ツールで
 描くなら、パスの始端を支持点ではなく**軒先**にし、その位置・高さ・バウンド offset を
 自分で計算する必要がある。
+
+## 打ち切った調査: 構造材 PIO から「スパン」「部材長」をパラメータで読む
+
+**結論: 構造材 PIO（`StructuralMember`）のパラメータ表に、部材長にもスパンにも当たるものは
+1 件も無い。パラメータ側から部材の長さを読む道は存在しない**——[issue #95](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/95)。
+実体の長さは **`GetCustomObjectPath` で読み戻したパスの両端の距離**で測る（上記
+「高さ・実体を最終的に決めるのは…」の「検算できる。ただし読むのは『作り直しの後』」）。
+**鉛直材なら `StartElevation` / `EndElevation` の差でも測れるが、水平材は両端の Z が
+等しいのが正常**なので、その差は 0 になる——**水平材・斜め材で使えるのはパスの読み戻し
+だけ**である。
+
+### 「無い」と言い切れる根拠（3 つが独立に同じ答えを出している）
+
+1. **パラメータ表の全数列挙（実機）。** 構造材 PIO のパラメータは **181 件**で、
+   その全件の universal 名・ローカライズ名は
+   [issue #82](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/82)
+   の実機実行（VW 2026 / mac・日本語 UI。
+   [実行ログ全文](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/84#issuecomment-5737168941)）で
+   拾ってある（上記「名前の解決は『種別 × 文書』ごとに 1 度でよい」の表）。
+   **`Span` も、部材の軸方向の長さに当たるものも、181 件のどこにも無い。**
+   長さらしい名前は**断面の寸法**（`MajorBreadth` 主幅 / `MinorBreadth` 副幅 /
+   `MajorDepth` 主高さ / `MinorDepth` 副高さ、および同じ値を持つ `B` / `B1` / `D` / `D1`）と
+   **高さ方向のオフセット**（`StartElevation` / `EndElevation` / `StartOffset` /
+   `EndOffset`）だけで、どれも部材長ではない。
+   **同じ種別のインスタンスなら表は常に同一**（値を変えても・ポップアップを倒しても・
+   別文書でも・スタイルを当てても一致）なので、**「別の本なら在るかもしれない」は無い**。
+2. **SDK の全数検索【ヘッダ根拠】。** VW 2026 SDK（mac）の `SDKLib` 全体——`Include` の
+   ヘッダと、同梱の VWFC 実装ソース `Source` の両方——を `[Ss]pan` で検索しても、
+   構造材に関わるものは 1 件も出ない。出るのは
+   `SetObjectAsSpanWallBreak`（**壁を跨ぐシンボルのブレーク**。構造材とは無関係）と
+   `nlohmann/json` の `span_input_adapter`、あとはコメント中の "spanning" だけ
+   （[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35422406982)）。
+   **部材長を返すオブジェクト変数も無い**——`ObjectVariables.h` の `ov*Length*` は
+   寸法の補助線長（`ovDimCustStartWitLength` 等）と塗りの軸長（`ovFillIAxisLength` 等）
+   だけである
+   （[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35422680180)）。
+3. **実運用での全数確認（実機）。** ホームズ君 IFC 取り込みプラグインで
+   `ResolveParamNameAmong(pio, {"Span"}, {"スパン"})` が、**横架材 266 本・垂木 54 本の
+   全数で解決しなかった**（universal 名でもローカライズ名でも引けない。
+   [あちらの PR #124](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/124)）。
+   絵は正しく描けている本での結果なので、「描けていないから引けない」ではない。
+
+### `CenterPointLength(長さ)` は部材長ではない——**センターマークの長さである**【推定】
+
+「長さ」を名前に含むパラメータを全数列挙すると `CenterPointLength(長さ)` の 1 件だけが
+当たるので、**ここが最も踏みやすい罠**である。**これは部材長ではない。**
+
+- **実測が否定している。** 実長 **5333mm** の柱で `CenterPointLength` は **100**
+  （[あちらの PR #124](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/124)）。
+  パラメータ表の既定値も **100**（相方の `CenterPointGap` は 10）で、**部材長と連動していない**。
+- **表の並びが素性を示している。** 索引 153〜160 は
+  `CenterPointMarker`（センターマークを使用）・`CenterPointMarkerClass` …
+  `CenterPointMarkerWeight` と続き、その直後が **159 `CenterPointLength`（長さ）**、
+  **160 `CenterPointGap`（間隔）**である。**この「長さ」は
+  センターマーク（作図記号）の線の長さ**で、部材の長さとは関係が無い【推定】。
+- **教訓: ローカライズ名だけで当てない。** 「長さ」で引き当てたものが部材長とは限らない。
+  **引き当てたら値を実測と突き合わせる**（1 本でも桁が合わなければ別物）。
+
+### では OIP の「スパン」欄は何か——**パラメータではなく計算値**【推定】
+
+OIP には「スパン」の欄が見えている（上記「パスの型を間違えると…」に
+「OIP は『スパン 0 / 長さ 0』」の記録がある）のに、**パラメータ表にその名前が無い**。
+PIO はパラメータに紐づかない欄を OIP へ出せるので、**この欄はパスから毎回計算して
+表示しているだけ**で、**読み書きできる値としては存在しない**と見るのが整合的である
+【推定】。**目視でしか見えないものなので、これ以上は実機でも取りに行けない**——
+そして**取りに行く必要も無い**（読む道が無いことは 1〜3 で確定しており、
+欄の正体が何であっても実装は変わらない）。
+
+### 代わりにどう測るか
+
+```
+MCObjectHandle path = gSDK->GetCustomObjectPath(pio);   // 作り直しの「後」に読む
+// 鉛直材（NURBS）: NurbsCurveGetNumPieces / NurbsGetNumPts / NurbsGetPt3D で両端を取る
+// 水平材（2D ポリライン）: VWPolygon2DObj の GetVertexCount / GetVertexPoint(i)
+```
+
+- **読むのは `ResetObject` の後**（パスはバウンドから作り直される。上記
+  「高さ・実体を最終的に決めるのは…」）。生成直後に読んでも渡した値が返るだけで、
+  実体の長さにはなっていない。
+- **`ResetObject` が触るのは Z の差だけで、水平成分は渡したパスのままビット一致で残る**
+  （上記「鉛直でないパスでは…」「水平成分が 1e-7 以上ある部材は…」）。だから
+  **両端の距離は水平材でも斜め材でもそのまま部材長として読める**。
+- 「実体を持っているか」を数えたいだけなら、**見るべきは鉛直材だけでよい**——水平成分が
+  1e-7 以上ある部材は 0 長の死角に落ちない（上記「水平成分が 1e-7 以上ある部材は…」）。
 
 ## 構造材同士の「自動結合」を作る API は無い【ヘッダ根拠】
 
