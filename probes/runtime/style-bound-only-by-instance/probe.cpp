@@ -11,77 +11,57 @@
 //	`UpdateStyledObjects` でスタイルの持つバウンドに置き換わる**と実機で確定した
 //	（順序では避けられない）。唯一の逃げ道が
 //	`SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByInstance)` で、
-//	これなら書いたバウンドが残る。
+//	これは**全パラメータ**を切り替える——つまり逃げ道は「スタイルをほぼ無力化する」ことと
+//	引き換えだった。取り込みが実際にやりたいのは「**断面や材種はスタイルで揃えつつ、
+//	高さだけは本ごとに指定する**」で、それが作れるかで実プラグインがスタイルを使えるかが決まる。
 //
-//	ところが**この口は名前のとおり全パラメータを切り替える**ので、現状の逃げ道は
-//	「スタイルをほぼ無力化する」ことと引き換えになっている。取り込みが実際にやりたいのは
-//	**「断面や材種はスタイルで揃えつつ、高さだけは本ごとに指定する」**——それが作れるかで、
-//	実プラグインがスタイルを使えるかどうかが決まる。
+//	## 1 度目の実行で分かったこと（2026-09-25 / VW 2026 / mac。PR #119 のコメント）
 //
-//	## 先に SDK のソースで潰したこと（実機へ持っていく前に分かったもの）
+//	  * **1 つずつ切り替える口は効く。** 181 件すべてが by-style / by-instance を往復し、
+//	    `SetAllPluginStyleParameters` は表の全件に行き渡る（外れ値ゼロ）。
+//	  * **バウンドは名前付きパラメータ 1 つに紐づいていた**——181 件を両方向に総当たりして、
+//	    **どちらの向きでも `DialogStartElevationReference` ただ 1 件**が動いた。
+//	    「バウンドはパラメータではないから名指しできない」という読みは誤りだった。
+//	  * よって**求めていた形は作れる**見込み: 全件 by-style にしたうえで、その 1 件だけを
+//	    `SetPluginStyleParameterType(..., kPluginStyleParameter_ByInstance)` にする。
 //
-//	**VWFC の参照実装では、由来表（`'PSMP'`）の鍵は「パラメータ名」しかない。**
-//	【ソース根拠】`Source/VWSDK/VWFC/Tools/VWStyleSupport.cpp`:
+//	## この 2 度目で取りに行くもの
 //
-//	    bool VWStyleSupport::CreateUnstyledMap( MCObjectHandle hObject ) {
-//	        VWParametricObj paramObj( hObject );
-//	        size_t numOfFields = paramObj.GetParamsCount();
-//	        for (size_t i = 0; i < numOfFields; i++) {
-//	            TXString name = paramObj.GetParamName( i );   // ← 鍵はパラメータ名だけ
-//	            ... fmapStyleInfo.insert( TStyleInfo_Pair( name, sInfo ) );
-//	        }
-//	    }
-//	    bool VWStyleSupport::SetAllStyleTypes( EPluginStyleParameter styleType ) {
-//	        for ( iter = fmapStyleInfo.begin(); iter != fmapStyleInfo.end(); iter++ )
-//	            iter->second.styleType = styleType;        // ← 表の全件を舐めるだけ
-//	    }
+//	  1. **その作り方が本当に実用になるか。** 1 度目の G 群は**別の作り方（全件 by-style）で
+//	     測ってしまっていた**ので、「高さは本ごと・断面はスタイルで揃う」の確認になっていない。
+//	     今回は**掃引で見つけた名前をそのまま使う**（名前を決め打ちしない）。
+//	  2. **物差しが片方の端しか見ていなかった。** 1 度目は「書く 2500/2500・スタイル
+//	     2500/5500」だったので、**差が出るのは終端（ID 1）だけ**だった。`DialogStart…` と
+//	     いう名前なのに終端が動いているのは筋が通らないので、**書く値を 3000/3000**（スタイルの
+//	     どちらとも違う）に替え、**ID 0 と ID 1 を別々に判定**する。始端と終端で別の名前が
+//	     要るなら、ここで出る。
+//	  3. **副産物の切り分け。** 1 度目の G 群では、`ResetObject` で作り直した本は
+//	     `MemberID` / `MajorBreadth` が**インスタンスの値のまま**だったのに、
+//	     `UpdateStyledObjects` を流した本は**スタイルの値**になっていた。**バウンドは
+//	     `ResetObject` でも配られるのに、パラメータの値は配られない**ように見える。
+//	     同じ本を流す前後で読み直して確かめる。
 //
-//	つまり「全部」とは**パラメータ表の全件**のことで、そこにバウンドの席は無い。
-//	**にもかかわらず #112 ではバウンドが by-style / by-instance に従った**——この食い違いが
-//	調査の核心で、**ここから先はヘッダでは決められない**（VW 本体側の
-//	`SetAllPluginStyleParameters` が VWFC の参照実装と同じとは限らない）。
+//	## 群
 //
-//	## 何をどう切り分けるか
-//
-//	判定はどの群も同じ「物差し」で行う。**水平材（両端とも offset 2500 で書く）に、
-//	バウンド 2500 / 5500 のスタイルを当てて `ResetObject` する**。
-//
-//	  * 解決バウンドが 2500 / 2500 のまま → **バウンドは自由**（by-instance のふるまい）
-//	  * 解決バウンドが 2500 / 5500 になる → **バウンドはスタイルに取られた**
-//
-//	  A 群 … 下ごしらえ。パラメータ表を全数列挙し、スタイルを 1 本作る。
-//	  B 群 … **1 つずつ切り替える口は本当に効くのか。** `SetPluginStyleParameterType` で
-//	          書いて `GetPluginStyleParameterType` で読み戻す。`SetAllPluginStyleParameters`
-//	          が表の全件に行き渡るのかも、ここで全数確認する（issue の 3 ＝
-//	          「バウンドを名指しできる名前があるか」への答えでもある——**全件が揃って
-//	          動くなら、バウンドだけ別扱いになっている席は表に無い**）。
-//	  C 群 … **名指しで全部 by-instance にすると、バウンドは自由になるか**（issue の 1）。
-//	          自由になるなら、バウンドは**名前で届く**。ならないなら、
-//	          `SetAllPluginStyleParameters` は名前の表以外の何かも書いている。
-//	  D 群 … **逆向き。全部 by-instance にした後、名指しで全部 by-style へ戻す**
-//	          （issue の 2）。**バウンドが自由なままなら、それが求めている形そのもの**
-//	          ——「他は全部スタイル、バウンドだけ本ごと」。
-//	  E 群 … **挟み撃ち（掃引）。** 全部 by-style の状態から**1 つだけ**by-instance にして
-//	          181 通り試し、バウンドが自由になる名前を探す。
-//	  F 群 … **逆の掃引。** 全部 by-instance の状態から**1 つだけ**by-style へ戻して
-//	          181 通り試し、バウンドを取る名前を探す。**D 群が「取られる」だったときは、
-//	          ここで見つかった名前だけを by-instance に残せばよい**ことになる。
-//	  G 群 … **実用形の総合確認。** D 群（または F 群）で分かった作り方でスタイルを組み、
-//	          **①高さは本ごとに別々** ②**断面・材種はスタイルで揃う** ③`ResetObject` でも
-//	          `UpdateStyledObjects` でも成り立つ、の 3 つを同時に確かめる。
-//	          **②が崩れていたら「スタイルを使えている」とは言えない**ので、
-//	          パラメータの値（`MemberID` ＝テキスト、`MajorBreadth` ＝実数）が
-//	          スタイル側の値に揃うかまで読む。
-//
-//	掃引（E / F）は**同じスタイル 1 本を使い回して由来表だけ書き換える**（毎回スタイルを
-//	作ると資源が 362 本増えるため）。判定に使う材は毎回作り直す。
+//	  A 群 … 下ごしらえ。パラメータ表を数え、**高さに関わる名前だけ**を並べる
+//	          （181 件の全一覧は 1 度目の結果コメントに残っているので繰り返さない）。
+//	  B 群 … `SetAllPluginStyleParameters` が表の全件に行き渡ることの再確認。
+//	  C 群 … **掃引。** 全件 by-style から**1 つだけ**by-instance にして総当たりし、
+//	          **ID 0 が自由になる名前**と**ID 1 が自由になる名前**を別々に集める。
+//	  D 群 … **逆の掃引。** 全件 by-instance から**1 つだけ**by-style へ戻して総当たりし、
+//	          **ID 0 / ID 1 を取る名前**を別々に集める。
+//	  E 群 … **C 群で見つかった名前だけを裏返した形**（＝求めている形）で、両端とも
+//	          自由になるかを確かめる。
+//	  F 群 … **実用形の総合確認。** E 群の形で本を 6 つ置き、①高さは本ごとに別々
+//	          ②断面・材種（`MemberID` / `MajorBreadth`）はスタイルで揃う、を
+//	          **`ResetObject` 経路と `UpdateStyledObjects` 経路の両方**で見る。
+//	          **`UpdateStyledObjects` を流した後に 6 つ全部を読み直す**ので、
+//	          上記 3（値がいつ配られるか）もここで決まる。
 //
 //	## 読み方
 //
 //	各群の末尾に「→ 判定:」の 1 行を出す。掃引は**baseline と違う結果になった名前だけ**を
-//	並べる（181 行を全部出さない）ので、「（該当なし）」ならその向きでは 1 つも動かない。
-//
-//	プローブは新規の空図面で走る前提で、undo イベントは開かない。
+//	並べる。プローブは新規の空図面で走る前提で、undo イベントは開かない。
 //
 
 #include "Probe.h"
@@ -96,14 +76,19 @@ namespace
 	// -----------------------------------------------------------------------
 	// 形の定数。**新規の空図面（レイヤ高さ 0）では `LayerElevation` の offset が
 	// そのまま解決Zになる**（#81 / #109 / #112 と同じ置き方）。
-	const double kElevLow = 2500; // 対象に書く offset（両端とも）
-	const double kElevHigh = 5500; // スタイルが持つ上端 offset（＝書いた値と食い違う）
-	const double kPlanar = 2000; // 水平材の平面上の長さ
+	//
+	// **物差しは両端で効かせる。** 書く値をスタイルのどちらの端とも違う 3000 にすると、
+	// 「ID 0 が自由か」「ID 1 が自由か」を別々に読める（1 度目は書く値の片方が
+	// スタイルと同じだったので、始端の動きが見えなかった）。
+	const double kWant = 3000;		// 対象に書く offset（両端とも）
+	const double kStyleLow = 2500;	// スタイルが持つ下端 offset
+	const double kStyleHigh = 5500; // スタイルが持つ上端 offset
+	const double kPlanar = 2000;	// 水平材の平面上の長さ
 
 	// 一致と見なす窓。作り直しは 1〜2 ULP の残差を残す（#67 / #71）ので 1e-6 で見る。
 	const double kEpsilon = 1e-6;
 
-	// G 群で「スタイル側の値が流れてくるか」を見るための、見分けの付く値。
+	// F 群で「スタイル側の値が流れてくるか」を見るための、見分けの付く値。
 	const char* const kStyleMemberID = "STYLE-GAWA";
 	const char* const kInstanceMemberID = "HON-GOTO";
 	const double kStyleBreadth = 300;
@@ -146,6 +131,11 @@ namespace
 		return TXString(value.c_str());
 	}
 
+	bool Contains(const std::string& haystack, const char* needle)
+	{
+		return haystack.find(needle) != std::string::npos;
+	}
+
 	// 由来の種別を読める形に。**`EPluginStyleParameter` は `short` の typedef**
 	// （`MiniCadCallBacks.h:1338`）なので、知らない値もそのまま数字で出す。
 	std::string DescribeStyleType(EPluginStyleParameter type)
@@ -168,8 +158,7 @@ namespace
 	}
 
 	// -----------------------------------------------------------------------
-	// 読み戻し。**バウンドのレコードと解決した絶対Z**をひと揃いで取る（#112 の Snap を
-	// この調査に要るぶんだけ残したもの）。
+	// 読み戻し。**バウンドのレコードと解決した絶対Z**をひと揃いで取る。
 	struct Snap
 	{
 		bool pathOk = false;
@@ -220,12 +209,6 @@ namespace
 		return snap;
 	}
 
-	// **この調査の物差し。** 書いた 2500 / 2500 が残っていれば「バウンドは自由」。
-	bool BoundStayed(const Snap& snap)
-	{
-		return Near(snap.resolved[0], kElevLow) && Near(snap.resolved[1], kElevLow);
-	}
-
 	std::string DescribeSnap(const Snap& snap)
 	{
 		return "Δz=" + Num(snap.dz) + " 挿入点Z=" + Num(snap.insertZ) +
@@ -235,10 +218,25 @@ namespace
 			   " ／ styleRef=" + Count(static_cast<long long>(snap.styleRef));
 	}
 
-	std::string Verdict(const Snap& snap)
+	// **この調査の物差し。** ID ごとに「書いた値が残ったか」を別々に読む。
+	struct Freedom
 	{
-		return BoundStayed(snap) ? "**バウンドは自由（書いた 2500/2500 のまま）**"
-								 : "**バウンドはスタイルに取られた**";
+		bool free0 = false;
+		bool free1 = false;
+	};
+
+	Freedom Judge(const Snap& snap, double want0, double want1)
+	{
+		Freedom freedom;
+		freedom.free0 = Near(snap.resolved[0], want0);
+		freedom.free1 = Near(snap.resolved[1], want1);
+		return freedom;
+	}
+
+	std::string DescribeFreedom(const Freedom& freedom)
+	{
+		return std::string("ID0=") + (freedom.free0 ? "**自由**" : "**取られた**") +
+			   " ／ ID1=" + (freedom.free1 ? "**自由**" : "**取られた**");
 	}
 
 	// -----------------------------------------------------------------------
@@ -278,10 +276,9 @@ namespace
 		return gSDK->CreateCustomObjectPath("StructuralMember", curve, noProfile, true);
 	}
 
-	// この調査でずっと使う「対象」——**水平材**（平面長 2000・Z 差 0）に、
-	// 書きたいバウンド（両端とも 2500）を書いたもの。
+	// 対象（**水平材**）を作り、書きたいバウンドを両端へ書く。
 	MCObjectHandle CreateTargetWithBounds(vwprobe::Report& probe, const std::string& where,
-										  double lowOffset, double highOffset)
+										  double low, double high)
 	{
 		MCObjectHandle pio = CreateBare(kPlanar, 0, 0);
 		if (pio == nullptr)
@@ -289,25 +286,26 @@ namespace
 			probe.fail(where + ": 対象を作れなかった");
 			return nullptr;
 		}
-		WriteLayerElevationBound(pio, 0, lowOffset);
-		WriteLayerElevationBound(pio, 1, highOffset);
+		WriteLayerElevationBound(pio, 0, low);
+		WriteLayerElevationBound(pio, 1, high);
 		return pio;
 	}
 
 	// 物差しを 1 回引く: 対象を作る → スタイルを当てる → `ResetObject` → 読む。
-	Snap MeasureWithReset(vwprobe::Report& probe, const std::string& where, RefNumber styleRef)
+	Freedom MeasureWithReset(vwprobe::Report& probe, const std::string& where, RefNumber styleRef,
+							 Snap& snapOut)
 	{
-		Snap snap;
-		MCObjectHandle pio = CreateTargetWithBounds(probe, where, kElevLow, kElevLow);
+		MCObjectHandle pio = CreateTargetWithBounds(probe, where, kWant, kWant);
 		if (pio == nullptr)
-			return snap;
+			return Freedom();
 		gSDK->SetPluginObjectStyle(pio, styleRef);
 		gSDK->ResetObject(pio);
-		return Read(pio);
+		snapOut = Read(pio);
+		return Judge(snapOut, kWant, kWant);
 	}
 
 	// -----------------------------------------------------------------------
-	// A 群: プラグインスタイルを 1 本作る（#98 で確かめた手順。**`CreatePluginStyle` は
+	// プラグインスタイルを 1 本作る（#98 で確かめた手順。**`CreatePluginStyle` は
 	// 呼んではいけない**——文書の PIO が全滅する）。
 	//
 	// **`Style` と名乗らない。** macOS の `MacTypes.h` が `typedef unsigned char Style;` を
@@ -317,14 +315,11 @@ namespace
 	{
 		RefNumber ref = 0;
 		MCObjectHandle symDef = nullptr;
-		std::string label;
 	};
 
-	ProbeStyle MakeStyle(vwprobe::Report& probe, const std::string& label, bool byInstance,
-						 bool distinctiveParams)
+	ProbeStyle MakeStyle(vwprobe::Report& probe, const std::string& label)
 	{
 		ProbeStyle style;
-		style.label = label;
 
 		MCObjectHandle seed = CreateBare(0, 0, 0);
 		if (seed == nullptr)
@@ -332,16 +327,13 @@ namespace
 			probe.fail("A: " + label + " の元にする部材を作れなかった");
 			return style;
 		}
-		// 元にする材は**鉛直材で 2500 / 5500**。当てた先の「書いた値（2500/2500）」と
-		// 食い違うので、取られたかどうかが一目で分かる。
-		WriteLayerElevationBound(seed, 0, kElevLow);
-		WriteLayerElevationBound(seed, 1, kElevHigh);
-		if (distinctiveParams)
-		{
-			VWParametricObj seedObj(seed);
-			seedObj.SetParamString("MemberID", kStyleMemberID);
-			seedObj.SetParamReal("MajorBreadth", kStyleBreadth);
-		}
+		// 元にする材のバウンドは 2500 / 5500。**対象が書く 3000 / 3000 とは
+		// 両端とも違う**ので、取られた端が一目で分かる。
+		WriteLayerElevationBound(seed, 0, kStyleLow);
+		WriteLayerElevationBound(seed, 1, kStyleHigh);
+		VWParametricObj seedObj(seed);
+		seedObj.SetParamString("MemberID", kStyleMemberID);
+		seedObj.SetParamReal("MajorBreadth", kStyleBreadth);
 		gSDK->ResetObject(seed);
 
 		// **名前がぶつかると `CreateSymbolDefinition` は nil を返す**（同じ図面で 2 度
@@ -365,15 +357,15 @@ namespace
 		gSDK->ResetObject(symDef); // **サブタイプを書く前に通す**（#98）
 		const Sint32 internalID = static_cast<Sint32>(VWParametricObj::GetInternalID(seed));
 		gSDK->SetSymbolDefSubType(symDef, internalID);
-		gSDK->SetAllPluginStyleParameters(symDef, byInstance ? kPluginStyleParameter_ByInstance
-															 : kPluginStyleParameter_ByStyle);
+		gSDK->SetAllPluginStyleParameters(symDef, kPluginStyleParameter_ByStyle);
 
 		const bool isStyle = gSDK->IsPluginStyle(symDef);
 		const RefNumber ref = static_cast<RefNumber>(gSDK->GetObjectInternalIndex(symDef));
 		probe.log("  " + label + ": 名前=\"" + Str(used) + "\" ／ 中へ入れた=" + YesNo(added) +
 				  " ／ IsPluginStyle=" + YesNo(isStyle) +
-				  " ／ ref=" + Count(static_cast<long long>(ref)) +
-				  " ／ 既定の由来=" + (byInstance ? "by-instance" : "by-style"));
+				  " ／ ref=" + Count(static_cast<long long>(ref)) + " ／ バウンド " +
+				  Num(kStyleLow) + "/" + Num(kStyleHigh) + " ／ MemberID=\"" + kStyleMemberID +
+				  "\" ／ MajorBreadth=" + Num(kStyleBreadth));
 		if (!isStyle || ref == 0)
 		{
 			probe.fail("A: " + label + " をプラグインスタイルにできなかった");
@@ -384,7 +376,7 @@ namespace
 		return style;
 	}
 
-	// 由来表を「全件 <type>」にしてから、名前を 1 つだけ別の由来にする。
+	// 由来表を「全件 <base>」にしてから、名前を 1 つだけ <flipped> にする。
 	// `flipIndex` が names の範囲外なら、1 つも裏返さない（baseline 用）。
 	void ShapeMap(const ProbeStyle& style, const std::vector<std::string>& names,
 				  EPluginStyleParameter base, size_t flipIndex, EPluginStyleParameter flipped)
@@ -394,21 +386,11 @@ namespace
 			gSDK->SetPluginStyleParameterType(style.symDef, Tx(names[flipIndex]), flipped);
 	}
 
-	// 由来表を「名指しで全件 <type>」にする（`SetAllPluginStyleParameters` は使わない）。
-	void SetEveryNameTo(const ProbeStyle& style, const std::vector<std::string>& names,
-						EPluginStyleParameter type)
-	{
-		for (size_t i = 0; i < names.size(); ++i)
-			gSDK->SetPluginStyleParameterType(style.symDef, Tx(names[i]), type);
-	}
-
-	// 由来表を全件読み、種別ごとに数える。`expected` と違う名前は `outliers` へ。
-	std::string TallyMap(MCObjectHandle target, const std::vector<std::string>& names,
-						 EPluginStyleParameter expected, std::vector<std::string>& outliers)
+	// 由来表を全件読み、種別ごとに数える。
+	std::string TallyMap(MCObjectHandle target, const std::vector<std::string>& names)
 	{
 		long long counts[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 		long long other = 0;
-		outliers.clear();
 		for (size_t i = 0; i < names.size(); ++i)
 		{
 			const EPluginStyleParameter type =
@@ -417,8 +399,6 @@ namespace
 				++counts[type];
 			else
 				++other;
-			if (type != expected && outliers.size() < kListLimit)
-				outliers.push_back(names[i] + "=" + DescribeStyleType(type));
 		}
 		std::string text;
 		for (int type = 0; type < 8; ++type)
@@ -451,12 +431,49 @@ namespace
 		return text;
 	}
 
+	void AddUnique(std::vector<std::string>& into, const std::string& name)
+	{
+		for (size_t i = 0; i < into.size(); ++i)
+		{
+			if (into[i] == name)
+				return;
+		}
+		into.push_back(name);
+	}
+
+	// F 群で置く本 1 つぶん。
+	struct Bar
+	{
+		MCObjectHandle pio = nullptr;
+		std::string label;
+		double low = 0;
+		double high = 0;
+	};
+
+	void LogBar(vwprobe::Report& probe, const Bar& bar, const std::string& when)
+	{
+		if (bar.pio == nullptr)
+			return;
+		const Snap snap = Read(bar.pio);
+		const Freedom freedom = Judge(snap, bar.low, bar.high);
+		VWParametricObj obj(bar.pio);
+		const std::string memberID = Str(obj.GetParamValue("MemberID"));
+		const double breadth = obj.GetParamReal("MajorBreadth");
+		probe.log("    " + bar.label + " " + when + ": " + DescribeSnap(snap));
+		probe.log("      書いた " + Num(bar.low) + "/" + Num(bar.high) + " のままか: " +
+				  DescribeFreedom(freedom) + " ／ MemberID=\"" + memberID + "\"（スタイル側=" +
+				  (memberID == std::string(kStyleMemberID) ? "**はい**" : "**いいえ**") +
+				  "） ／ MajorBreadth=" + Num(breadth) + "（スタイル側=" +
+				  (Near(breadth, kStyleBreadth) ? "**はい**" : "**いいえ**") + "）");
+	}
+
 } // namespace
 
 VW_PROBE("style-bound-only-by-instance", "バウンドだけ by-instance のプラグインスタイルは作れるか",
-		 "構造材のパラメータ表を全数列挙し、由来（by-style / by-instance）を"
-		 "名指しで組み替えながら、書いたストーリバウンドがスタイルに取られるかを測る。"
-		 "『他はスタイルで揃え、高さだけ本ごと』が作れるかに yes / no で答える。"
+		 "構造材のパラメータ表の由来（by-style / by-instance）を 1 つずつ組み替えて総当たりし、"
+		 "ストーリバウンドを握っている名前を ID 0 / ID 1 別に特定する。"
+		 "見つけた名前だけを by-instance にした形で、"
+		 "『高さは本ごと・断面はスタイルで揃う』が本当に成り立つかまで確かめる。"
 		 "新規の空図面で走らせること")
 {
 	// =======================================================================
@@ -468,15 +485,14 @@ VW_PROBE("style-bound-only-by-instance", "バウンドだけ by-instance のプ�
 			gSDK->GetObjectName(currentLayer, layerName);
 		probe.log(std::string("いまのレイヤ: \"") + Str(layerName) + "\"");
 		probe.log("物差し: **水平材**（平面長 " + Num(kPlanar) + " ／ Z 差 0）に両端とも offset " +
-				  Num(kElevLow) + " を書き、**バウンド " + Num(kElevLow) + " / " + Num(kElevHigh) +
+				  Num(kWant) + " を書き、**バウンド " + Num(kStyleLow) + " / " + Num(kStyleHigh) +
 				  " のスタイル**を当てて `ResetObject` する");
-		probe.log("  解決が " + Num(kElevLow) + "/" + Num(kElevLow) +
-				  " のまま → **バウンドは自由** ／ " + Num(kElevLow) + "/" + Num(kElevHigh) +
-				  " になる → **スタイルに取られた**");
+		probe.log("  書く値はスタイルの**どちらの端とも違う**ので、**ID 0 と ID 1 を別々に**"
+				  "判定できる（1 度目は終端しか見えていなかった）");
 	}
 
 	// =======================================================================
-	probe.log("=== A. パラメータ表を全数列挙し、スタイルを 2 本作る ===");
+	probe.log("=== A. パラメータ表を数え、高さに関わる名前を並べる ===");
 	std::vector<std::string> names;
 	{
 		MCObjectHandle sample = CreateBare(kPlanar, 0, 0);
@@ -494,20 +510,18 @@ VW_PROBE("style-bound-only-by-instance", "バウンドだけ by-instance のプ�
 			if (!name.empty())
 				names.push_back(name);
 		}
-		probe.log("  名前を引けたもの: " + Count(static_cast<long long>(names.size())) + " 件" +
-				  (count > kSweepLimit ? "（上限 " + Count(kSweepLimit) + " で打ち切り）" : ""));
-		// 10 件ずつ並べる。**掃引で動いた名前を突き合わせるための一覧**なので省略しない。
-		for (size_t i = 0; i < names.size(); i += 10)
+		probe.log("  名前を引けたもの: " + Count(static_cast<long long>(names.size())) +
+				  " 件（**181 件の全一覧は 1 度目の結果コメントに残っている**ので繰り返さない）");
+		// 高さ・階・バウンドに関わりそうな名前だけを並べる（掃引の結果と突き合わせる用）。
+		std::vector<std::string> related;
+		for (size_t i = 0; i < names.size(); ++i)
 		{
-			std::string line = "    [" + Count(static_cast<long long>(i)) + "] ";
-			for (size_t j = i; j < i + 10 && j < names.size(); ++j)
-			{
-				if (j != i)
-					line += ", ";
-				line += names[j];
-			}
-			probe.log(line);
+			if (Contains(names[i], "Elev") || Contains(names[i], "Story") ||
+				Contains(names[i], "Bound") || Contains(names[i], "Level") ||
+				Contains(names[i], "Height") || Contains(names[i], "Dialog"))
+				related.push_back("[" + Count(static_cast<long long>(i)) + "]" + names[i]);
 		}
+		probe.log("  高さ・階・バウンドに関わりそうな名前: " + JoinList(related));
 		if (names.empty())
 		{
 			probe.fail("A: パラメータ名を 1 つも引けなかった（以降の群は成立しない）");
@@ -515,7 +529,7 @@ VW_PROBE("style-bound-only-by-instance", "バウンドだけ by-instance のプ�
 		}
 	}
 
-	const ProbeStyle work = MakeStyle(probe, "作業用", false, true);
+	const ProbeStyle work = MakeStyle(probe, "作業用");
 	if (work.ref == 0 || work.symDef == nullptr)
 	{
 		probe.fail("A: 作業用スタイルを作れなかった（以降の群は成立しない）");
@@ -523,208 +537,162 @@ VW_PROBE("style-bound-only-by-instance", "バウンドだけ by-instance のプ�
 	}
 
 	// =======================================================================
-	probe.log("=== B. 1 つずつ切り替える口は効くのか（by-style / by-instance の読み戻し） ===");
+	probe.log("=== B. 一括の口が表の全件に行き渡るか（1 度目の再確認） ===");
 	{
-		std::vector<std::string> outliers;
-
 		gSDK->SetAllPluginStyleParameters(work.symDef, kPluginStyleParameter_ByStyle);
-		probe.log("  `SetAllPluginStyleParameters(ByStyle)` の後（定義から読む）: " +
-				  TallyMap(work.symDef, names, kPluginStyleParameter_ByStyle, outliers));
-		probe.log("    by-style でなかった名前: " + JoinList(outliers));
-
+		probe.log("  `SetAllPluginStyleParameters(ByStyle)` の後: " + TallyMap(work.symDef, names));
 		gSDK->SetAllPluginStyleParameters(work.symDef, kPluginStyleParameter_ByInstance);
-		probe.log("  `SetAllPluginStyleParameters(ByInstance)` の後（定義から読む）: " +
-				  TallyMap(work.symDef, names, kPluginStyleParameter_ByInstance, outliers));
-		probe.log("    by-instance でなかった名前: " + JoinList(outliers));
-
-		// 1 つだけ裏返して読み戻す（**書けたことを読み戻さずに信じない**）。
-		gSDK->SetAllPluginStyleParameters(work.symDef, kPluginStyleParameter_ByStyle);
-		const std::string first = names[0];
-		gSDK->SetPluginStyleParameterType(work.symDef, Tx(first), kPluginStyleParameter_ByInstance);
-		probe.log("  `SetPluginStyleParameterType(\"" + first + "\", ByInstance)` の読み戻し: " +
-				  DescribeStyleType(gSDK->GetPluginStyleParameterType(work.symDef, Tx(first))) +
-				  " ／ 隣の \"" + names[names.size() > 1 ? 1 : 0] + "\" は " +
-				  DescribeStyleType(gSDK->GetPluginStyleParameterType(
-					  work.symDef, Tx(names[names.size() > 1 ? 1 : 0]))));
-
-		// **`GetPluginStyleParameterType` の第 1 引数は「object」**（`ISDK.h:2921`）。
-		// 定義とインスタンスのどちらを受けるのかはヘッダからは決まらないので両方引く。
-		MCObjectHandle probeInstance = CreateTargetWithBounds(probe, "B", kElevLow, kElevLow);
-		if (probeInstance != nullptr)
-		{
-			gSDK->SetPluginObjectStyle(probeInstance, work.ref);
-			probe.log(
-				"  同じ名前をインスタンスから読む: " +
-				DescribeStyleType(gSDK->GetPluginStyleParameterType(probeInstance, Tx(first))));
-		}
-
-		// 表に無い名前を引くと何が返るか（「バウンドを名指しできる名前」を探すときの物差し）。
-		probe.log("  表に無い名前（\"VwProbeNoSuchParam\"）を引くと: " +
-				  DescribeStyleType(gSDK->GetPluginStyleParameterType(
-					  work.symDef, TXString("VwProbeNoSuchParam"))));
-		probe.log("  → 判定: 全件が揃って by-style / by-instance を往復するなら、"
-				  "**由来表の席はパラメータ名だけ**で、バウンド専用の名前は無い（issue の 3）");
+		probe.log("  `SetAllPluginStyleParameters(ByInstance)` の後: " +
+				  TallyMap(work.symDef, names));
 	}
 
 	// =======================================================================
-	probe.log("=== C. 名指しで全部 by-instance にすると、バウンドは自由になるか（issue の 1） ===");
+	probe.log("=== C. 掃引: 全件 by-style から 1 つだけ by-instance にする ===");
+	std::vector<std::string> freeing0;
+	std::vector<std::string> freeing1;
 	{
-		// 対照 1: `SetAllPluginStyleParameters(ByStyle)`（#112 の既知の形）
-		gSDK->SetAllPluginStyleParameters(work.symDef, kPluginStyleParameter_ByStyle);
-		const Snap byStyle = MeasureWithReset(probe, "C", work.ref);
-		probe.log("  C1 一括 by-style（対照・#112 で取られた形）: " + DescribeSnap(byStyle));
-		probe.log("     → " + Verdict(byStyle));
-
-		// 対照 2: `SetAllPluginStyleParameters(ByInstance)`（#112 の逃げ道）
-		gSDK->SetAllPluginStyleParameters(work.symDef, kPluginStyleParameter_ByInstance);
-		const Snap byInstance = MeasureWithReset(probe, "C", work.ref);
-		probe.log("  C2 一括 by-instance（対照・#112 の逃げ道）: " + DescribeSnap(byInstance));
-		probe.log("     → " + Verdict(byInstance));
-
-		// 本題: 一括の口を使わず、**名指しで全件**を by-instance にする。
-		gSDK->SetAllPluginStyleParameters(work.symDef, kPluginStyleParameter_ByStyle);
-		SetEveryNameTo(work, names, kPluginStyleParameter_ByInstance);
-		const Snap named = MeasureWithReset(probe, "C", work.ref);
-		probe.log("  C3 **名指しで全件 by-instance**: " + DescribeSnap(named));
-		probe.log("     → " + Verdict(named));
-
-		probe.log(std::string("  → 判定: C3 が C2 と同じなら、**バウンドは名前で届いている**"
-							  "（どれかの名前に紐づく）。C3 が C1 と同じなら、"
-							  "**`SetAllPluginStyleParameters` は名前の表以外の何かも書いている**"
-							  "——名指しでは届かない。実測: C1=") +
-				  (BoundStayed(byStyle) ? "自由" : "取られた") +
-				  " ／ C2=" + (BoundStayed(byInstance) ? "自由" : "取られた") +
-				  " ／ C3=" + (BoundStayed(named) ? "自由" : "取られた"));
-	}
-
-	// =======================================================================
-	probe.log("=== D. 一括 by-instance の後、名指しで全部 by-style へ戻す（issue の 2） ===");
-	bool recipeWorks = false;
-	{
-		gSDK->SetAllPluginStyleParameters(work.symDef, kPluginStyleParameter_ByInstance);
-		SetEveryNameTo(work, names, kPluginStyleParameter_ByStyle);
-
-		std::vector<std::string> outliers;
-		probe.log("  由来表の読み戻し: " +
-				  TallyMap(work.symDef, names, kPluginStyleParameter_ByStyle, outliers));
-		probe.log("    by-style でなかった名前: " + JoinList(outliers));
-
-		const Snap snap = MeasureWithReset(probe, "D", work.ref);
-		probe.log("  結果: " + DescribeSnap(snap));
-		recipeWorks = BoundStayed(snap);
-		probe.log("  → 判定: " + Verdict(snap) +
-				  "。**自由なら、これが求めている形そのもの**"
-				  "——名前を持つパラメータは全部スタイル、バウンドだけ本ごと");
-	}
-
-	// =======================================================================
-	probe.log("=== E. 掃引: 全部 by-style から 1 つだけ by-instance にする ===");
-	{
+		Snap snap;
 		ShapeMap(work, names, kPluginStyleParameter_ByStyle, names.size(),
 				 kPluginStyleParameter_ByStyle);
-		const Snap baseline = MeasureWithReset(probe, "E", work.ref);
-		probe.log("  baseline（1 つも裏返さない）: " + Verdict(baseline));
+		const Freedom baseline = MeasureWithReset(probe, "C", work.ref, snap);
+		probe.log("  baseline（1 つも裏返さない）: " + DescribeFreedom(baseline) + " ／ " +
+				  DescribeSnap(snap));
 
-		std::vector<std::string> hits;
-		size_t tried = 0;
 		for (size_t i = 0; i < names.size(); ++i)
 		{
 			ShapeMap(work, names, kPluginStyleParameter_ByStyle, i,
 					 kPluginStyleParameter_ByInstance);
-			const Snap snap = MeasureWithReset(probe, "E", work.ref);
-			++tried;
-			if (BoundStayed(snap) != BoundStayed(baseline))
-				hits.push_back(names[i]);
+			const Freedom freedom = MeasureWithReset(probe, "C", work.ref, snap);
+			if (freedom.free0 != baseline.free0)
+				freeing0.push_back(names[i]);
+			if (freedom.free1 != baseline.free1)
+				freeing1.push_back(names[i]);
 		}
-		probe.log("  試した件数=" + Count(static_cast<long long>(tried)));
-		probe.log("  **baseline と違う結果になった名前**: " + JoinList(hits));
-		probe.log("  → 判定: 1 件でもあれば、**バウンドはその名前に紐づいている**"
-				  "（＝その名前だけ by-instance にすれば、他はスタイルのままにできる）");
+		probe.log("  試した件数=" + Count(static_cast<long long>(names.size())));
+		probe.log("  **ID 0（始端）が自由になった名前**: " + JoinList(freeing0));
+		probe.log("  **ID 1（終端）が自由になった名前**: " + JoinList(freeing1));
+		probe.log("  → 判定: 両方に同じ名前が並べば、**1 つの名前が両端を握っている**。"
+				  "別々なら**端ごとに名前が要る**");
 	}
 
 	// =======================================================================
-	probe.log("=== F. 掃引: 全部 by-instance から 1 つだけ by-style へ戻す ===");
+	probe.log("=== D. 逆の掃引: 全件 by-instance から 1 つだけ by-style へ戻す ===");
 	{
+		Snap snap;
 		ShapeMap(work, names, kPluginStyleParameter_ByInstance, names.size(),
 				 kPluginStyleParameter_ByInstance);
-		const Snap baseline = MeasureWithReset(probe, "F", work.ref);
-		probe.log("  baseline（1 つも戻さない）: " + Verdict(baseline));
+		const Freedom baseline = MeasureWithReset(probe, "D", work.ref, snap);
+		probe.log("  baseline（1 つも戻さない）: " + DescribeFreedom(baseline) + " ／ " +
+				  DescribeSnap(snap));
 
-		std::vector<std::string> hits;
-		size_t tried = 0;
+		std::vector<std::string> taking0;
+		std::vector<std::string> taking1;
 		for (size_t i = 0; i < names.size(); ++i)
 		{
 			ShapeMap(work, names, kPluginStyleParameter_ByInstance, i,
 					 kPluginStyleParameter_ByStyle);
-			const Snap snap = MeasureWithReset(probe, "F", work.ref);
-			++tried;
-			if (BoundStayed(snap) != BoundStayed(baseline))
-				hits.push_back(names[i]);
+			const Freedom freedom = MeasureWithReset(probe, "D", work.ref, snap);
+			if (freedom.free0 != baseline.free0)
+				taking0.push_back(names[i]);
+			if (freedom.free1 != baseline.free1)
+				taking1.push_back(names[i]);
 		}
-		probe.log("  試した件数=" + Count(static_cast<long long>(tried)));
-		probe.log("  **baseline と違う結果になった名前**: " + JoinList(hits));
-		probe.log("  → 判定: ここに並んだ名前が**バウンドを取る名前**。"
-				  "D 群が「取られた」だったときは、**この名前だけを by-instance に残せば**"
-				  "『他はスタイル・高さは本ごと』になる");
+		probe.log("  試した件数=" + Count(static_cast<long long>(names.size())));
+		probe.log("  **ID 0（始端）を取った名前**: " + JoinList(taking0));
+		probe.log("  **ID 1（終端）を取った名前**: " + JoinList(taking1));
+		probe.log("  → 判定: C 群と同じ顔ぶれなら、**その名前がバウンドの持ち主**で確定");
 	}
 
 	// =======================================================================
-	probe.log("=== G. 実用形の総合確認（高さは本ごと・断面はスタイルで揃うか） ===");
+	probe.log("=== E. 見つかった名前だけを by-instance にする（＝求めている形） ===");
+	std::vector<std::string> recipe;
 	{
-		// D 群の作り方（一括 by-instance → 名指しで全件 by-style）で組み直す。
-		// **D 群で駄目だったとしても、そのまま測る**——「何が崩れるか」が知見になる。
-		gSDK->SetAllPluginStyleParameters(work.symDef, kPluginStyleParameter_ByInstance);
-		SetEveryNameTo(work, names, kPluginStyleParameter_ByStyle);
-		probe.log(std::string("  使う作り方: 一括 by-instance → 名指しで全件 by-style"
-							  "（D 群の判定は ") +
-				  (recipeWorks ? "「自由」" : "「取られた」") + "）");
-		probe.log("  スタイル側の値: MemberID=\"" + std::string(kStyleMemberID) +
-				  "\" ／ MajorBreadth=" + Num(kStyleBreadth));
-
-		const double wanted[3] = {kElevLow, 4000, 6000};
-		for (int index = 0; index < 3; ++index)
+		for (size_t i = 0; i < freeing0.size(); ++i)
+			AddUnique(recipe, freeing0[i]);
+		for (size_t i = 0; i < freeing1.size(); ++i)
+			AddUnique(recipe, freeing1[i]);
+		probe.log("  by-instance にする名前: " + JoinList(recipe) + "（" +
+				  Count(static_cast<long long>(recipe.size())) +
+				  " 件。**C 群が見つけたものを"
+				  "そのまま使う**——決め打ちしない）");
+		if (recipe.empty())
 		{
-			MCObjectHandle pio = CreateTargetWithBounds(probe, "G", kElevLow, wanted[index]);
-			if (pio == nullptr)
+			probe.fail("E: バウンドを握る名前が 1 つも見つからなかった");
+		}
+		else
+		{
+			gSDK->SetAllPluginStyleParameters(work.symDef, kPluginStyleParameter_ByStyle);
+			for (size_t i = 0; i < recipe.size(); ++i)
+				gSDK->SetPluginStyleParameterType(work.symDef, Tx(recipe[i]),
+												  kPluginStyleParameter_ByInstance);
+			probe.log("  由来表の読み戻し: " + TallyMap(work.symDef, names) + "（by-instance が " +
+					  Count(static_cast<long long>(recipe.size())) + " 件だけなら狙いどおり）");
+
+			Snap snap;
+			const Freedom freedom = MeasureWithReset(probe, "E", work.ref, snap);
+			probe.log("  結果: " + DescribeSnap(snap));
+			probe.log("  → 判定: " + DescribeFreedom(freedom) +
+					  "。**両端とも自由なら、求めている形は作れる**");
+		}
+	}
+
+	// =======================================================================
+	probe.log("=== F. 実用形の総合確認（高さは本ごと・断面はスタイルで揃うか） ===");
+	if (!recipe.empty())
+	{
+		// E 群で組んだ由来表のまま使う。
+		probe.log("  本ごとに違うバウンドを書き、**スタイルとは違う** MemberID / MajorBreadth を"
+				  "インスタンスへ書いてからスタイルを当てる");
+		const double lows[6] = {kWant, 3200, 1000, kWant, 3200, 1000};
+		const double highs[6] = {kWant, 4000, 6500, kWant, 4000, 6500};
+		std::vector<Bar> bars;
+		for (int index = 0; index < 6; ++index)
+		{
+			Bar bar;
+			bar.low = lows[index];
+			bar.high = highs[index];
+			bar.label = std::string(index < 3 ? "R" : "U") + Count(index % 3 + 1);
+			bar.pio = CreateTargetWithBounds(probe, "F", bar.low, bar.high);
+			if (bar.pio == nullptr)
 				continue;
-			VWParametricObj obj(pio);
+			VWParametricObj obj(bar.pio);
 			obj.SetParamString("MemberID", kInstanceMemberID);
 			obj.SetParamReal("MajorBreadth", kInstanceBreadth);
-			gSDK->SetPluginObjectStyle(pio, work.ref);
-			// 3 本目だけ `UpdateStyledObjects` 経路で作り直す（#112 の E 群と同じ切り分け）。
-			if (index == 2)
-				gSDK->UpdateStyledObjects(work.ref);
-			else
-				gSDK->ResetObject(pio);
-
-			const Snap snap = Read(pio);
-			VWParametricObj after(pio);
-			const std::string memberID = Str(after.GetParamValue("MemberID"));
-			const double breadth = after.GetParamReal("MajorBreadth");
-			probe.log("  本 " + Count(index + 1) + "（書いたバウンド " + Num(kElevLow) + "/" +
-					  Num(wanted[index]) + " ／ 作り直しは " +
-					  (index == 2 ? "`UpdateStyledObjects`" : "`ResetObject`") + "）");
-			probe.log("    " + DescribeSnap(snap));
-			probe.log("    高さは書いたとおりか: " +
-					  std::string((Near(snap.resolved[0], kElevLow) &&
-								   Near(snap.resolved[1], wanted[index]))
-									  ? "**はい**"
-									  : "**いいえ**") +
-					  " ／ MemberID=\"" + memberID + "\"（スタイル側の値か: " +
-					  (memberID == std::string(kStyleMemberID) ? "**はい**" : "**いいえ**") +
-					  "） ／ MajorBreadth=" + Num(breadth) + "（スタイル側の値か: " +
-					  (Near(breadth, kStyleBreadth) ? "**はい**" : "**いいえ**") + "）");
+			gSDK->SetPluginObjectStyle(bar.pio, work.ref);
+			bars.push_back(bar);
 		}
-		probe.log("  → 判定: **3 本とも「高さは書いたとおり＝はい」かつ"
-				  "「スタイル側の値か＝はい」なら、求めている形は作れる**。"
-				  "高さが「いいえ」なら作れない。値が「いいえ」なら"
-				  "**スタイルが無力化されている**（＝「全部 by-instance」と同じ）");
+
+		// R1〜R3 だけ 1 本ごとに `ResetObject`。U1〜U3 は触らない。
+		probe.log("  R1〜R3 を 1 本ごとに `ResetObject`（U1〜U3 はまだ触らない）");
+		for (size_t i = 0; i < bars.size(); ++i)
+		{
+			if (bars[i].label[0] == 'R')
+				gSDK->ResetObject(bars[i].pio);
+		}
+		for (size_t i = 0; i < bars.size(); ++i)
+			LogBar(probe, bars[i], "（Reset 後 / Update 前）");
+
+		// ここで `UpdateStyledObjects` を 1 回。**6 本すべてを読み直す**ので、
+		// 「値はいつ配られるのか」（1 度目の副産物）もここで決まる。
+		probe.log("  `UpdateStyledObjects` を 1 回流して、**6 本すべてを読み直す**");
+		gSDK->UpdateStyledObjects(work.ref);
+		for (size_t i = 0; i < bars.size(); ++i)
+			LogBar(probe, bars[i], "（Update 後）");
+
+		probe.log("  → 判定: **6 本とも「書いた値のまま＝ID0/ID1 とも自由」かつ"
+				  "「スタイル側＝はい」なら、求めている形は実用になる**。"
+				  "高さが取られていれば作れない。値が「いいえ」のままなら"
+				  "**スタイルが効いていない**（＝全部 by-instance と同じ）");
+		probe.log("  → 併せて読む: **`ResetObject` だけの時点（Reset 後 / Update 前）で"
+				  "値が「いいえ」なのに、`UpdateStyledObjects` の後で「はい」に変われば、"
+				  "パラメータの値を配るのは `UpdateStyledObjects` だけ**"
+				  "（バウンドは `ResetObject` でも配られるのに）");
 	}
 
 	// =======================================================================
 	probe.log("=== まとめ ===");
-	probe.log("  読む順: B（口は効くか）→ C（名指しで届くか）→ D（求める形）→ E / F（掃引）"
-			  "→ G（総合）");
+	probe.log("  読む順: C / D（どの名前がバウンドを握るか）→ E（その名前だけ裏返す）"
+			  "→ F（実用になるか）");
 	probe.log("  答えたいのは 1 つ: **「バウンドだけ by-instance、他は by-style」は作れるか**"
 			  "（作れるならその手順）");
 }
