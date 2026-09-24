@@ -126,6 +126,7 @@ per-object の書き込みは**1 つも要らない**。
 - **マーカーだけは継承されない。** 既定は `GetDefaultArrowByClass()` が `true` を返すのに、
   生まれたオブジェクトは by-instance のままだった（PIO 20 個中 1 個、矩形は 0 個しか
   by-class にならない）。**マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ**
+  （**それで絵に出るのかは未確認**——下記「未確認のまま残っているもの」。[#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)）
   ——が、**それは無料**（0.00ms。上記の表）なので、費用の話には影響しない。
   - **この 1/20 の正体は「立てた旗が、最初の PIO の作り直しで下りる」だった**
     （下記「マーカーの既定を下ろしているのは…」で確定）。**旗は立っている間に生まれた
@@ -216,6 +217,11 @@ per-object の `SetArrowByClass(h)` を呼ぶのと手間は変わらず、そ�
 > 継承もされない旗を、戻せない代償で立てることになる。
 > **マーカーが要るなら per-object の `SetArrowByClass(h)` を呼ぶ**——無料で、
 > 図面の既定を触らない。
+>
+> **ただし、それでクラスのマーカーが本当に絵に出るのかは確かめていない**
+> ——`SetArrowByClass` を呼んだ線から `GetMarkerPolys` はマーカーの図形を返さなかった
+> （下記「未確認のまま残っているもの」。
+> [#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)）。
 
 ### `SetObjectClass` だけでは属性は by-instance のまま（前提は今も正しい）
 
@@ -366,7 +372,8 @@ if (savedFPatByClass)    gSDK->SetDefaultFPatByClass();
 **マーカー（`SetDefaultArrowByClass()`）は、この後始末に載らない**——`SetDefaultArrowHeadsN`
 を書いても旗は下りない（同じ値でも違う値でも。上記「マーカーの既定 by-class は、意図して
 下ろせない」で確定）。**立てたら戻せない**ので、**そもそも立てない**のが唯一の正解である
-——マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ（無料）。
+——マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ（無料。**ただしそれで絵に
+出るのかは未確認**——下記「未確認のまま残っているもの」。[#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)）。
 
 > **マーカーの「値」の退避・復元も、旧口（`SetDefaultArrowHeadsN`）ではできない。**
 > 有無（`starting` / `ending`）が `false` を受け付けず、読み戻しも嘘をつくため。
@@ -576,6 +583,42 @@ per-object では:
   微小な量子化が出た）。
 - **矢印を 2 インチ（≈50mm）より大きくする道は、ここまでに測った口には無い。**
 
+### 正体: 大きさは **1/16384 インチの 16 ビット整数**——だから上限が約 2 インチになる
+
+**中口（`Get/SetMarker`）の `size` を掃引して分かった**
+（[#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116)。
+`probes/runtime/marker-angle-order/`。
+[実測ログ](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/117#issuecomment-5823060642)）。
+**`SetMarker` の `size`（`short`）はポイントではなく 1/16384 インチ**である:
+
+| 中口へ書いた `size` | 新口 `dSize`（インチ） | `size ÷ 16384` | `size ÷ 72`（ポイント説） |
+| --- | --- | --- | --- |
+| `1` | 0.000061 | 0.000061 | 0.013889 |
+| `18` | 0.001099 | 0.001099 | 0.250000 |
+| `72` | 0.004395 | 0.004395 | 1.000000 |
+| `512` | 0.031250 | 0.031250 | 7.111111 |
+| `4096` | 0.250000 | 0.250000 | 56.888889 |
+| `16384` | **1.000000** | 1.000000 | 227.555556 |
+| `32767` | **1.999939** | 1.999939 | 455.097222 |
+| `-1` | −0.000061 | −0.000061 | −0.013889 |
+
+**11 点すべてで `dSize = size ÷ 16384` だった**（ポイント説はどの点でも合わない）。
+逆向きも同じで、新口へ書いたインチは中口で `dSize × 16384` として読める
+（0.0625 → `1024` / 0.2500 → `4096` / 1.0000 → `16384`）。
+
+- **上限 `1.9999…` の正体は `short` の上限そのもの。** 新口へ `2.0000` を書くと
+  **`1.999939` = 32767 ÷ 16384** で止まり、中口で読むと `32767` である。
+  「約 2.0 インチ」は**`short` に 1/16384 インチを詰めた器の上限**だった。
+  `1.9999` を書いた線は `32766`（= 1.999878）になる。
+- **新口の `dSize` も 1/16384 インチへ量子化されている**——`0.0100` を書くと
+  `0.010010`（= 164 ÷ 16384）が読み戻る。**#108 が文書の既定側で見た「0.0100 →
+  0.0099」も同じ筋の量子化である【推定】**（0.0099 ≈ 162 ÷ 16384。ただし per-object で
+  測った今回は 164 だったので、丸め方までは合わせていない）。
+- **`N` の付かない旧口（ポイント）と混同しないこと。** 同じ `short` でも
+  `Get/SetArrowHeads` は **72 分の 1 インチ**、`Get/SetMarker` は **16384 分の 1 インチ**
+  である。中口へポイントのつもりで `36` を渡すと、0.5 インチではなく
+  **0.0022 インチ**（ほぼ見えない大きさ）になる。
+
 ### per-object の `GetArrowHeadsN` は大きさを**整数インチに丸めて**返す（読みに使ってはいけない）
 
 **#108 の出発点だった食い違いの正体はこれである。** 同じ線を新口で読むと書いたとおりなのに、
@@ -641,10 +684,10 @@ per-object では:
 
 ## マーカーの様式は口ごとに別の番号体系——`ArrowType` は `MarkerType` ではない
 
-**結論を先に。`SetArrowHeadsN` / `SetDefaultArrowHeadsN` / `SetMarker` の `style` に
-`MarkerType` の定数（`kCircleMarker` など）を渡してはいけない。** この 3 つはいずれも
-**`MarkerType` ではない、口ごとに別の小さな番号**を受ける。`MarkerType` をそのまま
-**書ける**のは新口（`Set…BeginningMarker` / `Set…EndMarker`）だけである。
+**結論を先に。`SetArrowHeadsN` / `SetDefaultArrowHeadsN` / `SetMarker` / `SetClMarker` の
+`style` に `MarkerType` の定数（`kCircleMarker` など）を渡してはいけない。** この 4 つは
+いずれも**`MarkerType` ではない、口ごとに別の小さな番号**を受ける。`MarkerType` をそのまま
+**書ける**のは新口（`Set…BeginningMarker` / `Set…EndMarker`——クラスのものも含む）だけである。
 
 | 口 | 呼び出し | `style` に**書く**と | `style` を**読む**と |
 | --- | --- | --- | --- |
@@ -652,6 +695,8 @@ per-object では:
 | **旧口・文書の既定** | `Set/GetDefaultArrowHeadsN` | **`ArrowType` の enum 0〜4**（`arArrow`…`arCross`） | 同上（0〜2 だけ返る） |
 | **中口** | `SetMarker(h, …)` / `GetMarker(h, …)` | **`EMarkerType` の番号 0〜6**（宣言は `MarkerType` だが嘘） | **`MarkerType` そのもの**（新口と一致） |
 | **新口** | `Set/GetObjBeginningMarker`・`…EndMarker`・`…Default…` | **`MarkerType` そのもの**（往復する） | **`MarkerType` そのもの** |
+| **クラス・新口型** | `Set/GetClassBeginningMarker`・`…EndMarker` | **`MarkerType` そのもの**（往復する） | **`MarkerType` そのもの** |
+| **クラス・中口型** | `Set/GetClMarker(index, …)` | **`EMarkerType` の番号 0〜6**（中口と同じ罠） | **`MarkerType` そのもの** |
 
 **同じ `ArrowType` という型・同じ `style` という引数名なのに、per-object と文書の既定で
 解釈が違う。** そして**中口は宣言が `MarkerType` なのに書きだけ番号で受ける**。
@@ -787,43 +832,112 @@ per-object では:
 **`gSDK->SetMarker(h, kCircleMarker, …)` と書くと、丸ではなく「開いた矢印」（`1280`）に
 なる**——`kCircleMarker` は `2` で、番号の `2` は `kMarkerOpenArrow` だからである。
 
-### 角度（`nAngle`）——書けるのは中口だけ
+- **`size` はポイントではなく 1/16384 インチである**（上記「正体: 大きさは 1/16384
+  インチの 16 ビット整数」）。ポイントのつもりで `36` を渡すと 0.5 インチではなく
+  **0.0022 インチ**になる。`0.2500` インチなら `4096`、`1.0000` インチなら `16384`。
 
-| 口 | 角度を書けるか | 実測 |
+### 角度（`nAngle`）——**書ける。ただし角度を持たない様式がある**
+
+**「書けるのは中口だけ」と書いていたのは誤りだった**
+（[#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116) で訂正。
+`probes/runtime/marker-angle-order/`。
+[実測ログ](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/117#issuecomment-5823060642)）。
+**新口（`SMarkerStyle.nAngle`）でも角度は書ける**——矢印の線へ `-128` / `-45` / `-1` /
+`0` / `1` / `2` / `3` / `15` / `30` / `45` / `60` / `90` / `120` / `127` を書いて
+**14 点すべてがそのまま読み戻せた**。
+
+**#113 が 9 点すべてで `1` を読んだのは、そのプローブが角度を振るときの様式に
+`kCircleMarker`（丸）を固定していたため**である。丸は、下の表のとおり
+「新口で書くと角度が `1` になる」5 つの根のひとつだった。
+
+| 口 | 角度を書けるか |
+| --- | --- |
+| **旧口**（`Set(Default)ArrowHeadsN`） | **書けない**（引数が無い）。様式ごとの既定が入る（矢印 15 / 丸 0 / スラッシュ・十字 45） |
+| **新口**（`SMarkerStyle.nAngle`） | **書ける。ただし根が丸・投げ縄・矩形・二重線・`10` の様式では `1` になる** |
+| **中口**（`SetMarker` の `angle`） | **書ける。丸にも書ける**（新口が潰す様式でも入る）——ただし**届く様式は番号 0〜6 の 7 つだけ** |
+| **クラスの 2 つの口** | per-object とまったく同じ（下記「クラスの口も…」） |
+
+#### 角度が入る根・入らない根（新口で `style` ＋ `dSize` ＋ `nAngle` を 1 回で書いた）
+
+25 点の総当たり。**入らないのは 5 つの根**で、塗り・台・尾・半の変種は関係ない
+（丸は `2` も `130`（＋白）も `258`（＋塗り無し）も同じく `1`）。
+
+| | 根 |
+| --- | --- |
+| 角度が**入る** | `0` 矢印 / `1` 反り矢印 / `3` スラッシュ / `4` 十字 / `6` 六角 / `7` V / `9`（名前の無い根） |
+| 角度が**入らない**（`1` になる） | **`2` 丸 / `5` 投げ縄 / `10`（名前の無い根） / `11` 矩形 / `12` 二重線** |
+
+- **矢印の変種はすべて入る**——`128`（白）/ `256`（塗り無し）/ `1280`（開台）/
+  `2048`（角台）/ `3072`（弧台）/ `16384`（半チック）/ `32768`（尾）で確かめた。
+- **`8` を書くと `256`（矢印＋塗り無し）になる**——根 `8` は存在しない。`9` と `10` は
+  そのまま読み戻せるので**名前の無い根が実在する**が、`10` は角度を持たない。
+- **`nAngle` は `Sint8`**（`MiniCadCallBacks.h:841`）。`-128`〜`127` がそのまま入る。
+
+#### 丸は「角度を持てない」のではない——**新口の書き込みが潰している**
+
+同じ 14 点を、丸に対して**新口と中口の両方から**書いた:
+
+| 書いた角度（14 点） | **新口** → 丸 | **中口**（番号 3 = 塗り丸）→ 丸 |
 | --- | --- | --- |
-| **旧口**（`Set(Default)ArrowHeadsN`） | **書けない**（引数が無い） | 様式ごとの既定が入る（矢印 15 / 丸 0 / スラッシュ・十字 45） |
-| **新口**（`SMarkerStyle.nAngle`） | **書けない** | `0` / `5` / `15` / `30` / `45` / `60` / `90` / `120` / `180` の **9 点すべてで、読み戻すと `1`** |
-| **中口**（`SetMarker` の `angle`） | **書ける** | `0`〜`120` は往復した（新口の `nAngle` からも同じ値が読める） |
+| `0` / `1` / `2` / `3` / `15` / `30` / `45` / `60` / `90` / `120` / `127` / `-1` / `-45` / `-128` | **すべて `1`** | **すべてそのまま入る** |
 
-- **新口で書くと、書いた値に関わらず `nAngle` は `1` になる。** `SMarkerStyle` で
-  実際に効くのは `style` と `dSize` の 2 つだけである（`dWidth` /
-  `nThicknessBasis` / `dThickness` が入らないことは上記「`dWidth` は書いても入らない」）。
-- **中口は `short` で受け取るが、実際には符号付き 8 ビットに切り詰められる**——
-  `180` を書くと `-76`（= 180 − 256）が読めた。**角度は `-128`〜`127` で渡すこと。**
+矢印では両方とも往復する。つまり**丸の角度そのものは記録できる**のであって、
+**新口の書き込みだけが `1` を書いている**。
+
+> **丸のマーカーに角度が要るなら、中口（`SetMarker`）だけで書く。**
+> **そのあと新口を叩くと角度は `1` に戻る**——様式や大きさを書き直しただけでもそうなる。
+>
+> **投げ縄（`261`）・矩形（`11`）・二重線（`268`）・根 `10` には、角度を書く道が無い。**
+> 新口では `1` に潰れ、中口では**その様式へ届かない**（中口が受けるのは `EMarkerType` の
+> 番号 0〜6 ＝ `0` / `256` / `1280` / `2` / `130` / `259` / `260` の 7 つだけ）。
+
+- **中口の `angle` は `short` だが、行き先はこの `Sint8` である**——`180` を書くと
+  `-76`（= 180 − 256）が読めた。**角度は `-128`〜`127` で渡すこと。**
+
+### クラスの口も per-object とまったく同じ体系
+
+`Set/GetClassBeginningMarker`（`SMarkerStyle`。`ISDK.h:734` / `:743`）と
+`Set/GetClMarker`（`MarkerType` ＋ `size` ＋ `angle`。`:739` / `:748`）は、
+**それぞれ新口・中口と同じに振る舞う**。**どちらも `visibility` の引数を持たない。**
+
+| クラスの口 | `style` に**書く**と | 角度 |
+| --- | --- | --- |
+| `SetClassBeginningMarker` | **`MarkerType` そのもの**（6 点とも往復） | **書ける**（丸では `1`。per-object の新口と同じ） |
+| `SetClMarker` | **`EMarkerType` の番号 0〜6**（`0`→`0` / `1`→`256` / `2`→`1280` / `3`→`2` / `4`→`130` / `5`→`259` / `6`→`260`。`7` 以上と `MarkerType` の定数はすべて `0`） | **書ける**（丸でも入る。per-object の中口と同じ） |
+
+**`gSDK->SetClMarker(index, kCircleMarker, …)` は per-object の中口と同じ罠**
+——`kCircleMarker` は `2` なので、丸ではなく「開いた矢印」（`1280`）になる。
+
+- **クラスを作る口は `AddGuidesClass()`（`ISDK.h:1353`）だけ**である。
+  **`ClassNameToID` は、新しい名前を渡してもクラスを作らない**（有効な番号が返らない。
+  実測）。`ISDK.h` に `CreateClass` の類は無い。
+- **クラスへ置いた値が線の絵に出るのかは、別の話**（下記「未確認のまま残っているもの」）。
 
 ### どう書くか（マーカーの様式・大きさ・角度を指定する）
 
 ```cpp
-// --- 様式と大きさ: 新口で書き、新口で読む -------------------------------
-// MarkerType の定数をそのまま渡せる唯一の口。大きさ（dSize）も同じ呼び出しで入る
-// （上記「マーカーの大きさはインチで、上限があり…」）。
+// --- ふつうの様式: 新口 1 回で様式・大きさ・角度をまとめて書く -----------
+// MarkerType の定数をそのまま渡せる唯一の口。3 つとも同じ呼び出しで入る。
 SMarkerStyle mstyle{};
 Boolean visible = false;
 gSDK->GetObjBeginningMarker(line, mstyle, visible); // 他の欄を壊さないよう読んでから
 mstyle.style = kNoFillDimSlashMarker;               // ← 複合定数で渡す（259。3 だと補正される）
-mstyle.dSize = 0.25;                                // インチ。上限は約 2.0（#108）
+mstyle.dSize = 0.25;                                // インチ。上限 1.999939（= 32767/16384）
+mstyle.nAngle = 45;                                 // 度。-128〜127。丸などでは 1 に潰れる
 gSDK->SetObjBeginningMarker(line, mstyle, static_cast<Boolean>(true));
+gSDK->SetObjEndMarker(line, mstyle, static_cast<Boolean>(true));
+
+// --- 丸に角度が要るときだけ、中口ひとつで書く ---------------------------
+// style は EMarkerType の番号（3 = 塗り丸 → kCircleMarker）。size は 1/16384 インチ
+// （ポイントではない）。**このあと新口を叩くと角度が 1 に戻る。**
+gSDK->SetMarker(line, /* 3 = 塗り丸 */ 3, /* size */ 4096 /* = 0.2500 インチ */,
+                /* angle */ 45, static_cast<Boolean>(true), static_cast<Boolean>(true));
 
 // --- 読み戻し: 新口か GetMarker。旧口の style は使わない -----------------
 SMarkerStyle readBack{};
 Boolean readVisible = false;
 gSDK->GetObjBeginningMarker(line, readBack, readVisible);
 const long root = readBack.style & kMarkerRootTypeMask; // マスクはここでだけ意味がある
-
-// --- 角度が要るなら中口。style は EMarkerType の番号（0〜6）で渡す -------
-// 注意: SetMarker は宣言が MarkerType でも MarkerType を受けない。
-gSDK->SetMarker(line, /* 5 = スラッシュ */ 5, /* size(pt) */ 36, /* angle */ 45,
-                static_cast<Boolean>(true), static_cast<Boolean>(true));
 ```
 
 **旧口（`Set(Default)ArrowHeadsN`）で様式を指定しないこと。** per-object と文書の既定で
@@ -831,13 +945,19 @@ gSDK->SetMarker(line, /* 5 = スラッシュ */ 5, /* size(pt) */ 36, /* angle *
 旧口を使ってよいのは**有無を点ける向きだけ**である（上記「消すには新口の
 `visibility=false` を使う」の復元手順）。
 
+**中口を「角度のためだけ」に挟まないこと。** 中口は `style` と `size` も同時に書くので、
+**様式は番号 0〜6 の 7 つへ落ち、大きさは 1/16384 インチで渡し直すことになる**。
+角度が要るだけなら新口の `nAngle` で足りる（丸などの 5 つの根を除く）。
+
 ### 未確認のまま残っているもの
 
-- **中口で角度を書いてから新口で様式・大きさを書き直すと、角度は残るのか。**
-  新口で書くと `nAngle` が `1` になるので、**順番によっては角度が消える**見込みが高いが、
-  組み合わせては測っていない。#113 の問いは「`nAngle` は旧口から書けるのか」だったので
-  範囲外である——[#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116)
-  へ切り出した。
-- **クラスの口**（`Set/GetClassBeginningMarker` / `Set/GetClMarker`）がどちらの体系かは
-  測っていない。`Set/GetClMarker` は中口と同じ形（`MarkerType` ＋ `size` ＋ `angle`）
-  なので同じ振る舞いが疑われるが、**確かめていない**（同じく #116）。
+- **クラスへ置いたマーカーが、線の絵に本当に出るのか。** `SetClassBeginningMarker` で
+  クラスへ様式・大きさ・角度を置き（読み戻せることは確認済み）、線をそのクラスへ入れて
+  `SetArrowByClass(line)` まで呼んでも、**`GetMarkerPolys(line, …)` はマーカーの図形を
+  返さなかった**（by-class の旗は `yes`）。同じ走りの対照では、**per-object で直に書いた
+  線は図形を返す**（種別 21・境界 4.4901 × 4.4901）ので、**この口が壊れているわけではない**。
+  「絵に出ていない」のか「`GetMarkerPolys` が by-class を映さないだけ」なのかは分けて
+  いない——#116 の範囲外なので
+  [#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)
+  へ切り出した。**上記「マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ」は、
+  そこが片付くまで鵜呑みにしないこと。**
