@@ -284,16 +284,19 @@ namespace
 	//   lowOffset / highOffset … 元にする PIO に書くバウンドの offset
 	//   withBounds             … false なら元にする PIO にバウンドを 1 本も書かない
 	//   byInstance             … true なら `kPluginStyleParameter_ByInstance` にする
-	struct Style
+	// **`Style` と名乗らない。** macOS の `MacTypes.h` が `typedef unsigned char Style;` を
+	// グローバルへ出しているので、無名名前空間に入れていても「参照が曖昧」でコンパイルが
+	// 通らない（実際に踏んだ。probes/runtime/README.md「短い名前・ありふれた名前」）。
+	struct ProbeStyle
 	{
 		RefNumber ref = 0;
 		std::string label;
 	};
 
-	Style MakeStyle(vwprobe::Report& probe, const std::string& label, bool withBounds,
-					double lowOffset, double highOffset, bool byInstance)
+	ProbeStyle MakeStyle(vwprobe::Report& probe, const std::string& label, bool withBounds,
+						 double lowOffset, double highOffset, bool byInstance)
 	{
-		Style style;
+		ProbeStyle style;
 		style.label = label;
 
 		MCObjectHandle seed = CreateBare(0, 0, 0);
@@ -375,10 +378,12 @@ VW_PROBE("style-story-bound-overwrite",
 
 	// =======================================================================
 	probe.log("=== A. スタイルを 4 本作る（#98 の手順） ===");
-	const Style styleTall = MakeStyle(probe, "高い(2500/5500)", true, kElevLow, kElevHigh, false);
-	const Style styleFlat = MakeStyle(probe, "低い(2500/2500)", true, kElevLow, kElevLow, false);
-	const Style styleNone = MakeStyle(probe, "バウンド無し", false, 0, 0, false);
-	const Style styleTallByInstance =
+	const ProbeStyle styleTall =
+		MakeStyle(probe, "高い(2500/5500)", true, kElevLow, kElevHigh, false);
+	const ProbeStyle styleFlat =
+		MakeStyle(probe, "低い(2500/2500)", true, kElevLow, kElevLow, false);
+	const ProbeStyle styleNone = MakeStyle(probe, "バウンド無し", false, 0, 0, false);
+	const ProbeStyle styleTallByInstance =
 		MakeStyle(probe, "高い(by-instance)", true, kElevLow, kElevHigh, true);
 
 	// =======================================================================
@@ -386,10 +391,10 @@ VW_PROBE("style-story-bound-overwrite",
 	probe.log("  （ここで変われば `SetPluginObjectStyle` そのものが書いている。"
 			  "変わらなければ、書くのは `ResetObject` 側）");
 	{
-		const Style* cases[] = {&styleTall, &styleFlat};
+		const ProbeStyle* cases[] = {&styleTall, &styleFlat};
 		for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
 		{
-			const Style& style = *cases[i];
+			const ProbeStyle& style = *cases[i];
 			if (style.ref == 0)
 				continue;
 			probe.log("  " + style.label + " を当てる");
@@ -475,10 +480,10 @@ VW_PROBE("style-story-bound-overwrite",
 	// =======================================================================
 	probe.log("=== D. スタイル側のバウンドが効いているのか（当て分け。順序は C1 と同じ） ===");
 	{
-		const Style* cases[] = {&styleTall, &styleFlat, &styleNone, &styleTallByInstance};
+		const ProbeStyle* cases[] = {&styleTall, &styleFlat, &styleNone, &styleTallByInstance};
 		for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
 		{
-			const Style& style = *cases[i];
+			const ProbeStyle& style = *cases[i];
 			if (style.ref == 0)
 				continue;
 			MCObjectHandle pio = CreateTarget();
