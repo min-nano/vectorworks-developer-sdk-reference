@@ -35,7 +35,35 @@
 //	          バウンドである（変わらなければ別の要因）。
 //	  E 群 … **`UpdateStyledObjects` でも同じか**（1 本ごとの `ResetObject` を省く経路）。
 //	  F 群 … **バウンドを 1 本も持たない材にスタイルを当てるとバウンドが生えるか。**
-//	          生えるなら「スタイルがバウンドを配っている」と言い切れる。
+//	          生えるなら「スタイルがバウンドを配っている」と言い切れる。**生えたバウンドを
+//	          読み直せるか**も、ここで併せて見る（下記「この 2 度目で取りに行くもの」1）。
+//
+//	## 1 度目の実行で分かったこと（2026-09-24 / VW 2026 / mac。PR #114 のコメント）
+//
+//	  * `SetPluginObjectStyle` **単体ではバウンドを触らない**（当てる直前と直後で、
+//	    レコードも解決も同じ。変わるのは `styleRef` だけ）。書き換えるのは
+//	    **`ResetObject` / `UpdateStyledObjects`** の側である。
+//	  * **順序では避けられない。** バウンド先・スタイル先・スタイルの後に書き直し——
+//	    3 通りとも同じようにスタイルの値へ書き換わった。
+//	  * **効いているのはスタイルのバウンド。** 2500/5500 のスタイルを当てれば 2500/5500、
+//	    2500/2500 のスタイルなら書いた値のまま、バウンドを持たないスタイルなら 0/0。
+//	  * **`kPluginStyleParameter_ByInstance` にすると書いた値が残る**（by-style だけが
+//	    上書きする）。issue #112 の 5 の読み（「バウンドはパラメータではないので
+//	    by-instance にしても効かないのでは」）とは逆だった。
+//
+//	## この 2 度目で取りに行くもの
+//
+//	  1. **F 群で生えたバウンドが読めなかった件。** バウンドを持たない材へスタイルを
+//	     当てて `ResetObject` すると件数が 0 → 2 になり、実体は 2500→5500 に建った。
+//	     ところが `GetObjectStoryBound` の `fBound` / `fBoundStory` は読めない値で、
+//	     `GetObjectBoundElevation` は **0** を返した。**これはプローブ側の落ち度でも
+//	     ありうる**——渡した `SStoryObjectData` を既定構築のままにしていたので、
+//	     VW が書かなかったフィールドは**こちらの値が残っただけ**かもしれない。
+//	     そこで今回は **番兵を入れてから渡し**、**並んでいる ID を
+//	     `GetObjectStoryBoundsAt` で数えて引く**（ID 0 / 1 が並んでいる保証は無い）。
+//	  2. **by-instance の逃げ道は `UpdateStyledObjects` でも使えるか**（E 群）。
+//	     1 度目の E 群は by-style しか流していない。実装で 1 本ごとの `ResetObject` を
+//	     省く経路を採るなら、ここが決まらないと使えない。
 //
 //	## 読み方
 //
@@ -71,6 +99,11 @@ namespace
 	// 一致と見なす窓。作り直しは 1〜2 ULP の残差を残す（#67 / #71）ので 1e-6 で見る。
 	const double kEpsilon = 1e-6;
 
+	// `GetObjectStoryBound` へ渡す前に入れておく番兵。**読み戻しにこの値が残っていたら、
+	// VW はそのフィールドを書いていない**（呼び出し側の値がそのまま残っただけ）。
+	const int kSentinelStory = -12112;
+	const double kSentinelOffset = -1211200;
+
 	std::string Num(double value)
 	{
 		char buffer[64];
@@ -104,6 +137,9 @@ namespace
 
 		long long boundCount = 0;
 		bool hasBounds = false;
+		// **実際に並んでいる ID**（`GetObjectStoryBoundsAt` で数えて引いたもの）。
+		// ID 0 / 1 が並んでいるとは限らないので、決め打ちで読む前にこれを見る。
+		std::string boundIDs;
 		// ID 0 / 1 のレコードと解決結果。
 		bool recOk[2] = {false, false};
 		int recBound[2] = {-1, -1};	  // fBound（EStoryObjectBound）
@@ -152,11 +188,31 @@ namespace
 		snap.insertZ = matrix.P().z;
 
 		snap.hasBounds = gSDK->HasObjectStoryBounds(pio);
-		snap.boundCount = static_cast<long long>(gSDK->GetObjectStoryBoundsCount(pio));
+		const size_t count = gSDK->GetObjectStoryBoundsCount(pio);
+		snap.boundCount = static_cast<long long>(count);
+		// **並んでいる ID を数えて引く**（Findings「書いたら数えて読む」）。1 度目の実行で、
+		// スタイルが生やしたバウンドの `fBound` / `fBoundStory` が読めない値になったので、
+		// 「そもそも ID 0 / 1 が並んでいるのか」をここで見えるようにする。
+		for (size_t index = 0; index < count && index < 8; ++index)
+		{
+			if (!snap.boundIDs.empty())
+				snap.boundIDs += ",";
+			snap.boundIDs +=
+				Count(static_cast<long long>(gSDK->GetObjectStoryBoundsAt(pio, index)));
+		}
+
 		for (int id = 0; id < 2; ++id)
 		{
 			const MockUp::TObjectBoundID boundID = static_cast<MockUp::TObjectBoundID>(id);
+			// **番兵を入れてから呼ぶ。** `SStoryObjectData` は POD 寄りの受け渡し用
+			// レコードなので、VW が書かなかったフィールドは**呼び出し側の値のまま**
+			// 残る。既定構築のまま渡すと、それが「読めない値」として出てしまい、
+			// 「VW が変な値を書いた」と読み違える（1 度目の実行で踏んだ）。
 			MockUp::SStoryObjectData data;
+			data.fBound = MockUp::eStoryObjectBound_LayerElevation;
+			data.fBoundStory = kSentinelStory;
+			data.fLayerLevelType = "";
+			data.fOffset = kSentinelOffset;
 			if (gSDK->GetObjectStoryBound(pio, boundID, data))
 			{
 				snap.recOk[id] = true;
@@ -184,14 +240,20 @@ namespace
 	{
 		if (!snap.recOk[id])
 			return "無し";
-		return "種別" + Count(snap.recBound[id]) + "/階" + Count(snap.recStory[id]) + "/offset " +
-			   Num(snap.recOffset[id]);
+		const std::string story = (snap.recStory[id] == kSentinelStory)
+									  ? std::string("**VW は書かなかった**")
+									  : Count(snap.recStory[id]);
+		const std::string offset = Near(snap.recOffset[id], kSentinelOffset)
+									   ? std::string("**VW は書かなかった**")
+									   : Num(snap.recOffset[id]);
+		return "種別" + Count(snap.recBound[id]) + "/階" + story + "/offset " + offset;
 	}
 
 	std::string DescribeBounds(const Snap& snap)
 	{
 		return "バウンド: 件数=" + Count(snap.boundCount) + "(has=" + YesNo(snap.hasBounds) +
-			   ") ／ レコード ID0[" + DescribeRecord(snap, 0) + "] ID1[" + DescribeRecord(snap, 1) +
+			   ") 並んでいる ID=[" + snap.boundIDs + "] ／ レコード ID0[" +
+			   DescribeRecord(snap, 0) + "] ID1[" + DescribeRecord(snap, 1) +
 			   "] ／ 解決=" + Num(snap.resolved[0]) + "/" + Num(snap.resolved[1]) +
 			   " ／ styleRef=" + Count(static_cast<long long>(snap.styleRef));
 	}
@@ -507,20 +569,28 @@ VW_PROBE("style-story-bound-overwrite",
 
 	// =======================================================================
 	probe.log("=== E. UpdateStyledObjects でも同じことが起きるか（ResetObject を呼ばない） ===");
-	if (styleTall.ref != 0)
+	probe.log("  （**by-style と by-instance を並べる。** 1 度目の実行で、`ResetObject` 経路では"
+			  "by-instance のスタイルだけが書いたバウンドを残した——その逃げ道が、"
+			  "`ResetObject` を省く経路でも使えるのかを見る）");
 	{
-		MCObjectHandle pio = CreateTarget();
-		if (pio == nullptr)
+		const ProbeStyle* cases[] = {&styleTall, &styleTallByInstance};
+		for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
 		{
-			probe.fail("E: 対象を作れなかった");
-		}
-		else
-		{
+			const ProbeStyle& style = *cases[i];
+			if (style.ref == 0)
+				continue;
+			MCObjectHandle pio = CreateTarget();
+			if (pio == nullptr)
+			{
+				probe.fail("E: 対象を作れなかった");
+				continue;
+			}
+			probe.log("  " + style.label);
 			WriteFlatBounds(pio);
-			gSDK->SetPluginObjectStyle(pio, styleTall.ref);
+			gSDK->SetPluginObjectStyle(pio, style.ref);
 			const Snap before = Read(pio);
-			LogSnap(probe, "    ", "流す前", before);
-			gSDK->UpdateStyledObjects(styleTall.ref);
+			LogSnap(probe, "    ", "流す前 ", before);
+			gSDK->UpdateStyledObjects(style.ref);
 			const Snap after = Read(pio);
 			LogSnap(probe, "    ", "流した後", after);
 			probe.log(std::string("    → 判定: 書いた ") + Num(kElevLow) + "/" + Num(kElevLow) +
