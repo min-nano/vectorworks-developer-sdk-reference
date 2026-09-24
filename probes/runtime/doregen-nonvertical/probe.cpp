@@ -156,7 +156,9 @@ namespace
 
 		TransformMatrix matrix;
 		gSDK->GetEntityMatrix(pio, matrix);
-		snap.insertZ = matrix.offset.z;
+		// **平行移動の成分は `P()`**（`offset` は無名共用体 `v2` の中の名前で、
+		// `TransformMatrix` の直接のメンバではない。`MathCoordTypes.h`）。
+		snap.insertZ = matrix.P().z;
 
 		snap.boundLow = gSDK->GetObjectBoundElevation(pio, static_cast<MockUp::TObjectBoundID>(0));
 		snap.boundHigh = gSDK->GetObjectBoundElevation(pio, static_cast<MockUp::TObjectBoundID>(1));
