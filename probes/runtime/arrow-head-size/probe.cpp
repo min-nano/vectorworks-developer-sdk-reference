@@ -301,13 +301,14 @@ VW_PROBE("arrow-head-size", "per-object のマーカーの大きさが往復し�
 	probe.log("## 0. 走らせている図面の素性（単位・縮尺）");
 	probe.log("");
 	probe.log("**「既定側が一致したのは、たまたま単位が同じだからでは」という筋を潰す**ため、"
-			  "測る前に図面の素性を控える。`GetUnits(UnitsType&)` は数値のまま出す"
-			  "（対応表は SDK のヘッダに無い）。`CoordLengthToUnitsLengthN` は"
+			  "測る前に図面の素性を控える。`UnitsType` は **`unitsPerInch`（1 インチあたりの"
+			  "表示単位）と `unitMark`（記号）を持つ構造体**（`MiniCadCallBacks.h:1260`）"
+			  "なので、単位の筋はここの数値と突き合わせて潰せる。`CoordLengthToUnitsLengthN` は"
 			  "**内部座標 1 に相当する表示単位の長さ**で、これが単位系の実効的な物差しになる。");
 	probe.log("");
 
 	{
-		UnitsType units = static_cast<UnitsType>(0);
+		UnitsType units{};
 		gSDK->GetUnits(units);
 		MCObjectHandle activeLayer = gSDK->GetActiveLayer();
 		double_gs scale = 0;
@@ -316,7 +317,16 @@ VW_PROBE("arrow-head-size", "per-object のマーカーの大きさが往復し�
 
 		probe.log("| 何 | 値 |");
 		probe.log("| --- | --- |");
-		probe.log("| `GetUnits`（`UnitsType` の生値） | " + Num(static_cast<long>(units)) + " |");
+		// `UnitsType` は構造体（`MiniCadCallBacks.h:1260`）。**`unitsPerInch` を持つ**
+		// ので、「単位が違うから合わない」筋はここの数値と突き合わせて潰せる。
+		probe.log("| `GetUnits`→`unitsPerInch`（1 インチあたりの表示単位） | " +
+				  Real(static_cast<double>(units.unitsPerInch)) + " |");
+		probe.log("| `GetUnits`→`unitMark`（単位の記号） | " +
+				  std::string(static_cast<const char*>(units.unitMark)) + " |");
+		probe.log("| `GetUnits`→`storedAccuracy`（内部座標/単位） | " +
+				  Num(static_cast<long>(units.storedAccuracy)) + " |");
+		probe.log("| `GetUnits`→`format`（表示書式） | " + Num(static_cast<long>(units.format)) +
+				  " |");
 		probe.log("| アクティブレイヤの縮尺 `GetLayerScaleN` | " +
 				  (activeLayer != nil ? Real(static_cast<double>(scale))
 									  : std::string("（レイヤを取れなかった）")) +
