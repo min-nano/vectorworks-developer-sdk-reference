@@ -35,6 +35,9 @@
 **書き込みは効いており、1 旗版の読み戻しだけが嘘をつく**。既定の不透明度を確かめるなら
 `GetDefaultOpacityByClassN` を使う（per-object の `GetOpacityByClass(h)` は正しく返す）。
 
+**同じ形の穴がマーカーにもある**（そちらは読みだけでなく書き込みも効かない）。
+一覧は下記「読み戻しに使えない口（ここまでに分かっているもの）」。
+
 ## 全属性をまとめて by-class にする ISDK の口は無い【ソース根拠】
 
 - `SetAllAttributesByClass` も `AllAttr` も、**SDK 全体（ヘッダ・同梱の実装ソース・
@@ -263,7 +266,7 @@ gSDK->SetArrowByClass(object);     // マーカーだけ。無料
 | 線の太さ | `GetDefaultLineWeight()` → `short`（mils） | `SetDefaultLineWeight(short mils)` |
 | 線種 | `GetDefaultPenPatN()` → `InternalIndex` | `SetDefaultPenPatN(InternalIndex)` |
 | 面パターン | `GetDefaultFillPat()` → `InternalIndex` | `SetDefaultFillPat(InternalIndex)` |
-| マーカー | `GetDefaultArrowHeadsN(Boolean&, Boolean&, ArrowType&, double_gs&)` | `SetDefaultArrowHeadsN(Boolean, Boolean, ArrowType, double_param)` |
+| マーカー | `GetDefaultArrowHeadsN(Boolean&, Boolean&, ArrowType&, double_gs&)` **（有無は読めない）** | `SetDefaultArrowHeadsN(Boolean, Boolean, ArrowType, double_param)` **（有無の `false` は無視される）** |
 | 不透明度 | `GetDefaultOpacityN(OpacityRef&, OpacityRef&)` | `SetDefaultOpacityN(OpacityRef, OpacityRef)` |
 
 - **ペン色と面色は 1 本に同居している。** `ObjectColorType { ColorRef fillFore, fillBack,
@@ -272,6 +275,10 @@ gSDK->SetArrowByClass(object);     // マーカーだけ。無料
   **「ペン色だけを書く」口は無い。**
 - **丸ごと退避・復元する口は無い**（`GetDefaultAttributes` 的なもの）。SDK 全体の
   `(Set|Get)Default*` はこの顔ぶれしかない（`sdk-grep` で全識別子を列挙して確認）。
+- **マーカーの行は、この表のとおりには使えない。** 有無（`starting` / `ending`）は
+  読めも消せもしないので、**新口（`Get/SetDefaultBeginningMarker` /
+  `…EndMarker`）を使う**——下記「文書の既定のマーカーの有無は、旧口（`ArrowHeads`）
+  では読めも消せもしない」。`style` と `size` は旧口でも往復する。
 - **VWFC の `VWObjectAttr` は、ハンドル無しで作ると文書の既定を読み書きする。**
   `fhObject == nil` のとき、すべての getter / setter が `*Default*` 系へ落ちる作りで、
   per-object と同じ顔で既定を触れる（`SDKLib/Source/VWSDK/VWFC/VWObjects/VWObjectAttributes.cpp`。
@@ -361,10 +368,165 @@ if (savedFPatByClass)    gSDK->SetDefaultFPatByClass();
 下ろせない」で確定）。**立てたら戻せない**ので、**そもそも立てない**のが唯一の正解である
 ——マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ（無料）。
 
-> **`SetDefaultArrowHeadsN` は、マーカーの有無（`starting` / `ending`）を `false` へ
-> 書き戻せないらしい**——退避した `start=no end=no` を書き戻しても、読み直すと
-> `start=yes end=yes` のままだった（`size` は `0.2500` → `0.1250` と正しく往復した）。
-> **setter が効かないのか、getter が by-class のときに嘘をつくのかは切り分けていない**
-> ——#104 の範囲外なので
-> [#106](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/106)
-> へ切り出した。**値を往復させる作りにするなら、そこの結論を待つこと。**
+> **マーカーの「値」の退避・復元も、旧口（`SetDefaultArrowHeadsN`）ではできない。**
+> 有無（`starting` / `ending`）が `false` を受け付けず、読み戻しも嘘をつくため。
+> **`SetDefaultBeginningMarker` / `SetDefaultEndMarker` を使う**——次節で確定した
+> （[#106](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/106)）。
+
+## 文書の既定のマーカーの有無は、旧口（`ArrowHeads`）では読めも消せもしない
+
+**マーカーには口が 2 系統ある。** 上表に挙げた `ArrowHeads` 系が古い方で、
+`SMarkerStyle` と **`visibility`（有無）を別々の引数で持つ**系統が別にある
+（いずれも `Interfaces/VectorWorks/ISDK.h`）。
+
+| | 文書の既定 | per-object | クラス |
+| --- | --- | --- | --- |
+| **旧口**（真偽値 2 つ） | `Get/SetDefaultArrowHeadsN` | `Get/SetArrowHeadsN(h, …)` | — |
+| **新口**（`SMarkerStyle` ＋ `visibility`） | `Get/SetDefaultBeginningMarker` / `…EndMarker` | `Get/SetObjBeginningMarker` / `…ObjEndMarker` | `Get/SetClassBeginningMarker` / `…EndMarker` |
+
+**文書の既定の旧口には穴が 2 つある。** どちらも**`SetDefaultArrowByClass()` を一度も
+呼んでいない図面**（by-class の旗は全区間 `no`）で出たので、
+`GetDefaultOpacityByClass` の穴（by-class のときだけ嘘）とは**別物**である。
+
+### 穴 1: `GetDefaultArrowHeadsN` の `ending` は、終点ではなく `starting` を返す
+
+実測（VW 2026 / mac。組み合わせごとに `OpenDocumentPath(nullptr, false)` で新しい空の
+図面を開き、真っさらな既定から測った。`probes/runtime/default-arrow-heads-false/`）。
+**同じ状態を 3 経路で読んでいる**——旧口・新口・**書いた直後に引いた線**（既定は
+オブジェクトが生まれる瞬間に読まれるので、実際に何が書かれていたかの物証になる）:
+
+| 旧口へ書いた値 | 旧口の読み | 新口の読み（始点 / 終点） | 直後に引いた線（始点 / 終点） |
+| --- | --- | --- | --- |
+| （触っていない） | start=no **end=no** | no / no | no / no |
+| `(start=yes, end=no)` | start=yes **end=yes** | **yes / no** | **yes / no** |
+| `(start=no, end=yes)` | start=no **end=no** | **no / yes** | **no / yes** |
+| `(start=yes, end=yes)` | start=yes end=yes | yes / yes | yes / yes |
+
+- **新口と線は 4 行とも書いたとおり**で、互いに一致している。**食い違っているのは
+  旧口の `ending` だけ**で、その値は**毎回 `starting` と同じ**である。
+  つまり `ending` は**終点の状態ではなく、`starting` のコピー**——
+  **文書の既定の終点マーカーの有無は、旧口では読めない。**
+- **「どちらかが点いていれば両方 `yes`」ではない**（潰した筋）。3 行目
+  `(no, yes)` で旧口が `end=no` を返しているので、OR ではなくコピーである。
+- **`starting` のほうは正しい。** 嘘をつくのは `ending` の 1 つだけ。
+
+### 穴 2: `SetDefaultArrowHeadsN` は `starting` / `ending` の `false` を無視する
+
+**一度点けたマーカーは、この口では消せない。** 上の各行のあと、続けて
+`(start=no, end=no)` を**`size` を変えて**書いた（`size` が変われば「呼び出しは
+届いている」と言い切れる）:
+
+| 直前の実態（始点 / 終点） | `(no, no)` を書いた後の新口 | 直後に引いた線 | `size` |
+| --- | --- | --- | --- |
+| yes / no | **yes** / no | **yes** / no | 0.0472 → **0.0945**（書いたとおり） |
+| no / yes | no / **yes** | no / **yes** | 同上 |
+| yes / yes | **yes / yes** | **yes / yes** | 同上 |
+
+**`style` と `size` は往復するのに、真偽値だけが点ける方向にしか効かない。**
+3 経路とも一致しているので、これは読みの嘘ではなく**書き込みが無視されている**。
+
+### 消すには新口の `visibility=false` を使う（これが退避・復元の道）
+
+同じ 3 つの状態から `SetDefaultBeginningMarker(mstyle, false)` /
+`SetDefaultEndMarker(mstyle, false)` を呼ぶと、**3 経路とも `no` になった**
+（旧口の読みも `start=no end=no` へ戻る）。**文書の既定のマーカーを一時的に変えて
+元へ戻す作りは、新口でなら書ける。**
+
+**復元は「新口で消してから、旧口で点け直す」の 2 手で書く。** 2 つの口の、
+**それぞれ実測できている向き**だけを使う形である——新口は消す向き（上記）、
+旧口は点ける向き（穴 2 の表の ②。`(yes, no)` を書けば始点だけが点く）。
+**旧口で `false` が無視されるのは、直前に新口で消してあるので害が無い**
+（消えている端へ `false` を書いても消えたままなのは、穴 1 の表の 1〜2 行目で
+測れている）。
+
+```cpp
+// --- 退避: 有無は新口で読む（旧口の ending は信用できない） ---------------
+SMarkerStyle savedBegin{}, savedEnd{};
+Boolean savedBeginVisible = false, savedEndVisible = false;
+gSDK->GetDefaultBeginningMarker(savedBegin, savedBeginVisible);
+gSDK->GetDefaultEndMarker(savedEnd, savedEndVisible);
+// 様式と大きさは旧口でまとめて退避できる（往復する）。
+Boolean ignoredStart = false, ignoredEnd = false;
+ArrowType savedStyle = 0;
+double_gs savedSize = 0;
+gSDK->GetDefaultArrowHeadsN(ignoredStart, ignoredEnd, savedStyle, savedSize);
+
+// --- …取り込みのあいだだけ変える… ---------------------------------------
+
+// --- 復元: ① 新口で両端を消す（これが唯一の「消す」道） -------------------
+gSDK->SetDefaultBeginningMarker(savedBegin, static_cast<Boolean>(false));
+gSDK->SetDefaultEndMarker(savedEnd, static_cast<Boolean>(false));
+
+// --- 復元: ② 元から点いていた端だけを旧口で点け直す ----------------------
+// 点ける向きは効く。false は無視されるが、①で消してあるので害が無い。
+gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, savedSize);
+```
+
+**新口で「点ける」（`visibility=true`）のは、文書の既定では測っていない**
+【未確認】——per-object では効いた（下記）が、文書の既定で同じかは確かめていない。
+**上の手順はその向きを使わない**ので、確かめなくても書ける。
+
+**戻り値（`Boolean`）で成否を判定しないこと**——`visibility=false` を書いて
+実際に消えた回も、消えなかった旧口の呼び出しも、どちらも区別が付かなかった。
+[調査の作法](Investigation%20Techniques.md)のとおり**読み戻して確かめる**。
+
+### per-object（`SetArrowHeadsN(h, …)`）は 2 つとも正しい
+
+**穴は文書の既定だけの話である。** 線を 1 本ごとに新しく引いて同じ電池を通したところ、
+per-object では:
+
+- `GetArrowHeadsN(h, …)` の `ending` は**終点を正しく返す**（`(no, yes)` を書けば
+  `start=no end=yes` と読める）。
+- `SetArrowHeadsN(h, no, no, …)` は**マーカーを消せる**（3 通りとも消えた）。
+- 旧口を一度も通さず、新口だけで点けて消すこともできる。
+
+だから **per-object のマーカーを触るぶんには、旧口のままでよい**。新口が要るのは
+**文書の既定**を読み書きするときである。
+
+### #104 の観測は、この 2 つで説明が付く
+
+[#104](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/104)
+で「`(yes, no)` を書いたら `(yes, yes)` と読めた」「退避した `(no, no)` を書き戻しても
+`(yes, yes)` のままだった」のは、**by-class の旗とは無関係**だった:
+
+- 1 つ目は**穴 1**（`ending` が `starting` のコピー）。実際には終点は点いていない。
+- 2 つ目は**穴 2 と穴 1 の合わせ技**。始点は `false` が無視されて点いたままで、
+  終点はそのコピーが出ている。
+
+**当時「by-class のときに getter が嘘をつくのでは」と疑った筋は、ここで潰れた**
+——旗を一度も立てていない図面で、同じ食い違いがそのまま再現している。
+
+### 読み戻しに使えない口（ここまでに分かっているもの）
+
+| 口 | 何が起きるか | 代わりに使うもの |
+| --- | --- | --- |
+| `GetDefaultOpacityByClass()`（1 旗版） | 立てた後も `false` を返す（上記） | `GetDefaultOpacityByClassN(pen&, fill&)` |
+| `GetDefaultArrowHeadsN` の `ending` | 終点ではなく `starting` を返す | `GetDefaultEndMarker(mstyle&, visibility&)` |
+| `SetDefaultArrowHeadsN` の `starting` / `ending` | `false` が無視される（読みの問題ではない） | `SetDefaultBeginningMarker` / `SetDefaultEndMarker` |
+
+### 余録: `style=0` は「マーカー無し」ではない【ヘッダ根拠】
+
+`ArrowType` は `Sint32` で、値は `MarkerType` の体系である
+（`Kernel/API/MiniCadCallBacks.h`）。**`kArrowMarker = 0`** なので、
+**`style=0` は「無し」ではなく矢印そのもの**——有無は `style` ではなく
+`visibility`（新口）で持たれている。実測でも `style=0` のまま `visible` が
+`yes` にも `no` にもなった。根種別は `kMarkerRootTypeMask = 127` で取り出す。
+
+### 余録: `GetObjBeginningMarker` が `false` を返したら、出力引数を読まない
+
+実測はこうである——**マーカーを一度も設定していない線では `false` が返り**、
+そのとき `mstyle` / `visibility` には**その図面の既定とも無関係な値**が入っていた
+（既定が `size=0.0472` の図面で `size=0.1250`）。**設定した後は `true`** に変わる。
+
+**「戻り値は『値が入っているか』を表す」というのはこの並びからの解釈で、
+【推定】である**（#106 の問いではないので、そこは追っていない）。
+ただし**実測から直接言えること**——`false` のときの出力引数は当てにならない——
+だけで、使う側には足りる。
+
+### 範囲外: per-object のマーカーの `size` は書いたとおりにならない
+
+`SetArrowHeadsN(h, …, size=3.0000)` と書いて、読み戻しは旧口 `2.0000` /
+新口 `1.8000` だった（文書の既定側では `0.0472` → `0.0945` と書いたとおりに
+往復する）。**この調査の問いは有無（真偽値）なので、ここは追っていない**——
+[#108](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/108)
+へ切り出した。マーカーの**大きさ**を per-object で指定するなら、そちらを先に読むこと。
