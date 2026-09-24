@@ -124,15 +124,95 @@ per-object の書き込みは**1 つも要らない**。
   生まれたオブジェクトは by-instance のままだった（PIO 20 個中 1 個、矩形は 0 個しか
   by-class にならない）。**マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ**
   ——が、**それは無料**（0.00ms。上記の表）なので、費用の話には影響しない。
-  - **この 1/20 という半端な数には見込みが立った。** 別の調査（#102）の実測で、
-    **誰も下ろしていないのに既定のマーカー by-class が下りる**のを観測した——矩形を
-    作っても下りないが、**構造材 PIO を作った後には下りていた**。「最初の PIO が継いだ
-    その作成で既定の旗が下り、以降は継げない」なら、1/20 も（PIO の後に測った）矩形の
-    0/20 も説明が付く。**確定はしていない**（下ろしたのが PIO の作成だと 1 例から
-    決めている）ので、[#104](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/104)
-    で追う。**結論（マーカーが要るなら per-object を呼ぶ・それは無料）は変わらない。**
+  - **この 1/20 の正体は「立てた旗が、最初の PIO の作り直しで下りる」だった**
+    （下記「マーカーの既定を下ろしているのは…」で確定）。**旗は立っている間に生まれた
+    最初の PIO にだけ継承され、その PIO 自身の再生成で下りる**ので、PIO は 1/20 に、
+    その後に作った矩形は 0/20 になる。
+  - **巻き添えは無い。** 他の 6 旗は PIO を作っても下りない（同上）。
+    **この高速化が取り込みの途中で崩れることはない。**
 - **「作る前」でなければ効かない。** 既定はオブジェクトが生まれる瞬間に読まれるので、
   作った後に立てても既存のオブジェクトは変わらない。
+
+### マーカーの既定を下ろしているのは「PIO の作り直し（regen）」——1/20 の正体
+
+実測（VW 2026 / mac / 新規の空図面。`probes/runtime/default-arrow-byclass-drop/`。
+7 つの既定を立ててから、**1 つ作るごとに**文書の既定の 7 旗と、そのオブジェクトの 7 旗を
+読み直した。per-object の書き込みは 1 度もしていない）。
+
+**文書の既定の旗**（作った直後に読み直したもの）:
+
+| 何をした後 | 他の 6 つ | **マーカー** |
+| --- | --- | --- |
+| 7 つを立てた後 | yes | **yes** |
+| 矩形 A を作った後 | yes | yes |
+| **構造材 PIO 1 を作った後** | yes | **no** ← ここで下りる |
+| 構造材 PIO 2 を作った後 | yes | no |
+| 矩形 B を作った後 | yes | no |
+
+**生まれたオブジェクトの旗**:
+
+| | 他の 6 つ | **マーカー** |
+| --- | --- | --- |
+| 矩形 A | yes | **yes** |
+| **構造材 PIO 1** | yes | **yes** |
+| 構造材 PIO 2 | yes | no |
+| 矩形 B | yes | no |
+
+**下ろしているのは「作成」ではなく「作り直し（regen）」である。** 3 手で切り分けた
+（どの手も、測る前に旗を立て直してから行った——「下りているものは下りない」を
+読み違えないため）:
+
+| 何をした後 | マーカーの旗 |
+| --- | --- |
+| `CreateCustomObjectPath(..., doRegen=false)` で PIO を作る | **yes（下りない）** |
+| その PIO へ `ResetObject` | **no（下りる）** |
+| 矩形へ `ResetObject` | yes（下りない） |
+
+読みどころが 5 つある。
+
+1. **`doRegen=false` なら下りない。** 下ろしているのは「PIO を作ること」ではなく、
+   作成に含まれる**再生成**である。
+2. **作成を伴わない `ResetObject` でも下りる。** だから**PIO の再生成を起こす経路は
+   すべて疑う**——作成（`doRegen=true`）・`ResetObject`・**`UpdateStyledObjects`**
+   （ジオメトリの作り直しまで行う。[Parametric Objects](Parametric%20Objects.md)）。
+   最後の 1 つは**【推定】**——直接は測っていない。前 2 つは実測である。
+3. **矩形の `ResetObject` では下りない。** 再生成を持たないものでは何も起こらない。
+   **PIO でないものを何個作っても旗は保つ**（矩形 A で確認済み）。
+4. **1 回の再生成で 1 回だけ下りる。これが #94 の 1/20 の正体。** 旗は「立っている間に
+   生まれた最初の PIO」にだけ継承され、**その PIO 自身の再生成で下りる**。だから PIO は
+   20 個中 1 個になり、その後に作った矩形は 20 個中 0 個になる（#94 の表は PIO → 矩形の
+   順で走らせている）。**矩形が先なら矩形が継ぐ**——上の表の矩形 A が実際にそうなった。
+5. **巻き添えは無い。** 他の 6 旗（ペン色・面色・線の太さ・線種・面パターン・不透明度）は
+   **全区間で `yes` のまま**だった。**前節の高速化は、大量生成の途中で崩れない。**
+   崩れるのはマーカーだけである。
+
+**立て直せば毎回継げる（が、毎回下りる）。** 「作る直前に `SetDefaultArrowByClass()` を
+呼ぶ」を 3 本続けたところ、**3 本とも継ぎ、3 本とも直後に下りた**（3/3）。ただし
+per-object の `SetArrowByClass(h)` を呼ぶのと手間は変わらず、そちらは**作り直しを
+起こさない（0.00ms）うえ図面の既定を触らない**ので、**per-object のほうが素直**である。
+
+### マーカーの既定 by-class は、意図して下ろせない
+
+5 つで効いた筋（「**既定の値を書けば旗が下りる**」。下記「既定の by-class は…」）は、
+**マーカーでは効かない**。`SetDefaultArrowHeadsN` を書いても旗は下りなかった——
+**同じ値でも違う値でも**である（同じプローブ。値そのものは書けている——`size` は
+`0.1250` → `0.2500` に変わった）。
+
+| 何をした後 | マーカーの旗 |
+| --- | --- |
+| `SetDefaultArrowByClass()` を立て直した | yes |
+| `SetDefaultArrowHeadsN`（**同じ値**） | **yes（下りない）** |
+| `SetDefaultArrowHeadsN`（**違う値**） | **yes（下りない）** |
+
+**下ろす道は「PIO を 1 つ再生成する」しか無い**（上記）。それは図面へオブジェクトを
+足すか既存の PIO を作り直すことなので、**後始末には使えない**。
+
+> **帰結: `SetDefaultArrowByClass()` を呼んではいけない。** 呼ぶと**その図面の既定を
+> 元へ戻せない**——実測でも、プローブの締めで他の 6 旗は走らせる前へ戻ったのに、
+> **マーカーの旗だけが「走らせる前 = no / 締めの後 = yes」のまま残った**。
+> 継承もされない旗を、戻せない代償で立てることになる。
+> **マーカーが要るなら per-object の `SetArrowByClass(h)` を呼ぶ**——無料で、
+> 図面の既定を触らない。
 
 ### `SetObjectClass` だけでは属性は by-instance のまま（前提は今も正しい）
 
@@ -149,9 +229,10 @@ gSDK->SetDefaultClass(classID);
 gSDK->SetDefaultPColorsByClass();  gSDK->SetDefaultFColorsByClass();
 gSDK->SetDefaultLWByClass();       gSDK->SetDefaultPPatByClass();
 gSDK->SetDefaultFPatByClass();     gSDK->SetDefaultOpacityByClass();
-gSDK->SetDefaultArrowByClass();    // 立つが継承はされない（下の 1 行が要る）
+// SetDefaultArrowByClass() は**呼ばない**——継承されないうえ、下ろす口が無い
+// （下記「マーカーの既定 by-class は、意図して下ろせない」）。
 
-// 以後、オブジェクトを作るだけ。per-object の 7 つも SetObjectClass も呼ばない。
+// 以後、オブジェクトを作るだけ。per-object の 6 つも SetObjectClass も呼ばない。
 MCObjectHandle object = /* CreateCustomObjectPath など */;
 gSDK->SetArrowByClass(object);     // マーカーだけ。無料
 ```
@@ -275,8 +356,15 @@ if (savedFPatByClass)    gSDK->SetDefaultFPatByClass();
 「利用者が『クラスの属性を使用』にしていた図面を by-instance へ変えてしまう」ので、
 **戻すつもりで設定を書き換える**ことになる。
 
-**マーカー（`SetDefaultArrowByClass()`）の後始末は未確認**——`SetDefaultArrowHeadsN` を
-書けば下りるかは確かめられていない（確かめようとしたときには、誰も下ろしていないのに
-旗が下りていた。[#104](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/104)
-で追う）。マーカーの既定は**どうせ継承されない**（前節）ので、**立てないのが素直**である
+**マーカー（`SetDefaultArrowByClass()`）は、この後始末に載らない**——`SetDefaultArrowHeadsN`
+を書いても旗は下りない（同じ値でも違う値でも。上記「マーカーの既定 by-class は、意図して
+下ろせない」で確定）。**立てたら戻せない**ので、**そもそも立てない**のが唯一の正解である
 ——マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ（無料）。
+
+> **`SetDefaultArrowHeadsN` は、マーカーの有無（`starting` / `ending`）を `false` へ
+> 書き戻せないらしい**——退避した `start=no end=no` を書き戻しても、読み直すと
+> `start=yes end=yes` のままだった（`size` は `0.2500` → `0.1250` と正しく往復した）。
+> **setter が効かないのか、getter が by-class のときに嘘をつくのかは切り分けていない**
+> ——#104 の範囲外なので
+> [#106](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/106)
+> へ切り出した。**値を往復させる作りにするなら、そこの結論を待つこと。**
