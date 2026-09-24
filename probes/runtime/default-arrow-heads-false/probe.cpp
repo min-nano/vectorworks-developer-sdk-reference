@@ -180,7 +180,10 @@ namespace
 
 	// --- 3 つの証人を 1 度に書き出す --------------------------------------
 
-	void LogDefaultWitnesses(vwprobe::Report& probe, const std::string& label)
+	// `drawWitness` は「線を 1 本引いて、生まれたオブジェクトからも読むか」。
+	// **利用者の図面では引かない**（既定を書き換えないだけでなく、図形も足さない）
+	// ので、この証人が立つのはプローブが自分で開いた空の図面の中だけである。
+	void LogDefaultWitnesses(vwprobe::Report& probe, const std::string& label, bool drawWitness)
 	{
 		const LegacyArrow legacy = ReadLegacyDefault();
 		const MarkerEnd beginning = ReadModernDefaultBeginning();
@@ -194,8 +197,12 @@ namespace
 		probe.log("| 新口 `GetDefaultBeginningMarker` | " + Describe(beginning) + " |");
 		probe.log("| 新口 `GetDefaultEndMarker` | " + Describe(ending) + " |");
 
-		MCObjectHandle line = CreateWitnessLine();
-		if (line == nil)
+		MCObjectHandle line = drawWitness ? CreateWitnessLine() : nil;
+		if (!drawWitness)
+		{
+			probe.log("| 直後に引いた線 | （この図面では引かない） |");
+		}
+		else if (line == nil)
 		{
 			probe.log("| 直後に引いた線 | **引けなかった（nil）** |");
 		}
@@ -219,7 +226,11 @@ namespace
 
 	size_t CountOpenDocuments()
 	{
-		TVWArray_OpenFileInformation files;
+		// **`MockUp::` が要る。** `TVWArray_OpenFileInformation`（`ISDK.h:153` の
+		// `TXGenericArray<SOpenFileInformation>` の別名）は名前空間 `MockUp` の中に
+		// あり、`PluginPrefix.h` の `using namespace` 4 つはそこを開けない。
+		// 素で書くと `unknown type name` でコンパイルが通らない（実際に踏んだ）。
+		MockUp::TVWArray_OpenFileInformation files;
 		gSDK->GetOpenFilesList(files);
 		return static_cast<size_t>(files.GetSize());
 	}
@@ -287,15 +298,17 @@ namespace
 		size_t countBefore = 0;
 		const bool fresh = OpenFreshDocument(probe, countBefore);
 
-		LogDefaultWitnesses(probe, "① 触っていない既定（この図面の出発点）");
+		LogDefaultWitnesses(probe, "① 触っていない既定（この図面の出発点）", fresh);
 
 		const LegacyArrow start = ReadLegacyDefault();
 
 		gSDK->SetDefaultArrowHeadsN(starting, ending, start.style, start.size);
-		LogDefaultWitnesses(
-			probe, std::string("② `SetDefaultArrowHeadsN(start=") + YesNo(starting) +
-					   ", end=" + YesNo(ending) + ", style=" + Num(static_cast<long>(start.style)) +
-					   ", size=" + Real(static_cast<double>(start.size)) + ")` を書いた後");
+		LogDefaultWitnesses(probe,
+							std::string("② `SetDefaultArrowHeadsN(start=") + YesNo(starting) +
+								", end=" + YesNo(ending) +
+								", style=" + Num(static_cast<long>(start.style)) +
+								", size=" + Real(static_cast<double>(start.size)) + ")` を書いた後",
+							fresh);
 
 		// size を変えて (no, no) を書く。真偽値が戻らなくても size が変われば、
 		// 呼び出しそのものは届いている。
@@ -306,7 +319,8 @@ namespace
 							std::string("③ `SetDefaultArrowHeadsN(start=no, end=no, style=") +
 								Num(static_cast<long>(start.style)) +
 								", size=" + Real(static_cast<double>(otherSize)) +
-								")` を書いた後（**消せるか**。size は変えてある）");
+								")` を書いた後（**消せるか**。size は変えてある）",
+							fresh);
 
 		// 新口で消す。style はいま入っているものをそのまま書き戻し、
 		// **visibility だけを false にする**。
@@ -317,8 +331,10 @@ namespace
 				gSDK->SetDefaultBeginningMarker(beginning.style, static_cast<Boolean>(0));
 			const Boolean retEnd = gSDK->SetDefaultEndMarker(finish.style, static_cast<Boolean>(0));
 			LogDefaultWitnesses(
-				probe, std::string("④ 新口で `visibility=false` を書いた後（戻り値: 始点=") +
-						   YesNo(retBeginning) + " 終点=" + YesNo(retEnd) + "）");
+				probe,
+				std::string("④ 新口で `visibility=false` を書いた後（戻り値: 始点=") +
+					YesNo(retBeginning) + " 終点=" + YesNo(retEnd) + "）",
+				fresh);
 		}
 
 		if (fresh)
@@ -346,7 +362,7 @@ VW_PROBE("default-arrow-heads-false", "マーカーの有無に false を書け�
 	probe.log("");
 	probe.log("開いている図面の件数: " + Num(static_cast<long>(CountOpenDocuments())));
 	probe.log("");
-	LogDefaultWitnesses(probe, "この図面の既定（読むだけ。書き換えない）");
+	LogDefaultWitnesses(probe, "この図面の既定（読むだけ。書き換えない）", false);
 
 	// =====================================================================
 	// 1〜3. 組み合わせごとに、真っさらな既定から測る。
@@ -484,9 +500,11 @@ VW_PROBE("default-arrow-heads-false", "マーカーの有無に false を書け�
 	probe.log("開いている図面の件数: " + Num(static_cast<long>(CountOpenDocuments())) +
 			  "（0 節と同じなら、開いた図面はすべて閉じられている）");
 	probe.log("");
-	LogDefaultWitnesses(probe, "いまアクティブな図面の既定（0 節と同じなら書き換えていない）");
-	probe.log("**上の行で線が 1 本引かれている**——証人を立てるために必ず 1 本引くため。"
-			  "利用者の図面に残るのはこの 1 本だけで、既定は書き換えていない。");
+	LogDefaultWitnesses(probe, "いまアクティブな図面の既定（0 節と同じなら書き換えていない）",
+						false);
+	probe.log("**利用者の図面には何も足していない**——既定を書き換えないだけでなく、"
+			  "証人の線もプローブが自分で開いた図面の中だけで引いている"
+			  "（図面を開けなかったときは、その旨が上に出ている）。");
 	probe.log("");
 
 	probe.log("## 読み方");
