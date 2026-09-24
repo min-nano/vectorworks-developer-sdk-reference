@@ -504,20 +504,20 @@ per-object では:
 | `GetDefaultArrowHeadsN` の `ending` | 終点ではなく `starting` を返す | `GetDefaultEndMarker(mstyle&, visibility&)` |
 | `SetDefaultArrowHeadsN` の `starting` / `ending` | `false` が無視される（読みの問題ではない） | `SetDefaultBeginningMarker` / `SetDefaultEndMarker` |
 
-### 余録: `style=0` は「マーカー無し」ではない【ヘッダ根拠】
+### 余録: `style=0` は「マーカー無し」ではない
 
-`ArrowType` は `Sint32` で、値は `MarkerType` の体系である
-（`Kernel/API/MiniCadCallBacks.h`）。**`kArrowMarker = 0`** なので、
-**`style=0` は「無し」ではなく矢印そのもの**——有無は `style` ではなく
-`visibility`（新口）で持たれている。実測でも `style=0` のまま `visible` が
-`yes` にも `no` にもなった。根種別は `kMarkerRootTypeMask = 127` で取り出す。
+**マーカーの有無は `style` ではなく `visibility`（新口）で持たれている。**
+実測でも `style=0` のまま `visible` が `yes` にも `no` にもなった。どの口でも
+`0` は「無し」ではなく**矢印**を指す（新口の `MarkerType` では `kArrowMarker = 0`、
+旧口の番号でも `0` は塗り矢印。下記「マーカーの様式は口ごとに別の番号体系」）。
 
-**ただし「`ArrowType` の値は `MarkerType` の体系である」の部分は、後の実測と食い違っている**
-——旧口に書いた `ArrowType` と新口で読める `MarkerType` は同じ数にならなかった
-（下記「様式（根種別）を変えても、大きさの振る舞いは変わらない」。
-[#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)）。
-**`kArrowMarker = 0` なので `style=0` は「無し」ではない**という、この節の要点そのものは
-実測とも合っている。
+> **この節にあった「`ArrowType` は `Sint32` で、値は `MarkerType` の体系である
+> 【ヘッダ根拠】」は誤りだったので消した。** `Kernel/API/MiniCadCallBacks.h` は 756 行目から
+> `ArrowType`（`arArrow = 0` … `arCross = 4`）と `MarkerType`（`kArrowMarker = 0` …）の
+> **2 つの体系を続けて**定義しており、**隣の enum を読み違えていた**。正しい対応は
+> 下記「マーカーの様式は口ごとに別の番号体系」に実測で書いてある
+> （[#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)）。
+> `Sint32` であることと、`0` が「無し」ではないことだけが合っていた。
 
 ### 余録: `GetObjBeginningMarker` が `false` を返したら、出力引数を読まない
 
@@ -632,10 +632,212 @@ per-object では:
 `kArrowMarker` / `kCircleMarker` / `kDimSlashMarker` / `kOpenBaseNoFillMarker` の 4 つで
 測って、**すべて** 0.5000 → 0.5000、3.0000 → 1.8000 だった。上限も丸めも様式に依らない。
 
-> **ただし、書いた `ArrowType` と新口で読める `MarkerType` は同じ数値ではない**
-> ——`0`→`0` / `2`→**`1280`** / `3`→**`2`** / `1280`→**`2048`**。
-> **上記「余録: `style=0` は「マーカー無し」ではない」の「`ArrowType` の値は `MarkerType` の
-> 体系である」は【ヘッダ根拠】で、この実測と食い違っている**（`kArrowMarker = 0` が
-> 「無し」ではない、という部分は実測とも合う）。#108 の範囲外なので対応表は追っていない
-> ——[#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)
-> へ切り出した。**様式を指定して描くなら、そちらを先に読むこと。**
+> **ただし、ここで振っていた `style` の数値は、新口で読める `MarkerType` とは
+> 別の体系である**——旧口へ書いた `0` / `2` / `3` / `1280` は、新口ではそれぞれ
+> `0` / `1280` / `2` / `2048` として読める。**対応表は下記「マーカーの様式は口ごとに
+> 別の番号体系——`ArrowType` は `MarkerType` ではない」に確定させた**
+> （[#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)）。
+> **様式を指定して描くなら、そちらを先に読むこと。**
+
+## マーカーの様式は口ごとに別の番号体系——`ArrowType` は `MarkerType` ではない
+
+**結論を先に。`SetArrowHeadsN` / `SetDefaultArrowHeadsN` / `SetMarker` の `style` に
+`MarkerType` の定数（`kCircleMarker` など）を渡してはいけない。** この 3 つはいずれも
+**`MarkerType` ではない、口ごとに別の小さな番号**を受ける。`MarkerType` をそのまま
+**書ける**のは新口（`Set…BeginningMarker` / `Set…EndMarker`）だけである。
+
+| 口 | 呼び出し | `style` に**書く**と | `style` を**読む**と |
+| --- | --- | --- | --- |
+| **旧口・per-object** | `Set/GetArrowHeadsN(h, …)` | **`EMarkerType` の番号 0〜6**（VWFC の並び） | **どちらの体系でもない。ほぼ常に `0`——読みに使えない** |
+| **旧口・文書の既定** | `Set/GetDefaultArrowHeadsN` | **`ArrowType` の enum 0〜4**（`arArrow`…`arCross`） | 同上（0〜2 だけ返る） |
+| **中口** | `SetMarker(h, …)` / `GetMarker(h, …)` | **`EMarkerType` の番号 0〜6**（宣言は `MarkerType` だが嘘） | **`MarkerType` そのもの**（新口と一致） |
+| **新口** | `Set/GetObjBeginningMarker`・`…EndMarker`・`…Default…` | **`MarkerType` そのもの**（往復する） | **`MarkerType` そのもの** |
+
+**同じ `ArrowType` という型・同じ `style` という引数名なのに、per-object と文書の既定で
+解釈が違う。** そして**中口は宣言が `MarkerType` なのに書きだけ番号で受ける**。
+実測（VW 2026 / mac。`probes/runtime/marker-style-mapping/`。
+[#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)。
+[実測ログ](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/115#issuecomment-5822033817)）。
+
+### per-object の旧口（`SetArrowHeadsN`）は `EMarkerType` の番号 0〜6
+
+`EMarkerType` は VWFC のヘッダにある並びである（`VWFC/VWFCLibrary.h:62`。
+`kMarkerFilledArrow = 0` … `kMarkerCross = 6`）。**これが per-object の旧口の `style` の
+正体**で、`MarkerType` の定数とは無関係である。1 つの値につき新しい線を 1 本引いて
+書き、新口で読み戻した:
+
+| 書いた `style` | `EMarkerType` の名前 | 読める `MarkerType` | 分解（根 / 塗り / 台） | 一緒に入る `nAngle` |
+| --- | --- | --- | --- | --- |
+| `0` | `kMarkerFilledArrow` | **`0`** = `kArrowMarker` | 矢印 / 線色 / 平 | 15 |
+| `1` | `kMarkerEmptyArrow` | **`256`** = `kNoFillMarker` | 矢印 / **無し** / 平 | 15 |
+| `2` | `kMarkerOpenArrow` | **`1280`** = `kOpenBaseNoFillMarker` | 矢印 / 無し / **開** | 15 |
+| `3` | `kMarkerFilledBall` | **`2`** = `kCircleMarker` | **丸** / 線色 / 平 | 0 |
+| `4` | `kMarkerEmptyBall` | **`130`** = `kWhiteFillMarker｜kCircleMarker` | 丸 / **白** / 平 | 0 |
+| `5` | `kMarkerSlash` | **`259`** = `kNoFillDimSlashMarker` | **スラッシュ** / 無し / 平 | 45 |
+| `6` | `kMarkerCross` | **`260`** = `kNoFillDimCrossMarker` | **十字** / 無し / 平 | 45 |
+| `7` 以上・負・範囲外 | — | **`2048`** = `kAngleBaseMarker` | 矢印 / 線色 / **角** | 15 |
+
+- **`nAngle` も一緒に決まる。** 旧口に角度の引数は無いが、様式ごとの既定
+  （矢印 15 / 丸 0 / スラッシュ・十字 45）が書き込まれる。**#108 で「全区間 `15`」と
+  読めたのは、そこで振っていた様式がすべて矢印の仲間だったから**である。
+- **VWFC の名前と、実際に入る `MarkerType` は言葉としては一致しない。**
+  `kMarkerEmptyArrow`（白矢印）に入るのは**白塗り**ではなく**塗り無し**の `256`、
+  `kMarkerEmptyBall`（白丸）に入るのは**白塗り**の `130` である。名前ではなく
+  上の表の数値で読むこと。
+
+### 範囲外は飽和でも下位ビットでもない——per-object は一律 `2048`
+
+`20` / `50` / `100` / `126` / `127` / `128` / `129` / `255` / `256` / `259` / `260` /
+`261` / `512` / `1024` / `1280` / `2048` / `3072` / `4096` / `16384` / `32767` /
+`32768` / `65535` / `65536` / `-1` / `-2` の **25 点すべてで `2048`**（角台の矢印）
+になった。
+
+- **飽和（クランプ）ではない**——飽和なら有効範囲の端（`6` → `260`）になるはずである。
+- **下位ビットだけでもない**——`127`/`128`/`255`/`256` はマスクの境目だが、そこで割れない。
+- **剰余でもない**——`7` の倍数（`7` / `14` / `21`）で `0` に戻らない。
+- **負の値も同じ `2048`** で、符号なしとして大きな値になっているわけでもない。
+
+**つまり「0〜6 以外はすべて `2048`（線色塗りの矢印・角台）という 1 つの値になる」**
+という、それ以上分解できない振る舞いである。#110 で `1280` を書いて `2048` が読めたのは、
+`1280` が**範囲外だった**というだけのことだった。
+
+### 文書の既定の旧口（`SetDefaultArrowHeadsN`）は**別の表**——`ArrowType` の enum 0〜4
+
+**per-object と同じ呼び出し名・同じ型なのに、番号の意味が違う。** 文書の既定側は
+`MiniCadCallBacks.h:756` の `ArrowType` の enum そのもの（`arArrow = 0`,
+`arTightArrow = 1`, `arBall = 2`, `arSlash = 3`, `arCross = 4`）で解釈される:
+
+| 既定へ書いた `style` | `ArrowType` の名前 | 既定・新口で読める `MarkerType` | そこから生まれた線 |
+| --- | --- | --- | --- |
+| `0` | `arArrow` | **`0`** = `kArrowMarker` | `0` |
+| `1` | `arTightArrow` | **`1`** = `kConcaveCurvedArrowMarker` | `1` |
+| `2` | `arBall` | **`2`** = `kCircleMarker` | `2` |
+| `3` | `arSlash` | **`259`** = `kNoFillDimSlashMarker` | `259` |
+| `4` | `arCross` | **`260`** = `kNoFillDimCrossMarker` | `260` |
+| `5` 以上 | — | **`0`**（矢印） | `0` |
+
+**範囲外の落ち先も per-object（`2048`）とは違って `0` である。** 生まれた線は既定と
+同じ値を持つので、**既定が嘘をついているのではなく、本当にその値が書かれている**。
+
+**同じ番号が 2 つの口で別の様式を指す。** 例えば `3` は、per-object では**丸**
+（`kCircleMarker`）、文書の既定では**スラッシュ**（`kNoFillDimSlashMarker`）になる。
+**旧口で様式を指定するなら、どちらの口を叩いているかで表を選び分けなければならない**
+——だから旧口では指定しない、が実務上の答えである（下記「どう書くか」）。
+
+### 旧口の `style` の**読み**は、どちらの体系でもない——使ってはいけない
+
+`GetArrowHeadsN` / `GetDefaultArrowHeadsN` の `style` は、**書いた番号も
+`MarkerType` も返さない**。per-object で 0〜19 を書いて読み直すと、
+**`3` を書いたときだけ `2` が返り、残りはすべて `0`** だった（`1` を書いても `0`、
+`2` を書いても `0`、`4`〜`19` も `0`）。新口で `MarkerType` を書いてから読んでも、
+`0` / `1` / `2` の 3 つだけがそのまま返り、`259` / `260` / `261` / `6` / `7` / `11` /
+`128` / `256` / `1280` / `2048` / `3072` / `32768` / `16384` は**すべて `0`** になる。
+
+**`style=0` が返ってきても「矢印である」とは限らない。「読めなかった」も同じ `0` である。**
+→ **様式を読むのは新口の `SMarkerStyle.style` か、中口の `GetMarker`**（下記）。
+
+これは**大きさの読み**（`GetArrowHeadsN` の `size` が整数インチに丸まる。上記
+「per-object の `GetArrowHeadsN` は大きさを整数インチに丸めて返す」）と同じ筋の話で、
+**旧口の getter は読み戻しに使えない**——有無（`ending`）・大きさ・様式の 3 つとも嘘をつく。
+
+### マスク（`kMarkerRootTypeMask` ほか）は `MarkerType` の値にだけ意味がある
+
+`kMarkerRootTypeMask = 127` / `kMarkerFillMask = 896` / `kMarkerBaseMask = 7168` /
+`kMarkerHalfTickMask = 24576` / `kMarkerTailMask = 32768` は、**新口と中口が返す
+`MarkerType` に対してだけ**意味を持つ。旧口へ書く番号（0〜6）も、旧口が返す番号も
+`MarkerType` ではないので、**同じマスクで割っても意味を成さない**（実際、旧口の読みは
+ほぼ `0` なので、割ると何もかもが「矢印 / 線色 / 平」に見えてしまう）。
+
+### 新口（`SetObjBeginningMarker`）は `MarkerType` をそのまま往復させる
+
+**様式を指定する道はここである。** 21 個の `MarkerType` を書いて読み直し、
+**17 個はそのまま往復した**（`0` / `1` / `2` / `6` / `7` / `11` / `128` / `256` /
+`258` / `259` / `260` / `261` / `1280` / `2048` / `3072` / `16384` / `32768`）。
+
+**往復しなかった 4 つは、いずれも `kNoFillMarker`（256）が自動で足された**もので、
+**壊れているのではなく VW が補正している**:
+
+| 書いた | 読めた | 何が起きたか |
+| --- | --- | --- |
+| `3` = `kDimSlashMarker` | `259` | `＋kNoFillMarker` |
+| `4` = `kDimCrossMarker` | `260` | `＋kNoFillMarker` |
+| `5` = `kLassoMarker` | `261` | `＋kNoFillMarker` |
+| `12` = `kDoubleLineMarker` | `268` | `＋kNoFillMarker` |
+
+ヘッダが「`kNoFillMarker` is the only valid setting for `kLassoMarker`,
+`kDimSlashMarker`, `kDimCrossMarker`」と書いているとおりで、**複合定数
+（`kNoFillDimSlashMarker = 259` など）を最初から渡せば往復する**。
+`kDoubleLineMarker`（`268` になる）はヘッダのその注記に挙がっていないが、実測では
+同じ扱いだった。
+
+### 中口（`Set/GetMarker`）——読みは `MarkerType`、書きは `EMarkerType` の番号
+
+`SetMarker(h, MarkerType style, short size, short angle, Boolean start, Boolean end)` /
+`GetMarker(…)`（`Interfaces/VectorWorks/ISDK.h:1401` / `:941`）は、**角度を引数に持つ
+唯一の口**である。ところが:
+
+- **`GetMarker` の `style` は `MarkerType` そのもの**を返す（測った全区間で新口と一致）。
+  **旧口と違って読みに使える。**
+- **`SetMarker` の `style` は `MarkerType` ではない。** 宣言は `MarkerType` だが、
+  実際に受けるのは**per-object の旧口とまったく同じ `EMarkerType` の番号 0〜6**
+  （`0`→`0` / `1`→`256` / `2`→`1280` / `3`→`2` / `4`→`130` / `5`→`259` / `6`→`260`）。
+  **`7` 以上と、`128` / `256` / `1280` / `2048` などの `MarkerType` 定数は、すべて `0`
+  （線色塗りの矢印）になる**——旧口の範囲外が `2048` だったのに対し、こちらは `0`。
+
+**`gSDK->SetMarker(h, kCircleMarker, …)` と書くと、丸ではなく「開いた矢印」（`1280`）に
+なる**——`kCircleMarker` は `2` で、番号の `2` は `kMarkerOpenArrow` だからである。
+
+### 角度（`nAngle`）——書けるのは中口だけ
+
+| 口 | 角度を書けるか | 実測 |
+| --- | --- | --- |
+| **旧口**（`Set(Default)ArrowHeadsN`） | **書けない**（引数が無い） | 様式ごとの既定が入る（矢印 15 / 丸 0 / スラッシュ・十字 45） |
+| **新口**（`SMarkerStyle.nAngle`） | **書けない** | `0` / `5` / `15` / `30` / `45` / `60` / `90` / `120` / `180` の **9 点すべてで、読み戻すと `1`** |
+| **中口**（`SetMarker` の `angle`） | **書ける** | `0`〜`120` は往復した（新口の `nAngle` からも同じ値が読める） |
+
+- **新口で書くと、書いた値に関わらず `nAngle` は `1` になる。** `SMarkerStyle` で
+  実際に効くのは `style` と `dSize` の 2 つだけである（`dWidth` /
+  `nThicknessBasis` / `dThickness` が入らないことは上記「`dWidth` は書いても入らない」）。
+- **中口は `short` で受け取るが、実際には符号付き 8 ビットに切り詰められる**——
+  `180` を書くと `-76`（= 180 − 256）が読めた。**角度は `-128`〜`127` で渡すこと。**
+
+### どう書くか（マーカーの様式・大きさ・角度を指定する）
+
+```cpp
+// --- 様式と大きさ: 新口で書き、新口で読む -------------------------------
+// MarkerType の定数をそのまま渡せる唯一の口。大きさ（dSize）も同じ呼び出しで入る
+// （上記「マーカーの大きさはインチで、上限があり…」）。
+SMarkerStyle mstyle{};
+Boolean visible = false;
+gSDK->GetObjBeginningMarker(line, mstyle, visible); // 他の欄を壊さないよう読んでから
+mstyle.style = kNoFillDimSlashMarker;               // ← 複合定数で渡す（259。3 だと補正される）
+mstyle.dSize = 0.25;                                // インチ。上限は約 2.0（#108）
+gSDK->SetObjBeginningMarker(line, mstyle, static_cast<Boolean>(true));
+
+// --- 読み戻し: 新口か GetMarker。旧口の style は使わない -----------------
+SMarkerStyle readBack{};
+Boolean readVisible = false;
+gSDK->GetObjBeginningMarker(line, readBack, readVisible);
+const long root = readBack.style & kMarkerRootTypeMask; // マスクはここでだけ意味がある
+
+// --- 角度が要るなら中口。style は EMarkerType の番号（0〜6）で渡す -------
+// 注意: SetMarker は宣言が MarkerType でも MarkerType を受けない。
+gSDK->SetMarker(line, /* 5 = スラッシュ */ 5, /* size(pt) */ 36, /* angle */ 45,
+                static_cast<Boolean>(true), static_cast<Boolean>(true));
+```
+
+**旧口（`Set(Default)ArrowHeadsN`）で様式を指定しないこと。** per-object と文書の既定で
+番号の意味が違い、読み戻しもできないので、**書いた側が何を書いたか分からなくなる**。
+旧口を使ってよいのは**有無を点ける向きだけ**である（上記「消すには新口の
+`visibility=false` を使う」の復元手順）。
+
+### 未確認のまま残っているもの
+
+- **中口で角度を書いてから新口で様式・大きさを書き直すと、角度は残るのか。**
+  新口で書くと `nAngle` が `1` になるので、**順番によっては角度が消える**見込みが高いが、
+  組み合わせては測っていない。#113 の問いは「`nAngle` は旧口から書けるのか」だったので
+  範囲外である——[#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116)
+  へ切り出した。
+- **クラスの口**（`Set/GetClassBeginningMarker` / `Set/GetClMarker`）がどちらの体系かは
+  測っていない。`Set/GetClMarker` は中口と同じ形（`MarkerType` ＋ `size` ＋ `angle`）
+  なので同じ振る舞いが疑われるが、**確かめていない**（同じく #116）。
