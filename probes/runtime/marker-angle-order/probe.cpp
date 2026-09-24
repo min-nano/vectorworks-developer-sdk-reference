@@ -1,70 +1,40 @@
 //
 //	probes/runtime/marker-angle-order/probe.cpp
 //
-//	[issue #116] **様式（`MarkerType`）と角度（`nAngle`）を、両方とも狙いどおりに
-//	書く手順はあるのか。** #113（[実測ログ](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/115#issuecomment-5822033817)）で
-//	確定したのは次の 2 つで、**この 2 つを組み合わせたときどうなるかは測っていない**:
+//	[issue #116] **様式・大きさ・角度を同時に指定する手順はあるか**——1 周目
+//	（[実測ログ](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/117#issuecomment-5822405859)）で
+//	issue の 6 項目には答えが出た。要点:
 //
-//	  * **角度を書けるのは中口（`SetMarker` の `angle`）だけ。** 新口
-//	    （`SMarkerStyle.nAngle`）は 0 / 5 / 15 / 30 / 45 / 60 / 90 / 120 / 180 の
-//	    9 点すべてで、読み戻すと `1` になった。
-//	  * **`MarkerType` をそのまま書けるのは新口（`SetObjBeginningMarker`）だけ。**
-//	    中口の `SetMarker` は宣言が `MarkerType` でも、実際に受けるのは
-//	    `EMarkerType` の番号 0〜6（`0`→`0` / `1`→`256` / `2`→`1280` / `3`→`2` /
-//	    `4`→`130` / `5`→`259` / `6`→`260`。7 以上と `MarkerType` の定数はすべて `0`）。
+//	  * **新口 1 回で 3 つとも書ける**（`SetObjBeginningMarker` に `style` / `dSize` /
+//	    `nAngle` をまとめて渡す）。中口を挟む必要は無い。
+//	  * **ただし `kCircleMarker`（丸）の様式だけは、新口で書くと `nAngle` が `1` になる。**
+//	    丸以外（矢印・スラッシュ・六角・角台）は `45` がそのまま入った。
+//	  * **#113 の「新口では角度を書けない」は、丸を選んで測ったことによる見かけだった**
+//	    ——あのプローブの 5 節は `style` に `kCircleMarker` を固定していた
+//	    （`marker-style-mapping/probe.cpp` の該当箇所）。矢印で掃引すると
+//	    `1` / `2` / `3` / `15` / `45` / `90` / `127` / `-1` / `-128` の **9 点すべてが往復した**。
+//	  * **クラスの口は per-object と同じ**——新口型（`Set/GetClassBeginningMarker`）は
+//	    `MarkerType` が往復し、中口型（`Set/GetClMarker`）は書きだけ `EMarkerType` の
+//	    番号（0→0 / 1→256 / 2→1280 / 3→2 / 4→130 / 5→259 / 6→260、他は 0）。
 //
-//	つまり**「`MarkerType` の複合定数で様式を指定し、なおかつ角度も指定する」には
-//	2 つの口を続けて叩くしかない**が、新口で書くと `nAngle` が `1` になるので、
-//	**順番によっては角度が消える**見込みが高い。どちらの順でも駄目なら
-//	「角度は SDK からは実質指定できない」と確定させる。
+//	## この 2 周目で閉じる 3 つ
 //
-//	## 先に `sdk-grep` で分かったこと（実機へ持っていく前に潰した筋）
+//	1 周目が**新しく開けてしまった穴**を塞ぐ。どれも実機のログで機械的に答えが出る
+//	（目視は要らない）。
 //
-//	**1. `SMarkerStyle.nAngle` は `Sint8`**（`MiniCadCallBacks.h:839-847`）:
-//
-//	    struct SMarkerStyle {
-//	        MarkerType style;   // Uint16
-//	        Sint8      nAngle;  // ← 角度。-128〜127 しか入らない
-//	        double     dSize;   // インチ
-//	        double     dWidth;  // 書いても入らない（#108）
-//	        Uint8      nThicknessBasis;
-//	        double     dThickness;
-//	    };
-//
-//	**中口の `angle` が `short` なのに符号付き 8 ビットへ切り詰められる**
-//	（#113 で `180` → `-76`）のは、行き先がこの `Sint8` だからである。
-//	**器の狭さは `1` に潰れる説明にはならない**——45 も 15 も `Sint8` に収まる。
-//
-//	**2. ヘッダの用例は `nAngle = 15` を書いている**（`MiniCadCallBacks.h:851-853`。
-//	`marker.style = kArrowMarker + kOpenBaseNoFillMarker; marker.nAngle = 15;`）
-//	——**ヘッダは「新口で角度を書ける」つもりで書かれている**。実測はそうならない。
-//
-//	**3. クラスの口は 2 つある**（`Interfaces/VectorWorks/ISDK.h:734-748`）。
-//	形は per-object の新口・中口とそれぞれ同じで、**どちらも `visibility` を持たない**:
-//
-//	    Boolean GetClassBeginningMarker(InternalIndex index, SMarkerStyle& mstyle);   // :734
-//	    Boolean SetClassBeginningMarker(InternalIndex index, SMarkerStyle mstyle);    // :743
-//	    void    GetClMarker(InternalIndex index, MarkerType& style, short& size, short& angle); // :739
-//	    void    SetClMarker(InternalIndex index, MarkerType style, short size, short angle);    // :748
-//
-//	**ヘッダからは「どちらの番号体系か」は分からない**——per-object でも、宣言が
-//	`MarkerType` の中口が実際には `EMarkerType` の番号を受けていた。だから実測する。
-//
-//	## 確かめること（issue の切り分け項目に 1 節ずつ対応させてある）
-//
-//	  | 節 | 何を見るか | issue の項目 |
+//	  | 節 | 何を確かめるか | なぜ要るか |
 //	  | --- | --- | --- |
-//	  | 1 | **中口で角度 → 新口で様式・大きさ**。角度は残るか | 1 つ目 |
-//	  | 2 | **新口で様式 → 中口で角度**。様式は番号の表へ落ちるか | 2 つ目 |
-//	  | 3 | `nAngle` の `1` は「無視されて既定」か「潰される」か | 3 つ目 |
-//	  | 4 | **様式・大きさ・角度を同時に指定する手順**を 6 通り試して結論を出す | 4 つ目 |
-//	  | 5 | **クラスの新口**（`Set/GetClassBeginningMarker`）は `MarkerType` が往復するか | 5 つ目 |
-//	  | 6 | **クラスの中口**（`Set/GetClMarker`）に同じ罠があるか | 6 つ目 |
-//	  | 7 | クラスへ書いた値が、そのクラスの線へ本当に下りるか（物証） | — |
+//	  | 1 | **角度が入る様式・入らない様式の総当たり** | 「丸だけ駄目」なのか、他にもあるのかが分からないと**使う側が手順を選べない** |
+//	  | 2 | 角度の掃引を**丸と矢印で並べて**、中口からも書く | 「丸は角度を持てない」のか「新口の書き込みだけが潰す」のかを分ける |
+//	  | 3 | **中口の `size` の単位** | 1 周目で **18 を書いたら 0.0011 インチ**、`dSize=0.2500` を書いたら **4096** と読めた。**ポイント（72 分の 1）ではない**——`0.2500 × 16384 = 4096` なので **1/16384 インチ**に見えるが、3 点しか無い |
+//	  | 4 | **クラスのマーカーは線へ下りるのか**（`GetMarkerPolys` で物証を取る） | 1 周目の 7 節は per-object の口で読んで「戻り値 no」だった——**その出力引数は当てにならない**（Findings「`GetObjBeginningMarker` が `false` を返したら…」）ので、**何も分かっていない** |
 //
-//	**利用者の図面は触らない**——測るのはすべて、このプローブが自分で開いて自分で閉じる
-//	空の図面の中である（`OpenDocumentPath(nullptr, false)` / `CloseDocument()`）。
-//	節ごとに開き直すので前の節を引きずらない。
+//	`GetMarkerPolys(object, startPoly&, endPoly&)`（`ISDK.h:851`）は**実際に描かれる
+//	マーカーの図形**を返す。**描かれているかどうかが目視なしで分かる**唯一の口なので、
+//	4 節はこれと `GetObjectBounds`（:854）で測る。
+//
+//	**利用者の図面は触らない**——クラスを触る 4 節も含め、測るのはすべて、このプローブが
+//	自分で開いて自分で閉じる空の図面の中である。節ごとに開き直すので前の節を引きずらない。
 //
 
 #include "Probe.h"
@@ -90,9 +60,11 @@ namespace
 		return std::string(buffer);
 	}
 
-	const char* SameOrNot(long got, long wanted)
+	std::string Real6(double value)
 	{
-		return got == wanted ? "**入った**" : "**違う**";
+		char buffer[48];
+		std::snprintf(buffer, sizeof(buffer), "%.6f", value);
+		return std::string(buffer);
 	}
 
 	// --- `MarkerType` の分解と命名（#113 のプローブと同じ割り方） ---------
@@ -131,7 +103,7 @@ namespace
 		}
 	}
 
-	// --- 中口（`Get/SetMarker`。角度を持つ唯一の per-object の口） --------
+	// --- 中口（`Get/SetMarker`） -----------------------------------------
 
 	struct MiddleMarker
 	{
@@ -153,8 +125,8 @@ namespace
 
 	struct MarkerEnd
 	{
-		Boolean ok = 0; // 呼び出しの戻り値（参考。判断には使わない——#113）
-		Boolean visibility = 0; // マーカーが付いているか
+		Boolean ok = 0;
+		Boolean visibility = 0;
 		SMarkerStyle style{};
 	};
 
@@ -165,25 +137,21 @@ namespace
 		return end;
 	}
 
-	long ModernStyleOf(const MarkerEnd& end)
+	// 新口で**様式・大きさ・角度を 1 回で**書く（1 周目の R6。両端に同じものを書く）。
+	void WriteModernAll(MCObjectHandle object, long style, double sizeInInch, long angle)
 	{
-		return static_cast<long>(end.style.style);
+		MarkerEnd end = ReadModern(object);
+		end.style.style = static_cast<MarkerType>(style);
+		end.style.dSize = sizeInInch;
+		end.style.nAngle = static_cast<Sint8>(angle);
+		gSDK->SetObjBeginningMarker(object, end.style, static_cast<Boolean>(1));
+		gSDK->SetObjEndMarker(object, end.style, static_cast<Boolean>(1));
 	}
 
-	long ModernAngleOf(const MarkerEnd& end)
+	void WriteMiddle(MCObjectHandle object, long style, short size, short angle)
 	{
-		return static_cast<long>(end.style.nAngle);
-	}
-
-	// 新口で「様式と大きさだけを書く」——**読んでから差し替えて書き戻す**（他の欄を
-	// 壊さないため。#113 の「どう書くか」がそう書いている）。両端に同じものを書く。
-	void WriteModernStyleAndSize(MCObjectHandle object, long style, double sizeInInch)
-	{
-		MarkerEnd begin = ReadModern(object);
-		begin.style.style = static_cast<MarkerType>(style);
-		begin.style.dSize = sizeInInch;
-		gSDK->SetObjBeginningMarker(object, begin.style, static_cast<Boolean>(1));
-		gSDK->SetObjEndMarker(object, begin.style, static_cast<Boolean>(1));
+		gSDK->SetMarker(object, static_cast<MarkerType>(style), size, angle,
+						static_cast<Boolean>(1), static_cast<Boolean>(1));
 	}
 
 	// --- 証人の線 --------------------------------------------------------
@@ -250,430 +218,314 @@ namespace
 
 	// --- 掃引する値 ------------------------------------------------------
 
-	// 狙う `MarkerType`。**中口の番号 0〜6 で届くもの**（`259` = スラッシュ・塗り無し、
-	// `2` = 丸）と、**届かないもの**（`6` 六角 / `2048` 角台の矢印 / `258` 丸・塗り無し）を
-	// 混ぜてある——「複合定数と角度を両立させられるか」は、この 2 群で答えが変わりうる。
-	struct Target
+	struct NamedMarker
 	{
-		long style;		  // 狙う MarkerType
-		const char* name; // 定数名
-		long middleNumber; // 同じ様式へ中口で届く EMarkerType の番号（無ければ -1）
+		long value;
+		const char* name;
 	};
 
-	const Target kTargets[] = {
-		{kNoFillDimSlashMarker, "kNoFillDimSlashMarker(259)", 5},
-		{kCircleMarker, "kCircleMarker(2)", 3},
-		{kOpenBaseNoFillMarker, "kOpenBaseNoFillMarker(1280)", 2},
-		{kHexagonMarker, "kHexagonMarker(6)", -1},
-		{kAngleBaseMarker, "kAngleBaseMarker(2048)", -1},
-		{kCircleMarker | kNoFillMarker, "kCircleMarker|kNoFillMarker(258)", -1},
+	// 1 節。**根を全部（ヘッダにある 0〜12）と、塗り・台・尾・半の変種**を並べる。
+	// 丸の変種を 3 つ（`2` / `130` / `258`）入れてあるのは、「丸の根なら塗りに依らず
+	// 駄目なのか」をここで割るため。
+	const NamedMarker kStyleSweep[] = {
+		{kArrowMarker, "kArrowMarker(0)"},
+		{kConcaveCurvedArrowMarker, "kConcaveCurvedArrowMarker(1)"},
+		{kCircleMarker, "kCircleMarker(2)"},
+		{kDimSlashMarker, "kDimSlashMarker(3)"},
+		{kDimCrossMarker, "kDimCrossMarker(4)"},
+		{kLassoMarker, "kLassoMarker(5)"},
+		{kHexagonMarker, "kHexagonMarker(6)"},
+		{kVShapedMarker, "kVShapedMarker(7)"},
+		{8, "8（名前の無い根）"},
+		{9, "9（名前の無い根）"},
+		{10, "10（名前の無い根）"},
+		{kRectangleMarker, "kRectangleMarker(11)"},
+		{kDoubleLineMarker, "kDoubleLineMarker(12)"},
+		{kWhiteFillMarker, "kWhiteFillMarker(128。矢印＋白)"},
+		{kNoFillMarker, "kNoFillMarker(256。矢印＋塗り無し)"},
+		{kWhiteFillMarker | kCircleMarker, "kWhiteFillMarker|kCircleMarker(130)"},
+		{kCircleMarker | kNoFillMarker, "kCircleMarker|kNoFillMarker(258)"},
+		{kNoFillDimSlashMarker, "kNoFillDimSlashMarker(259)"},
+		{kNoFillDimCrossMarker, "kNoFillDimCrossMarker(260)"},
+		{kNoFillLassoMarker, "kNoFillLassoMarker(261)"},
+		{kOpenBaseNoFillMarker, "kOpenBaseNoFillMarker(1280)"},
+		{kAngleBaseMarker, "kAngleBaseMarker(2048)"},
+		{kArcBaseMarker, "kArcBaseMarker(3072)"},
+		{kLeftHalfTickMarker, "kLeftHalfTickMarker(16384)"},
+		{kTailMarker, "kTailMarker(32768。矢印＋尾)"},
 	};
-	const size_t kTargetsCount = sizeof(kTargets) / sizeof(kTargets[0]);
+	const size_t kStyleSweepCount = sizeof(kStyleSweep) / sizeof(kStyleSweep[0]);
 
-	// 3 節。**#113 が振っていない小さな値（1 / 2 / 3）と、`Sint8` の両端**を入れてある
-	// ——「`1` だけは書ける」「小さな値だけ通る」なら、ここで割れる。
-	const long kAngleSweep[] = {1, 2, 3, 15, 45, 90, 127, -1, -128};
+	// 2 節。角度の掃引（`Sint8` の両端と、#113 が振った値を含む）。
+	const long kAngleSweep[] = {0, 1, 2, 3, 15, 30, 45, 60, 90, 120, 127, -1, -45, -128};
 	const size_t kAngleSweepCount = sizeof(kAngleSweep) / sizeof(kAngleSweep[0]);
 
-	// 測るときの大きさ。新口はインチ、中口はポイント（72 分の 1 インチ）。
-	// **同じ大きさを 2 つの単位で書く**ので、どちらの口が最後に効いたかが読める。
+	// 3 節。中口へ書く `size`（`short`）。**1/16384 インチ説**なら
+	// `16384` = 1 インチ、`32767` ≒ 2 インチ（上限。#108 で 1.9999 インチ）になる。
+	// ポイント説（72 分の 1）なら `72` = 1 インチ。**両説が割れる点を選んである。**
+	const long kMiddleSizeSweep[] = {1, 18, 72, 144, 512, 1024, 4096, 8192, 16384, 32767, -1};
+	const size_t kMiddleSizeSweepCount = sizeof(kMiddleSizeSweep) / sizeof(kMiddleSizeSweep[0]);
+
+	// 3 節の逆向き。新口へ書くインチを、中口がどう読むか。
+	const double kInchSweep[] = {0.0100, 0.0625, 0.1250, 0.2500, 0.5000, 1.0000, 1.9999, 2.0000};
+	const size_t kInchSweepCount = sizeof(kInchSweep) / sizeof(kInchSweep[0]);
+
 	const double kSizeInch = 0.2500;
-	const short kSizePoints = 18; // = 0.2500 インチ
-	const short kProbeAngle = 45;
+	const long kProbeAngle = 45;
 
-	// 中口で「様式・大きさ・角度」を書く（両端）。
-	void WriteMiddle(MCObjectHandle object, long style, short sizePoints, short angle)
+	// 4 節。マーカーの図形（`GetMarkerPolys`）を 1 行のセルにする。
+	// **nil かどうかが「描かれているか」の物証**で、大きさは境界で見る。
+	std::string MarkerPolyCells(MCObjectHandle object)
 	{
-		gSDK->SetMarker(object, static_cast<MarkerType>(style), sizePoints, angle,
-						static_cast<Boolean>(1), static_cast<Boolean>(1));
-	}
-
-	// 1 本の線のいまの姿を、表の 1 行ぶんのセルにする（新口 style / dSize / nAngle と
-	// 中口の angle）。**2 つの口から同じ角度を読む**ので、片方の嘘に気付ける。
-	std::string StateCells(MCObjectHandle object)
-	{
-		const MarkerEnd modern = ReadModern(object);
-		const MiddleMarker middle = ReadMiddle(object);
-		return Num(ModernStyleOf(modern)) + " | " + RootName(ModernStyleOf(modern)) + " | " +
-			   Real(modern.style.dSize) + " | " + Num(ModernAngleOf(modern)) + " | " +
-			   Num(static_cast<long>(middle.angle)) + " | " + Num(static_cast<long>(middle.size));
+		MCObjectHandle startPoly = nil;
+		MCObjectHandle endPoly = nil;
+		gSDK->GetMarkerPolys(object, startPoly, endPoly);
+		std::string cells = std::string(startPoly != nil ? "**あり**" : "なし") + " | " +
+							std::string(endPoly != nil ? "**あり**" : "なし") + " | ";
+		if (startPoly == nil)
+			return cells + "— | —";
+		cells += Num(static_cast<long>(gSDK->GetObjectTypeN(startPoly))) + " | ";
+		WorldRect bounds;
+		if (gSDK->GetObjectBounds(startPoly, bounds) != 0)
+		{
+			const double width =
+				static_cast<double>(bounds.right) - static_cast<double>(bounds.left);
+			const double height =
+				static_cast<double>(bounds.top) - static_cast<double>(bounds.bottom);
+			cells += Real(width < 0 ? -width : width) + " × " + Real(height < 0 ? -height : height);
+		}
+		else
+		{
+			cells += "**境界を読めない**";
+		}
+		return cells;
 	}
 } // namespace
 
-VW_PROBE("marker-angle-order", "マーカーの角度と様式を両立させる手順があるかを確かめる",
-		 "中口と新口を続けて叩く順番を総当たりし、クラスの 2 つの口の番号体系も測る")
+VW_PROBE("marker-angle-order", "角度が入る様式・中口の size の単位・クラスの下り方を確かめる",
+		 "1 周目で開いた 3 つの穴（丸だけ駄目なのか・size の単位・クラスの物証）を塞ぐ")
 {
-	probe.log("**様式（`MarkerType`）と角度（`nAngle`）を両方とも狙いどおりに書く手順は"
-			  "あるのか**——これがこの調査の問いである。#113 で確定したのは"
-			  "「**角度を書けるのは中口（`SetMarker`）だけ**」「**`MarkerType` をそのまま"
-			  "書けるのは新口（`SetObjBeginningMarker`）だけ**」の 2 つで、"
-			  "**組み合わせたときどうなるかは測っていない**。");
+	probe.log("**これは 2 周目である。** 1 周目"
+			  "（[実測ログ](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/"
+			  "117#issuecomment-5822405859)）"
+			  "で issue #116 の 6 項目には答えが出た:");
 	probe.log("");
-	probe.log("**先に `sdk-grep` で分かっていること**——`SMarkerStyle.nAngle` は `Sint8` "
-			  "（`MiniCadCallBacks.h:841`）。中口の `angle`（`short`）が `180` → `-76` と"
-			  "切り詰められたのは行き先がこの器だからである。**ただし器の狭さは "
-			  "`1` に潰れる説明にはならない**——`45` も `15` も `Sint8` に収まる。"
-			  "しかも**ヘッダの用例は `marker.nAngle = 15;` と書いている**"
-			  "（同 :851-853）——ヘッダは「新口で角度を書ける」つもりでいる。");
+	probe.log("- **新口 1 回で 3 つとも書ける**——`SetObjBeginningMarker` に `style` / "
+			  "`dSize` / `nAngle` をまとめて渡せばよい。中口を挟む必要は無い。");
+	probe.log("- **ただし丸（`kCircleMarker`）だけは、新口で書くと `nAngle` が `1` になった。**");
+	probe.log("- **#113 の「新口では角度を書けない」は、丸を選んで測ったことによる見かけ**"
+			  "だった（あのプローブの 5 節は `style` に `kCircleMarker` を固定していた）。"
+			  "矢印で掃引すると 9 点すべてが往復した。");
+	probe.log("- **クラスの口は per-object と同じ**（新口型は `MarkerType` が往復、"
+			  "中口型は書きだけ `EMarkerType` の番号）。");
 	probe.log("");
-	probe.log("**クラスの口は 2 つある**（`ISDK.h:734-748`）。`Set/GetClassBeginningMarker` は"
-			  "新口と同じ形（`SMarkerStyle`）、`Set/GetClMarker` は中口と同じ形"
-			  "（`MarkerType` ＋ `size` ＋ `angle`）で、**どちらも `visibility` を持たない**。"
-			  "per-object では「宣言が `MarkerType` でも実際は番号」という罠があったので、"
-			  "**ヘッダの宣言では決められない**——5・6 節で実測する。");
+	probe.log("**2 周目は、1 周目が新しく開けた 3 つの穴を塞ぐ**——どれも機械で答えが出る:");
+	probe.log("");
+	probe.log("1. **角度が入る様式・入らない様式の総当たり**（「丸だけ駄目」なのか）");
+	probe.log("2. **丸と矢印を並べた角度の掃引**（丸が角度を持てないのか、"
+			  "新口の書き込みだけが潰すのか）");
+	probe.log("3. **中口の `size` の単位**——1 周目で `18` を書いたら **0.0011 インチ**、"
+			  "`dSize=0.2500` を書いたら **4096** と読めた。**ポイントではない**"
+			  "（`0.2500 × 16384 = 4096`）が、3 点しか無い");
+	probe.log("4. **クラスのマーカーは線へ下りるのか**——1 周目の 7 節は per-object の口で"
+			  "読んで「戻り値 no」だった。**その出力引数は当てにならない**ので何も分かって"
+			  "いない。`GetMarkerPolys`（`ISDK.h:851`）で**描かれる図形そのもの**を見る");
 	probe.log("");
 	probe.log("**利用者の図面は触らない**——測るのは、このプローブが自分で開いて自分で"
 			  "閉じる空の図面の中だけである。");
 	probe.log("");
-	probe.log("表の読み方: 新口 style は `GetObjBeginningMarker` の `SMarkerStyle.style`、"
-			  "`dSize` はインチ、`nAngle` は同じ構造体の角度。中口 angle / size は "
-			  "`GetMarker` の値（size は**ポイント**）。狙いは "
-			  "**大きさ " +
-			  Real(kSizeInch) + " インチ（= " + Num(kSizePoints) + "ポイント）・角度 " +
-			  Num(kProbeAngle) + " 度**で通してある。");
-	probe.log("");
 
 	// =====================================================================
-	// 1. 中口で角度 → 新口で様式・大きさ
+	// 1. 角度が入る様式・入らない様式
 	// =====================================================================
-	probe.log("## 1. 中口で角度を書いた後に、新口で様式・大きさを書く");
+	probe.log("## 1. 新口で角度が入る様式・入らない様式（総当たり）");
 	probe.log("");
-	probe.log("**角度は残るのか、`1` に潰れるのか。** 1 本ごとに新しい線を引き、"
-			  "`SetMarker(line, 0, " +
-			  Num(kSizePoints) + ", " + Num(kProbeAngle) +
-			  ", yes, yes)` で角度を入れてから、新口で `style` と `dSize` を書く"
-			  "（**読んでから差し替えて書き戻す**——#113 の「どう書くか」の形）。");
+	probe.log("1 本ごとに新しい線を引き、**新口 1 回**で `style` ＋ `dSize=" + Real(kSizeInch) +
+			  "` ＋ `nAngle=" + Num(kProbeAngle) + "` を書いて読み戻す。");
 	probe.log("");
 
 	{
 		size_t countBefore = 0;
 		const bool fresh = OpenFreshDocument(probe, countBefore);
 
-		probe.log("| 狙う様式 | 中口の後の angle | 新口の後の style | 根 | dSize | "
-				  "nAngle | 中口 angle | 中口 size |");
-		probe.log("| --- | --- | --- | --- | --- | --- | --- | --- |");
-		for (size_t i = 0; i < kTargetsCount; ++i)
+		probe.log("| 書いた style | 読めた style | 根 | dSize | nAngle | 中口 angle | "
+				  "**角度は入ったか** |");
+		probe.log("| --- | --- | --- | --- | --- | --- | --- |");
+		for (size_t i = 0; i < kStyleSweepCount; ++i)
 		{
 			MCObjectHandle line = CreateWitnessLine();
 			if (line == nil)
 			{
-				probe.log("| " + std::string(kTargets[i].name) +
-						  " | **引けなかった（nil）** | | | | | | |");
+				probe.log("| " + std::string(kStyleSweep[i].name) +
+						  " | **引けなかった（nil）** | | | | | |");
 				continue;
 			}
-			// ① 中口で角度を入れる（様式は塗り矢印 = 番号 0 にしておく）。
-			WriteMiddle(line, 0, kSizePoints, kProbeAngle);
-			const long angleAfterMiddle = static_cast<long>(ReadMiddle(line).angle);
-			// ② 新口で様式と大きさを書く。
-			WriteModernStyleAndSize(line, kTargets[i].style, kSizeInch);
-			probe.log("| " + std::string(kTargets[i].name) + " | " + Num(angleAfterMiddle) + " | " +
-					  StateCells(line) + " |");
+			WriteModernAll(line, kStyleSweep[i].value, kSizeInch, kProbeAngle);
+			const MarkerEnd got = ReadModern(line);
+			const long gotStyle = static_cast<long>(got.style.style);
+			const long gotAngle = static_cast<long>(got.style.nAngle);
+			probe.log("| " + std::string(kStyleSweep[i].name) + " | " + Num(gotStyle) + " | " +
+					  RootName(gotStyle) + " | " + Real(got.style.dSize) + " | " + Num(gotAngle) +
+					  " | " + Num(static_cast<long>(ReadMiddle(line).angle)) + " | " +
+					  std::string(gotAngle == kProbeAngle ? "**入った**" : "**違う**") + " |");
 		}
 		probe.log("");
-		probe.log("**読み方**: `nAngle` の欄が " + Num(kProbeAngle) +
-				  " のままなら**角度は残る**（＝新口は `nAngle` を触らない）。"
-				  "`1` になっていれば**新口で書いた時点で角度が消える**ので、"
-				  "この順では両立しない。");
+		probe.log("**読み方**: 「違う」が丸の根（`2` / `130` / `258`）の行だけに並べば、"
+				  "**角度を持てないのは丸だけ**と確定する。他の根にも並ぶなら、"
+				  "**その一覧がそのまま「角度を指定できない様式」の表**になる。");
 		probe.log("");
 		CloseFreshDocument(probe, countBefore, fresh);
 	}
 
 	// =====================================================================
-	// 2. 新口で様式 → 中口で角度
+	// 2. 丸と矢印を並べた角度の掃引
 	// =====================================================================
-	probe.log("## 2. 逆順——新口で様式を書いた後に、中口で角度を書く");
+	probe.log("## 2. 角度の掃引——丸と矢印を、新口と中口の両方で");
 	probe.log("");
-	probe.log("**中口は `style` も同時に書く**（角度だけを書く口は無い）ので、"
-			  "**様式が番号 0〜6 の表へ落ちてしまわないか**が焦点である。"
-			  "中口へ渡す `style` を 2 通り試す:");
-	probe.log("");
-	probe.log("- **(a) 読み戻した `MarkerType` をそのまま渡す**"
-			  "（素朴にやるとこうなる。#113 のとおりなら番号として解釈されて壊れる）");
-	probe.log("- **(b) 同じ様式へ届く `EMarkerType` の番号を渡す**"
-			  "（届く番号がある様式だけ。無いものは「番号なし」と出る）");
+	probe.log("**丸が角度を持てないのか、新口の書き込みだけが潰すのか**を分ける。"
+			  "中口（`SetMarker`）で丸に角度を書いて入るなら、**潰しているのは新口の"
+			  "書き込みだけ**である（1 周目のクラス 6 節では、中口から丸へ `45` が入った）。");
 	probe.log("");
 
 	{
 		size_t countBefore = 0;
 		const bool fresh = OpenFreshDocument(probe, countBefore);
 
-		probe.log("| 狙う様式 | 中口へ渡した style | 新口の後の style | 最終 style | 根 | "
-				  "dSize | nAngle | 中口 angle | 中口 size | 様式は保たれたか |");
-		probe.log("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |");
-		for (size_t i = 0; i < kTargetsCount; ++i)
-		{
-			for (int variant = 0; variant < 2; ++variant)
-			{
-				const long passed = variant == 0 ? kTargets[i].style : kTargets[i].middleNumber;
-				const std::string passedLabel =
-					variant == 0 ? "(a) " + Num(passed) + "（MarkerType のまま）"
-								 : (passed < 0 ? "(b) **番号なし**"
-											   : "(b) " + Num(passed) + "（EMarkerType の番号）");
-				if (variant == 1 && passed < 0)
-				{
-					probe.log("| " + std::string(kTargets[i].name) + " | " + passedLabel +
-							  " | — | — | — | — | — | — | — | **この様式へ届く番号は無い** |");
-					continue;
-				}
-				MCObjectHandle line = CreateWitnessLine();
-				if (line == nil)
-				{
-					probe.log("| " + std::string(kTargets[i].name) + " | " + passedLabel +
-							  " | **引けなかった（nil）** | | | | | | | |");
-					continue;
-				}
-				// ① 新口で様式と大きさ。
-				WriteModernStyleAndSize(line, kTargets[i].style, kSizeInch);
-				const long styleAfterModern = ModernStyleOf(ReadModern(line));
-				// ② 中口で角度（style も一緒に書かざるを得ない）。
-				WriteMiddle(line, passed, kSizePoints, kProbeAngle);
-				const long finalStyle = ModernStyleOf(ReadModern(line));
-				probe.log("| " + std::string(kTargets[i].name) + " | " + passedLabel + " | " +
-						  Num(styleAfterModern) + " | " + StateCells(line) + " | " +
-						  SameOrNot(finalStyle, kTargets[i].style) + " |");
-			}
-		}
-		probe.log("");
-		probe.log("**読み方**: 「最終 style」が狙いと同じで `nAngle` も " + Num(kProbeAngle) +
-				  " なら、**この順で両立する**。様式が別の数に変わっていれば、"
-				  "**中口の書き込みが様式を番号の表へ落としている**。");
-		probe.log("");
-		CloseFreshDocument(probe, countBefore, fresh);
-	}
-
-	// =====================================================================
-	// 3. `nAngle` の `1` は何なのか
-	// =====================================================================
-	probe.log("## 3. 新口の `nAngle` が `1` になるのは「無視」か「潰し」か");
-	probe.log("");
-	probe.log("**読んでからそのまま書き戻す**（`nAngle` を触らない）とどうなるかで分かる:");
-	probe.log("");
-	probe.log("- 書き戻しても角度が残る → **`nAngle` は読まれていない（無視）** のであって、"
-			  "**既にある角度は壊れない**。#113 で常に `1` だったのは、"
-			  "「新口で書いた線の角度の既定が `1`」というだけのことになる。");
-	probe.log("- 書き戻すと `1` になる → **新口で書くたびに角度が `1` へ潰される**。"
-			  "角度を入れた後で新口を叩けない（1 節の順は使えない）。");
-	probe.log("");
-	probe.log("あわせて**#113 が振っていない小さな値（1 / 2 / 3）と `Sint8` の両端**も"
-			  "書いてみる——「`1` だけは書ける」「小さい値だけ通る」ならここで割れる。");
-	probe.log("");
-
-	{
-		size_t countBefore = 0;
-		const bool fresh = OpenFreshDocument(probe, countBefore);
-
-		probe.log("### 3-A. 角度 " + Num(kProbeAngle) +
-				  " を中口で入れた線に、新口でいろいろな書き方をする");
-		probe.log("");
-		probe.log("| 新口での書き方 | 書く前の nAngle | 書いた後の nAngle | 中口 angle | "
-				  "style | dSize |");
-		probe.log("| --- | --- | --- | --- | --- | --- |");
-
-		struct WriteBackCase
-		{
-			const char* label;
-			int kind; // 0=素通し 1=dSize だけ変える 2=同じ角度を明示 3=別の角度 4=まっさら
-		};
-		const WriteBackCase kCases[] = {
-			{"読んで**何も変えずに**書き戻す", 0},
-			{"読んで **`dSize` だけ**変えて書き戻す", 1},
-			{"読んで **`nAngle` に同じ値**を入れて書き戻す", 2},
-			{"読んで **`nAngle` に別の値（90）**を入れて書き戻す", 3},
-			{"**読まずに** `SMarkerStyle{}`（`nAngle=0`）で書く", 4},
-		};
-		const size_t kCasesCount = sizeof(kCases) / sizeof(kCases[0]);
-
-		for (size_t i = 0; i < kCasesCount; ++i)
-		{
-			MCObjectHandle line = CreateWitnessLine();
-			if (line == nil)
-			{
-				probe.log("| " + std::string(kCases[i].label) +
-						  " | **引けなかった（nil）** | | | | |");
-				continue;
-			}
-			WriteMiddle(line, 0, kSizePoints, kProbeAngle);
-			const MarkerEnd before = ReadModern(line);
-			SMarkerStyle write = before.style;
-			switch (kCases[i].kind)
-			{
-			case 1:
-				write.dSize = 0.5000;
-				break;
-			case 2:
-				write.nAngle = static_cast<Sint8>(kProbeAngle);
-				break;
-			case 3:
-				write.nAngle = static_cast<Sint8>(90);
-				break;
-			case 4:
-			{
-				SMarkerStyle blank{};
-				blank.style = static_cast<MarkerType>(kCircleMarker);
-				blank.dSize = kSizeInch;
-				write = blank;
-				break;
-			}
-			default:
-				break;
-			}
-			gSDK->SetObjBeginningMarker(line, write, static_cast<Boolean>(1));
-			probe.log("| " + std::string(kCases[i].label) + " | " + Num(ModernAngleOf(before)) +
-					  " | " + StateCells(line) + " |");
-		}
-		probe.log("");
-
-		probe.log("### 3-B. 新口へ角度を直に書く（#113 が振っていない値を足した掃引）");
-		probe.log("");
-		probe.log("線は毎回引き直し、**中口で角度 " + Num(kProbeAngle) +
-				  " を入れてから**新口でその値を書く（＝書き込みが効かなければ " +
-				  Num(kProbeAngle) + " が残り、効けば書いた値になり、潰されれば `1` になる）。");
-		probe.log("");
-		probe.log("| 新口へ書いた `nAngle` | 読み戻した nAngle | どうなったか | 中口 angle |");
-		probe.log("| --- | --- | --- | --- |");
+		probe.log("| 書いた角度 | 新口→矢印 | 新口→丸 | 中口→矢印(番号 0) | 中口→丸(番号 3) |");
+		probe.log("| --- | --- | --- | --- | --- |");
 		for (size_t i = 0; i < kAngleSweepCount; ++i)
 		{
 			const long wanted = kAngleSweep[i];
-			MCObjectHandle line = CreateWitnessLine();
-			if (line == nil)
+			std::string cells;
+
+			// 新口 → 矢印 / 丸
+			const long modernStyles[2] = {kArrowMarker, kCircleMarker};
+			for (int k = 0; k < 2; ++k)
 			{
-				probe.log("| " + Num(wanted) + " | **引けなかった（nil）** | | |");
-				continue;
-			}
-			WriteMiddle(line, 0, kSizePoints, kProbeAngle);
-			MarkerEnd end = ReadModern(line);
-			end.style.nAngle = static_cast<Sint8>(wanted);
-			gSDK->SetObjBeginningMarker(line, end.style, static_cast<Boolean>(1));
-			const MarkerEnd after = ReadModern(line);
-			const long got = ModernAngleOf(after);
-			const char* verdict = got == wanted
-									  ? "**書けた**"
-									  : (got == kProbeAngle ? "書き込みが無視された（前の値）"
-															: "**別の値へ潰れた**");
-			probe.log("| " + Num(wanted) + " | " + Num(got) + " | " + verdict + " | " +
-					  Num(static_cast<long>(ReadMiddle(line).angle)) + " |");
-		}
-		probe.log("");
-		CloseFreshDocument(probe, countBefore, fresh);
-	}
-
-	// =====================================================================
-	// 4. 3 つを同時に指定する手順はあるか
-	// =====================================================================
-	probe.log("## 4. 様式・大きさ・角度の 3 つを同時に指定する手順はあるか");
-	probe.log("");
-	probe.log("**この節が issue の結論になる。** 狙いは「様式＝その行の `MarkerType`・"
-			  "大きさ＝" +
-			  Real(kSizeInch) + " インチ・角度＝" + Num(kProbeAngle) +
-			  " 度」の 3 つが**同時に**読み戻せること。手順を 6 通り試す:");
-	probe.log("");
-	probe.log("| 手順 | 何をするか |");
-	probe.log("| --- | --- |");
-	probe.log("| R1 | **中口だけ**（`SetMarker(番号, ポイント, 角度)`） |");
-	probe.log("| R2 | 新口（様式・大きさ）→ 中口（角度。style は番号） |");
-	probe.log("| R3 | 中口（角度）→ 新口（様式・大きさ） |");
-	probe.log("| R4 | 新口 → 中口 → **新口で様式だけ書き直す** |");
-	probe.log("| R5 | 中口 → 新口 → **中口でもう一度**（番号） |");
-	probe.log("| R6 | 新口で `style` と `dSize` と `nAngle` を**まとめて 1 回**で書く |");
-	probe.log("");
-
-	{
-		size_t countBefore = 0;
-		const bool fresh = OpenFreshDocument(probe, countBefore);
-
-		probe.log("| 狙う様式 | 手順 | 最終 style | 根 | dSize | nAngle | 中口 angle | "
-				  "中口 size | **3 つとも狙いどおりか** |");
-		probe.log("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
-		for (size_t i = 0; i < kTargetsCount; ++i)
-		{
-			for (int recipe = 1; recipe <= 6; ++recipe)
-			{
-				const long middleNumber =
-					kTargets[i].middleNumber >= 0 ? kTargets[i].middleNumber : 0;
 				MCObjectHandle line = CreateWitnessLine();
 				if (line == nil)
 				{
-					probe.log("| " + std::string(kTargets[i].name) + " | R" + Num(recipe) +
-							  " | **引けなかった（nil）** | | | | | | |");
+					cells += " **nil** |";
 					continue;
 				}
-				switch (recipe)
-				{
-				case 1:
-					WriteMiddle(line, middleNumber, kSizePoints, kProbeAngle);
-					break;
-				case 2:
-					WriteModernStyleAndSize(line, kTargets[i].style, kSizeInch);
-					WriteMiddle(line, middleNumber, kSizePoints, kProbeAngle);
-					break;
-				case 3:
-					WriteMiddle(line, middleNumber, kSizePoints, kProbeAngle);
-					WriteModernStyleAndSize(line, kTargets[i].style, kSizeInch);
-					break;
-				case 4:
-					WriteModernStyleAndSize(line, kTargets[i].style, kSizeInch);
-					WriteMiddle(line, middleNumber, kSizePoints, kProbeAngle);
-					WriteModernStyleAndSize(line, kTargets[i].style, kSizeInch);
-					break;
-				case 5:
-					WriteMiddle(line, middleNumber, kSizePoints, kProbeAngle);
-					WriteModernStyleAndSize(line, kTargets[i].style, kSizeInch);
-					WriteMiddle(line, middleNumber, kSizePoints, kProbeAngle);
-					break;
-				default:
-				{
-					MarkerEnd end = ReadModern(line);
-					end.style.style = static_cast<MarkerType>(kTargets[i].style);
-					end.style.dSize = kSizeInch;
-					end.style.nAngle = static_cast<Sint8>(kProbeAngle);
-					gSDK->SetObjBeginningMarker(line, end.style, static_cast<Boolean>(1));
-					gSDK->SetObjEndMarker(line, end.style, static_cast<Boolean>(1));
-					break;
-				}
-				}
-				const MarkerEnd got = ReadModern(line);
-				const bool styleOk = ModernStyleOf(got) == kTargets[i].style;
-				const bool sizeOk =
-					got.style.dSize > kSizeInch - 0.0005 && got.style.dSize < kSizeInch + 0.0005;
-				const bool angleOk = ModernAngleOf(got) == kProbeAngle;
-				const std::string verdict = styleOk && sizeOk && angleOk
-												? "**○ 3 つとも入った**"
-												: std::string("× ") + (styleOk ? "" : "様式 ") +
-													  (sizeOk ? "" : "大きさ ") +
-													  (angleOk ? "" : "角度 ") + "が狙いと違う";
-				probe.log("| " + std::string(kTargets[i].name) + " | R" + Num(recipe) + " | " +
-						  StateCells(line) + " | " + verdict + " |");
+				WriteModernAll(line, modernStyles[k], kSizeInch, wanted);
+				cells += " " + Num(static_cast<long>(ReadModern(line).style.nAngle)) + " |";
 			}
+
+			// 中口 → 矢印（番号 0）/ 丸（番号 3）
+			const long middleNumbers[2] = {0, 3};
+			for (int k = 0; k < 2; ++k)
+			{
+				MCObjectHandle line = CreateWitnessLine();
+				if (line == nil)
+				{
+					cells += " **nil** |";
+					continue;
+				}
+				WriteMiddle(line, middleNumbers[k], static_cast<short>(4096),
+							static_cast<short>(wanted));
+				cells += " " + Num(static_cast<long>(ReadModern(line).style.nAngle)) + " |";
+			}
+			probe.log("| " + Num(wanted) + " |" + cells);
 		}
 		probe.log("");
-		probe.log("**読み方**: ○ が 1 つでもあれば、**その手順が答え**である。"
-				  "「中口で届く番号がある様式」だけに ○ が並ぶなら、"
-				  "**角度を指定できるのは中口で届く 7 つの様式だけ**と確定する。"
-				  "どの行にも ○ が無ければ、**様式と角度は同時に指定できない**"
-				  "（＝角度は SDK からは実質指定できない）と確定する。");
+		probe.log("**読み方**: 「新口→丸」の列だけが `1` で埋まり、「中口→丸」が書いた値を"
+				  "返すなら、**丸も角度は持てる。潰しているのは新口の書き込みである**。"
+				  "両方 `1` なら、**丸は角度を持てない**（口の問題ではない）。");
 		probe.log("");
 		CloseFreshDocument(probe, countBefore, fresh);
 	}
 
 	// =====================================================================
-	// 5・6・7. クラスの口
+	// 3. 中口の `size` の単位
 	// =====================================================================
-	probe.log("## 5. クラスの新口（`Set/GetClassBeginningMarker`）");
+	probe.log("## 3. 中口（`Get/SetMarker`）の `size` の単位");
 	probe.log("");
-	probe.log("**`MarkerType` がそのまま往復するか**（per-object の新口と同じか）と、"
-			  "**`nAngle` は書けるか**を見る。この口は `visibility` を持たない。");
+	probe.log("**1 周目で「ポイントではない」ことが分かった**——`18` を書いたら "
+			  "`0.0011` インチ、`dSize=0.2500` を書いたら `4096` と読めた。"
+			  "`0.2500 × 16384 = 4096` なので **1/16384 インチ**に見えるが、"
+			  "3 点では決められないので掃引する。");
+	probe.log("");
+	probe.log("**ポイント説なら `72` が 1 インチ、1/16384 インチ説なら `16384` が 1 インチ**"
+			  "になる。`32767`（`short` の上限）は 1.9999 インチ"
+			  "（= マーカーの大きさの上限。#108）にぴったり当たるはずである。");
 	probe.log("");
 
 	{
 		size_t countBefore = 0;
 		const bool fresh = OpenFreshDocument(probe, countBefore);
 
-		// **クラスは次の順に取る。どれで取れたかは必ずログに出す**（取れたクラスが
-		// 何であれ、番号体系の測定は成り立つ）:
-		//   ① 名前から引く（`ClassNameToID`。:1444）——引くだけで作られるなら、これ
-		//   ② ガイドクラスを作る（`AddGuidesClass`。:1353）——**作る口はこれだけ**
-		//   ③ 寸法クラス（`GetDimensionClassID`。:1368）——図面に必ずある本物のクラス
-		//   ④ なし（`GetNoneClassID`。:1377）——最後の逃げ道
+		probe.log("### 3-A. 中口へ書いた `size` を、新口のインチで読む");
+		probe.log("");
+		probe.log("| 中口へ書いた size | 新口 dSize（インチ） | 中口で読み直した size | "
+				  "size ÷ 16384 | size ÷ 72 |");
+		probe.log("| --- | --- | --- | --- | --- |");
+		for (size_t i = 0; i < kMiddleSizeSweepCount; ++i)
+		{
+			const long wanted = kMiddleSizeSweep[i];
+			MCObjectHandle line = CreateWitnessLine();
+			if (line == nil)
+			{
+				probe.log("| " + Num(wanted) + " | **引けなかった（nil）** | | | |");
+				continue;
+			}
+			WriteMiddle(line, 0, static_cast<short>(wanted), static_cast<short>(kProbeAngle));
+			const MarkerEnd got = ReadModern(line);
+			probe.log("| " + Num(wanted) + " | " + Real6(got.style.dSize) + " | " +
+					  Num(static_cast<long>(ReadMiddle(line).size)) + " | " +
+					  Real6(static_cast<double>(wanted) / 16384.0) + " | " +
+					  Real6(static_cast<double>(wanted) / 72.0) + " |");
+		}
+		probe.log("");
+		probe.log("**読み方**: 「新口 dSize」が「size ÷ 16384」の列と一致すれば"
+				  "**1/16384 インチ**、「size ÷ 72」と一致すれば**ポイント**である。");
+		probe.log("");
+
+		probe.log("### 3-B. 逆向き——新口へ書いたインチを、中口の `size` で読む");
+		probe.log("");
+		probe.log("| 新口へ書いた dSize | 新口で読めた dSize | 中口 size | "
+				  "dSize × 16384 | dSize × 72 |");
+		probe.log("| --- | --- | --- | --- | --- |");
+		for (size_t i = 0; i < kInchSweepCount; ++i)
+		{
+			const double wanted = kInchSweep[i];
+			MCObjectHandle line = CreateWitnessLine();
+			if (line == nil)
+			{
+				probe.log("| " + Real(wanted) + " | **引けなかった（nil）** | | | |");
+				continue;
+			}
+			WriteModernAll(line, kArrowMarker, wanted, kProbeAngle);
+			const MarkerEnd got = ReadModern(line);
+			probe.log("| " + Real(wanted) + " | " + Real6(got.style.dSize) + " | " +
+					  Num(static_cast<long>(ReadMiddle(line).size)) + " | " +
+					  Real(got.style.dSize * 16384.0) + " | " + Real(got.style.dSize * 72.0) +
+					  " |");
+		}
+		probe.log("");
+		probe.log("**読み方**: 「中口 size」が「dSize × 16384」と一致すれば 1/16384 インチ。"
+				  "`short` は 32767 までなので、**2 インチ（= 32768）を超えると読めなくなる"
+				  "はず**——`2.0000` の行がそれを踏む（上限 1.9999 で止まるなら 32766 前後）。");
+		probe.log("");
+		CloseFreshDocument(probe, countBefore, fresh);
+	}
+
+	// =====================================================================
+	// 4. クラスのマーカーは線へ下りるか（物証）
+	// =====================================================================
+	probe.log("## 4. クラスのマーカーは線へ下りるか——`GetMarkerPolys` で物証を取る");
+	probe.log("");
+	probe.log("**1 周目の 7 節は何も分かっていなかった**——per-object の新口で読んで"
+			  "「戻り値 no」だったが、**`false` のときの出力引数は当てにならない**"
+			  "（Findings「余録: `GetObjBeginningMarker` が `false` を返したら、"
+			  "出力引数を読まない」）。**描かれているか**は "
+			  "`GetMarkerPolys`（`ISDK.h:851`）が返す図形で分かる。");
+	probe.log("");
+
+	{
+		size_t countBefore = 0;
+		const bool fresh = OpenFreshDocument(probe, countBefore);
+
 		InternalIndex classIndex = 0;
 		std::string classHow;
 		{
@@ -681,164 +533,37 @@ VW_PROBE("marker-angle-order", "マーカーの角度と様式を両立させる
 			if (named != InternalIndex(-1) && gSDK->ValidClass(named))
 			{
 				classIndex = named;
-				classHow = "`ClassNameToID(\"VwSdkProbeMarker\")` で取れた"
-						   "（**名前を引くだけでクラスが用意される**）";
+				classHow = "`ClassNameToID(\"VwSdkProbeMarker\")` で取れた";
 			}
 			else
 			{
 				const InternalIndex guides = gSDK->AddGuidesClass();
-				const InternalIndex dimension = gSDK->GetDimensionClassID();
 				if (gSDK->ValidClass(guides))
 				{
 					classIndex = guides;
-					classHow = "新しい名前では取れなかったので**ガイドクラスを作って**"
-							   "（`AddGuidesClass`）使う";
-				}
-				else if (gSDK->ValidClass(dimension))
-				{
-					classIndex = dimension;
-					classHow = "**寸法クラス**（`GetDimensionClassID`）を使う"
-							   "——名前からもガイドからも取れなかった";
+					classHow = "**ガイドクラスを作って**（`AddGuidesClass`）使う";
 				}
 				else
 				{
 					classIndex = gSDK->GetNoneClassID();
-					classHow = "**「なし」クラス**（`GetNoneClassID`）を使う"
-							   "——ほかのどれでも取れなかった";
+					classHow = "**「なし」クラス**（`GetNoneClassID`）を使う";
 				}
 			}
 		}
-		probe.log("使うクラス: 番号 " + Num(static_cast<long>(classIndex)) + " ——" + classHow +
-				  "。");
-		{
-			TXString className;
-			gSDK->ClassIDToName(classIndex, className);
-			probe.log("クラス名: `" + std::string(static_cast<const char*>(className)) + "`");
-		}
+		TXString className;
+		gSDK->ClassIDToName(classIndex, className);
+		probe.log("使うクラス: 番号 " + Num(static_cast<long>(classIndex)) + "（`" +
+				  std::string(static_cast<const char*>(className)) + "`）——" + classHow + "。");
 		probe.log("");
 
-		probe.log("### 5-A. `MarkerType` は往復するか（`nAngle` に " + Num(kProbeAngle) +
-				  " を入れて書く）");
-		probe.log("");
-		probe.log("| 書いた style | 書き込みの戻り値 | 読めた style | 根 | dSize | nAngle | "
-				  "様式は往復したか | 角度は入ったか |");
-		probe.log("| --- | --- | --- | --- | --- | --- | --- | --- |");
-		for (size_t i = 0; i < kTargetsCount; ++i)
-		{
-			SMarkerStyle mstyle{};
-			gSDK->GetClassBeginningMarker(classIndex, mstyle);
-			mstyle.style = static_cast<MarkerType>(kTargets[i].style);
-			mstyle.dSize = kSizeInch;
-			mstyle.nAngle = static_cast<Sint8>(kProbeAngle);
-			const Boolean wrote = gSDK->SetClassBeginningMarker(classIndex, mstyle);
-			SMarkerStyle readBack{};
-			gSDK->GetClassBeginningMarker(classIndex, readBack);
-			const long gotStyle = static_cast<long>(readBack.style);
-			const long gotAngle = static_cast<long>(readBack.nAngle);
-			probe.log("| " + std::string(kTargets[i].name) + " | " +
-					  std::string(wrote != 0 ? "true" : "false") + " | " + Num(gotStyle) + " | " +
-					  RootName(gotStyle) + " | " + Real(readBack.dSize) + " | " + Num(gotAngle) +
-					  " | " + SameOrNot(gotStyle, kTargets[i].style) + " | " +
-					  SameOrNot(gotAngle, kProbeAngle) + " |");
-		}
-		probe.log("");
-
-		probe.log("### 5-B. 角度だけを振る（per-object の新口は全点 `1` になった）");
-		probe.log("");
-		probe.log("| 書いた `nAngle` | 読めた `nAngle` | どうなったか |");
-		probe.log("| --- | --- | --- |");
-		for (size_t i = 0; i < kAngleSweepCount; ++i)
-		{
-			const long wanted = kAngleSweep[i];
-			SMarkerStyle mstyle{};
-			gSDK->GetClassBeginningMarker(classIndex, mstyle);
-			mstyle.nAngle = static_cast<Sint8>(wanted);
-			gSDK->SetClassBeginningMarker(classIndex, mstyle);
-			SMarkerStyle readBack{};
-			gSDK->GetClassBeginningMarker(classIndex, readBack);
-			const long got = static_cast<long>(readBack.nAngle);
-			probe.log("| " + Num(wanted) + " | " + Num(got) + " | " +
-					  std::string(got == wanted ? "**書けた**" : "**書けなかった**") + " |");
-		}
-		probe.log("");
-
-		// -----------------------------------------------------------------
-		probe.log("## 6. クラスの中口（`Set/GetClMarker`）——同じ罠があるか");
-		probe.log("");
-		probe.log("per-object の中口は「**読みは `MarkerType`、書きは `EMarkerType` の番号**」"
-				  "だった。同じ形のこの口でも同じか。**番号 0〜6 と `MarkerType` の定数の"
-				  "両方を書いて、クラスの新口で読み戻す**——"
-				  "番号 0〜6 が per-object と同じ `0` / `256` / `1280` / `2` / `130` / `259` / "
-				  "`260` へ化ければ、**同じ表**である。");
-		probe.log("");
-		probe.log("| `SetClMarker` へ書いた style | `GetClMarker` style | angle | size | "
-				  "クラス新口 style | 根 | nAngle | dSize | 書いたとおりか |");
-		probe.log("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
-
-		struct ClassWrite
-		{
-			long value;
-			const char* label;
-		};
-		const ClassWrite kClassWrites[] = {
-			{0, "0"},
-			{1, "1"},
-			{2, "2"},
-			{3, "3"},
-			{4, "4"},
-			{5, "5"},
-			{6, "6"},
-			{7, "7"},
-			{kCircleMarker, "kCircleMarker(2)"},
-			{kNoFillDimSlashMarker, "kNoFillDimSlashMarker(259)"},
-			{kOpenBaseNoFillMarker, "kOpenBaseNoFillMarker(1280)"},
-			{kAngleBaseMarker, "kAngleBaseMarker(2048)"},
-		};
-		const size_t kClassWritesCount = sizeof(kClassWrites) / sizeof(kClassWrites[0]);
-		for (size_t i = 0; i < kClassWritesCount; ++i)
-		{
-			const long wanted = kClassWrites[i].value;
-			gSDK->SetClMarker(classIndex, static_cast<MarkerType>(wanted), kSizePoints,
-							  kProbeAngle);
-			MarkerType clStyle = 0;
-			short clSize = 0;
-			short clAngle = 0;
-			gSDK->GetClMarker(classIndex, clStyle, clSize, clAngle);
-			SMarkerStyle modern{};
-			gSDK->GetClassBeginningMarker(classIndex, modern);
-			const long modernStyle = static_cast<long>(modern.style);
-			probe.log("| " + std::string(kClassWrites[i].label) + " | " +
-					  Num(static_cast<long>(clStyle)) + " | " + Num(static_cast<long>(clAngle)) +
-					  " | " + Num(static_cast<long>(clSize)) + " | " + Num(modernStyle) + " | " +
-					  RootName(modernStyle) + " | " + Num(static_cast<long>(modern.nAngle)) +
-					  " | " + Real(modern.dSize) + " | " + SameOrNot(modernStyle, wanted) + " |");
-		}
-		probe.log("");
-		probe.log("**読み方**: 「クラス新口 style」の欄が、番号 0〜6 に対して per-object の"
-				  "中口とまったく同じ `0` / `256` / `1280` / `2` / `130` / `259` / `260` に"
-				  "なれば、**クラスの中口も `EMarkerType` の番号を受ける**（同じ罠）。"
-				  "`MarkerType` の定数の行がそのまま往復するなら、**クラスの中口だけは"
-				  "宣言どおり**ということになる。`angle` の欄が " +
-				  Num(kProbeAngle) + " なら、**クラスにも角度を書ける口はこちら**である。");
-		probe.log("");
-
-		// -----------------------------------------------------------------
-		probe.log("## 7. クラスへ書いた値は、そのクラスの線へ下りるか");
-		probe.log("");
-		probe.log("**クラスの口が本当にマーカーを持っているか**の物証。"
-				  "5・6 節で書いたクラスへ線を入れ、`SetArrowByClass(line)` を呼んでから"
-				  "per-object の口で読む（`visibility` の引数を持たない口なので、"
-				  "**マーカーが見える状態になるのか**もここで分かる）。");
-		probe.log("");
-
-		// 下りてくるはずの値を、はっきりした組み合わせで置き直す。
-		SMarkerStyle wanted{};
-		gSDK->GetClassBeginningMarker(classIndex, wanted);
-		wanted.style = static_cast<MarkerType>(kNoFillDimSlashMarker);
-		wanted.dSize = kSizeInch;
-		wanted.nAngle = static_cast<Sint8>(kProbeAngle);
-		gSDK->SetClassBeginningMarker(classIndex, wanted);
-		gSDK->SetClassEndMarker(classIndex, wanted);
+		// クラスへはっきりした値を置く（1 周目で往復することは確かめてある）。
+		SMarkerStyle classStyle{};
+		gSDK->GetClassBeginningMarker(classIndex, classStyle);
+		classStyle.style = static_cast<MarkerType>(kNoFillDimSlashMarker);
+		classStyle.dSize = kSizeInch;
+		classStyle.nAngle = static_cast<Sint8>(kProbeAngle);
+		gSDK->SetClassBeginningMarker(classIndex, classStyle);
+		gSDK->SetClassEndMarker(classIndex, classStyle);
 		SMarkerStyle classNow{};
 		gSDK->GetClassBeginningMarker(classIndex, classNow);
 		probe.log("クラスへ置いた値: style=" + Num(static_cast<long>(classNow.style)) + "（" +
@@ -846,47 +571,64 @@ VW_PROBE("marker-angle-order", "マーカーの角度と様式を両立させる
 				  " nAngle=" + Num(static_cast<long>(classNow.nAngle)));
 		probe.log("");
 
-		probe.log("| 線 | by-class の旗 | 新口の戻り値 | visible | style | 根 | dSize | "
-				  "nAngle | 中口 angle |");
-		probe.log("| --- | --- | --- | --- | --- | --- | --- | --- | --- |");
-		for (int step = 0; step < 2; ++step)
+		probe.log("| 線 | by-class の旗 | 始点の図形 | 終点の図形 | 図形の種別 | "
+				  "図形の境界（幅 × 高さ） |");
+		probe.log("| --- | --- | --- | --- | --- | --- |");
+
+		struct LineCase
+		{
+			const char* label;
+			int kind; // 0=素の線 1=クラスに入れただけ 2=by-class も立てる 3=per-object で直に
+		};
+		const LineCase kLineCases[] = {
+			{"**対照**: 何も書いていない素の線", 0},
+			{"クラスに入れただけ", 1},
+			{"クラスに入れて `SetArrowByClass` も呼んだ", 2},
+			{"**対照**: per-object で直に書いた（クラスとは無関係）", 3},
+		};
+		const size_t kLineCasesCount = sizeof(kLineCases) / sizeof(kLineCases[0]);
+
+		for (size_t i = 0; i < kLineCasesCount; ++i)
 		{
 			MCObjectHandle line = CreateWitnessLine();
 			if (line == nil)
 			{
-				probe.log(
-					"| " +
-					std::string(step == 0 ? "クラスに入れただけ" : "`SetArrowByClass` も呼んだ") +
-					" | **引けなかった（nil）** | | | | | | | |");
+				probe.log("| " + std::string(kLineCases[i].label) +
+						  " | **引けなかった（nil）** | | | | |");
 				continue;
 			}
-			gSDK->SetObjectClass(line, classIndex);
-			if (step == 1)
+			if (kLineCases[i].kind == 1 || kLineCases[i].kind == 2)
+				gSDK->SetObjectClass(line, classIndex);
+			if (kLineCases[i].kind == 2)
 				gSDK->SetArrowByClass(line);
-			const MarkerEnd end = ReadModern(line);
-			const MiddleMarker middle = ReadMiddle(line);
-			probe.log("| " +
-					  std::string(step == 0 ? "クラスに入れただけ" : "`SetArrowByClass` も呼んだ") +
-					  " | " + std::string(gSDK->GetArrowByClass(line) != 0 ? "yes" : "no") + " | " +
-					  std::string(end.ok != 0 ? "yes" : "no") + " | " +
-					  std::string(end.visibility != 0 ? "yes" : "no") + " | " +
-					  Num(ModernStyleOf(end)) + " | " + RootName(ModernStyleOf(end)) + " | " +
-					  Real(end.style.dSize) + " | " + Num(ModernAngleOf(end)) + " | " +
-					  Num(static_cast<long>(middle.angle)) + " |");
+			if (kLineCases[i].kind == 3)
+				WriteModernAll(line, kNoFillDimSlashMarker, kSizeInch, kProbeAngle);
+			probe.log("| " + std::string(kLineCases[i].label) + " | " +
+					  std::string(gSDK->GetArrowByClass(line) != 0 ? "yes" : "no") + " | " +
+					  MarkerPolyCells(line) + " |");
 		}
+		probe.log("");
+		probe.log("**読み方**: 「クラスに入れて `SetArrowByClass` も呼んだ」行に図形が"
+				  "**あり**、素の線に**なし**なら、**クラスのマーカーは本当に線へ下りている**"
+				  "（per-object の口で読めないだけ）。by-class を立てても図形が出ないなら、"
+				  "**クラスのマーカーは絵に出ていない**——`visibility` の引数が無い口なので、"
+				  "点ける道が別に要ることになる。");
+		probe.log("");
+		probe.log("**対照の 2 本が効く**——素の線に図形が出ないこと（＝この口が"
+				  "「マーカーの有無」を映すこと）と、per-object で直に書いた線に図形が出ること"
+				  "（＝この口が壊れていないこと）を、同じ走りの中で確かめている。");
 		probe.log("");
 		CloseFreshDocument(probe, countBefore, fresh);
 	}
 
 	// =====================================================================
-	// 8. 締め
+	// 5. 締め
 	// =====================================================================
-	probe.log("## 8. 締め");
+	probe.log("## 5. 締め");
 	probe.log("");
 	probe.log("開いている図面の件数: " + Num(static_cast<long>(CountOpenDocuments())) +
 			  "（走らせる前と同じなら、開いた図面はすべて閉じられている）");
 	probe.log("");
-	probe.log("**利用者の図面には何も足していない**——クラスを触る 5〜7 節も含め、"
-			  "測るのはすべてプローブが自分で開いて自分で閉じる空の図面の中である"
-			  "（図面を開けなかったときは、その旨が上に出ている）。");
+	probe.log("**利用者の図面には何も足していない**——クラスを触る 4 節も含め、"
+			  "測るのはすべてプローブが自分で開いて自分で閉じる空の図面の中である。");
 }
