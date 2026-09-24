@@ -432,19 +432,39 @@ if (savedFPatByClass)    gSDK->SetDefaultFPatByClass();
 （旧口の読みも `start=no end=no` へ戻る）。**文書の既定のマーカーを一時的に変えて
 元へ戻す作りは、新口でなら書ける。**
 
+**復元は「新口で消してから、旧口で点け直す」の 2 手で書く。** 2 つの口の、
+**それぞれ実測できている向き**だけを使う形である——新口は消す向き（上記）、
+旧口は点ける向き（穴 2 の表の ②。`(yes, no)` を書けば始点だけが点く）。
+**旧口で `false` が無視されるのは、直前に新口で消してあるので害が無い**
+（消えている端へ `false` を書いても消えたままなのは、穴 1 の表の 1〜2 行目で
+測れている）。
+
 ```cpp
-// 退避（有無は新口で読む。旧口の ending は信用できない）
+// --- 退避: 有無は新口で読む（旧口の ending は信用できない） ---------------
 SMarkerStyle savedBegin{}, savedEnd{};
 Boolean savedBeginVisible = false, savedEndVisible = false;
 gSDK->GetDefaultBeginningMarker(savedBegin, savedBeginVisible);
 gSDK->GetDefaultEndMarker(savedEnd, savedEndVisible);
+// 様式と大きさは旧口でまとめて退避できる（往復する）。
+Boolean ignoredStart = false, ignoredEnd = false;
+ArrowType savedStyle = 0;
+double_gs savedSize = 0;
+gSDK->GetDefaultArrowHeadsN(ignoredStart, ignoredEnd, savedStyle, savedSize);
 
-// …取り込みのあいだだけ変える…
+// --- …取り込みのあいだだけ変える… ---------------------------------------
 
-// 復元（visibility を明示的に書けるので、消す方向にも効く）
-gSDK->SetDefaultBeginningMarker(savedBegin, savedBeginVisible);
-gSDK->SetDefaultEndMarker(savedEnd, savedEndVisible);
+// --- 復元: ① 新口で両端を消す（これが唯一の「消す」道） -------------------
+gSDK->SetDefaultBeginningMarker(savedBegin, static_cast<Boolean>(false));
+gSDK->SetDefaultEndMarker(savedEnd, static_cast<Boolean>(false));
+
+// --- 復元: ② 元から点いていた端だけを旧口で点け直す ----------------------
+// 点ける向きは効く。false は無視されるが、①で消してあるので害が無い。
+gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, savedSize);
 ```
+
+**新口で「点ける」（`visibility=true`）のは、文書の既定では測っていない**
+【未確認】——per-object では効いた（下記）が、文書の既定で同じかは確かめていない。
+**上の手順はその向きを使わない**ので、確かめなくても書ける。
 
 **戻り値（`Boolean`）で成否を判定しないこと**——`visibility=false` を書いて
 実際に消えた回も、消えなかった旧口の呼び出しも、どちらも区別が付かなかった。
@@ -492,12 +512,16 @@ per-object では:
 `visibility`（新口）で持たれている。実測でも `style=0` のまま `visible` が
 `yes` にも `no` にもなった。根種別は `kMarkerRootTypeMask = 127` で取り出す。
 
-### 余録: `GetObjBeginningMarker` の戻り値は「値が入っているか」
+### 余録: `GetObjBeginningMarker` が `false` を返したら、出力引数を読まない
 
-マーカーを一度も設定していない線では `false` を返し、そのとき `mstyle` /
-`visibility` に入っている値は**当てにならない**（新規図面の既定と関係のない
-`size=0.1250` が返っていた）。設定した後は `true` を返す。**`false` が返った
-ときの出力引数を読まないこと。**
+実測はこうである——**マーカーを一度も設定していない線では `false` が返り**、
+そのとき `mstyle` / `visibility` には**その図面の既定とも無関係な値**が入っていた
+（既定が `size=0.0472` の図面で `size=0.1250`）。**設定した後は `true`** に変わる。
+
+**「戻り値は『値が入っているか』を表す」というのはこの並びからの解釈で、
+【推定】である**（#106 の問いではないので、そこは追っていない）。
+ただし**実測から直接言えること**——`false` のときの出力引数は当てにならない——
+だけで、使う側には足りる。
 
 ### 範囲外: per-object のマーカーの `size` は書いたとおりにならない
 
