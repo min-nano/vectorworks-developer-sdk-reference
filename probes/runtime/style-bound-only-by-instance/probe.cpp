@@ -267,13 +267,55 @@ namespace
 		return curve;
 	}
 
+	// **PIO の定義を先に作って「オブジェクトの設定」ダイアログを抑止する。**
+	// `CreateCustomObject*` は、その名前の PIO が文書に未定義なら定義を作り、その
+	// `prefWhen` の**既定が `kCustomObjectPrefAlways`**——つまり**最初の 1 個で
+	// ダイアログが出て止まる**（[Findings「生成時に『オブジェクトの設定』ダイアログが
+	// 出る」](../../../Findings/Parametric%20Objects.md)）。`gSDK->CreateCustomObjectPath`
+	// を直に叩くこのプローブには、VWFC の `VWParametricObj` が内側で呼んでいる
+	// `GS_DefineCustomObject(..., kCustomObjectPrefNever)`（`VWParametricObj.cpp:33`）が
+	// 掛からないので、**自分で 1 度呼ぶ**。
+	//
+	// **実際に踏んだ。** 1 度目の実行は構造材が使われている文書だったので素通りし、
+	// 2 度目はまっさらな文書（レイヤ「レイヤ-1」）で**構造材の「オブジェクトの設定」が
+	// 出て**、キャンセルされ、`CreateCustomObjectPath` が nil を返して A 群で止まった。
+	void DefineStructuralMember(vwprobe::Report& probe)
+	{
+		// 戻り値は定義のハンドル（`ISDK.h:1087`）。**nil でも止めない**——既に定義が
+		// ある文書で nil が返るのか確かめていないので、ここで判断材料だけ残す。
+		MCObjectHandle definition =
+			gSDK->DefineCustomObject("StructuralMember", kCustomObjectPrefNever);
+		probe.log(std::string("`DefineCustomObject(\"StructuralMember\", "
+							  "kCustomObjectPrefNever)`: ") +
+				  (definition != nullptr ? "定義のハンドルが返った"
+										 : "**nil が返った**（既に定義済みの文書かもしれない）") +
+				  " ／ これを呼ばないと、**PIO が未定義の文書では最初の 1 個で"
+				  "「オブジェクトの設定」ダイアログが出て止まる**");
+	}
+
+	// `CreateBare` が nil を返した理由（直近）。**どちらの呼び出しで落ちたかを
+	// 呼び出し側のメッセージへ乗せる**ため——2 度目の実行では「部材を作れなかった」
+	// としか出ず、ダイアログが出たことはログから分からなかった。
+	std::string gCreateFailure;
+
 	MCObjectHandle CreateBare(double dx, double dy, double dz)
 	{
+		gCreateFailure.clear();
 		MCObjectHandle curve = MakePath(dx, dy, dz);
 		if (curve == nullptr)
+		{
+			gCreateFailure = "`CreateNurbsCurve` が nil を返した";
 			return nullptr;
+		}
 		MCObjectHandle noProfile = nullptr;
-		return gSDK->CreateCustomObjectPath("StructuralMember", curve, noProfile, true);
+		MCObjectHandle pio =
+			gSDK->CreateCustomObjectPath("StructuralMember", curve, noProfile, true);
+		if (pio == nullptr)
+			gCreateFailure = "`CreateCustomObjectPath(\"StructuralMember\", …)` が nil を"
+							 "返した（「オブジェクトの設定」ダイアログが出てキャンセル"
+							 "された可能性。抑止は走り出しの `DefineCustomObject` で"
+							 "済ませてある）";
+		return pio;
 	}
 
 	// 対象（**水平材**）を作り、書きたいバウンドを両端へ書く。
@@ -283,7 +325,7 @@ namespace
 		MCObjectHandle pio = CreateBare(kPlanar, 0, 0);
 		if (pio == nullptr)
 		{
-			probe.fail(where + ": 対象を作れなかった");
+			probe.fail(where + ": 対象を作れなかった——" + gCreateFailure);
 			return nullptr;
 		}
 		WriteLayerElevationBound(pio, 0, low);
@@ -324,7 +366,7 @@ namespace
 		MCObjectHandle seed = CreateBare(0, 0, 0);
 		if (seed == nullptr)
 		{
-			probe.fail("A: " + label + " の元にする部材を作れなかった");
+			probe.fail("A: " + label + " の元にする部材を作れなかった——" + gCreateFailure);
 			return style;
 		}
 		// 元にする材のバウンドは 2500 / 5500。**対象が書く 3000 / 3000 とは
@@ -489,6 +531,9 @@ VW_PROBE("style-bound-only-by-instance", "バウンドだけ by-instance のプ�
 				  " のスタイル**を当てて `ResetObject` する");
 		probe.log("  書く値はスタイルの**どちらの端とも違う**ので、**ID 0 と ID 1 を別々に**"
 				  "判定できる（1 度目は終端しか見えていなかった）");
+		// **何かを作る前に必ずここを通す。** これが無いと、構造材が使われていない文書では
+		// 最初の 1 個で「オブジェクトの設定」ダイアログが出て止まる（2 度目の実行で踏んだ）。
+		DefineStructuralMember(probe);
 	}
 
 	// =======================================================================
@@ -498,7 +543,7 @@ VW_PROBE("style-bound-only-by-instance", "バウンドだけ by-instance のプ�
 		MCObjectHandle sample = CreateBare(kPlanar, 0, 0);
 		if (sample == nullptr)
 		{
-			probe.fail("A: 列挙用の部材を作れなかった");
+			probe.fail("A: 列挙用の部材を作れなかった——" + gCreateFailure);
 			return;
 		}
 		VWParametricObj sampleObj(sample);
