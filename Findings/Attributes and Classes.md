@@ -125,9 +125,12 @@ per-object の書き込みは**1 つも要らない**。
   ぶんが消えるため。
 - **マーカーだけは継承されない。** 既定は `GetDefaultArrowByClass()` が `true` を返すのに、
   生まれたオブジェクトは by-instance のままだった（PIO 20 個中 1 個、矩形は 0 個しか
-  by-class にならない）。**マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ**
-  （**それで絵に出るのかは未確認**——下記「未確認のまま残っているもの」。[#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)）
-  ——が、**それは無料**（0.00ms。上記の表）なので、費用の話には影響しない。
+  by-class にならない）。**マーカーが要るなら per-object の口を叩く**——が、**それは無料**
+  （0.00ms。上記の表）なので、費用の話には影響しない。
+  - **ただし `SetArrowByClass` を呼ぶだけでは絵に出ない。** クラスの値を読んで per-object の
+    新口へ `visibility=true` で書き写し、**その後で** `SetArrowByClass` を呼ぶ
+    （下記「クラスのマーカーは、per-object で有無を点けてはじめて描かれる」で確定。
+    [#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)）。
   - **この 1/20 の正体は「立てた旗が、最初の PIO の作り直しで下りる」だった**
     （下記「マーカーの既定を下ろしているのは…」で確定）。**旗は立っている間に生まれた
     最初の PIO にだけ継承され、その PIO 自身の再生成で下りる**ので、PIO は 1/20 に、
@@ -215,12 +218,11 @@ per-object の `SetArrowByClass(h)` を呼ぶのと手間は変わらず、そ�
 > 元へ戻せない**——実測でも、プローブの締めで他の 6 旗は走らせる前へ戻ったのに、
 > **マーカーの旗だけが「走らせる前 = no / 締めの後 = yes」のまま残った**。
 > 継承もされない旗を、戻せない代償で立てることになる。
-> **マーカーが要るなら per-object の `SetArrowByClass(h)` を呼ぶ**——無料で、
-> 図面の既定を触らない。
+> **マーカーが要るなら per-object の口を叩く**——無料で、図面の既定を触らない。
 >
-> **ただし、それでクラスのマーカーが本当に絵に出るのかは確かめていない**
-> ——`SetArrowByClass` を呼んだ線から `GetMarkerPolys` はマーカーの図形を返さなかった
-> （下記「未確認のまま残っているもの」。
+> **ただし `SetArrowByClass(h)` だけでは絵に出ない。** クラスの値を読んで per-object の
+> 新口へ `visibility=true` で書き写し、**その後で** `SetArrowByClass` を呼ぶ
+> （下記「クラスのマーカーは、per-object で有無を点けてはじめて描かれる」で確定。
 > [#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)）。
 
 ### `SetObjectClass` だけでは属性は by-instance のまま（前提は今も正しい）
@@ -248,6 +250,159 @@ gSDK->SetArrowByClass(object);     // マーカーだけ。無料
 
 **効き目**: 1 オブジェクトあたり「9ms × 7」が消える。作り直しを起こす書き込みが
 残らないため。
+
+## クラスのマーカーは、per-object で有無を点けてはじめて描かれる
+
+**結論を先に。クラスへ値を置いて線へ `SetArrowByClass` を呼ぶだけでは、マーカーは
+1 つも描かれない。** 絵に出す道は 1 つだけで、**クラスの値を読んで per-object の新口へ
+`visibility=true` で書き写し、その後で `SetArrowByClass` を呼ぶ**——SDK 自身の参照実装
+（`VWTaggedObj::CreateLeaderLine`。`Source/VWSDK/VWFC/Tools/VWTaggedObj.cpp:660` 付近）が
+取っている手順そのものである。
+
+```cpp
+// クラスのマーカーを線の絵に出す唯一の道。**順序が効く**（下記「順序が効く」）。
+gSDK->SetObjectClass(line, classIndex);
+
+SMarkerStyle fromClass{};
+gSDK->GetClassBeginningMarker(classIndex, fromClass);
+gSDK->SetObjBeginningMarker(line, fromClass, static_cast<Boolean>(true)); // ← 有無はここだけ
+SMarkerStyle fromClassEnd{};
+gSDK->GetClassEndMarker(classIndex, fromClassEnd);
+gSDK->SetObjEndMarker(line, fromClassEnd, static_cast<Boolean>(true));
+
+gSDK->SetArrowByClass(line); // ← 書き写した**後**に呼ぶ（先に呼ぶと旗が消える）
+```
+
+**理由は「有無（visibility）を持つ口が per-object にしか無い」ことである。**【ヘッダ根拠】
+
+| 口 | 宣言 | 有無 |
+| --- | --- | --- |
+| per-object・新口 | `SetObjBeginningMarker(MCObjectHandle, SMarkerStyle, Boolean visibility)` | **ある** |
+| per-object・中口 | `SetMarker(MCObjectHandle, MarkerType, short, short, Boolean start, Boolean end)` | **ある** |
+| **クラス・新口** | `SetClassBeginningMarker(InternalIndex, SMarkerStyle)` | **無い** |
+| **クラス・中口** | `SetClMarker(InternalIndex, MarkerType, short size, short angle)` | **無い**（`start` / `end` すら無い） |
+
+VectorScript 側も同じで、`SetClassBeginningMarker(name, style, angle, size, width,
+thicknessBasis, thickness)` / `SetClassEndMarker` / `SetClassArrow(className, style, size,
+angle)` のどれにも有無の引数は無く、戻り値の `BOOLEAN` は「Return TRUE if operation was
+successful」＝**成否**である。**クラス属性の口を全数当たっても**有無に当たるものは無い
+（`GetClColor` / `GetClFillPat` / `GetClLineWeight` / `GetClMarker` / `GetClUseGraphic` /
+`GetClVisibility` / `GetClPenPatN` ＋テクスチャとテキストスタイルだけ。`GetClVisibility` は
+**クラス自体の表示・非表示**でマーカーとは無関係）。
+
+以下は実測（VW 2026 / mac / 新規の空図面。`probes/runtime/class-marker-drawn/`。
+[#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)。
+[実測ログ](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/121#issuecomment-5825309331)）。
+線はすべて (x, 0)–(x, 1000) の縦線で、クラスには style=259（スラッシュ・塗り無し）・
+dSize=0.2500・nAngle=45 を置いてある。
+
+### 物差しの校正——`GetMarkerPolys` は「描かれるか」を映す。`GetObjectBounds` は映さない
+
+`GetMarkerPolys(object, startPoly&, endPoly&)`（`ISDK.h:851`）は**実際に描かれるマーカーの
+図形**を返す。**これが「描かれているか」を目視なしで分かる唯一の口**だが、そう言うには
+校正が要る——**値はあるが消えている線**（per-object で `visibility=false`）で何が返るかを
+確かめないと、「値の有無」を映しているだけかもしれない。
+
+| 線 | 新口の読み | 図形（始 / 終） | 図形の境界 | 線そのものの境界 |
+| --- | --- | --- | --- | --- |
+| **対照**: 素の線 | ok=no vis=no | なし / なし | — | 0.0000 × 1000.0000 |
+| per-object・**visibility=true** | ok=yes vis=yes style=259 dSize=0.2500 | **あり** / **あり** | 4.4901 × 4.4901 | 0.0000 × 1000.0000 |
+| per-object・**visibility=false**（値はある） | ok=yes **vis=no** style=259 dSize=0.2500 | **なし** / **なし** | — | 0.0000 × 1000.0000 |
+| per-object・visibility=true・dSize=**2.0000** | ok=yes vis=yes style=259 dSize=**1.9999** | **あり** / **あり** | **35.9199 × 35.9199** | 0.0000 × 1000.0000 |
+| per-object・visibility=true・**矢印**（style=0） | ok=yes vis=yes style=0 dSize=0.2500 | **あり** / **あり** | **12.7000 × 6.3500** | 0.0000 × 1000.0000 |
+
+- **`GetMarkerPolys` は有無に従う。** 同じ値を持つ 2 本で、`visibility=true` は図形を返し
+  **`visibility=false` は返さない**。**つまりこの口は「描かれるか」を映している**
+  ——以下の「図形なし」は「絵に出ていない」と読んでよい。
+- **線そのものの境界（`GetObjectBounds`）はマーカーを含まない。** **1.9999 インチ
+  （≈50.8mm）のマーカーを点けても、線の境界は幅 0 のまま**である。
+  **マーカーのぶんを見込んで場所を計算することはできない**——必要なら
+  `GetMarkerPolys` で図形を取り、その境界を自分で足す。
+- 図形の種別は**どの様式でも 21**。境界の数値は素直に読める——0.2500 インチ = 6.3500mm を
+  45° に倒したスラッシュなら 6.3500 ÷ √2 = **4.4901**、1.9999 インチなら **35.9199**、
+  矢印（45° ではない）は **12.7000 × 6.3500** ＝ 0.5 × 0.25 インチである。
+- `dSize=2.0000` が `1.9999` になるのは上限（下記「マーカーの大きさはインチで…」）。
+
+### クラス経由の道は、どれも描かれない（7 通り試した）
+
+| 線 | by-class の旗 | 新口の読み | 図形（始 / 終） |
+| --- | --- | --- | --- |
+| **対照**: 素の線 | no | ok=no vis=no | なし / なし |
+| クラスに入れただけ | no | ok=no vis=no | なし / なし |
+| **クラスに入れて `SetArrowByClass`** | **yes** | ok=no vis=no | **なし / なし** |
+| 同じもの＋`ResetObject` | yes | ok=no vis=no | **なし / なし** |
+| `SetClUseGraphic(true)` の後にクラス＋`SetArrowByClass` | yes | ok=no vis=no | **なし / なし** |
+| クラスの値を**中口**（`SetClMarker`）で書いて＋`SetArrowByClass` | yes | ok=no vis=no | **なし / なし** |
+| `SetArrowByClass` を**先**に、`SetObjectClass` を**後**に | yes | ok=no vis=no | **なし / なし** |
+| **クラスから読んで per-object へ書き写す＋`SetArrowByClass`** | **yes** | ok=yes vis=yes | **あり / あり**（4.4901 × 4.4901） |
+| 書き写すだけ（`SetArrowByClass` を呼ばない） | no | ok=yes vis=yes style=259 | **あり / あり**（4.4901 × 4.4901） |
+| **対照**: per-object で直に書いた | no | ok=yes vis=yes style=259 | **あり / あり**（4.4901 × 4.4901） |
+
+- **`GetArrowByClass` が `yes` を返しても、絵には何も無い。** 旗が立っていることと
+  マーカーが描かれることは別である。
+- **`ResetObject` でも出ない。** 「描き直せば反映される」たぐいの話ではない。
+- **`SetClUseGraphic`（クラスの「グラフィック属性を使用」）は関係ない。** `AddClass` で
+  作ったクラスでは初期値が `no` だが、`true` にしても図形は出ない。VWFC の参照実装が
+  この旗で `SetArrowByClass` を囲っているのは**ほかの 5 つの属性と揃えているだけ**で、
+  マーカーが出る条件ではない。
+- **クラス側の口を新口から中口（`SetClMarker`）へ替えても変わらない。** どちらにも
+  有無が無いという 1 点が効いている。
+- **順序を逆にしても変わらない。**
+
+### ただし by-class そのものは生きている——per-object が渡すのは**有無だけ**
+
+**書き写した値で描かれているのではない。** 書き写して `SetArrowByClass` を呼んだ線を
+残したまま、**クラスの値だけを**後から style=260（十字）・dSize=1.0000 へ書き換えると:
+
+| 線 | クラスを変える前の図形 | 変えた後の図形 |
+| --- | --- | --- |
+| `SetArrowByClass` だけの線 | なし | **なし**（変わらず） |
+| **書き写して `SetArrowByClass` を呼んだ線** | あり 4.4901 × 4.4901（= 0.25 インチ） | **あり 17.9605 × 17.9605**（= **1.0 インチ**） |
+
+**描かれる様式と大きさはクラスから来ている**——per-object へ書き写した値
+（dSize=0.2500）ではなく、**クラスの新しい値（dSize=1.0000）で描き直された**。
+つまり:
+
+> **per-object への書き写しは「有無を点ける」ためだけに要る。** 点けたあとは正しく
+> by-class で、**クラスを直せば線の絵も直る**。「書き写し」は by-class を諦めることでは
+> ない——`SetArrowByClass` を呼んでおけば、値の出どころはクラスのままである。
+
+（by-class の旗を立てていない線——書き写しただけの線——は by-instance なので、クラスを
+変えても追随しないはずである。**【推定】**——そちらはクラスを変えて測っていない。）
+
+### 順序が効く——per-object へ書き写すのは `SetArrowByClass` より**先**
+
+**`SetArrowByClass` を呼んだ後に per-object のマーカーを書くと、by-class の旗が下りる**
+（`GetArrowByClass` が `no` に戻る。上の表の「`SetArrowByClass` の後に per-object へ
+書き写す」行）。図形は出るが、それは**per-object の値で描いた線**であって、クラスを直しても
+追随しない。**SDK の参照実装が「書き写し → `SetArrowByClass`」の順である理由がこれ**で、
+逆順では by-class にならない。
+
+### by-class の線では、per-object の読みは信用できない
+
+- **何も書き写していない by-class の線は、`GetObjBeginningMarker` が `false`（`ok=no`）を
+  返す。** 旗が `yes` でもである——**by-class の値は per-object の口からは読めない**
+  （`false` のときの出力引数を読んではいけないのは下記「余録: `GetObjBeginningMarker` が
+  `false` を返したら…」の通り）。
+- **書き写した by-class の線では、読めはするが値が嘘になる。** 実測では
+  `ok=yes vis=yes` の後ろで **`style=0`（矢印）と読めたのに、描かれていたのは
+  スラッシュ**（境界 4.4901 × 4.4901 は 45° のスラッシュのもの）だった。クラスを
+  dSize=1.0000 へ変えた後も、**読みは dSize=0.2500 のまま**で図形だけが大きくなった。
+- **したがって by-class の線のマーカーを読みたいなら、クラスの口
+  （`GetClassBeginningMarker`）で読む。** per-object の読みは「有無」以外に使えない。
+
+### 文書の既定から生まれた線は per-object の値を持つ（クラス経由だけが特別）
+
+既定のマーカーは線が生まれる瞬間に読まれる（[#94](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/94)）
+が、**入るのは per-object の値で、有無も一緒に入る**:
+
+| 線 | 新口の読み | 図形（始 / 終） |
+| --- | --- | --- |
+| `SetDefaultBeginningMarker`（visibility=true）を立ててから生まれた線 | ok=yes **vis=yes** style=259 dSize=0.2500 | **あり / あり**（4.4901 × 4.4901） |
+| **対照**: 既定を戻した後（vis=no）に生まれた線 | ok=no vis=no | なし / なし |
+
+**だから既定の道では何も詰まらない**——**詰まるのはクラス経由だけ**で、それは
+「クラス側に有無が無い」という 1 点に尽きる。
 
 ## 既定の by-class は「既定の値を書き戻す」と下りる（退避・復元できる）
 
@@ -372,8 +527,9 @@ if (savedFPatByClass)    gSDK->SetDefaultFPatByClass();
 **マーカー（`SetDefaultArrowByClass()`）は、この後始末に載らない**——`SetDefaultArrowHeadsN`
 を書いても旗は下りない（同じ値でも違う値でも。上記「マーカーの既定 by-class は、意図して
 下ろせない」で確定）。**立てたら戻せない**ので、**そもそも立てない**のが唯一の正解である
-——マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ（無料。**ただしそれで絵に
-出るのかは未確認**——下記「未確認のまま残っているもの」。[#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)）。
+——マーカーが要るなら per-object の口を叩く（無料。**ただし `SetArrowByClass` だけでは
+絵に出ない**——クラスの値を per-object へ書き写してから呼ぶ。上記「クラスのマーカーは、
+per-object で有無を点けてはじめて描かれる」。[#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)）。
 
 > **マーカーの「値」の退避・復元も、旧口（`SetDefaultArrowHeadsN`）ではできない。**
 > 有無（`starting` / `ending`）が `false` を受け付けず、読み戻しも嘘をつくため。
@@ -911,7 +1067,8 @@ per-object では:
 - **クラスを作る口は `AddGuidesClass()`（`ISDK.h:1353`）だけ**である。
   **`ClassNameToID` は、新しい名前を渡してもクラスを作らない**（有効な番号が返らない。
   実測）。`ISDK.h` に `CreateClass` の類は無い。
-- **クラスへ置いた値が線の絵に出るのかは、別の話**（下記「未確認のまま残っているもの」）。
+- **クラスへ置いた値が線の絵に出るのかは、別の話**——**per-object で有無を点けない限り
+  描かれない**（上記「クラスのマーカーは、per-object で有無を点けてはじめて描かれる」）。
 
 ### どう書くか（マーカーの様式・大きさ・角度を指定する）
 
@@ -948,16 +1105,3 @@ const long root = readBack.style & kMarkerRootTypeMask; // マスクはここで
 **中口を「角度のためだけ」に挟まないこと。** 中口は `style` と `size` も同時に書くので、
 **様式は番号 0〜6 の 7 つへ落ち、大きさは 1/16384 インチで渡し直すことになる**。
 角度が要るだけなら新口の `nAngle` で足りる（丸などの 5 つの根を除く）。
-
-### 未確認のまま残っているもの
-
-- **クラスへ置いたマーカーが、線の絵に本当に出るのか。** `SetClassBeginningMarker` で
-  クラスへ様式・大きさ・角度を置き（読み戻せることは確認済み）、線をそのクラスへ入れて
-  `SetArrowByClass(line)` まで呼んでも、**`GetMarkerPolys(line, …)` はマーカーの図形を
-  返さなかった**（by-class の旗は `yes`）。同じ走りの対照では、**per-object で直に書いた
-  線は図形を返す**（種別 21・境界 4.4901 × 4.4901）ので、**この口が壊れているわけではない**。
-  「絵に出ていない」のか「`GetMarkerPolys` が by-class を映さないだけ」なのかは分けて
-  いない——#116 の範囲外なので
-  [#120](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/120)
-  へ切り出した。**上記「マーカーが要るなら per-object の `SetArrowByClass` を呼ぶ」は、
-  そこが片付くまで鵜呑みにしないこと。**
