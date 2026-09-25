@@ -19,6 +19,7 @@
 
 #include "VWFC/VWObjects/VWParametricObj.h"
 #include "VWFC/VWObjects/VWRecordFormatObj.h"
+#include "VWFC/Math/VWTransformMatrix.h"
 
 #include <chrono>
 #include <cstdio>
@@ -176,9 +177,8 @@ namespace
 		// 3) ByMatrixEx(bInsert=false)
 		probe.log("[3] CreateCustomObjectByMatrixEx(bInsert=false) → 書く → "
 				  "AddObjectToContainer → ResetObject");
-		TransformMatrix mat;
-		mat.SetToIdentity();
-		mat.SetTrans(WorldPt3(9000, baseY, 0));
+		VWTransformMatrix mat;
+		mat.SetOffset(VWPoint3D(9000, baseY, 0));
 		t0 = ProbeClock::now();
 		MCObjectHandle h3 = gSDK->CreateCustomObjectByMatrixEx(pioName, mat, false);
 		probe.log("  作成 " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePio(h3, widthParam));
