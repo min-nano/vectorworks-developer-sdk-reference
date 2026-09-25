@@ -28,6 +28,11 @@
 //	  R4  書式の既定値を書いてから CreateCustomObject（ResetObject を呼ばない）
 //	  R5  点で置く PIO へ CreateCustomObjectPath(name, nil, nil, doRegen=false)
 //
+//	**走らせる順は R1 → R4 → R2 → R3 → R5**（番号順ではない）。R2 / R3 は図面に入って
+//	いないかもしれないオブジェクトへ書き込み、R5 はパス用の口を点の PIO へ向けるので、
+//	**落ちるとすればこの 3 つ**である。落ちてもそこまでのログは残る（Probe.h）ので、
+//	**答えの価値が高い R4（書式の既定値）を先に済ませておく**。
+//
 //	**「作成時に再生成が走ったか」の判定は、ResetObject を呼ぶ前の子オブジェクトの数で行う**
 //	（PIO の実体は子として持たれるので、再生成していなければ 0 件になるはず）。所要時間は
 //	その裏づけに使う（再生成 1 回はこの機種で 10ms 前後かかることが分かっている）。
@@ -120,39 +125,37 @@ namespace
 	struct ProbeRouteResult
 	{
 		std::string label;
-		double createMs = 0.0;	// 生成の呼び出しだけの合計
-		double writeMs = 0.0;	// パラメータ書き込みの合計
-		double attachMs = 0.0;	// AddObjectToContainer の合計
-		double resetMs = 0.0;	// ResetObject の合計
-		size_t created = 0;		// nil でなかった本数
+		double createMs = 0.0;		   // 生成の呼び出しだけの合計
+		double writeMs = 0.0;		   // パラメータ書き込みの合計
+		double attachMs = 0.0;		   // AddObjectToContainer の合計
+		double resetMs = 0.0;		   // ResetObject の合計
+		size_t created = 0;			   // nil でなかった本数
 		size_t membersAfterCreate = 0; // ResetObject 前の子の数（全本の合計）
 		size_t membersAfterReset = 0;  // ResetObject 後の子の数（全本の合計）
-		size_t inLayer = 0;			   // レイヤ直下に並んでいた本数（最後に数える）
-		size_t valueOk = 0;			   // 最後に読み戻した値が狙いどおりだった本数
-		double firstValue = 0.0;	   // 1 本目の読み戻し値（狙いと違うときの手掛かり）
+		size_t inLayer = 0;		 // レイヤ直下に並んでいた本数（最後に数える）
+		size_t valueOk = 0;		 // 最後に読み戻した値が狙いどおりだった本数
+		double firstValue = 0.0; // 1 本目の読み戻し値（狙いと違うときの手掛かり）
 	};
 
 	void ProbeLogRoute(::vwprobe::Report& probe, const ProbeRouteResult& result)
 	{
-		const double total =
-			result.createMs + result.writeMs + result.attachMs + result.resetMs;
+		const double total = result.createMs + result.writeMs + result.attachMs + result.resetMs;
 		const double per = kProbePioCount > 0 ? total / double(kProbePioCount) : 0.0;
 		probe.log("[" + result.label + "] 作れた " + ProbeCount(long(result.created)) + "/" +
 				  ProbeCount(long(kProbePioCount)) + " 本");
-		probe.log("[" + result.label + "] 所要 合計 " + ProbeNum(total) + "ms ＝ " +
-				  ProbeNum(per) + "ms/本（生成 " + ProbeNum(result.createMs) + "ms ／ 書き込み " +
+		probe.log("[" + result.label + "] 所要 合計 " + ProbeNum(total) + "ms ＝ " + ProbeNum(per) +
+				  "ms/本（生成 " + ProbeNum(result.createMs) + "ms ／ 書き込み " +
 				  ProbeNum(result.writeMs) + "ms ／ 図面へ入れる " + ProbeNum(result.attachMs) +
 				  "ms ／ ResetObject " + ProbeNum(result.resetMs) + "ms）");
 		probe.log("[" + result.label + "] 子オブジェクト 生成直後の合計 " +
 				  ProbeCount(long(result.membersAfterCreate)) + " 件 ／ 最後の合計 " +
 				  ProbeCount(long(result.membersAfterReset)) + " 件");
-		probe.log("[" + result.label + "] レイヤ直下にあった " +
-				  ProbeCount(long(result.inLayer)) + " 本 ／ 値が狙いどおり " +
-				  ProbeCount(long(result.valueOk)) + " 本（1 本目の読み戻し " +
-				  ProbeNum(result.firstValue) + "）");
-		probe.log("[" + result.label + "] 判定: 作成時の再生成は " +
-				  (result.membersAfterCreate == 0 ? "走っていない（子 0 件）"
-												  : "走った（子がある）"));
+		probe.log("[" + result.label + "] レイヤ直下にあった " + ProbeCount(long(result.inLayer)) +
+				  " 本 ／ 値が狙いどおり " + ProbeCount(long(result.valueOk)) +
+				  " 本（1 本目の読み戻し " + ProbeNum(result.firstValue) + "）");
+		probe.log(
+			"[" + result.label + "] 判定: 作成時の再生成は " +
+			(result.membersAfterCreate == 0 ? "走っていない（子 0 件）" : "走った（子がある）"));
 	}
 } // namespace
 
@@ -183,8 +186,8 @@ VW_PROBE("pio-create-one-regen", "点で置く PIO を 1 回の再生成で作�
 			const TXString& candidate = kPioNames[i];
 			probe.log(std::string("試し置き: CreateCustomObject(\"") +
 					  static_cast<const char*>(candidate) + "\") を 1 本");
-			MCObjectHandle hTrial = gSDK->CreateCustomObject(candidate, WorldPt(-20000, -20000),
-															 0.0, true);
+			MCObjectHandle hTrial =
+				gSDK->CreateCustomObject(candidate, WorldPt(-20000, -20000), 0.0, true);
 			if (hTrial == nil)
 			{
 				probe.log(std::string("  → nil。この名前は使えない"));
@@ -333,6 +336,69 @@ VW_PROBE("pio-create-one-regen", "点で置く PIO を 1 回の再生成で作�
 	}
 
 	// -----------------------------------------------------------------------
+	// R4: レコード書式の既定値を書いてから作る。**ResetObject もパラメータの書き込みも
+	// しない**——それで狙いの値で生まれるなら、再生成は作成時の 1 回だけで済む。
+	// -----------------------------------------------------------------------
+	{
+		ProbeRouteResult route;
+		route.label = "R4 書式の既定値を書いてから作る（Reset 無し）";
+		std::vector<MCObjectHandle> handles;
+		probe.log("---- R4 を走らせる ----");
+
+		MCObjectHandle hFormatSeed =
+			gSDK->CreateCustomObject(pioName, WorldPt(-20000, 0.0), 0.0, true);
+		if (hFormatSeed == nil)
+		{
+			probe.fail("[R4] 書式を引くための 1 本を作れなかった");
+		}
+		else
+		{
+			VWRecordFormatObj format = VWParametricObj(hFormatSeed).GetRecordFormat();
+			const double beforeDefault = format.GetParamReal(paramName);
+			probe.log("[R4] 書式の既定値（書く前）: " + ProbeNum(beforeDefault));
+
+			format.SetParamReal(paramName, targetValue);
+			const double afterDefault = format.GetParamReal(paramName);
+			probe.log("[R4] 書式の既定値（書いた後）: " + ProbeNum(afterDefault) +
+					  (afterDefault == targetValue ? "（書けた）" : "（**書けていない**）"));
+			// 既にある本へ波及したかも見る（R1 の本は targetValue のままのはず）。
+			probe.log("[R4] 書式を書いた時点で、この 1 本の値は " +
+					  ProbeNum(VWParametricObj(hFormatSeed).GetParamReal(paramName)));
+
+			for (size_t i = 0; i < kProbePioCount; ++i)
+			{
+				const WorldPt where(double(i) * kProbeItemSpacingX, kProbeRouteSpacingY * 3.0);
+				double t0 = ProbeNowMs();
+				MCObjectHandle h = gSDK->CreateCustomObject(pioName, where, 0.0, true);
+				route.createMs += ProbeNowMs() - t0;
+				if (h == nil)
+					continue;
+				++route.created;
+				route.membersAfterCreate += ProbeCountMembers(h);
+				handles.push_back(h);
+			}
+			for (size_t i = 0; i < handles.size(); ++i)
+			{
+				route.membersAfterReset += ProbeCountMembers(handles[i]);
+				if (ProbeIsInLayer(hLayer, handles[i]))
+					++route.inLayer;
+				const double value = VWParametricObj(handles[i]).GetParamReal(paramName);
+				if (i == 0)
+					route.firstValue = value;
+				if (value == targetValue)
+					++route.valueOk;
+			}
+			ProbeLogRoute(probe, route);
+			results.push_back(route);
+
+			// 既定値を戻す（issue #122 の約束）。
+			format.SetParamReal(paramName, beforeDefault);
+			probe.log("[R4] 既定値を戻した: " + ProbeNum(format.GetParamReal(paramName)));
+			gSDK->DeleteObject(hFormatSeed, false);
+		}
+	}
+
+	// -----------------------------------------------------------------------
 	// R2: bInsert=false で作り、パラメータを書いてから図面へ入れ、ResetObject。
 	// bInsert が「図面に入れない」意味なら、生成直後の子は 0 件になるはず。
 	// -----------------------------------------------------------------------
@@ -443,69 +509,6 @@ VW_PROBE("pio-create-one-regen", "点で置く PIO を 1 回の再生成で作�
 	}
 
 	// -----------------------------------------------------------------------
-	// R4: レコード書式の既定値を書いてから作る。**ResetObject もパラメータの書き込みも
-	// しない**——それで狙いの値で生まれるなら、再生成は作成時の 1 回だけで済む。
-	// -----------------------------------------------------------------------
-	{
-		ProbeRouteResult route;
-		route.label = "R4 書式の既定値を書いてから作る（Reset 無し）";
-		std::vector<MCObjectHandle> handles;
-		probe.log("---- R4 を走らせる ----");
-
-		MCObjectHandle hFormatSeed = gSDK->CreateCustomObject(pioName, WorldPt(-20000, 0.0), 0.0,
-															  true);
-		if (hFormatSeed == nil)
-		{
-			probe.fail("[R4] 書式を引くための 1 本を作れなかった");
-		}
-		else
-		{
-			VWRecordFormatObj format = VWParametricObj(hFormatSeed).GetRecordFormat();
-			const double beforeDefault = format.GetParamReal(paramName);
-			probe.log("[R4] 書式の既定値（書く前）: " + ProbeNum(beforeDefault));
-
-			format.SetParamReal(paramName, targetValue);
-			const double afterDefault = format.GetParamReal(paramName);
-			probe.log("[R4] 書式の既定値（書いた後）: " + ProbeNum(afterDefault) +
-					  (afterDefault == targetValue ? "（書けた）" : "（**書けていない**）"));
-			// 既にある本へ波及したかも見る（R1 の本は targetValue のままのはず）。
-			probe.log("[R4] 書式を書いた時点で、この 1 本の値は " +
-					  ProbeNum(VWParametricObj(hFormatSeed).GetParamReal(paramName)));
-
-			for (size_t i = 0; i < kProbePioCount; ++i)
-			{
-				const WorldPt where(double(i) * kProbeItemSpacingX, kProbeRouteSpacingY * 3.0);
-				double t0 = ProbeNowMs();
-				MCObjectHandle h = gSDK->CreateCustomObject(pioName, where, 0.0, true);
-				route.createMs += ProbeNowMs() - t0;
-				if (h == nil)
-					continue;
-				++route.created;
-				route.membersAfterCreate += ProbeCountMembers(h);
-				handles.push_back(h);
-			}
-			for (size_t i = 0; i < handles.size(); ++i)
-			{
-				route.membersAfterReset += ProbeCountMembers(handles[i]);
-				if (ProbeIsInLayer(hLayer, handles[i]))
-					++route.inLayer;
-				const double value = VWParametricObj(handles[i]).GetParamReal(paramName);
-				if (i == 0)
-					route.firstValue = value;
-				if (value == targetValue)
-					++route.valueOk;
-			}
-			ProbeLogRoute(probe, route);
-			results.push_back(route);
-
-			// 既定値を戻す（issue #122 の約束）。
-			format.SetParamReal(paramName, beforeDefault);
-			probe.log("[R4] 既定値を戻した: " + ProbeNum(format.GetParamReal(paramName)));
-			gSDK->DeleteObject(hFormatSeed, false);
-		}
-	}
-
-	// -----------------------------------------------------------------------
 	// R5: 点で置く PIO へ CreateCustomObjectPath(name, nil, nil, doRegen=false) を使えるか。
 	// パス PIO 用の口なので、点 PIO に対して何が起きるかはヘッダから読めない。
 	// -----------------------------------------------------------------------
@@ -530,8 +533,8 @@ VW_PROBE("pio-create-one-regen", "点で置く PIO を 1 回の再生成で作�
 			route.membersAfterCreate += members;
 			if (i == 0)
 				probe.log("[R5] 1 本目: 型 " + ProbeCount(long(gSDK->GetObjectTypeN(h))) +
-						  " ／ 生成直後の子 " + ProbeCount(long(members)) +
-						  " 件 ／ レイヤ直下に " + (ProbeIsInLayer(hLayer, h) ? "ある" : "無い"));
+						  " ／ 生成直後の子 " + ProbeCount(long(members)) + " 件 ／ レイヤ直下に " +
+						  (ProbeIsInLayer(hLayer, h) ? "ある" : "無い"));
 
 			t0 = ProbeNowMs();
 			VWParametricObj(h).SetParamReal(paramName, targetValue);
@@ -577,8 +580,8 @@ VW_PROBE("pio-create-one-regen", "点で置く PIO を 1 回の再生成で作�
 			baseline = per;
 		const double ratio = baseline > 0.0 ? per / baseline : 0.0;
 		probe.log(route.label + ": " + ProbeNum(per) + "ms/本（R1 比 " + ProbeNum(ratio, 2) +
-				  "）／ 作成時の再生成 " +
-				  (route.membersAfterCreate == 0 ? "無し" : "有り") + " ／ 値が狙いどおり " +
-				  ProbeCount(long(route.valueOk)) + "/" + ProbeCount(long(route.created)) + " 本");
+				  "）／ 作成時の再生成 " + (route.membersAfterCreate == 0 ? "無し" : "有り") +
+				  " ／ 値が狙いどおり " + ProbeCount(long(route.valueOk)) + "/" +
+				  ProbeCount(long(route.created)) + " 本");
 	}
 }
