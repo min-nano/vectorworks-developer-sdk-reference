@@ -1206,7 +1206,7 @@ VW 2026 / mac・新規の空図面。`probes/runtime/create-pio-with-params/` �
 「レコードを指定して作る」＝ 1 回にできるかを
 [issue #122](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/122) で
 調べた（VW 2026 / mac・新規の空図面・組み込みのドア / 窓。
-`probes/runtime/create-pio-with-params/` を 3 版・計 4 回走らせた。3 版目は 2 回とも同じ値）。
+`probes/runtime/create-pio-with-params/` を 4 版・計 5 回走らせた。3 版目は 2 回とも同じ値）。
 **「作成の直後に描かれたか」は PIO の子の数と外形で判定した**——描かれる前の PIO は
 子が 1 つ（型 0）で、外形は PIO の種類ごとの決まった小さな枠になる。所要時間は各 1 回の
 実測なので、1 本あたりの費用としては引かない。
@@ -1223,9 +1223,13 @@ VW 2026 / mac・新規の空図面。`probes/runtime/create-pio-with-params/` �
 3. **`bInsert=false` は再生成を止めない。** 図面に入れない（親が nil）だけで、作成直後に
    子 11 / 15 まで描かれている。`CreateCustomObjectByMatrixEx(…, false)` も同じ。
    後から `AddObjectToContainer(h, layer)` で入れられ、入れただけでは描き直さない。
-4. **1 回で済ませる経路はあるが、どれも「いつもの経路と同じもの」にはならない**
-   （下の表）。**ダイアログを出さない条件**（`kCustomObjectPrefNever`。プラグインが
-   実際に使う条件）では、**2 回描く今のやり方だけが正しい個体を作る。**
+4. **「見本を 1 本だけ普通に作り、残りは描かずに作って見本の全欄を写す」なら、1 本 1 回で
+   いつもの経路と全欄一致する個体ができる**（下記「手順」）。**ダイアログを出さない条件**
+   （`kCustomObjectPrefNever`。プラグインが実際に使う条件）で、ドア 672 欄・窓 618 欄とも
+   差 0、外形・子の型の並びも一致した。
+5. **それ以外の 1 回で済ませる経路は、ダイアログを出さない条件ではいつもの経路と同じものに
+   ならない**（下の表）。書式の既定値を書き換える経路は効かず、描かずに作って必要な欄だけ
+   書く経路は別物（袖 FIX 付きのドアなど）になる。
 
 ### 1 回で済ませる経路と、いつもの経路（A）との差
 
@@ -1236,7 +1240,8 @@ A は `CreateCustomObject` → `Width` を 1410 に → `ResetObject`。全欄�
 | --- | --- | --- | --- |
 | **書式の既定値を書き換えてから `CreateCustomObject`**（`VWRecordFormatObj::SetParamReal`。作ったら戻す） | 1 | **効く**（外形 1410。既にある個体は変わらない） | **効かない**——`Width` はドア 826・窓 896 のまま（既定と同じ）。A と 11 / 15 欄違う |
 | **`CreateCustomObjectPath(name, nil, nil, doRegen=false)` → `SetEntityMatrix` → 書く → `ResetObject`** | 1 | **ドアは 672 欄すべて一致**（外形・子の型の並びも一致） | **別物になる**——何も書かずに描かせるとドアは子 47・幅 1589.6（**袖 FIX 付き**の別のドア）。A0 と 67 / 61 欄違い、窓は書いた幅が外形に出ない |
-| 同上で、**`CreateCustomObject` で作った個体（A0）の全欄を `SetParamValue` で写してから**書く | 1（＋見本の 1 本） | — | **外形・子の数は A と一致。ただし線の種類・太さの欄だけ 17 / 18 欄違う**（`2D…LineStyle` が A=2 / 写した側=0、`WallLineLW` など） |
+| 同上で、**`CreateCustomObject` で作った個体（A0）の全欄を `SetParamValue`（文字列）で写してから**書く | 1（＋見本の 1 本） | — | **外形・子の型の並びは A と一致。ただし線の種類の欄とそこから決まる欄が 17 / 18 欄違う**（`2D…LineStyle` が A=2 / 写した側=0、`WallLineLW` など） |
+| 同上で、**欄型ごとの口で写してから**書く（下記「手順」） | 1（＋見本の 1 本） | — | **全欄一致**（ドア 672・窓 618 欄とも差 0。外形・子の型の並びも一致） |
 
 **読みどころ**:
 
@@ -1250,9 +1255,54 @@ A は `CreateCustomObject` → `Width` を 1410 に → `ResetObject`。全欄�
   値の組（`DetailLevel` Low、`SideLights` True、インチ由来の 19.05 / 25.4 など）で描かれる。
   **ダイアログを通した文書ではドアが全欄一致した**ので、初期化の中身は「ダイアログの値」
   に由来すると読める【推定】。
-- **線の種類・太さの欄は `SetParamValue` の文字列では写らない**（`2` を書いても `0` が残る）。
-  型に合った書き口（`SetParamPenStyle` / `SetParamPenWeight` など）なら写るかは
-  **【未確認】**。
+- **線の種類の欄（欄型 `kFieldPenStyle` = 26）は `SetParamValue` の文字列では写らない。**
+  `2` を書いても `0` が残る（写した直後、`ResetObject` の前に読み戻して確認。ドア・窓とも
+  15 欄）。そのまま `ResetObject` すると、そこから決まる整数の欄（`WallLineLW` / `SwingLW` /
+  `OpDirectionLineWeight` など、欄型 1）も A と違う値になる。**`SetParamPenStyle` で写せば
+  写る**（差 0）。なぜ文字列で写らないかは突き止めていない（同梱の
+  `VWParametricObj::SetParamValue` は `kFieldText` とそれ以外で書き方を分けている、までは
+  読んだ）。
+
+### 手順（1 本 1 回で、いつもの経路と同じ個体を作る）
+
+```cpp
+// 0) 文書ごとに 1 度: ダイアログを止める
+gSDK->DefineCustomObject(name, kCustomObjectPrefNever);
+
+// 1) 文書ごと・種類ごとに 1 度: 見本を普通に作る（この 1 本は作成時に描かれる）
+MCObjectHandle sample = gSDK->CreateCustomObject(name, WorldPt(0, 0), 0.0, true);
+VWParametricObj from(sample);
+
+// 2) 1 本ごと: 描かずに作る → 置く → 見本を欄型ごとの口で写す → 値を書く → 1 回描く
+MCObjectHandle h = gSDK->CreateCustomObjectPath(name, nil, nil, false);
+gSDK->SetEntityMatrix(h, placement);          // 位置・角度（描き直さない）
+VWParametricObj to(h);
+for (size_t i = 0; i < from.GetParamsCount(); ++i) {
+    const TXString p = from.GetParamName(i);
+    switch (from.GetParamStyle(p)) {
+    case kFieldPenStyle:  to.SetParamPenStyle(p, from.GetParamPenStyle(p)); break;
+    case kFieldPenWeight: to.SetParamPenWeight(p, from.GetParamPenWeight(p)); break;
+    case kFieldFill:      to.SetParamFill(p, from.GetParamFill(p)); break;
+    case kFieldColor:     to.SetParamColor(p, from.GetParamColor(p)); break;
+    case kFieldClass:     to.SetParamClass(p, from.GetParamClass(p)); break;
+    case kFieldBuildingMaterial: to.SetParamBuildingMaterial(p, from.GetParamBuildingMaterial(p)); break;
+    case kFieldTexture:   to.SetParamTexture(p, from.GetParamTexture(p)); break;
+    case kFieldSymDef:    to.SetParamSymDef(p, from.GetParamSymDef(p)); break;
+    default:              to.SetParamValue(p, from.GetParamValue(p)); break;
+    }
+}
+to.SetParamReal("Width", width);              // 欲しい値を書く
+gSDK->ResetObject(h);                         // ここで 1 回だけ描く
+```
+
+- **実測でずれが出たのは線の種類（欄型 26）だけ**だった。上の `switch` のうち、ドア・窓で
+  実際に効き目を確かめたのは `kFieldPenStyle` の枝である（他の欄型はドア・窓に文字列で
+  写して差が出なかった。枝を足したのは同じ理由で落ちうるから）。
+- **見本は図面に 1 本残る。** 写し終えた後で消してよいかは確かめていない。見本の値は
+  「その文書でダイアログを出さずに作ったときの初期値」なので、文書をまたいで使い回さない
+  【推定】。
+- 所要は各 1 回の実測で、`ResetObject` 1 回が 15〜19ms、写す手間は測っていない。
+  減るのは「作成時の 1 回」ぶん（上の実測で 1 回 10〜20ms）。
 
 ### 位置と角度は `SetEntityMatrix` で与える（描き直しを起こさない）
 
