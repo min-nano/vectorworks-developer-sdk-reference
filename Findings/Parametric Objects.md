@@ -106,8 +106,10 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
   持つバウンドに置き換わる**（下記
   「[スタイルを当てると書いたバウンドはスタイルのものへ置き換わる](#スタイルを当てると書いたバウンドはスタイルのものへ置き換わる)」）。
   **書いた直後に読み比べても、その値は最終形ではない**——順序を入れ替えても避けられない
-  ので、検査するなら**作り直しを通した後**に読む。置き換えを起こしたくないなら
-  スタイル側を `kPluginStyleParameter_ByInstance` にする（同）。
+  ので、検査するなら**作り直しを通した後**に読む。置き換えを起こしたくないなら、
+  スタイル側で **`DialogStartElevationReference` だけを `kPluginStyleParameter_ByInstance`
+  にする**（下記「[バウンドだけ by-instance のスタイルは作れる](#バウンドだけ-by-instance-のスタイルは作れる握っているのは-dialogstartelevationreference-1-件)」。
+  全パラメータを切り替える必要は無い）。
 - **`SetCustomObjectPath` で差し替えるときは、挿入点を読んでから相対座標を計算する**
   （上記 2）。挿入点は `GetObjectModelPos`（VWFC）で読める。**差し替えたパスは以後
   `ResetObject` で作り直されず、逆にバウンドのほうが書き換わる**ので、差し替えるなら
@@ -1193,7 +1195,14 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
   スタイルを当てない PIO（データタグ・グラフィック凡例）にはそもそも要らない。
   **`UpdateStyledObjects` が流すのは描画属性だけではない——ジオメトリの作り直しまで行う**
   ので、スタイルを当てた PIO では 1 本ごとの `ResetObject` を省ける（速さは変わらない。
-  下記「リセット（再生成）をまとめられるか」）。
+  下記「リセット（再生成）をまとめられるか」）。**ただし省けるのはバウンドまで
+  by-style のときだけ**——バウンドを by-instance にしたスタイルでは、
+  `ResetObject` を 1 度も通していない材の**終端が「スタイルの span」だけずれる**
+  （下記「[バウンドだけ by-instance のスタイルは作れる](#バウンドだけ-by-instance-のスタイルは作れる握っているのは-dialogstartelevationreference-1-件)」の
+  「`UpdateStyledObjects` だけでは済まない」）。
+- **パラメータの値を配るのは `UpdateStyledObjects` だけで、`ResetObject` では配られない。**
+  by-style にしたパラメータは、`ResetObject` を通した直後も**インスタンスの値のまま**で、
+  `UpdateStyledObjects` を流して初めてスタイルの値になる（同じ 6 本を流す前後で読み比べた実測。同）。
 - **スタイル名 → RefNumber を名前で引く呼び出しは無い。** `GetNamedObject` ＋
   `GetObjectInternalIndex` で引く。
 - **スタイルはストーリバウンドも配る。** 当てた先に書いてあったバウンドは、次の
@@ -1259,14 +1268,14 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
 - **スタイルを当てる PIO では、バウンドの検査を「書いた直後」に置かない。**
   `GetObjectBoundElevation` の読み比べ（この文書の冒頭「実務上の指針」）は、
   **スタイルを当てて作り直しを通した後**に行う。手前で読んだ値は最終形ではない。
-- **本ごとに違う高さを持たせたいなら、スタイルは by-instance で作る**（上記 6）。
+- **本ごとに違う高さを持たせたいなら、バウンドだけを by-instance にする**——
+  **`SetAllPluginStyleParameters` で全部を切り替える必要は無い。** 握っているのは
+  `DialogStartElevationReference` **ただ 1 件**で、それだけを by-instance にすれば
+  **他の 180 件は by-style のまま**にできる（下記
+  「[バウンドだけ by-instance のスタイルは作れる](#バウンドだけ-by-instance-のスタイルは作れる握っているのは-dialogstartelevationreference-1-件)」）。
   by-style のまま当てると、**そのスタイルを当てた全部の材が、スタイルの高さに揃う**。
-  ——確かめたのは `SetAllPluginStyleParameters` で**全部**を切り替えた場合だけである。
-  **「バウンドだけ by-instance、他は by-style」が作れるかは未確認**
-  （[#118](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/118)）。
-  1 つずつ切り替える口は `SetPluginStyleParameterType(hSymDef, paramName, styleType)` で
-  **パラメータ名で指す**ので、名前を持たないバウンドは名指しできない——
-  **作れない見込み【ヘッダ根拠】**だが、実機では確かめていない。
+- **そのスタイルでは、1 本ごとの `ResetObject` を省いてはいけない。**
+  `UpdateStyledObjects` だけで済ませると**終端が「スタイルの span」だけずれる**（同）。
 - **バウンドは必ず自分で両端とも書く**（スタイルに供給させない）。バウンドを 1 本も
   持たない材にスタイルを当てて `ResetObject` すると、**バウンドは 2 本生え（ID 0 / 1）、
   実体もスタイルどおり（2500→5500）に建つのに、その 2 本は読み戻せない**。
@@ -1287,6 +1296,107 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
 
 **スタイルを当てない PIO は何も変わらない。** 上記はすべて**スタイルを当てた PIO**
 の話で、当てなければ書いたバウンドは書いたとおりに残る（上記 3 の対照行）。
+
+### バウンドだけ by-instance のスタイルは作れる——握っているのは `DialogStartElevationReference` 1 件
+
+[issue #118](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/118) で
+**実機確認済み**（VW 2026 / mac・新規の空図面。`probes/runtime/style-bound-only-by-instance/` を
+**3 度**走らせた——2 度目は**プローブ側の落ち度**で A 群の 1 行目で止まっている
+（`DefineCustomObject` を呼んでおらず「オブジェクトの設定」ダイアログが出た。
+[`probes/runtime/README.md`](../probes/runtime/README.md) に一般則として書いた）ので、
+**下記の値は 1 度目と 3 度目のもの**。総当たりは 2 度とも同じ 1 件を指した。実行ログそのまま）。
+
+**結論: 作れる。** 全部を by-style にしたうえで、**`DialogStartElevationReference` 1 件だけ**を
+by-instance へ戻す。**これで「断面や材種はスタイルで揃え、高さは本ごと」になる。**
+
+```cpp
+gSDK->SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByStyle);
+gSDK->SetPluginStyleParameterType(hSymDef, "DialogStartElevationReference",
+                                  kPluginStyleParameter_ByInstance);
+```
+
+1. **バウンドは「パラメータ表に名前を持たない別系統の値」ではなかった。**
+   由来表（`'PSMP'`）の鍵はパラメータ名しか無く【ソース根拠】、その **181 件を両方向に総当たり**
+   したところ、動いたのは **1 件だけ**だった。
+
+   | 掃引 | バウンドが動いた名前 |
+   | --- | --- |
+   | 全件 by-style → **1 つだけ** by-instance | `DialogStartElevationReference`（他 180 件は無反応） |
+   | 全件 by-instance → **1 つだけ** by-style | `DialogStartElevationReference`（同） |
+
+   **どちらの向きでも同じ 1 件**なので、これがバウンドの持ち主で確定である。
+2. **1 件で両端を握っている。** 始端（ID 0）と終端（ID 1）を**別々に判定できる物差し**
+   （書く 3000 / 3000・スタイルは 2500 / 5500）で測っても、**この 1 件で ID 0 も ID 1 も同時に
+   自由になる**。`Start` という名前に反して**終端も動く**ので、**バウンドのためだけなら**
+   `DialogEndElevationReference` を併せて裏返す必要は無い（単独で裏返してもバウンドは動かず、
+   総当たりでも引っ掛からなかった）。
+3. **だから `SetAllPluginStyleParameters(ByInstance)` が効いていたのは副作用である。**
+   一括の口は**表の全件に行き渡る**（181 件を読み戻して外れ値 0 件）ので、
+   「全部 by-instance」はこの 1 件も裏返していたにすぎない。**名前の表以外に何かを
+   書いているわけではない**——[#112](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/112)
+   の「バウンドはパラメータではないのに切り替えに従う」という食い違いは、これで解ける。
+4. **1 つずつ切り替える口はそのまま使える。** `SetPluginStyleParameterType(hSymDef, 名前, 種別)` で
+   書き、`GetPluginStyleParameterType` で読み戻せる（**定義からもインスタンスからも同じ値が読める**）。
+   **ただし表に無い名前を引くと `by-instance`（0）が返る**ので、
+   **戻り値から「その名前が表にある」とは判断できない**（綴りを間違えても静かに 0 が返る）。
+
+**実用になることまで確かめてある。** バウンドの違う水平材 6 本
+（3000/3000・3200/4000・1000/6500）へ当て、**インスタンス側にはスタイルと違う値**
+（`MemberID="HON-GOTO"` / `MajorBreadth=120`。スタイルは `"STYLE-GAWA"` / `300`）を書いてから
+走らせると、**6 本とも書いたバウンドのまま**で、パラメータは**スタイルの値に揃った**。
+
+**手順（この順で通した）**:
+
+1. バウンドを両端とも書く
+2. `SetPluginObjectStyle` でスタイルを当てる
+3. **1 本ごとに `ResetObject`**
+4. 最後に `UpdateStyledObjects` を 1 回
+
+#### `UpdateStyledObjects` だけでは済まない——3 を省くと高さが静かに狂う
+
+上の手順の **3 を省いてはいけない**。同じ図面で、3 を省いた 3 本
+（バウンドとスタイルは同じ。`UpdateStyledObjects` だけを流した）は**終端だけがずれた**。
+
+| 書いたバウンド | 期待する Δz | 実測 Δz | 終端の絶対Z（期待 → 実測） |
+| --- | --- | --- | --- |
+| 3000 / 3000 | 0 | **−3000** | 3000 → **0** |
+| 3200 / 4000 | 800 | **−2200** | 4000 → **1000** |
+| 1000 / 6500 | 5500 | **2500** | 6500 → **3500** |
+
+**3 本とも、ちょうど「スタイルの span（2500〜5500 ＝ 3000）」だけ低い**——
+
+```
+実測 Δz ＝ (自分のバウンドの span) − (スタイルのバウンドの span)
+```
+
+が 3 本ともぴったり成り立つ。**始端（挿入点）は正しく、レコードも解決結果も書いたとおり**
+なので、**読み戻しでは検知できない**（`GetObjectStoryBound` も `GetObjectBoundElevation` も
+正しい値を返すのに、図だけが違う）。**この文書の冒頭「実務上の指針」の検査をすり抜ける**ので、
+**速さのために 3 を省く改変を入れない。**
+
+- **先に `ResetObject` を通してあれば起きない。** 同じ図面の残り 3 本は、`ResetObject` の後に
+  `UpdateStyledObjects` を流しても正しいままだった。
+- **後から `ResetObject` を通せば直るのか・機構は何かは、この調査の範囲外**なので
+  [#125](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/125) へ切り出した。
+  【推定】「いまの形はスタイルどおり」という前提で差分を足しているように見えるが、確かめていない。
+- **[#81](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/81) が
+  「`UpdateStyledObjects` だけで正しく建った」のと矛盾しない。** あちらは**バウンドも by-style**で、
+  自分の span とスタイルの span が同じ（どちらも 3000）だったので、上の式でも差が 0 になる。
+
+#### パラメータの値を配るのは `UpdateStyledObjects` だけ（`ResetObject` では配られない）
+
+同じ 6 本を、`UpdateStyledObjects` を流す前と後で読み比べた実測:
+
+| 読んだ時点 | `MemberID` | `MajorBreadth` |
+| --- | --- | --- |
+| `ResetObject` の後・`UpdateStyledObjects` の前 | `HON-GOTO`（**インスタンスの値のまま**） | 120（同） |
+| `UpdateStyledObjects` の後 | `STYLE-GAWA`（**スタイルの値**） | 300（同） |
+
+**by-style にしただけでは値は流れない。** バウンドは `ResetObject` でも配られるのに、
+パラメータの値は配られない——**この 2 つは別の経路で動いている**。だから上の手順は
+**4（`UpdateStyledObjects` を 1 回）も省けない**。「[プラグインスタイル](#プラグインスタイル)」の
+「当てただけでは何も流れない」と同じ話だが、**`ResetObject` を挟んでも変わらない**ことまでは
+そこに書いていなかった。
 
 ### **`CreatePluginStyle` を呼んではいけない**——スタイルは作られず、文書中の PIO が全滅する
 

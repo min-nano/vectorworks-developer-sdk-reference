@@ -76,6 +76,21 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
     ので、`struct Style` は作れない。`ProbeStyle` のように接頭辞を付ける。
     （`Style` / `Point` / `Rect` / `Handle` など、**mac の古い型名は一通り埋まっている**
     と思っておく。）
+- **PIO を作るなら、走り出しで `DefineCustomObject` を呼ぶ。**
+  `gSDK->CreateCustomObject*` は、その名前の PIO が文書に未定義なら定義を作り、その
+  `prefWhen` の**既定が `kCustomObjectPrefAlways`**——つまり**最初の 1 個で「オブジェクトの
+  設定」ダイアログが出て止まる**（[Findings「生成時に『オブジェクトの設定』ダイアログが
+  出る」](../../Findings/Parametric%20Objects.md)）。VWFC の `VWParametricObj` は内側で
+  抑止しているが、**`gSDK->CreateCustomObjectPath` を直に叩くプローブには掛からない**。
+
+  ```cpp
+  gSDK->DefineCustomObject("StructuralMember", kCustomObjectPrefNever);  // 何かを作る前に 1 度
+  ```
+
+  **実際に踏んだ**（#118）。**構造材を使ったことのある文書では素通りするので、手元で通っても
+  当てにならない**——利用者は「新規の空図面で」走らせる（上記「図面を壊す前提で書く」）ので、
+  そちらではダイアログが出る。**しかもログには「作れなかった」としか残らない**ので、
+  **nil が返った理由（どの呼び出しか）をメッセージに乗せておく**こと。
 - **PR 番号やコミットをコードへ書かない。** 出所はビルドのときに決まり、
   [`scripts/gather-probes.sh`](../../scripts/gather-probes.sh) が表を生成して
   ピッカーに出す。**issue 番号だけは例外**——調査そのものの id なので、先頭コメントの
