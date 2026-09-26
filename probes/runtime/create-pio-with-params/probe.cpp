@@ -2,32 +2,41 @@
 //	probes/runtime/create-pio-with-params/probe.cpp
 //
 //	[issue #122] 組み込み PIO（ドア・窓）を「パラメータを指定した状態で、再生成 1 回で」
-//	作れる経路があるかを実測する。ヘッダだけでは分からない:
+//	作れるか——その 2 回目。1 回目で次が分かった:
 //
-//	  1) CreateCustomObject は作成の時点で再生成（既定値で描く）するか。
-//	     → 作る → 書く → ResetObject が「2 回描く」になっているか。
-//	  2) CreateCustomObject / CreateCustomObjectByMatrixEx の bInsert=false は何をするか
-//	     （図面に入れない＝再生成しない、なのか。後から AddObjectToContainer できるか）。
-//	  3) パラメトリックレコード書式の既定値を書き換えてから作ると、その値で生まれるか。
-//	  4) 点で置く PIO に CreateCustomObjectPath(name, nil, nil, doRegen=false) が使えるか。
+//	  - CreateCustomObject は作成の時点で再生成する（bInsert=false でも同じ）。
+//	  - 書式の既定値を書き換えてから作れば、その値で 1 回だけ描かれる。
+//	  - 点で置く PIO も CreateCustomObjectPath(name, nil, nil, doRegen=false) で
+//	    再生成なしに作れ、書いてから ResetObject すれば 1 回で正しい外形になる。
 //
-//	「再生成が走ったか」は、PIO の中身（子オブジェクトの数）と外形で判定する
-//	（再生成前の PIO は中身を持たない）。所要時間も添える。
+//	残った問い（この回で確かめる）:
+//
+//	  A) 初めて使う文書で、Path の入口（doRegen=false）でも「オブジェクトの設定」
+//	     ダイアログが出るか。DefineCustomObject(kCustomObjectPrefNever) で止まるか。
+//	     ダイアログは人を待つので、所要時間（秒単位になるか）で判定する。
+//	  B) Path の入口で作ったものを「位置・角度つき」で置けるか（SetEntityMatrix）。
+//	     置いただけで再生成が走るか。
+//	  C) できあがったものが、CreateCustomObject で作ったものと同じか
+//	     （位置・向き・外形・子の型の並び・パスの有無・全パラメータの値）。
+//
+//	**新規の空図面で走らせる**（ドア・窓を一度も使っていない文書でないと A が測れない）。
 //
 
 #include "Probe.h"
 
-#include "VWFC/VWObjects/VWParametricObj.h"
-#include "VWFC/VWObjects/VWRecordFormatObj.h"
 #include "VWFC/Math/VWTransformMatrix.h"
+#include "VWFC/VWObjects/VWParametricObj.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
 namespace
 {
 	using ProbeClock = std::chrono::steady_clock;
+
+	const double kProbeAngleDeg = 30.0;
 
 	double ElapsedMsSince(ProbeClock::time_point t0)
 	{
@@ -48,202 +57,157 @@ namespace
 		return buf;
 	}
 
-	std::string HandleWord(MCObjectHandle h)
+	// 1 秒を超えたら人を待った（＝ダイアログが出た）とみなす。作成そのものは 20ms 前後
+	// （1 回目の実測）なので、取り違えは起きない。
+	std::string DialogWord(double ms)
 	{
-		return h == nil ? "nil" : "非 nil";
+		return ms > 1000.0 ? "ダイアログが出た見込み" : "ダイアログ無し";
 	}
 
-	// PIO の中身（直下の子）の数。再生成前の PIO は 0 のはず。
-	int CountMembersOfPio(MCObjectHandle h)
+	// 直下の子の型を並べる（再生成前後・経路間の比較用）。
+	std::string MemberTypesOfPio(MCObjectHandle h, int& count)
 	{
-		int n = 0;
+		count = 0;
+		std::string s;
 		for (MCObjectHandle m = gSDK->FirstMemberObj(h); m != nil; m = gSDK->NextObject(m))
-			++n;
-		return n;
-	}
-
-	// 1 行の状態: 子の数・外形・パラメータの値・親。
-	std::string DescribePio(MCObjectHandle h, const TXString& paramName)
-	{
-		if (h == nil)
-			return "(nil)";
-		std::string s = "子=" + std::to_string(CountMembersOfPio(h));
-		WorldRect r;
-		if (gSDK->GetObjectBounds(h, r))
-			s += " 外形=" + FormatNum(r.Width()) + "x" + FormatNum(r.Height());
-		else
-			s += " 外形=(取れない)";
-		if (!paramName.IsEmpty())
 		{
-			VWParametricObj pio(h);
-			s += " " + std::string(paramName.GetStdString()) + "=" +
-				 FormatNum(pio.GetParamReal(paramName));
+			if (!s.empty())
+				s += ",";
+			s += std::to_string(gSDK->GetObjectTypeN(m));
+			++count;
 		}
-		MCObjectHandle parent = gSDK->ParentObject(h);
-		s += " 親=" + HandleWord(parent);
-		if (parent != nil)
-			s += "(type=" + std::to_string(gSDK->GetObjectTypeN(parent)) + ")";
 		return s;
 	}
 
-	// 幅を表す実数パラメータを探す。見つからなければ全欄を並べて空を返す。
-	TXString FindWidthParam(::vwprobe::Report& probe, MCObjectHandle h)
+	// 位置（行列の原点）・向き（U ベクトルの角度）・外形の中心と大きさ・子・パスの有無。
+	std::string DescribePlaced(MCObjectHandle h)
 	{
-		VWParametricObj pio(h);
-		const char* candidates[] = {"Width", "OverallWidth", "Door Width", "Window Width",
-									"W",	 "Length"};
-		for (const char* c : candidates)
+		if (h == nil)
+			return "(nil)";
+		TransformMatrix raw;
+		gSDK->GetEntityMatrix(h, raw);
+		VWTransformMatrix mat(raw);
+		const VWPoint3D off = mat.GetOffset();
+		const VWPoint3D u = mat.GetUVector();
+		const double angle = std::atan2(u.y, u.x) * 180.0 / 3.14159265358979323846;
+		std::string s = "原点=(" + FormatNum(off.x) + "," + FormatNum(off.y) + "," +
+						FormatNum(off.z) + ") 角度=" + FormatNum(angle);
+		WorldRect r;
+		if (gSDK->GetObjectBounds(h, r))
 		{
-			if (pio.GetParamIndex(c) != size_t(-1))
-				return c;
+			const WorldPt c = r.Center();
+			s += " 外形中心=(" + FormatNum(c.x) + "," + FormatNum(c.y) +
+				 ") 外形=" + FormatNum(r.Width()) + "x" + FormatNum(r.Height());
 		}
-		probe.log("  幅らしい欄が見つからない。欄を並べる:");
-		const size_t n = pio.GetParamsCount();
-		for (size_t i = 0; i < n && i < 60; ++i)
-			probe.log("    [" + std::to_string(i) + "] " +
-					  std::string(pio.GetParamName(i).GetStdString()));
-		return TXString();
+		int n = 0;
+		const std::string types = MemberTypesOfPio(h, n);
+		s += " 子=" + std::to_string(n) + "[" + types + "]";
+		s += std::string(" パス=") + (gSDK->GetCustomObjectPath(h) != nil ? "有" : "無");
+		return s;
 	}
 
-	void RunForPio(::vwprobe::Report& probe, const TXString& pioName, double baseY)
+	// 全パラメータを文字列で突き合わせ、違う欄を並べる。
+	void CompareAllParams(::vwprobe::Report& probe, MCObjectHandle a, MCObjectHandle b)
+	{
+		VWParametricObj pa(a);
+		VWParametricObj pb(b);
+		const size_t n = pa.GetParamsCount();
+		size_t diff = 0;
+		for (size_t i = 0; i < n; ++i)
+		{
+			const TXString name = pa.GetParamName(i);
+			const TXString va = pa.GetParamValue(name);
+			const TXString vb = pb.GetParamValue(name);
+			if (va == vb)
+				continue;
+			++diff;
+			if (diff <= 20)
+				probe.log("    違う: " + std::string(name.GetStdString()) + " A=" +
+						  std::string(va.GetStdString()) + " B=" + std::string(vb.GetStdString()));
+		}
+		probe.log("  全 " + std::to_string(n) + " 欄のうち違うもの " + std::to_string(diff) +
+				  " 欄（B の欄数 " + std::to_string(pb.GetParamsCount()) + "）");
+	}
+
+	void ComparePlacement(::vwprobe::Report& probe, const TXString& pioName, double baseY)
 	{
 		const std::string name = pioName.GetStdString();
 		probe.log("");
-		probe.log("===== " + name + " =====");
+		probe.log("===== B/C: " + name + "（位置・角度つきで置き、経路間で比べる） =====");
+		const double wantWidth = 1410.0;
 
-		// 0) 下見。書式（パラメトリックレコード）は最初の生成で文書に入る。
-		probe.log("[0] 下見: CreateCustomObject(bInsert=true)");
+		// A: いつもの経路
+		probe.log("[A] CreateCustomObject(pt, 30°) → 幅を書く → ResetObject");
 		auto t0 = ProbeClock::now();
-		MCObjectHandle h0 = gSDK->CreateCustomObject(pioName, WorldPt(0, baseY), 0.0, true);
-		double ms = ElapsedMsSince(t0);
-		if (h0 == nil)
-		{
-			probe.log("  nil（この PIO は使えない。飛ばす）");
+		MCObjectHandle ha =
+			gSDK->CreateCustomObject(pioName, WorldPt(0, baseY), kProbeAngleDeg, true);
+		probe.log("  作成 " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePlaced(ha));
+		if (ha == nil)
 			return;
-		}
-		const TXString widthParam = FindWidthParam(probe, h0);
-		probe.log("  作成 " + FormatMs(ms) + " / " + DescribePio(h0, widthParam));
-		if (widthParam.IsEmpty())
+		VWParametricObj(ha).SetParamReal("Width", wantWidth);
+		t0 = ProbeClock::now();
+		gSDK->ResetObject(ha);
+		probe.log("  ResetObject " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePlaced(ha));
+
+		// B: Path の入口（doRegen=false）→ 行列で置く → 書く → ResetObject
+		probe.log("[B] CreateCustomObjectPath(nil, nil, doRegen=false) → SetEntityMatrix(pt, "
+				  "30°) → 幅を書く → ResetObject");
+		t0 = ProbeClock::now();
+		MCObjectHandle hb = gSDK->CreateCustomObjectPath(pioName, nil, nil, false);
+		probe.log("  作成 " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePlaced(hb));
+		if (hb == nil)
 			return;
-		const double defaultWidth = VWParametricObj(h0).GetParamReal(widthParam);
-		const double wantWidth = defaultWidth + 500.0;
-		probe.log("  欄=" + std::string(widthParam.GetStdString()) +
-				  " 既定=" + FormatNum(defaultWidth) + " 書く値=" + FormatNum(wantWidth));
-		// 基準: 既定値のまま ResetObject した外形（再生成済みの姿）
+		VWTransformMatrix place;
+		place.RotateZAfter(kProbeAngleDeg);
+		place.SetOffset(VWPoint3D(6000, baseY, 0));
 		t0 = ProbeClock::now();
-		gSDK->ResetObject(h0);
-		probe.log("  ResetObject " + FormatMs(ElapsedMsSince(t0)) + " / " +
-				  DescribePio(h0, widthParam));
-
-		MCObjectHandle layer = gSDK->GetActiveLayer();
-
-		// 1) 今のやり方
-		probe.log("[1] CreateCustomObject(bInsert=true) → 書く → ResetObject");
+		gSDK->SetEntityMatrix(hb, place);
+		probe.log("  SetEntityMatrix " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePlaced(hb));
+		VWParametricObj(hb).SetParamReal("Width", wantWidth);
 		t0 = ProbeClock::now();
-		MCObjectHandle h1 = gSDK->CreateCustomObject(pioName, WorldPt(3000, baseY), 0.0, true);
-		probe.log("  作成 " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePio(h1, widthParam));
-		if (h1 != nil)
-		{
-			VWParametricObj(h1).SetParamReal(widthParam, wantWidth);
-			probe.log("  書いた直後 / " + DescribePio(h1, widthParam));
-			t0 = ProbeClock::now();
-			gSDK->ResetObject(h1);
-			probe.log("  ResetObject " + FormatMs(ElapsedMsSince(t0)) + " / " +
-					  DescribePio(h1, widthParam));
-		}
+		gSDK->ResetObject(hb);
+		probe.log("  ResetObject " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePlaced(hb));
 
-		// 2) bInsert=false
-		probe.log("[2] CreateCustomObject(bInsert=false) → 書く → AddObjectToContainer → "
-				  "ResetObject");
-		t0 = ProbeClock::now();
-		MCObjectHandle h2 = gSDK->CreateCustomObject(pioName, WorldPt(6000, baseY), 0.0, false);
-		probe.log("  作成 " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePio(h2, widthParam));
-		if (h2 != nil)
-		{
-			VWParametricObj(h2).SetParamReal(widthParam, wantWidth);
-			probe.log("  書いた直後 / " + DescribePio(h2, widthParam));
-			if (gSDK->ParentObject(h2) == nil)
-			{
-				const bool added = gSDK->AddObjectToContainer(h2, layer);
-				probe.log(std::string("  AddObjectToContainer=") + (added ? "true" : "false") +
-						  " / " + DescribePio(h2, widthParam));
-			}
-			t0 = ProbeClock::now();
-			gSDK->ResetObject(h2);
-			probe.log("  ResetObject " + FormatMs(ElapsedMsSince(t0)) + " / " +
-					  DescribePio(h2, widthParam));
-		}
+		// B': 書いて ResetObject した後で置き直す（置き直しに再生成が要るか）
+		probe.log("[B'] 同じ B を ResetObject の後で (12000, y) へ置き直す");
+		VWTransformMatrix again;
+		again.RotateZAfter(kProbeAngleDeg);
+		again.SetOffset(VWPoint3D(12000, baseY, 0));
+		gSDK->SetEntityMatrix(hb, again);
+		probe.log("  置き直した直後 / " + DescribePlaced(hb));
 
-		// 3) ByMatrixEx(bInsert=false)
-		probe.log("[3] CreateCustomObjectByMatrixEx(bInsert=false) → 書く → "
-				  "AddObjectToContainer → ResetObject");
-		VWTransformMatrix mat;
-		mat.SetOffset(VWPoint3D(9000, baseY, 0));
-		t0 = ProbeClock::now();
-		MCObjectHandle h3 = gSDK->CreateCustomObjectByMatrixEx(pioName, mat, false);
-		probe.log("  作成 " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePio(h3, widthParam));
-		if (h3 != nil)
-		{
-			VWParametricObj(h3).SetParamReal(widthParam, wantWidth);
-			probe.log("  書いた直後 / " + DescribePio(h3, widthParam));
-			if (gSDK->ParentObject(h3) == nil)
-			{
-				const bool added = gSDK->AddObjectToContainer(h3, layer);
-				probe.log(std::string("  AddObjectToContainer=") + (added ? "true" : "false") +
-						  " / " + DescribePio(h3, widthParam));
-			}
-			t0 = ProbeClock::now();
-			gSDK->ResetObject(h3);
-			probe.log("  ResetObject " + FormatMs(ElapsedMsSince(t0)) + " / " +
-					  DescribePio(h3, widthParam));
-		}
-
-		// 4) 書式の既定値を書き換えてから作る（終わったら戻す）
-		probe.log("[4] 書式の既定値を書き換える → CreateCustomObject(bInsert=true) → 戻す");
-		{
-			VWRecordFormatObj format = VWParametricObj(h0).GetRecordFormat();
-			probe.log("  書式の既定（前）=" + FormatNum(format.GetParamReal(widthParam)));
-			format.SetParamReal(widthParam, wantWidth);
-			probe.log("  書式の既定（書いた後）=" + FormatNum(format.GetParamReal(widthParam)) +
-					  " / 下見の個体 " + DescribePio(h0, widthParam));
-			t0 = ProbeClock::now();
-			MCObjectHandle h4 = gSDK->CreateCustomObject(pioName, WorldPt(12000, baseY), 0.0, true);
-			probe.log("  作成 " + FormatMs(ElapsedMsSince(t0)) + " / " +
-					  DescribePio(h4, widthParam));
-			format.SetParamReal(widthParam, defaultWidth);
-			probe.log("  書式の既定（戻した後）=" + FormatNum(format.GetParamReal(widthParam)) +
-					  " / 作った個体 " + DescribePio(h4, widthParam));
-			if (h4 != nil)
-			{
-				t0 = ProbeClock::now();
-				gSDK->ResetObject(h4);
-				probe.log("  （参考）ResetObject " + FormatMs(ElapsedMsSince(t0)) + " / " +
-						  DescribePio(h4, widthParam));
-			}
-		}
-
-		// 5) 点の PIO を Path の入口（doRegen=false）で作る
-		probe.log("[5] CreateCustomObjectPath(name, nil, nil, doRegen=false) → 書く → "
-				  "ResetObject");
-		t0 = ProbeClock::now();
-		MCObjectHandle h5 = gSDK->CreateCustomObjectPath(pioName, nil, nil, false);
-		probe.log("  作成 " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribePio(h5, widthParam));
-		if (h5 != nil)
-		{
-			VWParametricObj(h5).SetParamReal(widthParam, wantWidth);
-			probe.log("  書いた直後 / " + DescribePio(h5, widthParam));
-			t0 = ProbeClock::now();
-			gSDK->ResetObject(h5);
-			probe.log("  ResetObject " + FormatMs(ElapsedMsSince(t0)) + " / " +
-					  DescribePio(h5, widthParam));
-		}
+		probe.log("[C] A と B の全パラメータを突き合わせる");
+		CompareAllParams(probe, ha, hb);
 	}
 } // namespace
 
-VW_PROBE("create-pio-with-params", "PIO をパラメータ指定・再生成 1 回で作れるか",
-		 "ドア・窓を 5 経路（bInsert=false・書式の既定値・Path の doRegen=false 等）で作り、"
-		 "作成時に再生成されたかを子の数と外形で測る")
+VW_PROBE("create-pio-with-params", "PIO をパラメータ指定・再生成 1 回で作れるか（2 回目）",
+		 "新規の空図面で走らせる。Path の入口で作った点の PIO を位置・角度つきで置けるか、"
+		 "いつもの経路と同じものになるか、初回のダイアログが出るかを測る")
 {
-	RunForPio(probe, "Door", 0);
-	RunForPio(probe, "Window", 5000);
+	// A) 初めて使うときのダイアログ
+	probe.log("===== A: 初めて使うときのダイアログ =====");
+	probe.log("[A1] Door を初めて CreateCustomObjectPath(nil, nil, doRegen=false) で作る");
+	auto t0 = ProbeClock::now();
+	MCObjectHandle firstDoor = gSDK->CreateCustomObjectPath("Door", nil, nil, false);
+	double ms = ElapsedMsSince(t0);
+	probe.log("  作成 " + FormatMs(ms) + "（" + DialogWord(ms) + "） / " +
+			  DescribePlaced(firstDoor));
+
+	probe.log("[A2] Window を DefineCustomObject(kCustomObjectPrefNever) してから "
+			  "CreateCustomObject で初めて作る");
+	t0 = ProbeClock::now();
+	MCObjectHandle def = gSDK->DefineCustomObject("Window", kCustomObjectPrefNever);
+	ms = ElapsedMsSince(t0);
+	probe.log("  DefineCustomObject " + FormatMs(ms) + "（" + DialogWord(ms) +
+			  "） 戻り=" + (def != nil ? "非 nil" : "nil"));
+	t0 = ProbeClock::now();
+	MCObjectHandle firstWindow = gSDK->CreateCustomObject("Window", WorldPt(0, -5000), 0.0, true);
+	ms = ElapsedMsSince(t0);
+	probe.log("  作成 " + FormatMs(ms) + "（" + DialogWord(ms) + "） / " +
+			  DescribePlaced(firstWindow));
+
+	// B / C
+	ComparePlacement(probe, "Door", 5000);
+	ComparePlacement(probe, "Window", 10000);
 }
