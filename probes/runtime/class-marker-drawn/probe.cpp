@@ -241,6 +241,64 @@ namespace
 		return read;
 	}
 
+	// --- レイヤの中を数えて、全体の境界を取る（5 節） ---------------------
+	// **`GetMarkerPolys` を通らない物差し**のための道具。「線に変換」の前後で
+	// レイヤの図形の数と全体の境界を比べる。
+
+	struct LayerTally
+	{
+		long count = 0;
+		std::string bounds; // 「幅 × 高さ」。1 つも無ければ「—」
+	};
+
+	LayerTally TallyLayer(MCObjectHandle layer)
+	{
+		LayerTally tally;
+		bool any = false;
+		double left = 0, right = 0, top = 0, bottom = 0;
+		for (MCObjectHandle h = gSDK->FirstMemberObj(layer); h != nil; h = gSDK->NextObject(h))
+		{
+			++tally.count;
+			WorldRect r;
+			if (gSDK->GetObjectBounds(h, r) != 0)
+			{
+				const double l = static_cast<double>(r.left), rr = static_cast<double>(r.right);
+				const double t = static_cast<double>(r.top), b = static_cast<double>(r.bottom);
+				if (!any)
+				{
+					left = l < rr ? l : rr;
+					right = l < rr ? rr : l;
+					bottom = b < t ? b : t;
+					top = b < t ? t : b;
+					any = true;
+				}
+				else
+				{
+					if (l < left)
+						left = l;
+					if (rr < left)
+						left = rr;
+					if (l > right)
+						right = l;
+					if (rr > right)
+						right = rr;
+					if (b < bottom)
+						bottom = b;
+					if (t < bottom)
+						bottom = t;
+					if (b > top)
+						top = b;
+					if (t > top)
+						top = t;
+				}
+			}
+			if (tally.count > 500) // 念のため
+				break;
+		}
+		tally.bounds = any ? Real(right - left) + " × " + Real(top - bottom) : "—";
+		return tally;
+	}
+
 	// --- 1 行にまとめる ---------------------------------------------------
 
 	std::string RowCells(MCObjectHandle object)
@@ -749,26 +807,33 @@ VW_PROBE("class-marker-drawn", "クラスへ置いたマーカーが線の絵に
 	}
 
 	// =====================================================================
-	// 5. もう 1 つの物差し——「絵を図形に変える」（`ConvertToGroup`）
+	// 5. もう 1 つの物差し——「絵を線に変える」（`ConvertObjectToLines`）
 	// =====================================================================
-	probe.log("## 5. もう 1 つの物差し——絵を図形に変えて数える（`ConvertToGroup`）");
+	probe.log("## 5. もう 1 つの物差し——絵を線に変えて数える（`ConvertObjectToLines`）");
 	probe.log("");
 	probe.log("2 節の「図形なし」は `GetMarkerPolys` に拠っている。**その口が「描かれるか」では"
 			  "なく「per-object の有無」を見ているだけ**という筋が論理上残るので、"
 			  "**`GetMarkerPolys` をまったく通らない道**でもう一度測る。");
 	probe.log("");
-	probe.log("`ConvertToGroup(object, convertAction)`（`ISDK.h:2731`）は VW の"
-			  "「グループに変換」——**描かれているものを実体の図形に変える**。"
-			  "マーカーが描かれているなら、できたグループの中に線以外の部材が現れるはずである。");
+	probe.log("**1 周目は `ConvertToGroup`（`ISDK.h:2731`）で試して空振りした**"
+			  "——素の線でも per-object 直書きでも、**4 件すべてで `nil`** が返った"
+			  "（＝**「グループに変換」は素の線には効かない**。おそらくシンボルや PIO の"
+			  "ように「中身を持つもの」専用である）。それ自体が知見なので残す。");
 	probe.log("");
-	probe.log("**ここでも対照が要る**——素の線と per-object 直書きの 2 本で、"
+	probe.log("そこで今回は `ConvertObjectToLines(objectH, suspendDialog, convertMode)`"
+			  "（`ISDK.h:2732`）——VW の「線に変換」を使う。`suspendDialog=true` なので"
+			  "ダイアログは出ない。**描かれているものが実体の線になる**なら、"
+			  "**レイヤの中の図形の数**と**その全体の境界**が変わる。");
+	probe.log("");
+	probe.log("**ここでも対照が効く**——素の線と per-object 直書きの 2 本で、"
 			  "**この道がマーカーを映すのかどうか**が分かる。映さないなら"
-			  "（per-object 直書きでも部材が増えないなら）**この道でも分けられない**と分かる。");
+			  "（per-object 直書きでも数も境界も素の線と同じなら）**この道でも分けられない**。");
 	probe.log("");
 
 	{
-		probe.log("| 線 | by-class の旗 | グループ | 部材の数 | 部材の種別 | グループの境界 |");
-		probe.log("| --- | --- | --- | --- | --- | --- |");
+		probe.log("| 線 | by-class の旗 | `ConvertToGroup` | 変換前の数 | **変換後の数** | "
+				  "変換前の境界 | **変換後の境界** |");
+		probe.log("| --- | --- | --- | --- | --- | --- | --- |");
 
 		struct CvtCase
 		{
@@ -790,7 +855,7 @@ VW_PROBE("class-marker-drawn", "クラスへ置いたマーカーが線の絵に
 			size_t countBefore = 0;
 			const bool fresh = OpenFreshDocument(probe, countBefore);
 			const int kind = kCvtCases[i].kind;
-			// 大きいマーカー（上限の 2 インチ）で測る——小さいと部材が潰れて見分けにくい。
+			// 大きいマーカー（上限の 2 インチ）で測る——小さいと材が潰れて見分けにくい。
 			const InternalIndex classIndex =
 				(kind == 1 || kind == 2) ? PrepareClass(probe, kArrowMarker, 2.0, 0, false) : 0;
 
@@ -798,7 +863,7 @@ VW_PROBE("class-marker-drawn", "クラスへ置いたマーカーが線の絵に
 			if (line == nil)
 			{
 				probe.log("| " + std::string(kCvtCases[i].label) +
-						  " | **引けなかった（nil）** | | | | |");
+						  " | **引けなかった（nil）** | | | | | |");
 				CloseFreshDocument(probe, countBefore, fresh);
 				continue;
 			}
@@ -817,49 +882,45 @@ VW_PROBE("class-marker-drawn", "クラスへ置いたマーカーが線の絵に
 				WritePerObject(line, kArrowMarker, 2.0, 0, true);
 
 			const std::string flag = gSDK->GetArrowByClass(line) != 0 ? "**yes**" : "no";
-			MCObjectHandle group = gSDK->ConvertToGroup(line, 0);
-			if (group == nil)
+
+			// 1 周目に空振りした `ConvertToGroup` も、記録のために毎回叩いておく。
+			const std::string toGroup = gSDK->ConvertToGroup(line, 0) != nil ? "**あり**" : "nil";
+
+			MCObjectHandle layer = gSDK->ParentObject(line);
+			if (layer == nil)
+				layer = gSDK->GetActiveLayer();
+			if (layer == nil)
 			{
-				probe.log("| " + std::string(kCvtCases[i].label) + " | " + flag +
-						  " | **nil（変換できなかった）** | — | — | — |");
+				probe.log("| " + std::string(kCvtCases[i].label) + " | " + flag + " | " + toGroup +
+						  " | **レイヤを取れない** | | | |");
 				CloseFreshDocument(probe, countBefore, fresh);
 				continue;
 			}
 
-			long members = 0;
-			std::string kinds;
-			for (MCObjectHandle m = gSDK->FirstMemberObj(group); m != nil; m = gSDK->NextObject(m))
-			{
-				++members;
-				if (members <= 6)
-					kinds += (kinds.empty() ? "" : " / ") +
-							 Num(static_cast<long>(gSDK->GetObjectTypeN(m)));
-				if (members > 200)
-				{
-					kinds += " …（200 で打ち切り）";
-					break;
-				}
-			}
-			const BoundsRead gb = ReadBounds(group);
-			probe.log("| " + std::string(kCvtCases[i].label) + " | " + flag + " | あり | " +
-					  Num(members) + " | " + (kinds.empty() ? "—" : kinds) + " | " +
-					  (gb.ok ? Real(gb.width) + " × " + Real(gb.height) : "**読めない**") + " |");
+			const LayerTally before = TallyLayer(layer);
+			gSDK->ConvertObjectToLines(line, true, ConvertWireframeMode);
+			const LayerTally after = TallyLayer(layer);
+
+			probe.log("| " + std::string(kCvtCases[i].label) + " | " + flag + " | " + toGroup +
+					  " | " + Num(before.count) + " | **" + Num(after.count) + "** | " +
+					  before.bounds + " | **" + after.bounds + "** |");
 			CloseFreshDocument(probe, countBefore, fresh);
 		}
 		probe.log("");
-		probe.log("**読み方**: マーカーは**塗りのある矢印・2 インチ**（＝上限。50.8mm）で書いて"
-				  "いるので、材になれば見落としようがない。");
+		probe.log("**読み方**: マーカーは**塗りのある矢印・2 インチ**（＝上限。50.8mm）で"
+				  "書いているので、材になれば見落としようがない。線は (x, 0)–(x, 1000) の"
+				  "縦線なので、**素の線だけなら境界の幅は 0 のまま**である。");
 		probe.log("");
-		probe.log("- **per-object 直書きの行で部材が増える（または境界が広がる）なら、"
-				  "この道はマーカーを映している。** そのとき「クラス＋`SetArrowByClass`」の行が"
-				  "素の線と同じなら、**`GetMarkerPolys` を通らない 2 つ目の物差しでも"
-				  "「描かれていない」**——2 節の結論が独立に裏打ちされる。");
-		probe.log("- **per-object 直書きでも素の線と同じなら、この道はマーカーを映さない**"
-				  "（変換が線だけを写している）。そのときはこの節から何も言えない"
+		probe.log("- **per-object 直書きの行で、変換後の数が増える（または境界の幅が 0 を"
+				  "抜ける）なら、この道はマーカーを映している。** そのとき"
+				  "「クラス＋`SetArrowByClass`」の行が素の線と同じなら、"
+				  "**`GetMarkerPolys` を通らない 2 つ目の物差しでも「描かれていない」**"
+				  "——2 節の結論が独立に裏打ちされる。");
+		probe.log("- **per-object 直書きでも素の線と同じなら、この道もマーカーを映さない**"
+				  "（変換が線の芯だけを写している）。そのときはこの節から何も言えない"
 				  "——6 節の図面を見るしかない。");
 		probe.log("");
 	}
-
 	// =====================================================================
 	// 6. 目視用の対照図面（保険）
 	// =====================================================================
