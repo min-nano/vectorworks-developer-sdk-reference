@@ -2,20 +2,21 @@
 //	probes/runtime/create-pio-with-params/probe.cpp
 //
 //	[issue #122] 組み込み PIO（ドア・窓）を「パラメータを指定した状態で、再生成 1 回で」
-//	作れるか——その 3 回目。
+//	作れるか——その 4 回目。
 //
-//	2 回目で、ダイアログを DefineCustomObject(kCustomObjectPrefNever) で止めた窓では、
-//	CreateCustomObjectPath(nil, nil, doRegen=false) で作ったもの（B）が
-//	CreateCustomObject で作ったもの（A）と 618 欄中 76 欄違った（B は書いた幅も外形に
-//	出なかった）。ダイアログを OK で通したドアでは 672 欄すべて一致した。
-//	この回はダイアログを一切出さない条件（プラグインが実際に使う条件）で、差の出どころを分ける:
+//	3 回目で、ダイアログを出さない文書（DefineCustomObject(kCustomObjectPrefNever)）では
+//	「CreateCustomObjectPath(nil, nil, doRegen=false) → 見本（CreateCustomObject で作った A0）の
+//	全欄を SetParamValue で写す → 幅を書く → ResetObject」で外形は A と一致したが、線の種類・
+//	太さの欄だけ 17 / 18 欄違った。SDK の実装（VWParametricObj.cpp）では線の種類・太さは
+//	専用の欄型（kFieldPenStyle=26 / kFieldPenWeight=27）で、専用の口
+//	（SetParamPenStyle / SetParamPenWeight）がある。
 //
-//	  1) 書式（パラメトリックレコード）の既定値 F と、何も書かずに作った A0・B0 を
-//	     それぞれ突き合わせる。どちらが F のままで、どちらが F から離れるか。
-//	  2) B0 に A0 の全欄を写してから書いて ResetObject すると、A と同じになるか（C）。
-//	  3) 書式の既定値を書き換えてから CreateCustomObject（1 回目の [4]）は、A と同じになるか（D）。
-//	  4) ResetObject の後に SetEntityMatrix で動かすと外形が古いまま残った（2 回目の B'）。
-//	     もう一度 ResetObject すれば追い付くか。
+//	この回は欄型ごとの口で写し（型付きの写し）、次を確かめる:
+//
+//	  1) 写した直後（ResetObject の前）に A0 と全欄一致するか。違う欄は欄型つきで出す。
+//	  2) 幅を書いて ResetObject した後、A（CreateCustomObject → 幅 → ResetObject）と
+//	     全欄一致するか。外形・子の型の並びも比べる。
+//	  3) 比べるために、文字列（SetParamValue）だけで写した場合も同じ手順で並べる。
 //
 //	**新規の空図面で走らせる。**ダイアログは出ない見込み（出たら OK で閉じる）。
 //
@@ -24,7 +25,6 @@
 
 #include "VWFC/Math/VWTransformMatrix.h"
 #include "VWFC/VWObjects/VWParametricObj.h"
-#include "VWFC/VWObjects/VWRecordFormatObj.h"
 
 #include <chrono>
 #include <cstdio>
@@ -60,7 +60,7 @@ namespace
 		return std::string(s.GetStdString());
 	}
 
-	// 外形（中心・大きさ）と子の数。
+	// 外形（中心・大きさ）と子の型の並び。
 	std::string DescribeShape(MCObjectHandle h)
 	{
 		if (h == nil)
@@ -74,46 +74,81 @@ namespace
 				 ") 外形=" + FormatNum(r.Width()) + "x" + FormatNum(r.Height());
 		}
 		int n = 0;
+		std::string types;
 		for (MCObjectHandle m = gSDK->FirstMemberObj(h); m != nil; m = gSDK->NextObject(m))
+		{
+			if (!types.empty())
+				types += ",";
+			types += std::to_string(gSDK->GetObjectTypeN(m));
 			++n;
-		s += " 子=" + std::to_string(n);
+		}
+		s += " 子=" + std::to_string(n) + "[" + types + "]";
 		return s;
 	}
 
-	// 値の出どころ（書式 or 個体）を 1 本の関数で比べるための薄い口。
-	struct ProbeParamSource
+	// 全欄を文字列で突き合わせ、違う欄を欄型つきで最大 maxList 件まで並べる。
+	size_t CompareInstances(::vwprobe::Report& probe, const char* la, VWParametricObj& a,
+							const char* lb, VWParametricObj& b, size_t maxList)
 	{
-		const char* label;
-		VWParametricObj* pio;
-		VWRecordFormatObj* format;
-
-		TXString Value(const TXString& name) const
-		{
-			return pio != nullptr ? pio->GetParamValue(name) : format->GetParamValue(name);
-		}
-	};
-
-	// 全欄を文字列で突き合わせ、違う欄を最大 maxList 件まで並べる。欄名は a から採る。
-	size_t CompareParamSources(::vwprobe::Report& probe, VWParametricObj& names,
-							   const ProbeParamSource& a, const ProbeParamSource& b, size_t maxList)
-	{
-		const size_t n = names.GetParamsCount();
+		const size_t n = a.GetParamsCount();
 		size_t diff = 0;
 		for (size_t i = 0; i < n; ++i)
 		{
-			const TXString name = names.GetParamName(i);
-			const TXString va = a.Value(name);
-			const TXString vb = b.Value(name);
+			const TXString name = a.GetParamName(i);
+			const TXString va = a.GetParamValue(name);
+			const TXString vb = b.GetParamValue(name);
 			if (va == vb)
 				continue;
 			++diff;
 			if (diff <= maxList)
-				probe.log("      " + Utf8(name) + ": " + a.label + "=" + Utf8(va) + " " + b.label +
-						  "=" + Utf8(vb));
+				probe.log("      " + Utf8(name) + "（欄型 " +
+						  std::to_string(static_cast<int>(a.GetParamStyle(name))) + "）: " + la +
+						  "=" + Utf8(va) + " " + lb + "=" + Utf8(vb));
 		}
-		probe.log("    " + std::string(a.label) + " と " + b.label + ": 全 " + std::to_string(n) +
+		probe.log("    " + std::string(la) + " と " + lb + ": 全 " + std::to_string(n) +
 				  " 欄のうち違うもの " + std::to_string(diff) + " 欄");
 		return diff;
+	}
+
+	// 欄型ごとの口で写す。typed=false なら全欄を文字列（SetParamValue）で写す。
+	void CopyAllParams(VWParametricObj& from, VWParametricObj& to, bool typed)
+	{
+		const size_t n = from.GetParamsCount();
+		for (size_t i = 0; i < n; ++i)
+		{
+			const TXString name = from.GetParamName(i);
+			const EFieldStyle style = typed ? from.GetParamStyle(name) : kFieldText;
+			switch (style)
+			{
+			case kFieldPenStyle:
+				to.SetParamPenStyle(name, from.GetParamPenStyle(name));
+				break;
+			case kFieldPenWeight:
+				to.SetParamPenWeight(name, from.GetParamPenWeight(name));
+				break;
+			case kFieldFill:
+				to.SetParamFill(name, from.GetParamFill(name));
+				break;
+			case kFieldColor:
+				to.SetParamColor(name, from.GetParamColor(name));
+				break;
+			case kFieldClass:
+				to.SetParamClass(name, from.GetParamClass(name));
+				break;
+			case kFieldBuildingMaterial:
+				to.SetParamBuildingMaterial(name, from.GetParamBuildingMaterial(name));
+				break;
+			case kFieldTexture:
+				to.SetParamTexture(name, from.GetParamTexture(name));
+				break;
+			case kFieldSymDef:
+				to.SetParamSymDef(name, from.GetParamSymDef(name));
+				break;
+			default:
+				to.SetParamValue(name, from.GetParamValue(name));
+				break;
+			}
+		}
 	}
 
 	MCObjectHandle CreateByPathAt(const TXString& pioName, double x, double y)
@@ -127,6 +162,30 @@ namespace
 		return h;
 	}
 
+	void RunCopyCase(::vwprobe::Report& probe, const TXString& pioName, double x, double y,
+					 bool typed, VWParametricObj& pa0, VWParametricObj& pa)
+	{
+		const char* label = typed ? "T" : "S";
+		probe.log(std::string("[") + label + "] Path(doRegen=false) → A0 を" +
+				  (typed ? "欄型ごとの口で" : "文字列（SetParamValue）で") +
+				  "写す → 幅 → ResetObject");
+		MCObjectHandle h = CreateByPathAt(pioName, x, y);
+		if (h == nil)
+		{
+			probe.log("  作れなかった");
+			return;
+		}
+		VWParametricObj pc(h);
+		CopyAllParams(pa0, pc, typed);
+		probe.log("  写した直後（ResetObject の前）");
+		CompareInstances(probe, "A0", pa0, label, pc, 20);
+		pc.SetParamReal("Width", kWantWidth);
+		const auto t0 = ProbeClock::now();
+		gSDK->ResetObject(h);
+		probe.log("  ResetObject " + FormatMs(ElapsedMsSince(t0)) + " / " + DescribeShape(h));
+		CompareInstances(probe, "A", pa, label, pc, 20);
+	}
+
 	void RunForPio(::vwprobe::Report& probe, const TXString& pioName, double baseY)
 	{
 		probe.log("");
@@ -134,90 +193,32 @@ namespace
 
 		auto t0 = ProbeClock::now();
 		MCObjectHandle def = gSDK->DefineCustomObject(pioName, kCustomObjectPrefNever);
-		double ms = ElapsedMsSince(t0);
-		probe.log("DefineCustomObject(kCustomObjectPrefNever) " + FormatMs(ms) +
+		probe.log("DefineCustomObject(kCustomObjectPrefNever) " + FormatMs(ElapsedMsSince(t0)) +
 				  " 戻り=" + (def != nil ? "非 nil" : "nil"));
 
-		// 1) 何も書かずに作る
-		t0 = ProbeClock::now();
+		// 見本 A0（何も書かない）と、基準 A（幅を書いて ResetObject）
 		MCObjectHandle a0 = gSDK->CreateCustomObject(pioName, WorldPt(0, baseY), 0.0, true);
-		ms = ElapsedMsSince(t0);
-		probe.log("[A0] CreateCustomObject（何も書かない） " + FormatMs(ms) + " / " +
-				  DescribeShape(a0));
-		MCObjectHandle b0 = CreateByPathAt(pioName, 3000, baseY);
-		probe.log("[B0] CreateCustomObjectPath(doRegen=false)＋置く（何も書かない） / " +
-				  DescribeShape(b0));
-		if (a0 == nil || b0 == nil)
+		MCObjectHandle a = gSDK->CreateCustomObject(pioName, WorldPt(3000, baseY), 0.0, true);
+		if (a0 == nil || a == nil)
 		{
 			probe.log("  作れなかったので飛ばす");
 			return;
 		}
-		gSDK->ResetObject(b0);
-		probe.log("  B0 を ResetObject / " + DescribeShape(b0));
-
 		VWParametricObj pa0(a0);
-		VWParametricObj pb0(b0);
-		VWRecordFormatObj format = pa0.GetRecordFormat();
-		const ProbeParamSource srcF{"F", nullptr, &format};
-		const ProbeParamSource srcA0{"A0", &pa0, nullptr};
-		const ProbeParamSource srcB0{"B0", &pb0, nullptr};
-		probe.log("[1] 書式の既定値 F と突き合わせる");
-		CompareParamSources(probe, pa0, srcF, srcA0, 25);
-		CompareParamSources(probe, pa0, srcF, srcB0, 25);
-		CompareParamSources(probe, pa0, srcA0, srcB0, 5);
-
-		// 基準 A: いつもの経路で幅を書く
-		MCObjectHandle a = gSDK->CreateCustomObject(pioName, WorldPt(6000, baseY), 0.0, true);
 		VWParametricObj pa(a);
 		pa.SetParamReal("Width", kWantWidth);
 		gSDK->ResetObject(a);
+		probe.log("[A0] CreateCustomObject（何も書かない） / " + DescribeShape(a0));
 		probe.log("[A] CreateCustomObject → 幅 → ResetObject / " + DescribeShape(a));
-		const ProbeParamSource srcA{"A", &pa, nullptr};
 
-		// 2) C: Path の入口で作り、A0 の全欄を写してから幅を書く
-		MCObjectHandle c = CreateByPathAt(pioName, 9000, baseY);
-		VWParametricObj pc(c);
-		const size_t n = pa0.GetParamsCount();
-		for (size_t i = 0; i < n; ++i)
-		{
-			const TXString name = pa0.GetParamName(i);
-			pc.SetParamValue(name, pa0.GetParamValue(name));
-		}
-		pc.SetParamReal("Width", kWantWidth);
-		t0 = ProbeClock::now();
-		gSDK->ResetObject(c);
-		probe.log("[C] Path(doRegen=false) → A0 の全欄を写す → 幅 → ResetObject " +
-				  FormatMs(ElapsedMsSince(t0)) + " / " + DescribeShape(c));
-		const ProbeParamSource srcC{"C", &pc, nullptr};
-		CompareParamSources(probe, pa, srcA, srcC, 15);
-
-		// 3) D: 書式の既定値を書き換えてから CreateCustomObject（終わったら戻す）
-		const TXString oldWidth = format.GetParamValue("Width");
-		format.SetParamReal("Width", kWantWidth);
-		MCObjectHandle d = gSDK->CreateCustomObject(pioName, WorldPt(12000, baseY), 0.0, true);
-		format.SetParamValue("Width", oldWidth);
-		probe.log("[D] 書式の幅を書き換え → CreateCustomObject → 書式を戻す（戻した値=" +
-				  Utf8(format.GetParamValue("Width")) + "） / " + DescribeShape(d));
-		if (d != nil)
-		{
-			VWParametricObj pd(d);
-			const ProbeParamSource srcD{"D", &pd, nullptr};
-			CompareParamSources(probe, pa, srcA, srcD, 15);
-		}
-
-		// 4) ResetObject の後で動かすと外形が古いまま残るか、もう一度 ResetObject で追い付くか
-		VWTransformMatrix moved;
-		moved.SetOffset(VWPoint3D(15000, baseY, 0));
-		gSDK->SetEntityMatrix(c, moved);
-		probe.log("[4] C を (15000, y) へ SetEntityMatrix / " + DescribeShape(c));
-		gSDK->ResetObject(c);
-		probe.log("    もう一度 ResetObject / " + DescribeShape(c));
+		RunCopyCase(probe, pioName, 6000, baseY, true, pa0, pa);
+		RunCopyCase(probe, pioName, 9000, baseY, false, pa0, pa);
 	}
 } // namespace
 
-VW_PROBE("create-pio-with-params", "PIO をパラメータ指定・再生成 1 回で作れるか（3 回目）",
-		 "新規の空図面で走らせる。ダイアログを出さない条件で、Path の入口で作った PIO が"
-		 "いつもの経路と違う値になる出どころを分け、揃える手を試す")
+VW_PROBE("create-pio-with-params", "PIO をパラメータ指定・再生成 1 回で作れるか（4 回目）",
+		 "新規の空図面で走らせる。ダイアログを出さない条件で、Path の入口で作った PIO へ"
+		 "見本の全欄を欄型ごとの口で写すと、いつもの経路と全欄一致するかを測る")
 {
 	RunForPio(probe, "Door", 0);
 	RunForPio(probe, "Window", 5000);
