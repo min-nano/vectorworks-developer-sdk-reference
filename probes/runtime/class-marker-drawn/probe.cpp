@@ -63,16 +63,22 @@
 //	        `SetClUseGraphic` つき・中口で書く・順序違い・**VW 自身の作法**） | 1・2・4 |
 //	  | 3 | **クラスの値を後から変えたら、線は追随するか** | 1 |
 //	  | 4 | **文書の既定から生まれた線**（既定は per-object の値として入るはず） | 3 |
-//	  | 5 | **目視用の対照図面**——1〜4 の物差しで割れなかったときの保険 | 1 |
+//	  | 5 | **`GetMarkerPolys` を通らない 2 つ目の物差し**——`ConvertToGroup` で
+//	        「描かれているもの」を実体の図形に変え、部材を数える | 1・2 |
+//	  | 6 | **目視用の対照図面**——1〜5 の物差しで割れなかったときの保険 | 1 |
 //
 //	**1 節が効く**——per-object で **visibility=false** の線（値はあるが消えている）に
 //	図形が出ないなら、`GetMarkerPolys` は「値の有無」ではなく**実際に描かれるか**を
 //	映していることになり、2 節の「図形なし」は「絵に出ていない」と読める。
-//	逆に visibility=false でも図形が出るなら、この口は絵を映していないと分かる
-//	——そのときは 5 節の図面を見てもらう。
+//	逆に visibility=false でも図形が出るなら、この口は絵を映していないと分かる。
 //
-//	**利用者の図面は触らない。** 1〜4 節は、プローブが自分で開いて自分で閉じる空の図面の
-//	中だけで測る（クラスを作るのも文書の既定を触るのもその中）。**5 節だけは、見るための
+//	**5 節はその 1 節に頼らない。** `GetMarkerPolys` が「描かれるか」ではなく
+//	「per-object の有無」を見ているだけ、という筋が論理上残るので、**まったく別の道**
+//	（絵を図形へ変えて部材を数える）で同じことを測る。ここでも対照 2 本が効く
+//	——per-object 直書きで部材が増えないなら、この道でも分けられないと分かる。
+//
+//	**利用者の図面は触らない。** 1〜5 節は、プローブが自分で開いて自分で閉じる空の図面の
+//	中だけで測る（クラスを作るのも文書の既定を触るのもその中）。**6 節だけは、見るための
 //	図面を開いたまま残す**（見終わったら保存せず閉じてよい）。
 //
 
@@ -743,9 +749,121 @@ VW_PROBE("class-marker-drawn", "クラスへ置いたマーカーが線の絵に
 	}
 
 	// =====================================================================
-	// 5. 目視用の対照図面（保険）
+	// 5. もう 1 つの物差し——「絵を図形に変える」（`ConvertToGroup`）
 	// =====================================================================
-	probe.log("## 5. 目視用の対照図面——1〜4 で割れなかったときの保険");
+	probe.log("## 5. もう 1 つの物差し——絵を図形に変えて数える（`ConvertToGroup`）");
+	probe.log("");
+	probe.log("2 節の「図形なし」は `GetMarkerPolys` に拠っている。**その口が「描かれるか」では"
+			  "なく「per-object の有無」を見ているだけ**という筋が論理上残るので、"
+			  "**`GetMarkerPolys` をまったく通らない道**でもう一度測る。");
+	probe.log("");
+	probe.log("`ConvertToGroup(object, convertAction)`（`ISDK.h:2731`）は VW の"
+			  "「グループに変換」——**描かれているものを実体の図形に変える**。"
+			  "マーカーが描かれているなら、できたグループの中に線以外の部材が現れるはずである。");
+	probe.log("");
+	probe.log("**ここでも対照が要る**——素の線と per-object 直書きの 2 本で、"
+			  "**この道がマーカーを映すのかどうか**が分かる。映さないなら"
+			  "（per-object 直書きでも部材が増えないなら）**この道でも分けられない**と分かる。");
+	probe.log("");
+
+	{
+		probe.log("| 線 | by-class の旗 | グループ | 部材の数 | 部材の種別 | グループの境界 |");
+		probe.log("| --- | --- | --- | --- | --- | --- |");
+
+		struct CvtCase
+		{
+			const char* label;
+			int kind; // 0=素の線 1=クラス＋by-class 2=書き写し＋by-class 3=per-object 直書き
+		};
+		const CvtCase kCvtCases[] = {
+			{"**対照**: 何も書いていない素の線", 0},
+			{"クラスに入れて `SetArrowByClass`", 1},
+			{"クラスから書き写す＋`SetArrowByClass`", 2},
+			{"**対照**: per-object で直に書いた", 3},
+		};
+		const size_t kCvtCount = sizeof(kCvtCases) / sizeof(kCvtCases[0]);
+
+		// **1 件ずつ別の図面で測る**——変換は図面へ図形を足すので、
+		// 前の件が残っていると数が混ざる。
+		for (size_t i = 0; i < kCvtCount; ++i)
+		{
+			size_t countBefore = 0;
+			const bool fresh = OpenFreshDocument(probe, countBefore);
+			const int kind = kCvtCases[i].kind;
+			// 大きいマーカー（上限の 2 インチ）で測る——小さいと部材が潰れて見分けにくい。
+			const InternalIndex classIndex =
+				(kind == 1 || kind == 2) ? PrepareClass(probe, kArrowMarker, 2.0, 0, false) : 0;
+
+			MCObjectHandle line = CreateWitnessLine();
+			if (line == nil)
+			{
+				probe.log("| " + std::string(kCvtCases[i].label) +
+						  " | **引けなかった（nil）** | | | | |");
+				CloseFreshDocument(probe, countBefore, fresh);
+				continue;
+			}
+			if (kind == 1 || kind == 2)
+				gSDK->SetObjectClass(line, classIndex);
+			if (kind == 2)
+			{
+				SMarkerStyle fromClass{};
+				gSDK->GetClassBeginningMarker(classIndex, fromClass);
+				gSDK->SetObjBeginningMarker(line, fromClass, static_cast<Boolean>(1));
+				gSDK->SetObjEndMarker(line, fromClass, static_cast<Boolean>(1));
+			}
+			if (kind == 1 || kind == 2)
+				gSDK->SetArrowByClass(line);
+			if (kind == 3)
+				WritePerObject(line, kArrowMarker, 2.0, 0, true);
+
+			const std::string flag = gSDK->GetArrowByClass(line) != 0 ? "**yes**" : "no";
+			MCObjectHandle group = gSDK->ConvertToGroup(line, 0);
+			if (group == nil)
+			{
+				probe.log("| " + std::string(kCvtCases[i].label) + " | " + flag +
+						  " | **nil（変換できなかった）** | — | — | — |");
+				CloseFreshDocument(probe, countBefore, fresh);
+				continue;
+			}
+
+			long members = 0;
+			std::string kinds;
+			for (MCObjectHandle m = gSDK->FirstMemberObj(group); m != nil; m = gSDK->NextObject(m))
+			{
+				++members;
+				if (members <= 6)
+					kinds += (kinds.empty() ? "" : " / ") +
+							 Num(static_cast<long>(gSDK->GetObjectTypeN(m)));
+				if (members > 200)
+				{
+					kinds += " …（200 で打ち切り）";
+					break;
+				}
+			}
+			const BoundsRead gb = ReadBounds(group);
+			probe.log("| " + std::string(kCvtCases[i].label) + " | " + flag + " | あり | " +
+					  Num(members) + " | " + (kinds.empty() ? "—" : kinds) + " | " +
+					  (gb.ok ? Real(gb.width) + " × " + Real(gb.height) : "**読めない**") + " |");
+			CloseFreshDocument(probe, countBefore, fresh);
+		}
+		probe.log("");
+		probe.log("**読み方**: マーカーは**塗りのある矢印・2 インチ**（＝上限。50.8mm）で書いて"
+				  "いるので、材になれば見落としようがない。");
+		probe.log("");
+		probe.log("- **per-object 直書きの行で部材が増える（または境界が広がる）なら、"
+				  "この道はマーカーを映している。** そのとき「クラス＋`SetArrowByClass`」の行が"
+				  "素の線と同じなら、**`GetMarkerPolys` を通らない 2 つ目の物差しでも"
+				  "「描かれていない」**——2 節の結論が独立に裏打ちされる。");
+		probe.log("- **per-object 直書きでも素の線と同じなら、この道はマーカーを映さない**"
+				  "（変換が線だけを写している）。そのときはこの節から何も言えない"
+				  "——6 節の図面を見るしかない。");
+		probe.log("");
+	}
+
+	// =====================================================================
+	// 6. 目視用の対照図面（保険）
+	// =====================================================================
+	probe.log("## 6. 目視用の対照図面——1〜5 で割れなかったときの保険");
 	probe.log("");
 
 	{
@@ -814,7 +932,7 @@ VW_PROBE("class-marker-drawn", "クラスへ置いたマーカーが線の絵に
 					  "`SetArrowByClass` / per-object 直書きの 4 本で、マーカーは"
 					  "**塗りのある矢印・1 インチ**（見落としようのない大きさ）である。");
 			probe.log("");
-			probe.log("**1〜4 節で割れていれば、この図面は見なくてよい**（保存せず閉じて"
+			probe.log("**1〜5 節で割れていれば、この図面は見なくてよい**（保存せず閉じて"
 					  "構わない）。割れていなかったときだけ、**どの線に矢印が付いているか**を"
 					  "チャットで教えてください——それが最後の物差しになる。");
 		}
@@ -826,11 +944,11 @@ VW_PROBE("class-marker-drawn", "クラスへ置いたマーカーが線の絵に
 		probe.log("");
 	}
 
-	probe.log("## 6. 締め");
+	probe.log("## 7. 締め");
 	probe.log("");
 	probe.log("開いている図面の件数: " + Num(static_cast<long>(CountOpenDocuments())) +
-			  "（**走らせる前より 1 多いのが正しい**——5 節の図面だけを残している）");
+			  "（**走らせる前より 1 多いのが正しい**——6 節の図面だけを残している）");
 	probe.log("");
-	probe.log("**1〜4 節は利用者の図面を触っていない**。クラスを作ったのも文書の既定を"
+	probe.log("**1〜5 節は利用者の図面を触っていない**。クラスを作ったのも文書の既定を"
 			  "書き換えたのも、プローブが自分で開いて自分で閉じた空の図面の中である。");
 }
