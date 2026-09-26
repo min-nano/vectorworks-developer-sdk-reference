@@ -89,7 +89,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 echo "Downloading the Vectorworks SDK (a large zip: ~140 MB mac / ~90 MB win)..."
-curl -fL --retry 4 --retry-delay 5 -o "$work/sdk.zip" "$SDK_URL"
+curl -fL --retry 4 --retry-delay 5 -D "$work/headers.txt" -o "$work/sdk.zip" "$SDK_URL"
 
 # 展開。ランナーによって入っている道具が違うので順に試す（git-bash には unzip が
 # 無いことがあり、そこでは 7z か PowerShell の Expand-Archive を使う）。
@@ -124,6 +124,22 @@ for sub in $SUBDIRS; do
 		echo "(note) SDKLib/$sub not present in this SDK; skipping."
 	fi
 done
+
+# 出所の記録。URL の "latest" は SDK の版が上がると中身が差し替わるので、どの版から
+# 作ったかは zip の中のフォルダ名（例 `SDKVW(832364)`）と応答ヘッダでしか分からない。
+# 宣言索引（scripts/sdk-index.py）がこれを読んで `SDK Index/INDEX.md` に載せる。
+# 応答ヘッダはリダイレクトの分も重なって入るので、最後に出たものを採る。
+header_value() {
+	tr -d '\r' <"$work/headers.txt" | awk -v k="$1" '
+		tolower($0) ~ "^" tolower(k) ":" { sub(/^[^:]*:[ \t]*/, ""); v = $0 } END { print v }'
+}
+{
+	echo "folder=$(basename "$(dirname "$sdklib")")"
+	echo "url=$SDK_URL"
+	echo "last_modified=$(header_value last-modified)"
+	echo "etag=$(header_value etag)"
+} >"$SDK_DIR/sdk-origin.txt"
+cat "$SDK_DIR/sdk-origin.txt"
 
 if [ "$PARTS" = plugin ] && [ "$OS" = mac ]; then
 	# BuildVWR が実行できる状態か確かめる（実行ビット・Gatekeeper の隔離属性）。

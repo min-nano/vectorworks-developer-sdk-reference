@@ -14,6 +14,8 @@ The SDK https://www.vectorworks.net/en-US/support/custom/sdk/sdkdown provides OS
 - **[実測知見の索引 — `Findings/`](Findings/README.md)** … PIO・シンボル・壁・スラブ・
   屋根面・レイヤ・ビューポート・用紙・データタグ・グラフィック凡例・タグ付きデータ・
   Undo・ダイアログ・調査の作法
+- **[SDK の宣言索引 — `SDK Index/`](SDK%20Index/README.md)** … SDK の宣言（シグネチャ・
+  enum の値・宣言位置）と VectorScript の書式の一覧。週次の CI が最新の SDK から作り直す
 - **[実機確認プラグイン — `plugin/`](plugin/README.md)** … 実機の VectorWorks で
   調査コードを走らせるための小さなプラグイン。メニューコマンド 1 つから、**複数の PR の
   調査コード（プローブ）を同居させた 1 本のビルド**を選んで実行できる
