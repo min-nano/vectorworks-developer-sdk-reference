@@ -1186,6 +1186,85 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
 **定義が作られる過程で走るので 1 回目に間に合わない**。描き始める前に
 `DefineCustomObject(name, kCustomObjectPrefNever)` を 1 度呼んで先に定義しておく。
 
+**組み込みのドア・窓でも同じ**で、**入口を選ばない**
+（[issue #122](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/122)。
+VW 2026 / mac・新規の空図面。`probes/runtime/create-pio-with-params/` の実行ログ）。
+
+| 初めて作るときの呼び方 | 所要 | ダイアログ |
+| --- | --- | --- |
+| `CreateCustomObject("Door" / "Window", …)` | 42.6 秒 / 102.7 秒 | 出た（ドア設定・窓設定。利用者の目視） |
+| `CreateCustomObjectPath("Door", nil, nil, doRegen=false)` | 10.6 秒 | **出た**——再生成を止めても止まらない |
+| `DefineCustomObject(name, kCustomObjectPrefNever)`（51〜76ms）→ `CreateCustomObject` | 17〜27ms（窓）/ 305〜694ms（ドア） | 出ない（ドア・窓とも） |
+
+**ただしダイアログを飛ばすと、できる個体の値が変わる**（下記「パラメータを指定して作る
+口は無い」）。ダイアログを OK で通した文書と飛ばした文書では、同じ呼び方でも別物が
+できる。
+
+## パラメータを指定して作る口は無い——点の PIO も作成の時点で 1 回描く
+
+「作る → パラメトリックレコードを書く → `ResetObject`」は**2 回描いている**。これを
+「レコードを指定して作る」＝ 1 回にできるかを
+[issue #122](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/122) で
+調べた（VW 2026 / mac・新規の空図面・組み込みのドア / 窓。
+`probes/runtime/create-pio-with-params/` を 3 版・計 4 回走らせた。3 版目は 2 回とも同じ値）。
+**「作成の直後に描かれたか」は PIO の子の数と外形で判定した**——描かれる前の PIO は
+子が 1 つ（型 0）で、外形は PIO の種類ごとの決まった小さな枠になる。所要時間は各 1 回の
+実測なので、1 本あたりの費用としては引かない。
+
+**結論**:
+
+1. **パラメータの値を受け取る生成 API は無い**【ヘッダ根拠】。生成の入口は
+   `CreateCustomObject(name, loc, angle, bInsert)` / `CreateCustomObjectByMatrix(name, matrix)` /
+   `CreateCustomObjectByMatrixEx(name, matrix, bInsert)` / `CreateCustomObjectPath(name, path,
+   profile, doRegen)` / `CreateCustomObjectPathNoOffset` / `CreateCustomObjectDoubleClick`
+   だけで、**再生成を止める旗を持つのは `CreateCustomObjectPath` の `doRegen` だけ**。
+2. **`CreateCustomObject` は作成の時点で描く。** 作った直後にドアは子 11・外形 910、
+   窓は子 15 で、既定値のまま描かれている。書いて `ResetObject` するともう 1 回描く。
+3. **`bInsert=false` は再生成を止めない。** 図面に入れない（親が nil）だけで、作成直後に
+   子 11 / 15 まで描かれている。`CreateCustomObjectByMatrixEx(…, false)` も同じ。
+   後から `AddObjectToContainer(h, layer)` で入れられ、入れただけでは描き直さない。
+4. **1 回で済ませる経路はあるが、どれも「いつもの経路と同じもの」にはならない**
+   （下の表）。**ダイアログを出さない条件**（`kCustomObjectPrefNever`。プラグインが
+   実際に使う条件）では、**2 回描く今のやり方だけが正しい個体を作る。**
+
+### 1 回で済ませる経路と、いつもの経路（A）との差
+
+A は `CreateCustomObject` → `Width` を 1410 に → `ResetObject`。全欄を文字列
+（`GetParamValue`）で突き合わせた（ドア 672 欄・窓 618 欄）。
+
+| 経路 | 描く回数 | ダイアログを通した文書 | ダイアログを飛ばした文書（`kCustomObjectPrefNever`） |
+| --- | --- | --- | --- |
+| **書式の既定値を書き換えてから `CreateCustomObject`**（`VWRecordFormatObj::SetParamReal`。作ったら戻す） | 1 | **効く**（外形 1410。既にある個体は変わらない） | **効かない**——`Width` はドア 826・窓 896 のまま（既定と同じ）。A と 11 / 15 欄違う |
+| **`CreateCustomObjectPath(name, nil, nil, doRegen=false)` → `SetEntityMatrix` → 書く → `ResetObject`** | 1 | **ドアは 672 欄すべて一致**（外形・子の型の並びも一致） | **別物になる**——何も書かずに描かせるとドアは子 47・幅 1589.6（**袖 FIX 付き**の別のドア）。A0 と 67 / 61 欄違い、窓は書いた幅が外形に出ない |
+| 同上で、**`CreateCustomObject` で作った個体（A0）の全欄を `SetParamValue` で写してから**書く | 1（＋見本の 1 本） | — | **外形・子の数は A と一致。ただし線の種類・太さの欄だけ 17 / 18 欄違う**（`2D…LineStyle` が A=2 / 写した側=0、`WallLineLW` など） |
+
+**読みどころ**:
+
+- **`CreateCustomObject` は、作るときに書式の値へ「初期化」を掛けている。** ダイアログを
+  飛ばした文書で、書式（F）と何も書かずに作った A0 は 61 / 98 欄違う（`__version` 0→3160、
+  `DoorClass` None→一般、`SizeReference` Rough Opening→Leaf Size、`ROWidth` 0→910 など）。
+  **書式の既定値は、作られる値の出どころではない**——だから既定値を書き換えても効かない。
+  ダイアログを OK で通すと、ダイアログの値が書式へ書かれて出どころと一致する
+  （1 版目で書式経路が効いたのはこのため）【推定】。
+- **Path の入口（`doRegen=false`）はこの初期化を通らない。** 描かせると、書式とも A0 とも違う
+  値の組（`DetailLevel` Low、`SideLights` True、インチ由来の 19.05 / 25.4 など）で描かれる。
+  **ダイアログを通した文書ではドアが全欄一致した**ので、初期化の中身は「ダイアログの値」
+  に由来すると読める【推定】。
+- **線の種類・太さの欄は `SetParamValue` の文字列では写らない**（`2` を書いても `0` が残る）。
+  型に合った書き口（`SetParamPenStyle` / `SetParamPenWeight` など）なら写るかは
+  **【未確認】**。
+
+### 位置と角度は `SetEntityMatrix` で与える（描き直しを起こさない）
+
+`CreateCustomObjectPath(name, nil, nil, doRegen=false)` は原点・角度 0 に置く。
+`SetEntityMatrix`（0.00ms）で原点 (6000, 5000)・30° を与えても子は 1 のまま
+（描き直さない）。その後の `ResetObject` で、`CreateCustomObject(pt, 30°)` と**同じ外形・
+同じ子の型の並び**になった（ドア・窓とも）。
+
+**`ResetObject` の後で `SetEntityMatrix` で動かすと、外形（`GetObjectBounds`）が古い位置の
+まま残る**（原点は動いている）。もう一度 `ResetObject` すると追い付く。**置き場所は
+`ResetObject` の前に決める。**
+
 ## プラグインスタイル
 
 - **当てただけでは何も流れない。** `SetPluginObjectStyle` は関連付けまでしか
