@@ -7,30 +7,37 @@
 //	SDK から同じ状態を作った個体は高さが `0` のままになる（Findings「レベル（標高）
 //	オブジェクト」）。**その差がどこにあるのかを、同じ図面の中で突き合わせる。**
 //
-//	【このプローブは新規の空図面では答えが出ない】走らせる図面は
+//	【この調査は新規の空図面では答えが出ない】走らせる図面は
 //	**UI のツールでレベル基準線を断面ビューポートの注釈へ置いたもの**（名前と高さが
-//	両方出ているもの）。他のプローブと違って、**図面は読むだけ**で、UI が置いた個体には
-//	一切書き込まない（`SetParamValue` も `ResetObject` も呼ばない）。比較のために
-//	自分で作る個体（新規 1 本＋UI 製の複製 1 本）は、最後に消す。
+//	両方出ているもの）。他のプローブと違って、**UI が置いた個体には書き込まない**
+//	（`SetParamValue` も `ResetObject` も呼ばない）。比較のために自分で作る個体
+//	（新規 1 本＋UI 製の複製 1 本）は、最後に消す。
 //
 //	【ログは PR コメントとして公開される】この調査だけは利用者の図面を読むので、
 //	レイヤ名・ストーリ名・欄の値がそのまま載る。差し支えのある図面では走らせない
 //	（UI でレベル基準線を 1 本置いた小さな図面でも同じことが確かめられる）。
 //
+//	本命の見当は**ストーリバウンド**（`ISDK::SetObjectStoryBound` の一群）。ツールが
+//	個体にバウンドを付けていれば、高さは注釈の Z ではなく**バウンドを解決した絶対 Z**
+//	から出るので、注釈の中でも数値が出る——という筋。だから欄の差だけでなく、
+//	バウンドの中身（`SStoryObjectData`）と解決結果（`GetObjectBoundElevation`）も見る。
+//	（構造材 PIO でのバウンドの作法は Findings「パラメトリックオブジェクト」にある。）
+//
 //	確かめること:
 //	  1) UI が置いた個体の**全欄**（universal 名・ローカライズ名・欄型・値）
-//	  2) SDK から素で作った個体との**差のある欄だけの一覧**（＝埋めるべき欄の候補）
-//	  3) `IMarkersPluginSupport::IsElevationBenchmarkConstrained` が UI 製で true か
-//	  4) 補助オブジェクトの連鎖（オブジェクト変数 703）に何がぶら下がっているか
-//	  5) **UI 製の全欄を写した個体が、同じ高さを出すか**（出れば「欄で足りる」、
-//	     出なければ「欄の外に何かある」と分かれる）
-//	  6) **UI 製を複製した個体が、複製後も高さを出すか**（出れば状態は個体に入っている）
+//	  2) **ストーリバウンド**の有無・ID・中身・解決Z（UI 製 / SDK 製の両方）
+//	  3) SDK から素で作った個体との**差のある欄だけの一覧**
+//	  4) `IMarkersPluginSupport::IsElevationBenchmarkConstrained` が UI 製で true か
+//	  5) 補助オブジェクトの連鎖（オブジェクト変数 703）に何がぶら下がっているか
+//	  6) **1 つずつ足していく梯子**——3 つ組 → ストーリバウンドを写す → 全欄を写す
+//	     → 複製。どこで高さが出るかで、必要なものが 1 回の実行で切り分かる
 //
 
 #include "Probe.h"
 
 #include "Interfaces/VectorWorks/Extension/IMarkersPluginSupport.h"
 
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -52,6 +59,14 @@ namespace
 	std::string LmStr(const TXString& s)
 	{
 		return std::string(static_cast<const char*>(s));
+	}
+
+	std::string LmNum(double value)
+	{
+		// 図面の単位（mm）で読める桁に丸める。高さの比較しかしないので 3 桁で足りる。
+		char buffer[64];
+		std::snprintf(buffer, sizeof(buffer), "%.3f", value);
+		return std::string(buffer);
 	}
 
 	std::string LmObjectName(MCObjectHandle h)
@@ -78,8 +93,10 @@ namespace
 		}
 	}
 
-	std::string LmJoinTexts(const std::vector<std::string>& texts)
+	std::string LmDrawnTexts(MCObjectHandle h)
 	{
+		std::vector<std::string> texts;
+		LmCollectTexts(h, texts);
 		if (texts.empty())
 			return "(テキストなし)";
 		std::string line;
@@ -90,13 +107,6 @@ namespace
 			line += "〈" + texts[i] + "〉";
 		}
 		return line;
-	}
-
-	std::string LmDrawnTexts(MCObjectHandle h)
-	{
-		std::vector<std::string> texts;
-		LmCollectTexts(h, texts);
-		return LmJoinTexts(texts);
 	}
 
 	// レベルオブジェクトを、レイヤ直下・グループの中・ビューポートの注釈の中から探す。
@@ -137,15 +147,7 @@ namespace
 		}
 	}
 
-	std::vector<MCObjectHandle>* gLmLayers = nullptr;
-
-	void LmEachLayer(MCObjectHandle h, CallBackPtr /*cbp*/, void* /*env*/)
-	{
-		if (gLmLayers != nullptr && h != nil)
-			gLmLayers->push_back(h);
-	}
-
-	// 欄を 1 行で出す。UI 製と SDK 製で同じ形にして、差を目で拾えるようにする。
+	// 欄を 1 行ずつ出す。UI 製と SDK 製で同じ形にして、差を目で拾えるようにする。
 	void LmDumpParams(vwprobe::Report& probe, MCObjectHandle h, const std::string& indent)
 	{
 		VWFC::VWObjects::VWParametricObj obj(h);
@@ -159,6 +161,39 @@ namespace
 					  " / 欄型=" + std::to_string(static_cast<int>(obj.GetParamStyle(name))) +
 					  " / 値=〈" + LmStr(obj.GetParamValue(name)) + "〉");
 		}
+	}
+
+	// **本命**: ストーリバウンド（オブジェクトを階／レベルへ結ぶ仕組み）を読む。
+	void LmDumpStoryBounds(vwprobe::Report& probe, MCObjectHandle h, const std::string& indent)
+	{
+		const size_t count = gSDK->GetObjectStoryBoundsCount(h);
+		probe.log(indent + "ストーリバウンド: HasObjectStoryBounds=" +
+				  (gSDK->HasObjectStoryBounds(h) ? "true" : "false") +
+				  " 件数=" + std::to_string(count));
+		for (size_t i = 0; i < count; ++i)
+		{
+			const TObjectBoundID id = gSDK->GetObjectStoryBoundsAt(h, i);
+			VectorWorks::SStoryObjectData data;
+			const bool got = gSDK->GetObjectStoryBound(h, id, data);
+			TXString choice;
+			gSDK->GetChoiceStringFromStoryBoundData(data, choice);
+			probe.log(indent + "  [" + std::to_string(i) + "] id=" +
+					  std::to_string(static_cast<int>(id)) + " 読めた=" + (got ? "true" : "false") +
+					  " fBound=" + std::to_string(static_cast<int>(data.fBound)) + " fBoundStory=" +
+					  std::to_string(static_cast<int>(data.fBoundStory)) + " fLayerLevelType=〈" +
+					  LmStr(data.fLayerLevelType) + "〉 fOffset=" + LmNum(data.fOffset) +
+					  " 解決Z=" + LmNum(gSDK->GetObjectBoundElevation(h, id)) + " 選択肢文字列=〈" +
+					  LmStr(choice) + "〉");
+		}
+		// 並んでいなくても、既知の ID を名指しで問い合わせてみる（-3 は PIO 用の汎用 ID）。
+		const TObjectBoundID knownIDs[] = {static_cast<TObjectBoundID>(-3),
+										   static_cast<TObjectBoundID>(0),
+										   static_cast<TObjectBoundID>(1)};
+		std::string line = indent + "  名指しの HasObjectStoryBound:";
+		for (size_t i = 0; i < sizeof(knownIDs) / sizeof(knownIDs[0]); ++i)
+			line += " id=" + std::to_string(static_cast<int>(knownIDs[i])) + "→" +
+					(gSDK->HasObjectStoryBound(h, knownIDs[i]) ? "true" : "false");
+		probe.log(line);
 	}
 
 	// 補助オブジェクトの連鎖（オブジェクト変数 703 = ovFirstAuxObject）を辿る。
@@ -221,7 +256,7 @@ namespace
 		return support->IsElevationBenchmarkConstrained(h) ? "true" : "false";
 	}
 
-	// 注目している欄だけを 1 行で（長い全欄ダンプの前後で見比べるため）。
+	// 注目している欄だけを 1 行で（梯子の各段で見比べるため）。
 	std::string LmKeyFields(MCObjectHandle h)
 	{
 		VWFC::VWObjects::VWParametricObj obj(h);
@@ -233,6 +268,15 @@ namespace
 			   LmStr(obj.GetParamValue("__LevelTypeName")) + "〉";
 	}
 
+	// 梯子の 1 段ぶんの観測（何をした直後かを添えて、同じ形で出す）。
+	void LmLogStep(vwprobe::Report& probe, MCObjectHandle h, const std::string& what)
+	{
+		probe.log("  " + what + ": " + LmKeyFields(h));
+		probe.log("    文字: " + LmDrawnTexts(h));
+		probe.log("    拘束: " + LmConstrained(h) +
+				  " / バウンド件数=" + std::to_string(gSDK->GetObjectStoryBoundsCount(h)));
+	}
+
 	void LmDumpMarker(vwprobe::Report& probe, const LmFoundMarker& found, const std::string& tag)
 	{
 		probe.log("=== " + tag + " ===");
@@ -241,7 +285,7 @@ namespace
 		VWFC::VWObjects::VWParametricObj obj(found.fObject);
 		probe.log("  内部 ID: " + std::to_string(static_cast<int>(obj.GetInternalID())));
 		const VWPoint2D pos = obj.GetPointObjectPos();
-		probe.log("  位置: x=" + std::to_string(pos.x) + " y=" + std::to_string(pos.y));
+		probe.log("  位置: x=" + LmNum(pos.x) + " y=" + LmNum(pos.y));
 		probe.log("  注釈の中か（IsViewportGroupContainedObject）: " +
 				  std::string(
 					  gSDK->IsViewportGroupContainedObject(found.fObject, kViewportGroupAnnotation)
@@ -256,6 +300,7 @@ namespace
 					   ? std::string("nil")
 					   : "型=" + std::to_string(static_cast<int>(gSDK->GetObjectTypeN(profile))) +
 							 " 中の文字=" + LmDrawnTexts(profile)));
+		LmDumpStoryBounds(probe, found.fObject, "  ");
 		LmDumpAuxChain(probe, found.fObject, "  ");
 		LmDumpParams(probe, found.fObject, "  ");
 	}
@@ -264,8 +309,9 @@ namespace
 VW_PROBE("level-marker-annotation-height",
 		 "UI が置いたレベル基準線と SDK 製の個体を、同じ図面で全欄突き合わせる",
 		 "断面ビューポートの注釈で〈Z軸（3Dモード）〉のまま高さが出ている UI 製の個体を "
-		 "探して全欄・拘束・補助オブジェクトを出し、SDK から作った個体との差を一覧にする。"
-		 "**UI でレベル基準線を置いた図面で走らせる**（図面は読むだけ）")
+		 "探して全欄・ストーリバウンド・拘束・補助オブジェクトを出し、SDK から作った個体へ "
+		 "1 つずつ足して（3 つ組 → バウンド → 全欄 → 複製）どこで高さが出るかを見る。"
+		 "**UI でレベル基準線を置いた図面で走らせる**（UI 製の個体には書き込まない）")
 {
 	probe.log("この調査は図面を読む（UI が置いた個体には書き込まない）。");
 	probe.log("比較のために作る個体（新規 1 本・複製 1 本）は最後に消す。");
@@ -274,17 +320,17 @@ VW_PROBE("level-marker-annotation-height",
 	probe.log("--- 1: 文書の中のレベルオブジェクトを探す ---");
 
 	std::vector<MCObjectHandle> layers;
-	gLmLayers = &layers;
-	gSDK->ForEachLayer(&LmEachLayer, nullptr);
-	gLmLayers = nullptr;
+	gSDK->ForEachLayerN(
+		[&layers](MCObjectHandle h)
+		{
+			if (h != nil)
+				layers.push_back(h);
+		});
 	probe.log("レイヤ数: " + std::to_string(layers.size()));
 
 	std::vector<LmFoundMarker> found;
 	for (size_t i = 0; i < layers.size(); ++i)
-	{
-		const std::string where = "レイヤ〈" + LmObjectName(layers[i]) + "〉";
-		LmWalkContainer(layers[i], nil, where, 0, found);
-	}
+		LmWalkContainer(layers[i], nil, "レイヤ〈" + LmObjectName(layers[i]) + "〉", 0, found);
 	probe.log("自前の走査で見つかった件数: " + std::to_string(found.size()));
 
 	// 検索条件（criteria）でも引いてみる——注釈の中まで届くかどうかは、それ自体が知見。
@@ -358,9 +404,8 @@ VW_PROBE("level-marker-annotation-height",
 	VWFC::VWObjects::VWParametricObj to(mine);
 	to.SetPointObjectPos(from.GetPointObjectPos());
 	gSDK->ResetObject(mine);
-	probe.log("  SDK 製（素のまま）: " + LmKeyFields(mine));
-	probe.log("  SDK 製（素のまま）の文字: " + LmDrawnTexts(mine));
-	probe.log("  SDK 製（素のまま）の拘束: " + LmConstrained(mine));
+	LmLogStep(probe, mine, "SDK 製（素のまま。位置だけ UI 製に合わせた）");
+	LmDumpStoryBounds(probe, mine, "  ");
 	LmDumpAuxChain(probe, mine, "  ");
 
 	// 差のある欄だけを並べる——ここが「埋めるべき欄」の候補になる。
@@ -369,19 +414,57 @@ VW_PROBE("level-marker-annotation-height",
 	for (size_t i = 0, count = from.GetParamsCount(); i < count; ++i)
 	{
 		const TXString name = from.GetParamName(i);
-		const TXString uiValue = from.GetParamValue(name);
-		const TXString sdkValue = to.GetParamValue(name);
-		if (LmStr(uiValue) != LmStr(sdkValue))
+		const std::string uiValue = LmStr(from.GetParamValue(name));
+		const std::string sdkValue = LmStr(to.GetParamValue(name));
+		if (uiValue != sdkValue)
 		{
 			++diffCount;
 			probe.log("    " + LmStr(name) + "（" + LmStr(from.GetParamLocalizedName(i)) +
-					  "）: UI 製=〈" + LmStr(uiValue) + "〉 SDK 製=〈" + LmStr(sdkValue) + "〉");
+					  "）: UI 製=〈" + uiValue + "〉 SDK 製=〈" + sdkValue + "〉");
 		}
 	}
 	probe.log("  差のある欄: " + std::to_string(diffCount) + " 件");
 
-	// --- 4: UI 製の全欄を写したら、同じ高さが出るか ---
-	probe.log("--- 4: UI 製の全欄を写す（欄型ごとの口で写す）---");
+	// --- 4: 梯子 その 1——#130 で分かっている 3 つ組を書く ---
+	probe.log("--- 4: 梯子 1／3 つ組（__StoryName ＋ __LevelTypeName ＋ Datum=StoryLevel）---");
+	to.SetParamValue("__StoryName", from.GetParamValue("__StoryName"));
+	to.SetParamValue("__LevelTypeName", from.GetParamValue("__LevelTypeName"));
+	to.SetParamValue("Datum", "StoryLevel");
+	gSDK->ResetObject(mine);
+	LmLogStep(probe, mine, "3 つ組の後");
+
+	// --- 5: 梯子 その 2——UI 製のストーリバウンドを写す ---
+	probe.log("--- 5: 梯子 2／ストーリバウンドを写す ---");
+	const size_t uiBoundCount = gSDK->GetObjectStoryBoundsCount(target->fObject);
+	if (uiBoundCount == 0)
+	{
+		probe.log("  UI 製にストーリバウンドが 1 つも無いので、写すものが無い"
+				  "（＝この筋では説明できない）");
+	}
+	else
+	{
+		for (size_t i = 0; i < uiBoundCount; ++i)
+		{
+			const TObjectBoundID id = gSDK->GetObjectStoryBoundsAt(target->fObject, i);
+			VectorWorks::SStoryObjectData data;
+			if (!gSDK->GetObjectStoryBound(target->fObject, id, data))
+			{
+				probe.log("  id=" + std::to_string(static_cast<int>(id)) +
+						  " の中身が読めなかった（写せない）");
+				continue;
+			}
+			const bool set = gSDK->SetObjectStoryBound(mine, id, data);
+			probe.log("  SetObjectStoryBound(id=" + std::to_string(static_cast<int>(id)) +
+					  ") = " + (set ? "true" : "false"));
+		}
+		LmDumpStoryBounds(probe, mine, "  写した直後 ");
+		gSDK->ResetObject(mine);
+		LmLogStep(probe, mine, "バウンドを写して描き直した後");
+		LmDumpStoryBounds(probe, mine, "  描き直した後 ");
+	}
+
+	// --- 6: 梯子 その 3——全欄を写す（欄型ごとの口で写す）---
+	probe.log("--- 6: 梯子 3／全欄を写す ---");
 	for (size_t i = 0, count = from.GetParamsCount(); i < count; ++i)
 	{
 		const TXString name = from.GetParamName(i);
@@ -414,10 +497,8 @@ VW_PROBE("level-marker-annotation-height",
 		}
 	}
 	gSDK->ResetObject(mine);
-	probe.log("  写した後: " + LmKeyFields(mine));
-	probe.log("  写した後の文字: " + LmDrawnTexts(mine));
-	probe.log("  写した後の拘束: " + LmConstrained(mine));
-	probe.log("  写した後に残った差:");
+	LmLogStep(probe, mine, "全欄を写した後");
+	probe.log("  写しても残った差:");
 	size_t leftCount = 0;
 	for (size_t i = 0, count = from.GetParamsCount(); i < count; ++i)
 	{
@@ -431,8 +512,8 @@ VW_PROBE("level-marker-annotation-height",
 	}
 	probe.log("  残った差: " + std::to_string(leftCount) + " 件");
 
-	// --- 5: UI 製を複製したら、複製も高さを出すか ---
-	probe.log("--- 5: UI 製を複製する ---");
+	// --- 7: 梯子 その 4——UI 製を複製する（状態が個体に入っているかを見る）---
+	probe.log("--- 7: 梯子 4／UI 製を複製する ---");
 	MCObjectHandle dup = gSDK->DuplicateObject(target->fObject);
 	if (dup == nil)
 	{
@@ -442,18 +523,15 @@ VW_PROBE("level-marker-annotation-height",
 	{
 		if (!gSDK->AddViewportAnnotationObject(target->fViewport, dup))
 			probe.log("  ※ 複製の AddViewportAnnotationObject が false を返した");
-		probe.log("  複製（描き直す前）: " + LmKeyFields(dup));
-		probe.log("  複製（描き直す前）の文字: " + LmDrawnTexts(dup));
-		probe.log("  複製の拘束: " + LmConstrained(dup));
+		LmLogStep(probe, dup, "複製（描き直す前）");
+		LmDumpStoryBounds(probe, dup, "  ");
 		LmDumpAuxChain(probe, dup, "  ");
 		gSDK->ResetObject(dup);
-		probe.log("  複製（描き直した後）: " + LmKeyFields(dup));
-		probe.log("  複製（描き直した後）の文字: " + LmDrawnTexts(dup));
-		probe.log("  複製（描き直した後）の拘束: " + LmConstrained(dup));
+		LmLogStep(probe, dup, "複製（描き直した後）");
 	}
 
-	// --- 6: 片付け（自分で作ったものだけ消す）---
-	probe.log("--- 6: 片付け ---");
+	// --- 8: 片付け（自分で作ったものだけ消す）---
+	probe.log("--- 8: 片付け ---");
 	gSDK->DeleteObject(mine, false);
 	probe.log("  SDK 製の個体を消した");
 	if (dup != nil)
