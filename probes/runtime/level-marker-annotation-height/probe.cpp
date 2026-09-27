@@ -698,8 +698,79 @@ VW_PROBE("level-marker-annotation-height",
 		LmLogStep(probe, dup, "複製（描き直した後）");
 	}
 
-	// --- 8: 片付け（自分で作ったものだけ消す）---
-	probe.log("--- 8: 片付け ---");
+	// --- 8: 数値の出どころを詰める（3 つ組か、`Elev` 欄か）---
+	//
+	// 前回の実行で分かったこと: **素のまま作った個体が、3 つ組を書く前から同じ数値を
+	// 出していた**（`Elev` 欄が UI 製と同値＝差の一覧に出なかった）。`CreateCustomObject`
+	// は文書の PIO 既定値を引き継ぐので、直前に UI でツールを使った図面では既定値に
+	// そのレベルの高さが入っている。だから「3 つ組で数値が出た」とは言えない。
+	// **別のレベルの 3 つ組を書いて数値が動くか**で決める。
+	probe.log("--- 8: 数値の出どころ（3 つ組か Elev 欄か）---");
+	const LmFoundMarker* other = nullptr;
+	for (size_t i = 0; i < found.size(); ++i)
+	{
+		if (found[i].fViewport == nil || found[i].fPioName != kLmBenchmark2)
+			continue;
+		VWFC::VWObjects::VWParametricObj candidate(found[i].fObject);
+		if (LmStr(candidate.GetParamValue("__StoryName")) !=
+			LmStr(from.GetParamValue("__StoryName")))
+		{
+			other = &found[i];
+			break;
+		}
+	}
+	MCObjectHandle second = gSDK->CreateCustomObject(kLmBenchmark2, WorldPt(0, 0), 0.0);
+	if (second == nil)
+	{
+		probe.log("  2 本目を作れなかった（この試験は行えない）");
+	}
+	else
+	{
+		gSDK->AddViewportAnnotationObject(target->fViewport, second);
+		VWFC::VWObjects::VWParametricObj s2(second);
+		s2.SetPointObjectPos(from.GetPointObjectPos());
+		gSDK->ResetObject(second);
+		probe.log("  素のまま: Elev 欄=〈" + LmStr(s2.GetParamValue("Elev")) +
+				  "〉 RefElevSeaLevel=〈" + LmStr(s2.GetParamValue("RefElevSeaLevel")) + "〉");
+		LmLogStep(probe, second, "素のまま（＝文書の PIO 既定値のまま）");
+
+		if (other == nullptr)
+		{
+			probe.log("  別のストーリレベルを持つ個体が見つからないので、"
+					  "「3 つ組で数値が動くか」は試せない");
+		}
+		else
+		{
+			VWFC::VWObjects::VWParametricObj o(other->fObject);
+			probe.log("  別のレベルの 3 つ組を書く: __StoryName=〈" +
+					  LmStr(o.GetParamValue("__StoryName")) + "〉 __LevelTypeName=〈" +
+					  LmStr(o.GetParamValue("__LevelTypeName")) + "〉（その個体の数値は〈" +
+					  LmStr(o.GetParamValue("Elevation")) + "〉）");
+			s2.SetParamValue("__StoryName", o.GetParamValue("__StoryName"));
+			s2.SetParamValue("__LevelTypeName", o.GetParamValue("__LevelTypeName"));
+			s2.SetParamValue("Datum", "StoryLevel");
+			gSDK->ResetObject(second);
+			probe.log("  書いた後: Elev 欄=〈" + LmStr(s2.GetParamValue("Elev")) + "〉");
+			LmLogStep(probe, second, "別のレベルの 3 つ組を書いた後");
+			probe.log("  ※ 数値が相手のレベルの高さに変わっていれば「3 つ組が数値を決める」、"
+					  "既定値のままなら「数値は Elev 欄が持つ」");
+		}
+
+		// `Elev` を名指しで書いてみる（`__NNA_DO_NOT_CHANGE` だが座標欄なので書ける口はある）。
+		probe.log("  Elev 欄へ 1234.5 を書く");
+		s2.SetParamValue("Elev", "1234.5");
+		gSDK->ResetObject(second);
+		probe.log("  書いた後: Elev 欄=〈" + LmStr(s2.GetParamValue("Elev")) + "〉");
+		LmLogStep(probe, second, "Elev=1234.5 を書いた後");
+	}
+
+	// --- 9: 片付け（自分で作ったものだけ消す）---
+	probe.log("--- 9: 片付け ---");
+	if (second != nil)
+	{
+		gSDK->DeleteObject(second, false);
+		probe.log("  2 本目を消した");
+	}
 	gSDK->DeleteObject(mine, false);
 	probe.log("  SDK 製の個体を消した");
 	if (dup != nil)
