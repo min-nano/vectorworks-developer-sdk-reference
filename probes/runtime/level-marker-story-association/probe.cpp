@@ -1,27 +1,26 @@
 //
 //	probes/runtime/level-marker-story-association/probe.cpp
 //
-//	[issue #130] 残り 1 点——**注釈でストーリレベルへ結んだとき、高さもレベルの高さに
-//	できるか**。
+//	[issue #130] 最後の 1 点——**注釈で「名前＝ストーリレベル名」と「高さ＝注釈の Y」を
+//	両立できるか**。
 //
-//	ここまでに確定したこと:
-//	  * **注釈でもストーリレベルへ結べる**——`__StoryName` と `__LevelTypeName` を
-//	    組で書くと `Datum` が `StoryLevel` になり、描かれる名前が 〈FL-2 階〉になる
-//	    （書く順番は問わない）。**ただし高さは 0 のまま**。
-//	  * ストーリ従属のデザインレイヤに置いた個体は、何も書かなくても関連付き、
-//	    **ストーリの高さを変えると追う**（2800 → 3500）。
-//	  * **マーカーレイアウトは差し替えられる**——新しいテキストを作ってグループへ入れ、
-//	    **`SetObjectProfileGroup` で渡し直す**と絵に出る。中身を入れ替えるだけでは
-//	    出ない（データタグの「中身を入れてから渡す」と同じ筋）。
+//	ここまでの実測で、結び方が 3 つ組だと分かった:
+//	  * `__StoryName` ＋ `__LevelTypeName` ＋ **`Datum`＝`StoryLevel`** の 3 つを書くと、
+//	    注釈の個体でも `Datum` が `StoryLevel` で読み戻せて、名前が 〈FL-2 階〉になる。
+//	  * **名前欄だけ**（`Datum` を書かない）だと `Datum` は `UserReference` のままで、
+//	    名前も 〈-〉のまま。**`Datum` 単独**でも倒される（`GroundPlane`）。
+//	    ——つまり `Datum` は「結果」でも「口」でもなく、**3 つ揃って初めて効く**。
+//	  * 注釈では Z 基準の測定が 0 になる。高さを出すには `Axis`＝`YAxis2DMode`。
+//	  * **シートレイヤへ直に置くと、名前欄だけでも高さがストーリレベルの高さ（2800）に
+//	    なった**（`Datum` は `UserReference` のまま）。注釈だけが 0 のまま。
 //
-//	利用者の実機では、注釈の中のレベル基準線が **612**（＝ストーリレベルの高さ）を
-//	出している。こちらの再現では 0 のままなので、その差を潰す:
-//	  1. 結んだ個体を `ResetObject` 2 度＋`UpdateViewport` の後に読み直す
-//	     （遅れて埋まるのか）。
-//	  2. `Axis` を `YAxis2DMode` にしたら（名前はレベル名・高さは注釈の Y という組み
-//	     合わせになるか）。
-//	  3. `RefElev` にストーリレベルの高さを書いたら。
-//	  4. 参考として、シートレイヤへ直に置いた個体（注釈ではない）はどうか。
+//	そこで、実用の形になる組み合わせを確かめる:
+//	  1. 注釈 ＋ 3 つ組だけ（名前は出るか・高さは 0 か）。
+//	  2. **注釈 ＋ 3 つ組 ＋ `Axis`＝`YAxis2DMode`**（名前と高さを両立できるか）。2 点の
+//	     高さで見る。
+//	  3. 注釈 ＋ 3 つ組 ＋ `RefElev`（基準を引けるか）。
+//	  4. `Datum` 単独・名前欄単独の対照（どちらも効かないことの確認）。
+//	  5. 参考: シートレイヤ直置きに 3 つ組（名前も出るか）。
 //
 
 #include "Probe.h"
@@ -157,9 +156,10 @@ namespace
 	}
 } // namespace
 
-VW_PROBE("level-marker-story-association", "注釈でストーリレベルへ結んだとき高さも出せるかを詰める",
-		 "__StoryName ＋ __LevelTypeName で結んだ注釈の個体の高さが、描き直しの回数・"
-		 "Axis・RefElev・置き場所でどう変わるかを 1 つずつ見る")
+VW_PROBE("level-marker-story-association", "注釈でレベル名と高さを両立できるかを確かめる",
+		 "__StoryName ＋ __LevelTypeName ＋ Datum=StoryLevel の 3 つ組に Axis=YAxis2DMode を"
+		 "足して、名前（FL-2 階）と高さ（注釈の Y）が同時に出るかを見る。対照として "
+		 "Datum 単独・名前欄単独も置く")
 {
 	// --- 0) ストーリ 2 つ（1 階=0 / 2 階=2800）---
 	probe.log("--- 0: ストーリを作る ---");
@@ -216,78 +216,96 @@ VW_PROBE("level-marker-story-association", "注釈でストーリレベルへ結
 	}
 	gSDK->UpdateViewport(vp);
 
-	// ストーリレベルへ結ぶ（前回ここまでは確定している）。
-	auto bind = [](MCObjectHandle h)
+	// **3 つ組**——これが結ぶ手順（名前 2 つ ＋ Datum）。
+	auto bindAll = [](MCObjectHandle h)
 	{
 		LmWrite(h, "__StoryName", "2 階");
 		LmWrite(h, "__LevelTypeName", "FL");
+		LmWrite(h, "Datum", "StoryLevel");
 		gSDK->ResetObject(h);
 	};
 
-	// --- 1) 描き直しを重ねたら遅れて埋まるか ---
-	probe.log("--- 1: 結んだ注釈の個体を、描き直しを重ねて読み直す ---");
+	// --- 1) 注釈 ＋ 3 つ組だけ ---
+	probe.log("--- 1: 注釈（Y=2800）＋ 3 つ組 ---");
 	{
 		const MCObjectHandle h = LmPlaceInAnnotation(vp, storyLayer, 1000.0, 2800.0);
 		if (h != nil)
 		{
-			bind(h);
-			LmDescribe(probe, "結んだ直後", h);
-			gSDK->ResetObject(h);
-			LmDescribe(probe, "もう一度描き直して", h);
-			gSDK->UpdateViewport(vp);
-			LmDescribe(probe, "ビューポートを更新して", h);
+			bindAll(h);
+			LmDescribe(probe, "3 つ組だけ", h);
 			gSDK->DeleteObject(h, true);
 		}
 	}
 
-	// --- 2) Axis を YAxis2DMode にしたら（名前はレベル名・高さは注釈の Y か）---
-	probe.log("--- 2: 結んだうえで Axis=YAxis2DMode ---");
+	// --- 2) 注釈 ＋ 3 つ組 ＋ Axis=YAxis2DMode（本命） ---
+	probe.log("--- 2: 注釈 ＋ 3 つ組 ＋ Axis=YAxis2DMode（名前と高さの両立）---");
 	for (double y : {2800.0, 5600.0})
 	{
 		const MCObjectHandle h = LmPlaceInAnnotation(vp, storyLayer, 1500.0, y);
 		if (h == nil)
 			continue;
-		bind(h);
+		bindAll(h);
 		LmWrite(h, "Axis", "YAxis2DMode");
 		gSDK->ResetObject(h);
 		LmDescribe(probe, "注釈 Y=" + std::to_string(static_cast<int>(y)), h);
+		// 書く順を変えたらどうか（Axis を先に）。
+		const MCObjectHandle h2 = LmPlaceInAnnotation(vp, storyLayer, 1800.0, y);
+		if (h2 != nil)
+		{
+			LmWrite(h2, "Axis", "YAxis2DMode");
+			bindAll(h2);
+			LmDescribe(probe, "注釈 Y=" + std::to_string(static_cast<int>(y)) + "（Axis を先に）",
+					   h2);
+			gSDK->DeleteObject(h2, true);
+		}
 		gSDK->DeleteObject(h, true);
 	}
 
-	// --- 3) RefElev にストーリレベルの高さを書いたら ---
-	probe.log("--- 3: 結んだうえで RefElev=2800 ---");
+	// --- 3) 注釈 ＋ 3 つ組 ＋ RefElev ---
+	probe.log("--- 3: 注釈 ＋ 3 つ組 ＋ Axis=Y ＋ RefElev=1000 ---");
 	{
 		const MCObjectHandle h = LmPlaceInAnnotation(vp, storyLayer, 2000.0, 2800.0);
 		if (h != nil)
 		{
-			bind(h);
-			LmWrite(h, "RefElev", "2800");
+			bindAll(h);
+			LmWrite(h, "Axis", "YAxis2DMode");
+			LmWrite(h, "RefElev", "1000");
 			gSDK->ResetObject(h);
-			LmDescribe(probe, "RefElev=2800", h);
+			LmDescribe(probe, "RefElev=1000", h);
 			gSDK->DeleteObject(h, true);
 		}
 	}
 
-	// --- 4) 参考: シートレイヤへ直に置いた個体（注釈ではない）---
-	probe.log("--- 4: 参考——シートレイヤへ直に置く ---");
+	// --- 4) 対照: Datum 単独 / 名前欄単独 ---
+	probe.log("--- 4: 対照（どちらも効かないはず）---");
+	{
+		const MCObjectHandle h = LmPlaceInAnnotation(vp, storyLayer, 2500.0, 2800.0);
+		if (h != nil)
+		{
+			LmWrite(h, "Datum", "StoryLevel");
+			gSDK->ResetObject(h);
+			LmDescribe(probe, "Datum 単独", h);
+			gSDK->DeleteObject(h, true);
+		}
+		const MCObjectHandle h2 = LmPlaceInAnnotation(vp, storyLayer, 2800.0, 2800.0);
+		if (h2 != nil)
+		{
+			LmWrite(h2, "__StoryName", "2 階");
+			LmWrite(h2, "__LevelTypeName", "FL");
+			gSDK->ResetObject(h2);
+			LmDescribe(probe, "名前欄だけ", h2);
+			gSDK->DeleteObject(h2, true);
+		}
+	}
+
+	// --- 5) 参考: シートレイヤ直置きに 3 つ組 ---
+	probe.log("--- 5: 参考——シートレイヤへ直に置いて 3 つ組 ---");
 	{
 		const MCObjectHandle h = LmCreateOn(sheet, 0, 0);
 		if (h != nil)
 		{
-			LmDescribe(probe, "素のまま", h);
-			bind(h);
-			LmDescribe(probe, "結んだ後", h);
-			gSDK->DeleteObject(h, true);
-		}
-	}
-
-	// --- 5) 参考: ストーリ従属レイヤの個体（高さはレベルの高さになる）---
-	probe.log("--- 5: 参考——ストーリ従属のデザインレイヤ ---");
-	{
-		const MCObjectHandle h = LmCreateOn(storyLayer, 0, 0);
-		if (h != nil)
-		{
-			LmDescribe(probe, "素のまま", h);
+			bindAll(h);
+			LmDescribe(probe, "3 つ組", h);
 			gSDK->DeleteObject(h, true);
 		}
 	}
