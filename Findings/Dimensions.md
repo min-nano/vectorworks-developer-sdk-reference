@@ -329,6 +329,32 @@ for (short index = 9; index >= -8; --index)
     `GetActiveLayer()` を取り直してから判定する。
 - 平面ビューポートの `GetObjectTypeN` は **122**。
 
+### 注釈へ寸法を置くだけでは見えない——ビューポートの作法を先に踏む
+
+**実機で踏んだ。** 断面ビューポートを作って注釈へ寸法を 2 本足し、`UpdateViewport`
+まで呼んだのに、シートレイヤ上のビューポートは **53.3mm 角の「×」印の空枠**
+（`GetObjectBounds` も `左-26.64 上26.64 右26.64 下-26.64`）のままで、
+**断面も寸法も一切描かれなかった**。
+
+原因は寸法側ではなく、[Viewports](Viewports.md) に書いてある**ビューポートの作法を
+踏んでいなかった**こと。寸法を注釈へ置くときも同じ手順が要る:
+
+1. **レンダリングを隠線消去にする**（`ovViewportRenderType`(1001) ←
+   `renderFinalHiddenLine` = 6）。**これが先**——シェイドのままでは
+   `ovViewportDisplay2DComponents`(1059) が入らない。
+2. **クラスをすべて表示へ戻す。** ビューポートは**既定でクラスが全部消えている**
+   （`ForEachClass(true, …)` ＋ `SetViewportClassVisibility(vp, GetObjectInternalIndex(cls), 0)`）。
+3. 断面の表示の作法（`ovSectionViewportDisplayObjectsBeyondCutPlane`(1064) /
+   `ovViewportDisplayPlanar`(1035) / `ovViewportDisplay2DComponents`(1059)）を
+   **すべて更新より前に**設定する。
+4. 表示レイヤを表示にする（`SetViewportLayerVisibility`）。
+5. **注釈へ寸法を足した後、もう一度クラスを全部表示へ戻して再更新する。**
+   注釈へ**後から**足した図形のクラスは非表示のままだから（[Viewports](Viewports.md)）
+   ——ここを飛ばすと、断面は描かれているのに**寸法だけが見えない**。
+
+**「寸法が出ない」と判断する前に、ビューポートに何か 1 つでも描かれているかを見る。**
+空枠のままなら、それは寸法の問題ではない。
+
 ### 注釈空間は用紙 1:1 なので、文字は紙のポイントのまま出る
 
 同じ寸法を、縮尺 1:100 のデザインレイヤとビューポートの注釈とで読み比べた実測:
@@ -357,3 +383,5 @@ for (short index = 9; index >= -8; --index)
   座標の約束（横＝断面線の始点からの距離・縦＝Z）でハンドルは作れて注釈にも
   入る（`AddViewportAnnotationObject` = `true`、外接矩形も渡したとおり）が、
   **「断面の壁の左右端にぴったり掛かって見えるか」は絵でしか確かめられない。**
+  1 巡目はビューポートが空枠で確認できず（上記「注釈へ寸法を置くだけでは見えない」）、
+  作法を踏んだ 2 巡目のプローブで確かめ直している。
