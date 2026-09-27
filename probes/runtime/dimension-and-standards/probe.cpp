@@ -268,8 +268,9 @@ VW_PROBE("dimension-and-standards", "直線寸法の作り方と寸法規格の�
 			if (DimProbeInt(index) == before)
 				continue;
 			probe.log("(a) ovDimStandard に index " + DimProbeInt(index) + "（\"" + name + "\"）を書く:");
+			// TVariableBlock の DEFINE_TYPE は setter を operator= で作る（SetSint8 は無い）。
 			TVariableBlock v;
-			v.SetSint8(static_cast<Sint8>(index));
+			v = static_cast<Sint8>(index);
 			const bool ok = gSDK->SetObjectVariable(dimType0, ovDimStandard, v) != 0;
 			probe.log("    SetObjectVariable = " + std::string(ok ? "true" : "false"));
 			probe.log("    ResetObject の前: ovDimStandard = " + DimProbeReadSint8(dimType0, ovDimStandard)
