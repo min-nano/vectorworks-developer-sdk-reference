@@ -1,36 +1,36 @@
 //
 //	probes/runtime/section-vp-elevation-benchmark/probe.cpp
 //
-//	[issue #130] 断面ビューポートの注釈へレベルオブジェクトを置いたとき、**表示される
-//	高さが何で決まるか**を確定させる。
+//	[issue #130] 断面ビューポートの注釈へレベルオブジェクトを置くときの、**表示される
+//	高さの決まり方**と**名前の出し方**を確定させる（3 回目）。
 //
-//	1 回目の走行（同じ slug）で分かったこと:
-//	  * 名前は 3 つある——`Elevation Benchmark`（レベル（横断面）（レガシー）・内部 ID 102）、
-//	    `Elevation Benchmark2`（レベル基準線）、`Stake Object`（レベル）。
-//	  * レガシーを注釈の Y=0 / 2800 / 5600 へ置いても、**描かれた高さは 3 本とも 0 のまま**
-//	    ——挿入点の Y は既定では読まれない。動かしても変わらない。
-//	  * ところが真偽欄 `UseY` を true にすると、Y=2800 に置いた個体の高さが **2800** に
-//	    なった（`Use Control Point` は -2800）。**注釈の Y を読む口はある**。
+//	ここまでに実機で分かったこと:
+//	  * レベル系の PIO は 3 つ——`Elevation Benchmark2`（レベル基準線・内部 ID 663）、
+//	    `Elevation Benchmark`（レベル（横断面）（レガシー）・102）、`Stake Object`
+//	    （レベル・370）。
+//	  * **どちらも既定では注釈の Y を読まない**（高さは 0 のまま）。
+//	  * レベル基準線は `Axis`＝〈YAxis2DMode〉にすると、Y=2800 の注釈で **2800** が出た。
+//	  * レガシーは真偽欄 `UseY` で Y=2800→2800 / Y=5600→5600、**動かすと追う**。
+//	    ただし `UseY` は `__NNA_DO_NOT_CHANGE` の内部欄で、**表の顔は `Elevation Display`
+//	    の 5 択**（Custom / ground plane / reference elevation / Y value / control point）。
+//	    2 回目は内部欄を先に倒してしまったので、**この 5 択を素の個体へ書いたときに
+//	    入るかは未確認**のまま。
+//	  * レベル基準線の `Datum`（測定基準）は 6 択で〈StoryLevel〉を持つが、**ストーリの
+//	    無い文書では書いても GroundPlane に戻された**（試験した文書にストーリが無かった）。
 //
-//	そこで 2 回目はこう詰める:
-//	  1. **レベル基準線（`Elevation Benchmark2`）も同じ battery に掛ける**（1 回目は
-//	     レガシーしか見ていない）。
-//	  2. 真偽欄の総当たりを **2 つの高さ（2800 と 5600）で**行う——「両方でその Y が
-//	     出た欄」だけが「注釈の Y を読む口」だと言い切れる（1 点では偶然を消せない）。
-//	  3. その口を入れた個体を**動かして**、表示が追うかを見る。
-//	  4. **ポップアップ欄の選択肢を総当たり**する（`GetParamChoices` で universal 名を
-//	     採り、1 つずつ入れて描き直す）——基準の決め方と「数値を出さない」設定はここに
-//	     出るはず。
-//	  5. 文字欄の総当たり（表示名 "GL" を書く口）。
+//	そこで 3 回目は:
+//	  0. **ストーリを 2 つ作ってから**試す（〈StoryLevel〉を正しい土俵で確かめるため）。
+//	  A. レベル基準線: `Axis`＝Y を 2 つの高さ＋移動で確かめ、`Datum` の 6 択・`RefElev`・
+//	     `Offset`・`CustElev`・`Note`・前後記号・単位記号が**絵にどう出るか**を 1 つずつ。
+//	  B. レガシー: `Elevation Display` の 5 択を**素の個体へ**書いて、入るか・Y を読むか・
+//	     動かすと追うか。`DatumY` の引き算と、`Custom`＋`Elevation`＋`Title` で
+//	     **数値を出さずに名前だけ**出せるかも。
 //
 //	目視は頼まない——PIO が吐いた図形からテキストを読み出して比べる。
 //
 
 #include "Probe.h"
 
-// レベルオブジェクトが「拘束されているか」を見る口。**このヘッダは VectorworksSDK.h
-// からは引き込まれない**ので名指しで include する（-I に SDKLib/Include/Interfaces が
-// 入っている前提。plugin/CMakeLists.txt）。
 #include "VectorWorks/Extension/IMarkersPluginSupport.h"
 
 #include <cstdio>
@@ -47,7 +47,7 @@ namespace
 	std::string BmNum(double v)
 	{
 		char buf[64];
-		std::snprintf(buf, sizeof(buf), "%.1f", v);
+		std::snprintf(buf, sizeof(buf), "%.0f", v);
 		return std::string(buf);
 	}
 
@@ -89,81 +89,38 @@ namespace
 		return joined;
 	}
 
-	struct BmParam
+	std::string BmRead(MCObjectHandle h, const char* param)
 	{
-		size_t index = 0;
-		std::string name;
-		std::string localized;
-		short style = 0;
-		std::string value;
-	};
-
-	std::vector<BmParam> BmReadParams(MCObjectHandle h)
-	{
-		std::vector<BmParam> rows;
-		if (h == nil)
-			return rows;
-		size_t count = 0;
 		try
 		{
-			VWParametricObj probeObj(h);
-			count = probeObj.GetParamsCount();
+			VWParametricObj obj(h);
+			return BmToStd(obj.GetParamAsString(TXString(param)));
 		}
 		catch (...)
 		{
-			return rows;
+			return "(例外)";
 		}
-		VWParametricObj obj(h);
-		for (size_t i = 0; i < count; ++i)
-		{
-			BmParam row;
-			row.index = i;
-			TXString uname;
-			try
-			{
-				uname = obj.GetParamName(i);
-				row.name = BmToStd(uname);
-			}
-			catch (...)
-			{
-				continue;
-			}
-			try
-			{
-				row.localized = BmToStd(obj.GetParamLocalizedName(i));
-			}
-			catch (...)
-			{
-				row.localized = "(例外)";
-			}
-			try
-			{
-				row.style = static_cast<short>(obj.GetParamStyle(uname));
-			}
-			catch (...)
-			{
-				row.style = -1;
-			}
-			try
-			{
-				row.value = BmToStd(obj.GetParamAsString(uname));
-			}
-			catch (...)
-			{
-				row.value = "(例外)";
-			}
-			rows.push_back(row);
-		}
-		return rows;
 	}
 
-	// 注釈へ 1 本置く（作る → 注釈へ移す → 注釈空間の座標を書き直す → 描き直す）。
-	MCObjectHandle BmPlaceInAnnotation(const std::string& pioName, MCObjectHandle vp,
-									   MCObjectHandle designLayer, double x, double y)
+	bool BmWrite(MCObjectHandle h, const char* param, const char* value)
+	{
+		try
+		{
+			VWParametricObj obj(h);
+			obj.SetParamValue(TXString(param), TXString(value));
+			return true;
+		}
+		catch (...)
+		{
+			return false;
+		}
+	}
+
+	MCObjectHandle BmPlace(const char* pioName, MCObjectHandle vp, MCObjectHandle designLayer,
+						   double x, double y)
 	{
 		gSDK->SetCurrentLayer(designLayer);
-		const MCObjectHandle h =
-			gSDK->CreateCustomObject(TXString(pioName.c_str()), WorldPt(x, y), 0.0);
+		const MCObjectHandle h = gSDK->CreateCustomObject(TXString(pioName), WorldPt(x, y), 0.0);
 		if (h == nil)
 			return nil;
 		if (!gSDK->AddViewportAnnotationObject(vp, h))
@@ -180,246 +137,254 @@ namespace
 		return h;
 	}
 
-	bool BmContains(const std::string& haystack, const std::string& needle)
+	// ストーリを 2 つ作る（Findings「レイヤ・ストーリ・重ね順」の手順どおり）。
+	void BmMakeStories(vwprobe::Report& probe)
 	{
-		return haystack.find(needle) != std::string::npos;
+		TXString levelType("FL");
+		probe.log(std::string("CreateLayerLevelType(FL)=") +
+				  (gSDK->CreateLayerLevelType(levelType) ? "true" : "false"));
+
+		TXString templateName("FL テンプレート");
+		TXString templateLevelType("FL");
+		short templateIndex = 0;
+		const bool madeTemplate = gSDK->CreateStoryLevelTemplate(
+			templateName, 1.0, templateLevelType, 0, 2800, templateIndex);
+		probe.log(std::string("CreateStoryLevelTemplate=") + (madeTemplate ? "true" : "false") +
+				  " index=" + std::to_string(static_cast<int>(templateIndex)));
+
+		static const char* const kStoryNames[] = {"1 階", "2 階"};
+		static const double kStoryElevs[] = {0.0, 2800.0};
+		for (int i = 0; i < 2; ++i)
+		{
+			TXString name(kStoryNames[i]);
+			TXString suffix(kStoryNames[i]);
+			const bool made = gSDK->CreateStory(name, suffix);
+			const MCObjectHandle story = gSDK->GetNamedObject(TXString(kStoryNames[i]));
+			if (story == nil)
+			{
+				probe.log(std::string("ストーリ 〈") + kStoryNames[i] + "〉: CreateStory=" +
+						  (made ? "true" : "false") + " だがハンドルを引けなかった");
+				continue;
+			}
+			// **レベルを足す前に**高さを入れる（足した後では衝突し得る）。
+			const bool setElev = gSDK->SetStoryElevation(story, kStoryElevs[i]);
+			const bool added =
+				madeTemplate && gSDK->AddStoryLevelFromTemplate(story, templateIndex);
+			const MCObjectHandle layer = gSDK->GetLayerForStory(story, TXString("FL"));
+			probe.log(std::string("ストーリ 〈") + kStoryNames[i] + "〉: 高さ=" +
+					  BmNum(kStoryElevs[i]) + " SetStoryElevation=" + (setElev ? "true" : "false") +
+					  " AddStoryLevelFromTemplate=" + (added ? "true" : "false") +
+					  " レイヤ=" + (layer != nil ? "生えた" : "生えていない"));
+		}
 	}
 
-	// 1 つの PIO を、断面ビューポートの注釈の中で総当たりに掛ける。
-	void BmRunBattery(vwprobe::Report& probe, const std::string& pioName, MCObjectHandle vp,
-					  MCObjectHandle designLayer)
+	// レベル基準線（Elevation Benchmark2）を詰める。
+	void BmRunBenchmark2(vwprobe::Report& probe, MCObjectHandle vp, MCObjectHandle designLayer)
 	{
+		static const char* const kName = "Elevation Benchmark2";
 		probe.log("");
-		probe.log("========== 〈" + pioName + "〉 ==========");
-
-		EVSPluginType type = kVSPluginMenu;
-		if (!gSDK->GetPluginType(TXString(pioName.c_str()), type) || type != kVSPluginObject)
-		{
-			probe.log("PIO として見つからない（種別=" + std::to_string(static_cast<int>(type)) +
-					  "）ので飛ばす");
-			return;
-		}
-		gSDK->DefineCustomObject(TXString(pioName.c_str()), kCustomObjectPrefNever);
-
-		TXString localized;
-		gSDK->GetLocalizedPluginName(TXString(pioName.c_str()), localized);
-		probe.log("ローカライズ名=" + BmToStd(localized));
+		probe.log("========== 〈Elevation Benchmark2〉（レベル基準線）==========");
+		gSDK->DefineCustomObject(TXString(kName), kCustomObjectPrefNever);
 
 		using namespace VectorWorks::Extension;
 		IMarkersPluginSupportPtr markers(IID_MarkersPluginSupport);
 
-		// --- 1) 注釈の 3 つの高さへ素のまま置く（1 回目の追試） ---
+		// A1: Axis=YAxis2DMode を入れて 3 つの高さへ置く。
+		probe.log("--- A1: Axis=YAxis2DMode で注釈の 3 つの高さへ置く ---");
 		static const double kYs[] = {0.0, 2800.0, 5600.0};
-		std::vector<BmParam> baseParams;
 		for (int i = 0; i < 3; ++i)
 		{
-			const MCObjectHandle h = BmPlaceInAnnotation(pioName, vp, designLayer, 1000.0, kYs[i]);
+			const MCObjectHandle h = BmPlace(kName, vp, designLayer, 1000.0, kYs[i]);
 			if (h == nil)
 			{
-				probe.fail("注釈へ置けなかった（Y=" + BmNum(kYs[i]) + "・" + pioName + "）");
+				probe.fail("レベル基準線を注釈へ置けなかった（Y=" + BmNum(kYs[i]) + "）");
 				continue;
 			}
-			if (i == 0)
-				baseParams = BmReadParams(h);
-			probe.log("素のまま Y=" + BmNum(kYs[i]) + ": 文字=" + BmTextsOf(h) +
-					  (markers
-						   ? std::string(" 拘束=") +
-								 (markers->IsElevationBenchmarkConstrained(h) ? "true" : "false")
-						   : std::string("")));
+			BmWrite(h, "Axis", "YAxis2DMode");
+			gSDK->ResetObject(h);
+			probe.log("  Y=" + BmNum(kYs[i]) + ": Axis 読み戻し=〈" + BmRead(h, "Axis") +
+					  "〉 Elevation 欄=〈" + BmRead(h, "Elevation") + "〉 文字=" + BmTextsOf(h));
+			gSDK->DeleteObject(h, true);
 		}
-		if (baseParams.empty())
-		{
-			probe.fail("パラメータ表を読めなかった（" + pioName + "）");
-			return;
-		}
-		probe.log("欄の件数: " + std::to_string(baseParams.size()));
 
-		// --- 2) 真偽欄の総当たりを 2 つの高さで行う ---
-		//     「2800 に置いたら 2800、5600 に置いたら 5600 が出た」欄だけが、
-		//     注釈の Y（＝Z）を読む口だと言い切れる。
-		probe.log("--- 真偽欄の総当たり（Y=2800 と Y=5600 の 2 点で）---");
-		std::vector<std::string> readsY;
-		for (const BmParam& row : baseParams)
+		// A2: 動かしたら追うか。
+		probe.log("--- A2: Axis=Y の 1 本を動かす ---");
 		{
-			if (row.style != 2)
-				continue;
-			std::string texts[2];
-			for (int k = 0; k < 2; ++k)
+			const MCObjectHandle h = BmPlace(kName, vp, designLayer, 1500.0, 2800.0);
+			if (h != nil)
 			{
-				const double y = (k == 0) ? 2800.0 : 5600.0;
-				const MCObjectHandle h = BmPlaceInAnnotation(pioName, vp, designLayer, 2000.0, y);
-				if (h == nil)
-				{
-					texts[k] = "(置けず)";
-					continue;
-				}
-				try
-				{
-					VWParametricObj obj(h);
-					const TXString uname(row.name.c_str());
-					obj.SetParamBool(uname, !obj.GetParamBool(uname));
-					gSDK->ResetObject(h);
-					texts[k] = BmTextsOf(h);
-				}
-				catch (...)
-				{
-					texts[k] = "(例外)";
-				}
+				BmWrite(h, "Axis", "YAxis2DMode");
+				gSDK->ResetObject(h);
+				probe.log("  置いた直後（Y=2800）: " + BmTextsOf(h));
+				gSDK->MoveObject(h, 0, 2800);
+				gSDK->ResetObject(h);
+				probe.log("  Y=5600 へ動かして描き直し: " + BmTextsOf(h));
 				gSDK->DeleteObject(h, true);
 			}
-			const bool follows = BmContains(texts[0], "2800") && BmContains(texts[1], "5600");
-			probe.log("  " + row.name + " (" + row.localized + ") 反転: Y=2800→" + texts[0] +
-					  " / Y=5600→" + texts[1] + (follows ? "　★ Y を読んでいる" : ""));
-			if (follows)
-				readsY.push_back(row.name);
 		}
-		if (readsY.empty())
-			probe.log("  → 注釈の Y を読む真偽欄は見つからなかった");
 
-		// --- 3) その口を入れた個体を動かす（表示が追うか） ---
-		for (const std::string& name : readsY)
+		// A3: Datum の 6 択（Axis=Y・Y=2800・ストーリのある文書で）。
+		probe.log("--- A3: Datum の 6 択（Axis=Y / 注釈 Y=2800）---");
+		static const char* const kDatums[] = {"GroundPlane",   "DesignLayerZ", "ControlPoint",
+											  "UserReference", "Custom",	   "StoryLevel"};
+		for (const char* datum : kDatums)
 		{
-			const MCObjectHandle h = BmPlaceInAnnotation(pioName, vp, designLayer, 2500.0, 2800.0);
+			const MCObjectHandle h = BmPlace(kName, vp, designLayer, 2000.0, 2800.0);
 			if (h == nil)
 				continue;
-			try
+			BmWrite(h, "Axis", "YAxis2DMode");
+			BmWrite(h, "Datum", datum);
+			gSDK->ResetObject(h);
+			probe.log(std::string("  〈") + datum + "〉→ 読み戻し=〈" + BmRead(h, "Datum") +
+					  "〉 Elevation 欄=〈" + BmRead(h, "Elevation") + "〉 __StoryName=〈" +
+					  BmRead(h, "__StoryName") + "〉 __LevelTypeName=〈" +
+					  BmRead(h, "__LevelTypeName") + "〉 拘束=" +
+					  (markers ? (markers->IsElevationBenchmarkConstrained(h) ? "true" : "false")
+							   : "(口なし)") +
+					  " 文字=" + BmTextsOf(h));
+			gSDK->DeleteObject(h, true);
+		}
+
+		// A4〜A8: 1 欄ずつ（すべて Axis=Y・注釈 Y=2800）。
+		struct BmTweak
+		{
+			const char* label;
+			const char* datum; // 空なら既定のまま
+			const char* param1;
+			const char* value1;
+			const char* param2;
+			const char* value2;
+		};
+		static const BmTweak kTweaks[] = {
+			{"A4 UserReference ＋ RefElev=1000", "UserReference", "RefElev", "1000", "", ""},
+			{"A5 Offset=500", "", "Offset", "500", "", ""},
+			{"A6 Custom ＋ CustElev=GL", "Custom", "CustElev", "GL", "", ""},
+			{"A6' Custom ＋ CustElev=空", "Custom", "CustElev", "", "", ""},
+			{"A7 Note=軒高", "", "Note", "軒高", "", ""},
+			{"A7' 前記号=GL＋後記号=まで", "", "EPfx", "GL ", "ESfx", " まで"},
+			{"A8 単位=Millimeters ＋ 単位記号なし", "", "PrimaryUnits", "Millimeters",
+			 "ShowUnitMark", "False"},
+		};
+		probe.log("--- A4〜A8: 1 欄ずつ（Axis=Y / 注釈 Y=2800）---");
+		for (const BmTweak& tweak : kTweaks)
+		{
+			const MCObjectHandle h = BmPlace(kName, vp, designLayer, 2500.0, 2800.0);
+			if (h == nil)
+				continue;
+			BmWrite(h, "Axis", "YAxis2DMode");
+			if (tweak.datum[0] != '\0')
+				BmWrite(h, "Datum", tweak.datum);
+			BmWrite(h, tweak.param1, tweak.value1);
+			if (tweak.param2[0] != '\0')
+				BmWrite(h, tweak.param2, tweak.value2);
+			gSDK->ResetObject(h);
+			probe.log(std::string("  ") + tweak.label + ": " + tweak.param1 + " 読み戻し=〈" +
+					  BmRead(h, tweak.param1) + "〉 Elevation 欄=〈" + BmRead(h, "Elevation") +
+					  "〉 文字=" + BmTextsOf(h));
+			gSDK->DeleteObject(h, true);
+		}
+	}
+
+	// レガシー（Elevation Benchmark）を詰める。
+	void BmRunLegacy(vwprobe::Report& probe, MCObjectHandle vp, MCObjectHandle designLayer)
+	{
+		static const char* const kName = "Elevation Benchmark";
+		probe.log("");
+		probe.log("========== 〈Elevation Benchmark〉（レガシー）==========");
+		gSDK->DefineCustomObject(TXString(kName), kCustomObjectPrefNever);
+
+		// B1: Elevation Display の 5 択を**素の個体へ**書く（内部の真偽欄は触らない）。
+		probe.log("--- B1: Elevation Display の 5 択を素の個体へ書く（注釈 Y=2800）---");
+		static const char* const kDisplays[] = {
+			"Custom", "Z value relative to ground plane", "Z value relative to reference elevation",
+			"Y value relative to reference elevation", "Distance from control point"};
+		for (const char* display : kDisplays)
+		{
+			const MCObjectHandle h = BmPlace(kName, vp, designLayer, 3000.0, 2800.0);
+			if (h == nil)
+				continue;
+			BmWrite(h, "Elevation Display", display);
+			gSDK->ResetObject(h);
+			probe.log(std::string("  〈") + display + "〉→ 読み戻し=〈" +
+					  BmRead(h, "Elevation Display") + "〉 UseY=〈" + BmRead(h, "UseY") +
+					  "〉 文字=" + BmTextsOf(h));
+			gSDK->DeleteObject(h, true);
+		}
+
+		// B2: 「Y value relative to reference elevation」を 2 つの高さ＋移動で。
+		probe.log("--- B2: Y value relative to reference elevation を 2 つの高さ＋移動で ---");
+		static const double kYs[] = {0.0, 2800.0, 5600.0};
+		for (int i = 0; i < 3; ++i)
+		{
+			const MCObjectHandle h = BmPlace(kName, vp, designLayer, 3500.0, kYs[i]);
+			if (h == nil)
+				continue;
+			BmWrite(h, "Elevation Display", "Y value relative to reference elevation");
+			gSDK->ResetObject(h);
+			probe.log("  Y=" + BmNum(kYs[i]) + ": 文字=" + BmTextsOf(h));
+			if (i == 2)
 			{
-				VWParametricObj obj(h);
-				const TXString uname(name.c_str());
-				obj.SetParamBool(uname, !obj.GetParamBool(uname));
+				gSDK->MoveObject(h, 0, 1400);
 				gSDK->ResetObject(h);
-				probe.log("  " + name + " を入れた個体: 置いた直後（Y=2800）=" + BmTextsOf(h));
-				gSDK->MoveObject(h, 0, 2800 /* 2800 → 5600 */);
-				gSDK->ResetObject(h);
-				probe.log("  " + name + " を入れた個体: Y=5600 へ動かして描き直し=" + BmTextsOf(h));
-				gSDK->MoveObject(h, 0, 1400 /* 5600 → 7000。描き直さずに読む */);
-				probe.log(
-					"  " + name +
-					" を入れた個体: さらに Y=7000 へ動かして**描き直さずに**読む=" + BmTextsOf(h));
-				gSDK->ResetObject(h);
-				probe.log("  " + name + " を入れた個体: 描き直した後=" + BmTextsOf(h));
-			}
-			catch (...)
-			{
-				probe.log("  " + name + ": 移動の試験で例外");
+				probe.log("  Y=7000 へ動かして描き直し: " + BmTextsOf(h));
 			}
 			gSDK->DeleteObject(h, true);
 		}
 
-		// --- 4) ポップアップ欄の総当たり（選択肢を 1 つずつ入れて描き直す） ---
-		//     基準の決め方と「数値を出さない」設定はここに出るはず。Y を読む口は
-		//     入れた状態で見る（そうでないと全部 0 になって見分けが付かない）。
-		probe.log("--- ポップアップ欄の選択肢を総当たり（Y=2800 の注釈で）---");
-		int popupTrials = 0;
-		for (const BmParam& row : baseParams)
+		// B3: DatumY で基準をずらす。
+		probe.log("--- B3: DatumY=1000（注釈 Y=2800）---");
 		{
-			if (row.style != 8 && row.style != 9)
-				continue;
-			std::vector<std::string> choices;
+			const MCObjectHandle h = BmPlace(kName, vp, designLayer, 4000.0, 2800.0);
+			if (h != nil)
 			{
-				const MCObjectHandle probeHandle =
-					BmPlaceInAnnotation(pioName, vp, designLayer, 3000.0, 2800.0);
-				if (probeHandle == nil)
-					continue;
-				try
-				{
-					VWParametricObj obj(probeHandle);
-					TXStringSTLArray univ;
-					if (obj.GetParamChoices(row.index, univ))
-						for (size_t c = 0; c < univ.size(); ++c)
-							choices.push_back(BmToStd(univ[c]));
-				}
-				catch (...)
-				{
-				}
-				gSDK->DeleteObject(probeHandle, true);
-			}
-			if (choices.empty())
-			{
-				probe.log("  " + row.name + " (" + row.localized + "): 選択肢を取れなかった");
-				continue;
-			}
-			probe.log("  " + row.name + " (" + row.localized + "): 選択肢 " +
-					  std::to_string(choices.size()) + " 件");
-			for (const std::string& choice : choices)
-			{
-				if (++popupTrials > 60)
-					break;
-				const MCObjectHandle h =
-					BmPlaceInAnnotation(pioName, vp, designLayer, 3000.0, 2800.0);
-				if (h == nil)
-					continue;
-				try
-				{
-					VWParametricObj obj(h);
-					for (const std::string& yName : readsY)
-					{
-						const TXString yUname(yName.c_str());
-						obj.SetParamBool(yUname, !obj.GetParamBool(yUname));
-					}
-					const TXString uname(row.name.c_str());
-					obj.SetParamValue(uname, TXString(choice.c_str()));
-					gSDK->ResetObject(h);
-					probe.log("      〈" + choice + "〉→ 読み戻し=〈" +
-							  BmToStd(obj.GetParamAsString(uname)) + "〉 文字=" + BmTextsOf(h));
-				}
-				catch (...)
-				{
-					probe.log("      〈" + choice + "〉→ 例外");
-				}
+				BmWrite(h, "Elevation Display", "Y value relative to reference elevation");
+				BmWrite(h, "DatumY", "1000");
+				gSDK->ResetObject(h);
+				probe.log("  DatumY 読み戻し=〈" + BmRead(h, "DatumY") + "〉 文字=" + BmTextsOf(h));
 				gSDK->DeleteObject(h, true);
 			}
-			if (popupTrials > 60)
-			{
-				probe.log("  （総当たりが 60 回を超えたので打ち切る）");
-				break;
-			}
 		}
 
-		// --- 5) 文字欄の総当たり（表示名を書く口） ---
-		probe.log("--- 文字欄の総当たり（目印を書いて、絵に出るかを見る）---");
-		int textTried = 0;
-		for (const BmParam& row : baseParams)
+		// B4: 名前だけ出す（Custom ＋ Elevation ＋ Title）。
+		probe.log("--- B4: 数値を出さずに名前だけ出せるか ---");
+		struct BmNameCase
 		{
-			if (row.style != 4)
-				continue;
-			if (++textTried > 12)
-			{
-				probe.log("  （文字欄が 12 件を超えたので打ち切る）");
-				break;
-			}
-			const MCObjectHandle h = BmPlaceInAnnotation(pioName, vp, designLayer, 4000.0, 2800.0);
+			const char* label;
+			const char* elevation;
+			const char* title;
+		};
+		static const BmNameCase kCases[] = {
+			{"Custom ＋ Elevation=空 ＋ Title=1FL", "", "1FL"},
+			{"Custom ＋ Elevation=GL ＋ Title=空", "GL", ""},
+			{"Custom ＋ Elevation=+2800 ＋ Title=2FL", "+2800", "2FL"},
+		};
+		for (const BmNameCase& nameCase : kCases)
+		{
+			const MCObjectHandle h = BmPlace(kName, vp, designLayer, 4500.0, 2800.0);
 			if (h == nil)
 				continue;
-			try
-			{
-				VWParametricObj obj(h);
-				const TXString uname(row.name.c_str());
-				obj.SetParamString(uname, TXString("GLしるし"));
-				gSDK->ResetObject(h);
-				probe.log("  " + row.name + " (" + row.localized + "): 読み戻し=〈" +
-						  BmToStd(obj.GetParamAsString(uname)) + "〉 文字=" + BmTextsOf(h));
-			}
-			catch (...)
-			{
-				probe.log("  " + row.name + ": 例外");
-			}
+			BmWrite(h, "Elevation Display", "Custom");
+			BmWrite(h, "Elevation", nameCase.elevation);
+			BmWrite(h, "Title", nameCase.title);
+			gSDK->ResetObject(h);
+			probe.log(std::string("  ") + nameCase.label + ": Elevation Display 読み戻し=〈" +
+					  BmRead(h, "Elevation Display") + "〉 文字=" + BmTextsOf(h));
 			gSDK->DeleteObject(h, true);
 		}
-
-		gSDK->UpdateViewport(vp);
 	}
 } // namespace
 
 VW_PROBE("section-vp-elevation-benchmark",
-		 "断面ビューポートの注釈でレベルの高さが何で決まるかを確定する",
-		 "レベル基準線（Elevation Benchmark2）とレガシー（Elevation Benchmark）を断面"
-		 "ビューポートの注釈へ置き、真偽欄を 2 つの高さで総当たりして「注釈の Y を読む口」"
-		 "を特定し、動かして追うかを見る。ポップアップの選択肢と文字欄も総当たりする")
+		 "断面ビューポートの注釈でレベルの高さと名前の出し方を確定する",
+		 "ストーリを 2 つ作った文書で、レベル基準線の Axis / Datum / 基準高さ / "
+		 "カスタム文字と、レガシーの Elevation Display 5 択・DatumY・タイトルが、"
+		 "注釈の Y（＝Z）に対して絵にどう出るかを 1 欄ずつ実測する")
 {
-	const MCObjectHandle designLayer = gSDK->GetCurrentLayer();
+	// 0) ストーリを 2 つ作る（Datum=StoryLevel を正しい土俵で試すため）。
+	probe.log("--- 0: ストーリを 2 つ作る ---");
+	BmMakeStories(probe);
 
-	// 断面に何か映るように壁を 1 枚置く。
+	const MCObjectHandle designLayer = gSDK->GetCurrentLayer();
 	const MCObjectHandle wall = gSDK->CreateWall(WorldPt(-2000, 0), WorldPt(2000, 0), 200);
 	probe.log(std::string("試験用の壁: ") + (wall != nil ? "作れた" : "作れなかった"));
 
@@ -439,9 +404,10 @@ VW_PROBE("section-vp-elevation-benchmark",
 	probe.log("断面ビューポートを作れた: 型=" + std::to_string(gSDK->GetObjectTypeN(vp)));
 	gSDK->UpdateViewport(vp);
 
-	BmRunBattery(probe, "Elevation Benchmark2", vp, designLayer);
-	BmRunBattery(probe, "Elevation Benchmark", vp, designLayer);
+	BmRunBenchmark2(probe, vp, designLayer);
+	BmRunLegacy(probe, vp, designLayer);
 
+	gSDK->UpdateViewport(vp);
 	probe.log("");
-	probe.log("おわり（図面には試験用のシートレイヤ・断面ビューポート・壁が残る）");
+	probe.log("おわり（図面にはストーリ 2 つ・試験用のシートレイヤ・断面ビューポート・壁が残る）");
 }
