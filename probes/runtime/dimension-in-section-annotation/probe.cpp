@@ -4,16 +4,23 @@
 //	[issue #129] 断面ビューポートの注釈空間へ直線寸法を置いたとき、データタグと同じ
 //	座標の約束（横＝断面線の始点からの距離・縦＝Z）で狙った場所に出るかを実機で見る。
 //
-//	**2 巡目。** 1 巡目はビューポートが真っ白（×印の空枠）で何も描かれず、寸法が
-//	見えるかどうか以前の状態だった。原因はプローブ側で、Findings「Viewports」に
-//	書いてある断面ビューポートの作法を踏んでいなかったこと:
+//	**3 巡目。** 2 巡目で Findings「Viewports」の作法（隠線消去・全クラス表示・
+//	1064/1035/1059・注釈を足した後の再更新）をすべて踏んだが、**ビューポートは
+//	53.3mm 角の空枠のまま**で何も描かれなかった（外接矩形が 1 巡目と 1mm も違わない）。
+//	作法そのものは効いている——クラスは 43 件表示へ戻り、隠線消去も読み戻せた——ので、
+//	**原因は「描き方」ではなく「描くものが無い」側**を疑う。
 //
-//	  - **レンダリングを隠線消去にする**（これが先に要る。シェイドのままでは
-//	    2D コンポーネントの指定が入らない）
-//	  - **クラスをすべて表示へ戻す**（ビューポートは既定でクラスが全部消えている）
-//	  - 断面の表示の作法（1064 / 1035 / 1059）をすべて**更新より前**に設定する
-//	  - **注釈へ後から足した図形のクラスも非表示のまま**なので、足した後にもう一度
-//	    全クラスを表示へ戻して再更新する
+//	いちばん疑わしいのは**壁に高さが無いこと**。`CreateWall` は壁厚しか取らず、高さは
+//	デザインレイヤの「壁の高さ」設定に従う（Findings「Walls」）——新規の空図面でそれが
+//	0 なら、壁は高さ 0 の板で、断面には何も写らない。そこでこの版では:
+//
+//	  1. `GetWallOverallHeights` で**建てた直後の高さを読む**（0 なら黒）。
+//	  2. `SetWallOverallHeights` で**明示的に 0〜2800mm を与え**、読み戻して確かめる。
+//	  3. そのうえで断面を作り、外接矩形が 53.3mm 角より大きくなるかを見る。
+//
+//	ついでに 2 巡目で分かった小さな事実も記録する:
+//	**`ovViewportDisplay2DComponents`(1059) は `SetObjectVariable` が `true` を返すのに
+//	読み戻すと `false` のまま**（隠線消去を先に入れてあっても入らなかった）。
 //
 
 #include "Probe.h"
@@ -144,8 +151,46 @@ VW_PROBE("dimension-in-section-annotation", "断面ビューポートの注釈�
 	}
 	probe.log("壁を 1 枚建てた: (0,0)-(4000,0) 厚さ 120mm");
 	SecDimLogBounds(probe, "壁", wall);
-	probe.log("  壁の高さ（既定）を ovWallHeight ではなく外接立体で測らない——高さは");
-	probe.log("  断面の見え方で確かめる。");
+
+	// **ここが 3 巡目の本題。** CreateWall は壁厚しか取らず、高さはデザインレイヤの
+	// 「壁の高さ」設定に従う（Findings「Walls」）。新規の空図面でそれが 0 なら、
+	// 壁は高さ 0 の板で断面には何も写らない。
+	{
+		WorldCoord top = 0;
+		WorldCoord bottom = 0;
+		gSDK->GetWallOverallHeights(wall, top, bottom);
+		probe.log("  建てた直後の高さ: GetWallOverallHeights → 上" + SecDimNum(top) + " 下" +
+				  SecDimNum(bottom) + "（差 " + SecDimNum(top - bottom) + "mm）");
+		if (top - bottom == 0)
+			probe.log("  ★ 高さが 0。断面に何も写らないのはこれが原因の可能性が高い。");
+	}
+
+	// 明示的に 0〜2800mm を与える。壁は専用関数でないと高さ基準が確定しない
+	//（Findings「Walls」: 汎用の SetObjectStoryBound ではレイヤ設定に従ってしまう）。
+	{
+		VectorWorks::SStoryObjectData bottomData;
+		bottomData.fBound = VectorWorks::eStoryObjectBound_LayerElevation;
+		bottomData.fBoundStory = 0;
+		bottomData.fOffset = 0.0;
+
+		VectorWorks::SStoryObjectData topData;
+		topData.fBound = VectorWorks::eStoryObjectBound_LayerElevation;
+		topData.fBoundStory = 0;
+		topData.fOffset = 2800.0;
+
+		const bool ok = gSDK->SetWallOverallHeights(wall, bottomData, topData);
+		probe.log("  SetWallOverallHeights(下 0 / 上 2800, どちらもレイヤ基準) = " +
+				  std::string(ok ? "true" : "false"));
+		gSDK->ResetObject(wall);
+
+		WorldCoord top = 0;
+		WorldCoord bottom = 0;
+		gSDK->GetWallOverallHeights(wall, top, bottom);
+		probe.log("  与えた後の高さ: 上" + SecDimNum(top) + " 下" + SecDimNum(bottom) + "（差 " +
+				  SecDimNum(top - bottom) + "mm）");
+		if (top - bottom == 0)
+			probe.fail("高さを与えても 0 のまま。断面が空なのは別の原因（次の巡で追う）");
+	}
 
 	probe.log("");
 	probe.log("== 断面ビューポートを作る ==");
@@ -175,15 +220,22 @@ VW_PROBE("dimension-in-section-annotation", "断面ビューポートの注釈�
 			  SecDimWriteLikeCurrent(section, ovSectionViewportDisplayObjectsBeyondCutPlane, 0));
 	probe.log("  ovViewportDisplayPlanar(1035) ← false: " +
 			  SecDimWriteLikeCurrent(section, ovViewportDisplayPlanar, 0));
+	// 2 巡目の実測: ここは true が返るのに読み戻すと false のまま入らない。
 	probe.log("  ovViewportDisplay2DComponents(1059) ← true: " +
-			  SecDimWriteLikeCurrent(section, ovViewportDisplay2DComponents, 1));
+			  SecDimWriteLikeCurrent(section, ovViewportDisplay2DComponents, 1) +
+			  "  ※2 巡目は true が返るのに false のままだった");
 	probe.log("  表示レイヤ: SetViewportLayerVisibility(デザインレイヤ, 0) = " +
 			  std::string(gSDK->SetViewportLayerVisibility(section, layer, 0) ? "true" : "false"));
 	probe.log("  クラスを全部表示へ戻した件数 = " + std::to_string(SecDimShowAllClasses(section)));
 	gSDK->UpdateViewport(section);
 	SecDimLogBounds(probe, "更新後の断面ビューポート", section);
-	probe.log("  ※ 1 巡目はここが 53.3mm 角の空枠（左-26.64 上26.64 右26.64 下-26.64）だった。");
-	probe.log("  　 今回それより大きくなっていれば、中身が描かれたということ。");
+	probe.log("  ※ 1 巡目・2 巡目はここが 53.3mm 角の空枠（左-26.64 上26.64 右26.64 下-26.64）");
+	probe.log("  　 だった。今回それより大きくなっていれば、壁に高さを与えたことで");
+	probe.log("  　 中身が描かれたということ。同じままなら原因は高さではない。");
+	// 更新だけで足りないことがあるので、作り直しも試して前後を比べる。
+	gSDK->ResetObject(section);
+	gSDK->UpdateViewport(section);
+	SecDimLogBounds(probe, "ResetObject ＋ 再更新した後の断面ビューポート", section);
 
 	probe.log("");
 	probe.log("== 注釈へ寸法を 2 本置く ==");
