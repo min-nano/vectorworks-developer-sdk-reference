@@ -276,6 +276,96 @@ namespace
 				  " / バウンド件数=" + std::to_string(gSDK->GetObjectStoryBoundsCount(h)));
 	}
 
+	// レベルオブジェクトが 1 つも無い図面（＝新規の空図面）で走らせたときに、
+	// **UI でレベル基準線を 1 本置ける状態まで用意する**。ここまでは SDK で作れるので、
+	// 利用者に頼むのは「ツールで 1 本置いて、もう一度走らせる」だけで済む。
+	void LmBuildScaffolding(vwprobe::Report& probe)
+	{
+		probe.log("--- 下ごしらえ: ストーリ 2 つ・壁・断面ビューポートを作る ---");
+
+		// 1) レベル種別を先に登録する（Findings「レイヤとストーリ」の手順）。
+		TXString levelType("FL");
+		probe.log("  CreateLayerLevelType(FL)=" +
+				  std::string(gSDK->CreateLayerLevelType(levelType) ? "true" : "false"));
+
+		MCObjectHandle firstFloorLayer = nil;
+		const char* const storyNames[] = {"1 階", "2 階"};
+		const double storyElevations[] = {0.0, 2800.0};
+		for (size_t i = 0; i < 2; ++i)
+		{
+			TXString storyName(storyNames[i]);
+			TXString suffix("");
+			const bool made = gSDK->CreateStory(storyName, suffix);
+			MCObjectHandle story = gSDK->GetNamedObject(storyName);
+			if (story == nil)
+			{
+				probe.log(std::string("  ストーリ〈") + storyNames[i] +
+						  "〉を作れなかった（CreateStory=" + (made ? "true" : "false") +
+						  " / GetNamedObject=nil）");
+				continue;
+			}
+			// **レベルを足す前に高さを入れる**（後回しにすると次の CreateStory が衝突し得る）。
+			gSDK->SetStoryElevation(story, storyElevations[i]);
+			TXString templateName = storyName + "-FL";
+			short index = -1;
+			gSDK->CreateStoryLevelTemplate(templateName, 1.0, levelType, 0, 2800, index);
+			gSDK->AddStoryLevelFromTemplate(story, index);
+			// **戻り値ではなく読み戻しで判定する**（AddStoryLevel 系は true を返しても生えない）。
+			MCObjectHandle layer = gSDK->GetLayerForStory(story, levelType);
+			probe.log(std::string("  ストーリ〈") + storyNames[i] +
+					  "〉 高さ=" + LmNum(storyElevations[i]) + " レイヤ=" +
+					  (layer == nil ? "生えなかった" : "〈" + LmObjectName(layer) + "〉"));
+			if (i == 0)
+				firstFloorLayer = layer;
+		}
+
+		// 2) 断面に写るものを 1 つ（空の断面だと、どこを狙えばよいか分からないため）。
+		if (firstFloorLayer != nil)
+		{
+			gSDK->SetCurrentLayer(firstFloorLayer);
+			MCObjectHandle wall = gSDK->CreateWall(WorldPt(0, 0), WorldPt(6000, 0), 200);
+			if (wall != nil)
+			{
+				gSDK->SetWallCornerHeights(wall, 5600, 0, 5600, 0);
+				gSDK->ResetObject(wall);
+				probe.log("  壁を 1 枚作った（0,0）→（6000,0）高さ 0〜5600");
+			}
+		}
+
+		// 3) シートレイヤと断面ビューポート。断面線は壁の手前に引いて奥を見る形にするので、
+		//    **「切断面より奥を表示」（オブジェクト変数 1064）を true にしないと空になる**
+		//    （Findings「ビューポート」）。
+		MCObjectHandle sheet = gSDK->CreateLayer("断面（#135 の調査用）", kLayerSheet);
+		if (sheet == nil)
+		{
+			probe.log("  シートレイヤを作れなかった");
+			return;
+		}
+		MCObjectHandle viewport = gSDK->CreateSectionViewport(
+			WorldPt(-1000, -1500), WorldPt(7000, -1500), WorldPt(0, 3000), 0, -1000, 7000, sheet);
+		if (viewport == nil)
+		{
+			probe.log("  断面ビューポートを作れなかった");
+			return;
+		}
+		TVariableBlock beyond;
+		beyond.SetBoolean(true); // 真偽は SetBoolean で入れる（operator= は型が衝突する）
+		gSDK->SetObjectVariable(viewport, 1064, beyond);
+		VWFC::VWObjects::VWViewportObj(viewport).SetRenderType(renderFinalHiddenLine);
+		gSDK->UpdateViewport(viewport);
+		gSDK->SetCurrentLayer(sheet);
+		probe.log("  断面ビューポートを作った（シートレイヤ〈" + LmObjectName(sheet) + "〉の上）");
+
+		probe.log("");
+		probe.log("**次にしてほしいこと（これで最後）**");
+		probe.log("  1. いま開いているシートレイヤの断面ビューポートを右クリック →〈注釈を編集〉");
+		probe.log("  2. **レベル基準線ツール**で、注釈の中に 1 本置く"
+				  "（測定基準でストーリレベルを選び、`FL-2 階 2800` のように名前と高さが"
+				  "出る状態にする）");
+		probe.log("  3. 注釈の編集を終えて、**このプローブをもう一度走らせる**");
+		probe.log("     ——そこから先は自動で、UI 製と SDK 製の全欄を突き合わせる");
+	}
+
 	void LmDumpMarker(vwprobe::Report& probe, const LmFoundMarker& found, const std::string& tag)
 	{
 		probe.log("=== " + tag + " ===");
@@ -348,8 +438,11 @@ VW_PROBE("level-marker-annotation-height",
 
 	if (found.empty())
 	{
-		probe.fail("レベルオブジェクトが 1 つも見つからなかった。**UI のツールでレベル基準線を"
-				   "断面ビューポートの注釈へ置いた図面**を開いて走らせてください");
+		// 新規の空図面で走らせたとき。**失敗にはしない**——ここで下ごしらえまで済ませて、
+		// 「ツールで 1 本置いて、もう一度走らせる」だけにする。
+		probe.log("レベルオブジェクトが 1 つも無い図面だった"
+				  "（UI でレベル基準線を置いた図面を開いて走らせても、そのまま突き合わせる）。");
+		LmBuildScaffolding(probe);
 		return;
 	}
 
