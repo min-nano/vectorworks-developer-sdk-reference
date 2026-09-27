@@ -1,27 +1,36 @@
 //
 //	probes/runtime/section-vp-elevation-benchmark/probe.cpp
 //
-//	[issue #130] 断面ビューポートの注釈へ「レベル（標高）を示すオブジェクト」を置き、
-//	  1) その PIO の universal 名（SDK ヘッダにある内部 ID kInternalID_ElevationBenchmark /
-//	     …Benchmark2 に対応するもの）が何か
-//	  2) SDK から素直に作れるか（CreateCustomObject で足りるか・スタイルが要るか）と
-//	     全パラメータ（universal 名・ローカライズ名・欄型・初期値・ポップアップの選択肢）
-//	  3) **断面ビューポートの注釈へ置いたとき、表示される高さが何で決まるか**
-//	     （注釈空間の Y＝Z から自動で読むのか／パラメータの値が出るのか。動かしたら追うのか）
-//	  4) 表示名（"GL" など）を書く口と、高さの数値を出さない設定があるか
-//	を実機で確かめる。
+//	[issue #130] 断面ビューポートの注釈へレベルオブジェクトを置いたとき、**表示される
+//	高さが何で決まるか**を確定させる。
 //
-//	**目視に頼らない作り**にしてある——レベルオブジェクトが「何を描いたか」は、PIO が
-//	吐いた図形を辿ってテキスト（kTextNode）を読み出して比べる。だから「▼ の右に 2800 と
-//	出たか」を人に尋ねなくてよい。4) の総当たり（文字欄に書く・真偽欄を反転する）も、
-//	描かれたテキストがどう変わったかで判定する。
+//	1 回目の走行（同じ slug）で分かったこと:
+//	  * 名前は 3 つある——`Elevation Benchmark`（レベル（横断面）（レガシー）・内部 ID 102）、
+//	    `Elevation Benchmark2`（レベル基準線）、`Stake Object`（レベル）。
+//	  * レガシーを注釈の Y=0 / 2800 / 5600 へ置いても、**描かれた高さは 3 本とも 0 のまま**
+//	    ——挿入点の Y は既定では読まれない。動かしても変わらない。
+//	  * ところが真偽欄 `UseY` を true にすると、Y=2800 に置いた個体の高さが **2800** に
+//	    なった（`Use Control Point` は -2800）。**注釈の Y を読む口はある**。
+//
+//	そこで 2 回目はこう詰める:
+//	  1. **レベル基準線（`Elevation Benchmark2`）も同じ battery に掛ける**（1 回目は
+//	     レガシーしか見ていない）。
+//	  2. 真偽欄の総当たりを **2 つの高さ（2800 と 5600）で**行う——「両方でその Y が
+//	     出た欄」だけが「注釈の Y を読む口」だと言い切れる（1 点では偶然を消せない）。
+//	  3. その口を入れた個体を**動かして**、表示が追うかを見る。
+//	  4. **ポップアップ欄の選択肢を総当たり**する（`GetParamChoices` で universal 名を
+//	     採り、1 つずつ入れて描き直す）——基準の決め方と「数値を出さない」設定はここに
+//	     出るはず。
+//	  5. 文字欄の総当たり（表示名 "GL" を書く口）。
+//
+//	目視は頼まない——PIO が吐いた図形からテキストを読み出して比べる。
 //
 
 #include "Probe.h"
 
-// レベルオブジェクトが「何かに拘束されているか」を見る口。**このヘッダは
-// VectorworksSDK.h からは引き込まれない**ので、名指しで include する
-// （SDKLib/Include/Interfaces が -I に入っている前提。plugin/CMakeLists.txt）。
+// レベルオブジェクトが「拘束されているか」を見る口。**このヘッダは VectorworksSDK.h
+// からは引き込まれない**ので名指しで include する（-I に SDKLib/Include/Interfaces が
+// 入っている前提。plugin/CMakeLists.txt）。
 #include "VectorWorks/Extension/IMarkersPluginSupport.h"
 
 #include <cstdio>
@@ -30,34 +39,28 @@
 
 namespace
 {
-	// --- 小さな道具 ------------------------------------------------------------
-
-	std::string ProbeToStd(const TXString& s)
+	std::string BmToStd(const TXString& s)
 	{
 		return std::string(static_cast<const char*>(s));
 	}
 
-	std::string ProbeNum(double v)
+	std::string BmNum(double v)
 	{
 		char buf[64];
-		std::snprintf(buf, sizeof(buf), "%.4f", v);
+		std::snprintf(buf, sizeof(buf), "%.1f", v);
 		return std::string(buf);
 	}
 
-	// PIO が描いた図形を辿って、テキストオブジェクトの中身を集める。
-	// **これが「絵に何が出たか」の代わりになる**（目視を頼まないため）。
-	void ProbeCollectTexts(MCObjectHandle h, std::vector<std::string>& out, int depth)
+	void BmCollectTexts(MCObjectHandle h, std::vector<std::string>& out, int depth)
 	{
 		if (h == nil || depth > 5)
 			return;
 		for (MCObjectHandle child = gSDK->FirstMemberObj(h); child != nil;
 			 child = gSDK->NextObject(child))
 		{
-			const short type = gSDK->GetObjectTypeN(child);
-			if (type == kTextNode)
+			if (gSDK->GetObjectTypeN(child) == kTextNode)
 			{
-				std::string text = ProbeToStd(gSDK->GetTextChars(child));
-				// 改行はログ 1 行に畳む。
+				std::string text = BmToStd(gSDK->GetTextChars(child));
 				for (size_t i = 0; i < text.size(); ++i)
 					if (text[i] == '\n' || text[i] == '\r')
 						text[i] = ' ';
@@ -65,15 +68,15 @@ namespace
 			}
 			else
 			{
-				ProbeCollectTexts(child, out, depth + 1);
+				BmCollectTexts(child, out, depth + 1);
 			}
 		}
 	}
 
-	std::string ProbeTextsOf(MCObjectHandle h)
+	std::string BmTextsOf(MCObjectHandle h)
 	{
 		std::vector<std::string> texts;
-		ProbeCollectTexts(h, texts, 0);
+		BmCollectTexts(h, texts, 0);
 		if (texts.empty())
 			return "(テキストなし)";
 		std::string joined;
@@ -86,18 +89,18 @@ namespace
 		return joined;
 	}
 
-	// パラメータ表の 1 行。
-	struct ProbeParamRow
+	struct BmParam
 	{
-		std::string name;	   // universal 名
-		std::string localized; // ローカライズ名（実機の言語）
-		short style = 0;	   // EFieldStyle
-		std::string value;	   // 文字列にした値
+		size_t index = 0;
+		std::string name;
+		std::string localized;
+		short style = 0;
+		std::string value;
 	};
 
-	std::vector<ProbeParamRow> ProbeReadParams(MCObjectHandle h)
+	std::vector<BmParam> BmReadParams(MCObjectHandle h)
 	{
-		std::vector<ProbeParamRow> rows;
+		std::vector<BmParam> rows;
 		if (h == nil)
 			return rows;
 		size_t count = 0;
@@ -113,22 +116,21 @@ namespace
 		VWParametricObj obj(h);
 		for (size_t i = 0; i < count; ++i)
 		{
-			ProbeParamRow row;
+			BmParam row;
+			row.index = i;
 			TXString uname;
 			try
 			{
 				uname = obj.GetParamName(i);
-				row.name = ProbeToStd(uname);
+				row.name = BmToStd(uname);
 			}
 			catch (...)
 			{
-				row.name = "(GetParamName が例外)";
-				rows.push_back(row);
 				continue;
 			}
 			try
 			{
-				row.localized = ProbeToStd(obj.GetParamLocalizedName(i));
+				row.localized = BmToStd(obj.GetParamLocalizedName(i));
 			}
 			catch (...)
 			{
@@ -144,7 +146,7 @@ namespace
 			}
 			try
 			{
-				row.value = ProbeToStd(obj.GetParamAsString(uname));
+				row.value = BmToStd(obj.GetParamAsString(uname));
 			}
 			catch (...)
 			{
@@ -155,183 +157,269 @@ namespace
 		return rows;
 	}
 
-	// 2 つの表の差分（値が変わった欄）を 1 行ずつ出す。件数を返す。
-	size_t ProbeLogDiff(vwprobe::Report& probe, const std::string& tag,
-						const std::vector<ProbeParamRow>& base,
-						const std::vector<ProbeParamRow>& other)
+	// 注釈へ 1 本置く（作る → 注釈へ移す → 注釈空間の座標を書き直す → 描き直す）。
+	MCObjectHandle BmPlaceInAnnotation(const std::string& pioName, MCObjectHandle vp,
+									   MCObjectHandle designLayer, double x, double y)
 	{
-		if (base.size() != other.size())
-		{
-			probe.log(tag + ": 欄の件数が違う（" + std::to_string(base.size()) + " 対 " +
-					  std::to_string(other.size()) + "）");
-			return 0;
-		}
-		size_t diffs = 0;
-		for (size_t i = 0; i < base.size(); ++i)
-		{
-			if (base[i].value == other[i].value)
-				continue;
-			++diffs;
-			probe.log(tag + ": [" + std::to_string(i) + "] " + base[i].name + " = 〈" +
-					  base[i].value + "〉→〈" + other[i].value + "〉");
-		}
-		if (diffs == 0)
-			probe.log(tag + ": 値の違う欄は 0 件");
-		return diffs;
-	}
-
-	// 注釈空間での位置と実位置（外形）をログへ出す。
-	void ProbeLogPlace(vwprobe::Report& probe, const std::string& tag, MCObjectHandle h)
-	{
+		gSDK->SetCurrentLayer(designLayer);
+		const MCObjectHandle h =
+			gSDK->CreateCustomObject(TXString(pioName.c_str()), WorldPt(x, y), 0.0);
+		if (h == nil)
+			return nil;
+		if (!gSDK->AddViewportAnnotationObject(vp, h))
+			return nil;
 		try
 		{
 			VWParametricObj obj(h);
-			const VWPoint2D pos = obj.GetPointObjectPos();
-			probe.log(tag + " 挿入点: (" + ProbeNum(pos.x) + ", " + ProbeNum(pos.y) + ")");
+			obj.SetPointObjectPos(VWPoint2D(x, y));
 		}
 		catch (...)
 		{
-			probe.log(tag + " 挿入点: (GetPointObjectPos が例外)");
 		}
-		WorldRect bounds;
-		if (gSDK->GetObjectBounds(h, bounds))
-			probe.log(tag + " 外形: left=" + ProbeNum(bounds.left) +
-					  " top=" + ProbeNum(bounds.top) + " right=" + ProbeNum(bounds.right) +
-					  " bottom=" + ProbeNum(bounds.bottom));
-		else
-			probe.log(tag + " 外形: GetObjectBounds が false");
+		gSDK->ResetObject(h);
+		return h;
+	}
+
+	bool BmContains(const std::string& haystack, const std::string& needle)
+	{
+		return haystack.find(needle) != std::string::npos;
+	}
+
+	// 1 つの PIO を、断面ビューポートの注釈の中で総当たりに掛ける。
+	void BmRunBattery(vwprobe::Report& probe, const std::string& pioName, MCObjectHandle vp,
+					  MCObjectHandle designLayer)
+	{
+		probe.log("");
+		probe.log("========== 〈" + pioName + "〉 ==========");
+
+		EVSPluginType type = kVSPluginMenu;
+		if (!gSDK->GetPluginType(TXString(pioName.c_str()), type) || type != kVSPluginObject)
+		{
+			probe.log("PIO として見つからない（種別=" + std::to_string(static_cast<int>(type)) +
+					  "）ので飛ばす");
+			return;
+		}
+		gSDK->DefineCustomObject(TXString(pioName.c_str()), kCustomObjectPrefNever);
+
+		TXString localized;
+		gSDK->GetLocalizedPluginName(TXString(pioName.c_str()), localized);
+		probe.log("ローカライズ名=" + BmToStd(localized));
+
+		using namespace VectorWorks::Extension;
+		IMarkersPluginSupportPtr markers(IID_MarkersPluginSupport);
+
+		// --- 1) 注釈の 3 つの高さへ素のまま置く（1 回目の追試） ---
+		static const double kYs[] = {0.0, 2800.0, 5600.0};
+		std::vector<BmParam> baseParams;
+		for (int i = 0; i < 3; ++i)
+		{
+			const MCObjectHandle h = BmPlaceInAnnotation(pioName, vp, designLayer, 1000.0, kYs[i]);
+			if (h == nil)
+			{
+				probe.fail("注釈へ置けなかった（Y=" + BmNum(kYs[i]) + "・" + pioName + "）");
+				continue;
+			}
+			if (i == 0)
+				baseParams = BmReadParams(h);
+			probe.log("素のまま Y=" + BmNum(kYs[i]) + ": 文字=" + BmTextsOf(h) +
+					  (markers
+						   ? std::string(" 拘束=") +
+								 (markers->IsElevationBenchmarkConstrained(h) ? "true" : "false")
+						   : std::string("")));
+		}
+		if (baseParams.empty())
+		{
+			probe.fail("パラメータ表を読めなかった（" + pioName + "）");
+			return;
+		}
+		probe.log("欄の件数: " + std::to_string(baseParams.size()));
+
+		// --- 2) 真偽欄の総当たりを 2 つの高さで行う ---
+		//     「2800 に置いたら 2800、5600 に置いたら 5600 が出た」欄だけが、
+		//     注釈の Y（＝Z）を読む口だと言い切れる。
+		probe.log("--- 真偽欄の総当たり（Y=2800 と Y=5600 の 2 点で）---");
+		std::vector<std::string> readsY;
+		for (const BmParam& row : baseParams)
+		{
+			if (row.style != 2)
+				continue;
+			std::string texts[2];
+			for (int k = 0; k < 2; ++k)
+			{
+				const double y = (k == 0) ? 2800.0 : 5600.0;
+				const MCObjectHandle h = BmPlaceInAnnotation(pioName, vp, designLayer, 2000.0, y);
+				if (h == nil)
+				{
+					texts[k] = "(置けず)";
+					continue;
+				}
+				try
+				{
+					VWParametricObj obj(h);
+					const TXString uname(row.name.c_str());
+					obj.SetParamBool(uname, !obj.GetParamBool(uname));
+					gSDK->ResetObject(h);
+					texts[k] = BmTextsOf(h);
+				}
+				catch (...)
+				{
+					texts[k] = "(例外)";
+				}
+				gSDK->DeleteObject(h, true);
+			}
+			const bool follows = BmContains(texts[0], "2800") && BmContains(texts[1], "5600");
+			probe.log("  " + row.name + " (" + row.localized + ") 反転: Y=2800→" + texts[0] +
+					  " / Y=5600→" + texts[1] + (follows ? "　★ Y を読んでいる" : ""));
+			if (follows)
+				readsY.push_back(row.name);
+		}
+		if (readsY.empty())
+			probe.log("  → 注釈の Y を読む真偽欄は見つからなかった");
+
+		// --- 3) その口を入れた個体を動かす（表示が追うか） ---
+		for (const std::string& name : readsY)
+		{
+			const MCObjectHandle h = BmPlaceInAnnotation(pioName, vp, designLayer, 2500.0, 2800.0);
+			if (h == nil)
+				continue;
+			try
+			{
+				VWParametricObj obj(h);
+				const TXString uname(name.c_str());
+				obj.SetParamBool(uname, !obj.GetParamBool(uname));
+				gSDK->ResetObject(h);
+				probe.log("  " + name + " を入れた個体: 置いた直後（Y=2800）=" + BmTextsOf(h));
+				gSDK->MoveObject(h, 0, 2800 /* 2800 → 5600 */);
+				gSDK->ResetObject(h);
+				probe.log("  " + name + " を入れた個体: Y=5600 へ動かして描き直し=" + BmTextsOf(h));
+				gSDK->MoveObject(h, 0, 1400 /* 5600 → 7000。描き直さずに読む */);
+				probe.log(
+					"  " + name +
+					" を入れた個体: さらに Y=7000 へ動かして**描き直さずに**読む=" + BmTextsOf(h));
+				gSDK->ResetObject(h);
+				probe.log("  " + name + " を入れた個体: 描き直した後=" + BmTextsOf(h));
+			}
+			catch (...)
+			{
+				probe.log("  " + name + ": 移動の試験で例外");
+			}
+			gSDK->DeleteObject(h, true);
+		}
+
+		// --- 4) ポップアップ欄の総当たり（選択肢を 1 つずつ入れて描き直す） ---
+		//     基準の決め方と「数値を出さない」設定はここに出るはず。Y を読む口は
+		//     入れた状態で見る（そうでないと全部 0 になって見分けが付かない）。
+		probe.log("--- ポップアップ欄の選択肢を総当たり（Y=2800 の注釈で）---");
+		int popupTrials = 0;
+		for (const BmParam& row : baseParams)
+		{
+			if (row.style != 8 && row.style != 9)
+				continue;
+			std::vector<std::string> choices;
+			{
+				const MCObjectHandle probeHandle =
+					BmPlaceInAnnotation(pioName, vp, designLayer, 3000.0, 2800.0);
+				if (probeHandle == nil)
+					continue;
+				try
+				{
+					VWParametricObj obj(probeHandle);
+					TXStringSTLArray univ;
+					if (obj.GetParamChoices(row.index, univ))
+						for (size_t c = 0; c < univ.size(); ++c)
+							choices.push_back(BmToStd(univ[c]));
+				}
+				catch (...)
+				{
+				}
+				gSDK->DeleteObject(probeHandle, true);
+			}
+			if (choices.empty())
+			{
+				probe.log("  " + row.name + " (" + row.localized + "): 選択肢を取れなかった");
+				continue;
+			}
+			probe.log("  " + row.name + " (" + row.localized + "): 選択肢 " +
+					  std::to_string(choices.size()) + " 件");
+			for (const std::string& choice : choices)
+			{
+				if (++popupTrials > 60)
+					break;
+				const MCObjectHandle h =
+					BmPlaceInAnnotation(pioName, vp, designLayer, 3000.0, 2800.0);
+				if (h == nil)
+					continue;
+				try
+				{
+					VWParametricObj obj(h);
+					for (const std::string& yName : readsY)
+					{
+						const TXString yUname(yName.c_str());
+						obj.SetParamBool(yUname, !obj.GetParamBool(yUname));
+					}
+					const TXString uname(row.name.c_str());
+					obj.SetParamValue(uname, TXString(choice.c_str()));
+					gSDK->ResetObject(h);
+					probe.log("      〈" + choice + "〉→ 読み戻し=〈" +
+							  BmToStd(obj.GetParamAsString(uname)) + "〉 文字=" + BmTextsOf(h));
+				}
+				catch (...)
+				{
+					probe.log("      〈" + choice + "〉→ 例外");
+				}
+				gSDK->DeleteObject(h, true);
+			}
+			if (popupTrials > 60)
+			{
+				probe.log("  （総当たりが 60 回を超えたので打ち切る）");
+				break;
+			}
+		}
+
+		// --- 5) 文字欄の総当たり（表示名を書く口） ---
+		probe.log("--- 文字欄の総当たり（目印を書いて、絵に出るかを見る）---");
+		int textTried = 0;
+		for (const BmParam& row : baseParams)
+		{
+			if (row.style != 4)
+				continue;
+			if (++textTried > 12)
+			{
+				probe.log("  （文字欄が 12 件を超えたので打ち切る）");
+				break;
+			}
+			const MCObjectHandle h = BmPlaceInAnnotation(pioName, vp, designLayer, 4000.0, 2800.0);
+			if (h == nil)
+				continue;
+			try
+			{
+				VWParametricObj obj(h);
+				const TXString uname(row.name.c_str());
+				obj.SetParamString(uname, TXString("GLしるし"));
+				gSDK->ResetObject(h);
+				probe.log("  " + row.name + " (" + row.localized + "): 読み戻し=〈" +
+						  BmToStd(obj.GetParamAsString(uname)) + "〉 文字=" + BmTextsOf(h));
+			}
+			catch (...)
+			{
+				probe.log("  " + row.name + ": 例外");
+			}
+			gSDK->DeleteObject(h, true);
+		}
+
+		gSDK->UpdateViewport(vp);
 	}
 } // namespace
 
-VW_PROBE("section-vp-elevation-benchmark", "断面ビューポートの注釈へレベル（標高マーカー）を置く",
-		 "標高マーカー PIO の universal 名・全パラメータ・選択肢を出し、断面ビューポートの"
-		 "注釈へ高さ違いで 3 本置いて、描かれた文字が注釈空間の Y（＝Z）から決まるのかを"
-		 "実測する。表示名を書く口と数値を消す設定も、文字欄・真偽欄の総当たりで探す")
+VW_PROBE("section-vp-elevation-benchmark",
+		 "断面ビューポートの注釈でレベルの高さが何で決まるかを確定する",
+		 "レベル基準線（Elevation Benchmark2）とレガシー（Elevation Benchmark）を断面"
+		 "ビューポートの注釈へ置き、真偽欄を 2 つの高さで総当たりして「注釈の Y を読む口」"
+		 "を特定し、動かして追うかを見る。ポップアップの選択肢と文字欄も総当たりする")
 {
-	// =========================================================================
-	// 0) レベルオブジェクトの universal 名を突き止める
-	//    SDK ヘッダには内部 ID しか無い（kInternalID_ElevationBenchmark = 102 /
-	//    …Benchmark2 = 663）ので、名前は実機に尋ねるしかない。GetPluginType は
-	//    「その名前のプラグインが在るか・種別は何か」を返すので、候補を総当たりできる。
-	// =========================================================================
-	static const char* const kCandidateNames[] = {
-		"Elevation Benchmark",
-		"ElevationBenchmark",
-		"Elevation Benchmark2",
-		"ElevationBenchmark2",
-		"ElevBenchmark",
-		"Benchmark",
-		"Elevation Marker",
-		"ElevationMarker",
-		"Level Marker",
-		"LevelMarker",
-		"Level",
-		"Stake Object",
-		"StakeObject",
-		"Section Elevation Marker",
-		"SectionElevationMarker",
-		"Reference Marker",
-		"ReferenceMarker",
-		"Datum Marker",
-	};
-
-	std::string pioName;
-	for (const char* candidate : kCandidateNames)
-	{
-		const TXString name(candidate);
-		EVSPluginType type = kVSPluginMenu;
-		const bool found = gSDK->GetPluginType(name, type) != 0;
-		TXString localized;
-		const bool hasLocalized = gSDK->GetLocalizedPluginName(name, localized) != 0;
-		probe.log(std::string("候補 〈") + candidate + "〉: GetPluginType=" +
-				  (found ? "true" : "false") + " type=" + std::to_string(static_cast<int>(type)) +
-				  " ローカライズ名=" + (hasLocalized ? ProbeToStd(localized) : "(取れず)"));
-		// 種別 2（kVSPluginObject）＝ PIO。最初に見つかったものを採る。
-		if (found && type == kVSPluginObject && pioName.empty())
-			pioName = candidate;
-	}
-
-	if (pioName.empty())
-	{
-		probe.fail("候補のどれも PIO として見つからなかった（GetPluginType が種別 2 を返した"
-				   "名前が 1 つも無い）。上の一覧を見て候補を足す");
-		return;
-	}
-	probe.log("採用した universal 名: 〈" + pioName + "〉");
-
-	// =========================================================================
-	// 1) デザインレイヤに 1 本作って、パラメータ表を丸ごと出す（基準 A）
-	// =========================================================================
 	const MCObjectHandle designLayer = gSDK->GetCurrentLayer();
-	// 「オブジェクトの設定」ダイアログで止まらないように、作る前に 1 度定義する
-	// （probes/runtime/README.md の決まり）。
-	gSDK->DefineCustomObject(pioName, kCustomObjectPrefNever);
 
-	const MCObjectHandle a = gSDK->CreateCustomObject(pioName, WorldPt(0, 0), 0.0);
-	if (a == nil)
-	{
-		probe.fail("CreateCustomObject(〈" + pioName + "〉) が nil を返した（デザインレイヤ）");
-		return;
-	}
-	probe.log("A（デザインレイヤ）を作れた: 型=" + std::to_string(gSDK->GetObjectTypeN(a)));
-	try
-	{
-		VWParametricObj obj(a);
-		probe.log("A の PIO 名=" + ProbeToStd(obj.GetParametricName()) +
-				  " ローカライズ名=" + ProbeToStd(obj.GetLocalizedParametricName()) +
-				  " 内部 ID=" + std::to_string(static_cast<int>(obj.GetInternalID())));
-	}
-	catch (...)
-	{
-		probe.log("A: VWParametricObj が例外（PIO として扱えない）");
-	}
-
-	const std::vector<ProbeParamRow> paramsA = ProbeReadParams(a);
-	probe.log("A のパラメータ件数: " + std::to_string(paramsA.size()));
-	for (size_t i = 0; i < paramsA.size(); ++i)
-	{
-		const ProbeParamRow& row = paramsA[i];
-		probe.log("  [" + std::to_string(i) + "] " + row.name + " / " + row.localized +
-				  " 欄型=" + std::to_string(row.style) + " 値=〈" + row.value + "〉");
-	}
-	ProbeLogPlace(probe, "A", a);
-	probe.log("A が描いた文字: " + ProbeTextsOf(a));
-
-	// ポップアップ欄（8）・ラジオ欄（9）の選択肢を出す。「基準」「表示の種類」のような
-	// 欄が何を選べるかは、これで分かる。
-	for (const ProbeParamRow& row : paramsA)
-	{
-		if (row.style != 8 && row.style != 9)
-			continue;
-		std::string choices;
-		for (Sint32 idx = 0; idx < 24; ++idx)
-		{
-			TXString choice;
-			if (!gSDK->GetLocalizedPluginChoice(TXString(pioName.c_str()),
-												TXString(row.name.c_str()), idx, choice))
-				break;
-			if (!choices.empty())
-				choices += " / ";
-			choices += std::to_string(idx) + ":" + ProbeToStd(choice);
-		}
-		probe.log("  選択肢 " + row.name + ": " + (choices.empty() ? "(取れず)" : choices));
-	}
-
-	// レベルオブジェクトが「何かに拘束されているか」を見る口が SDK にある
-	// （IMarkersPluginSupport::IsElevationBenchmarkConstrained）。ストーリ／断面との
-	// 関連付けがここに出るなら、注釈へ置いた個体との差になって現れるはず。
-	using namespace VectorWorks::Extension;
-	IMarkersPluginSupportPtr markers(IID_MarkersPluginSupport);
-	if (markers)
-		probe.log(std::string("A の拘束: IsElevationBenchmarkConstrained=") +
-				  (markers->IsElevationBenchmarkConstrained(a) ? "true" : "false"));
-	else
-		probe.log("IMarkersPluginSupport を取得できなかった（拘束は見られない）");
-
-	// =========================================================================
-	// 2) 断面ビューポートを作る
-	// =========================================================================
-	// 断面に何か映るように、壁を 1 枚置く（高さは既定のまま）。
+	// 断面に何か映るように壁を 1 枚置く。
 	const MCObjectHandle wall = gSDK->CreateWall(WorldPt(-2000, 0), WorldPt(2000, 0), 200);
 	probe.log(std::string("試験用の壁: ") + (wall != nil ? "作れた" : "作れなかった"));
 
@@ -341,18 +429,6 @@ VW_PROBE("section-vp-elevation-benchmark", "断面ビューポートの注釈へ
 		probe.fail("CreateLayer(…, 2) が nil を返した（シートレイヤを作れない）");
 		return;
 	}
-	{
-		TVariableBlock value;
-		Sint16 layerType = 0;
-		if (gSDK->GetObjectVariable(sheet, 154 /* ovLayerType */, value) &&
-			value.GetSint16(layerType))
-			probe.log("作ったレイヤの種類（ovLayerType。1=デザイン 2=シート）: " +
-					  std::to_string(static_cast<int>(layerType)));
-		else
-			probe.log("作ったレイヤの種類（ovLayerType）: 読めなかった");
-	}
-
-	// 断面線は Y=0 の通りを横切る向きに引き、見る側は +Y 側。
 	const MCObjectHandle vp = gSDK->CreateSectionViewport(WorldPt(-3000, 0), WorldPt(3000, 0),
 														  WorldPt(0, 3000), 0, -1000, 10000, sheet);
 	if (vp == nil)
@@ -363,176 +439,9 @@ VW_PROBE("section-vp-elevation-benchmark", "断面ビューポートの注釈へ
 	probe.log("断面ビューポートを作れた: 型=" + std::to_string(gSDK->GetObjectTypeN(vp)));
 	gSDK->UpdateViewport(vp);
 
-	// =========================================================================
-	// 3) 注釈へ高さ違いで 3 本置く（注釈空間の Y＝Z）
-	// =========================================================================
-	static const double kTargetY[] = {0.0, 2800.0, 5600.0};
-	MCObjectHandle placed[3] = {nil, nil, nil};
-	for (int i = 0; i < 3; ++i)
-	{
-		gSDK->SetCurrentLayer(designLayer);
-		MCObjectHandle h = gSDK->CreateCustomObject(pioName, WorldPt(1000, kTargetY[i]), 0.0);
-		if (h == nil)
-		{
-			probe.fail("注釈用の " + std::to_string(i) +
-					   " 本目を作れなかった"
-					   "（CreateCustomObject が nil）");
-			continue;
-		}
-		if (!gSDK->AddViewportAnnotationObject(vp, h))
-		{
-			probe.fail("AddViewportAnnotationObject が false を返した（" + std::to_string(i) +
-					   " 本目）");
-			continue;
-		}
-		// 注釈へ移すと VW がどこへ落とすかは当てにできない（Findings「Data Tags」）ので、
-		// 注釈空間での座標を明示的に書き直す。
-		try
-		{
-			VWParametricObj obj(h);
-			obj.SetPointObjectPos(VWPoint2D(1000.0, kTargetY[i]));
-		}
-		catch (...)
-		{
-			probe.log(std::to_string(i) + " 本目: SetPointObjectPos が例外");
-		}
-		gSDK->ResetObject(h);
-		placed[i] = h;
-	}
-	gSDK->UpdateViewport(vp);
+	BmRunBattery(probe, "Elevation Benchmark2", vp, designLayer);
+	BmRunBattery(probe, "Elevation Benchmark", vp, designLayer);
 
-	for (int i = 0; i < 3; ++i)
-	{
-		if (placed[i] == nil)
-			continue;
-		const std::string tag = "注釈 Y=" + ProbeNum(kTargetY[i]);
-		ProbeLogPlace(probe, tag, placed[i]);
-		probe.log(tag + " が描いた文字: " + ProbeTextsOf(placed[i]));
-		if (markers)
-			probe.log(tag + " の拘束: " +
-					  (markers->IsElevationBenchmarkConstrained(placed[i]) ? "true" : "false"));
-		ProbeLogDiff(probe, tag + " と A の差", paramsA, ProbeReadParams(placed[i]));
-	}
-
-	// =========================================================================
-	// 4) 置いた 1 本を上げる（Y=5600 → 7000）。表示が追うか。
-	// =========================================================================
-	if (placed[2] != nil)
-	{
-		const std::vector<ProbeParamRow> before = ProbeReadParams(placed[2]);
-		gSDK->MoveObject(placed[2], 0, 1400 /* 5600 → 7000 */);
-		gSDK->ResetObject(placed[2]);
-		gSDK->UpdateViewport(vp);
-		ProbeLogPlace(probe, "移動後（狙いは Y=7000）", placed[2]);
-		probe.log("移動後が描いた文字: " + ProbeTextsOf(placed[2]));
-		ProbeLogDiff(probe, "移動の前後", before, ProbeReadParams(placed[2]));
-	}
-
-	// =========================================================================
-	// 5) 文字欄の総当たり——表示名（"GL"）を書く口はどれか
-	//    欄型 4（kFieldText）の欄ごとに 1 本ずつ注釈へ置き、目印を書いて描き直し、
-	//    **描かれた文字に目印が出たか**で判定する。
-	// =========================================================================
-	probe.log("--- 文字欄（欄型 4）に書いて、絵に出るかを見る ---");
-	int textTried = 0;
-	for (const ProbeParamRow& row : paramsA)
-	{
-		if (row.style != 4)
-			continue;
-		if (++textTried > 12)
-		{
-			probe.log("文字欄が 12 件を超えたので打ち切る");
-			break;
-		}
-		gSDK->SetCurrentLayer(designLayer);
-		MCObjectHandle h = gSDK->CreateCustomObject(pioName, WorldPt(2000, 2800), 0.0);
-		if (h == nil || !gSDK->AddViewportAnnotationObject(vp, h))
-		{
-			probe.log("  " + row.name + ": 個体を作れなかった");
-			continue;
-		}
-		const std::string mark = "GLしるし";
-		try
-		{
-			VWParametricObj obj(h);
-			obj.SetPointObjectPos(VWPoint2D(2000.0, 2800.0));
-			obj.SetParamString(TXString(row.name.c_str()), TXString(mark.c_str()));
-			gSDK->ResetObject(h);
-			const std::string readBack =
-				ProbeToStd(obj.GetParamAsString(TXString(row.name.c_str())));
-			probe.log("  " + row.name + ": 読み戻し=〈" + readBack +
-					  "〉 描かれた文字=" + ProbeTextsOf(h));
-		}
-		catch (...)
-		{
-			probe.log("  " + row.name + ": 書き込みで例外");
-		}
-		gSDK->DeleteObject(h, true);
-	}
-	gSDK->UpdateViewport(vp);
-
-	// =========================================================================
-	// 6) 真偽欄の総当たり——高さの数値を出さない設定はどれか
-	//    欄型 2（kFieldBoolean）の欄ごとに 1 本ずつ置いて反転し、描かれた文字の変化を見る。
-	// =========================================================================
-	probe.log("--- 真偽欄（欄型 2）を反転して、絵の文字がどう変わるかを見る ---");
-	std::string baselineTexts;
-	{
-		gSDK->SetCurrentLayer(designLayer);
-		MCObjectHandle h = gSDK->CreateCustomObject(pioName, WorldPt(3000, 2800), 0.0);
-		if (h != nil && gSDK->AddViewportAnnotationObject(vp, h))
-		{
-			try
-			{
-				VWParametricObj obj(h);
-				obj.SetPointObjectPos(VWPoint2D(3000.0, 2800.0));
-			}
-			catch (...)
-			{
-			}
-			gSDK->ResetObject(h);
-			baselineTexts = ProbeTextsOf(h);
-			probe.log("  反転なしの基準: " + baselineTexts);
-			gSDK->DeleteObject(h, true);
-		}
-	}
-	int boolTried = 0;
-	for (const ProbeParamRow& row : paramsA)
-	{
-		if (row.style != 2)
-			continue;
-		if (++boolTried > 24)
-		{
-			probe.log("真偽欄が 24 件を超えたので打ち切る");
-			break;
-		}
-		gSDK->SetCurrentLayer(designLayer);
-		MCObjectHandle h = gSDK->CreateCustomObject(pioName, WorldPt(3000, 2800), 0.0);
-		if (h == nil || !gSDK->AddViewportAnnotationObject(vp, h))
-		{
-			probe.log("  " + row.name + ": 個体を作れなかった");
-			continue;
-		}
-		try
-		{
-			VWParametricObj obj(h);
-			obj.SetPointObjectPos(VWPoint2D(3000.0, 2800.0));
-			const TXString uname(row.name.c_str());
-			const bool was = obj.GetParamBool(uname);
-			obj.SetParamBool(uname, !was);
-			gSDK->ResetObject(h);
-			const std::string texts = ProbeTextsOf(h);
-			probe.log("  " + row.name + " (" + row.localized + "): " + (was ? "true" : "false") +
-					  "→" + (!was ? "true" : "false") + " 文字=" + texts +
-					  (texts == baselineTexts ? "（基準と同じ）" : "（基準と違う）"));
-		}
-		catch (...)
-		{
-			probe.log("  " + row.name + ": 反転で例外");
-		}
-		gSDK->DeleteObject(h, true);
-	}
-	gSDK->UpdateViewport(vp);
-
+	probe.log("");
 	probe.log("おわり（図面には試験用のシートレイヤ・断面ビューポート・壁が残る）");
 }
