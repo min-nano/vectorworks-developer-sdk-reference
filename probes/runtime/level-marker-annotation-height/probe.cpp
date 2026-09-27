@@ -279,7 +279,7 @@ namespace
 	// レベルオブジェクトが 1 つも無い図面（＝新規の空図面）で走らせたときに、
 	// **UI でレベル基準線を 1 本置ける状態まで用意する**。ここまでは SDK で作れるので、
 	// 利用者に頼むのは「ツールで 1 本置いて、もう一度走らせる」だけで済む。
-	void LmBuildScaffolding(vwprobe::Report& probe)
+	MCObjectHandle LmBuildScaffolding(vwprobe::Report& probe)
 	{
 		probe.log("--- 下ごしらえ: ストーリ 2 つ・壁・断面ビューポートを作る ---");
 
@@ -339,31 +339,97 @@ namespace
 		if (sheet == nil)
 		{
 			probe.log("  シートレイヤを作れなかった");
-			return;
+			return nil;
 		}
 		MCObjectHandle viewport = gSDK->CreateSectionViewport(
 			WorldPt(-1000, -1500), WorldPt(7000, -1500), WorldPt(0, 3000), 0, -1000, 7000, sheet);
 		if (viewport == nil)
 		{
 			probe.log("  断面ビューポートを作れなかった");
-			return;
+			return nil;
 		}
 		TVariableBlock beyond;
-		beyond.SetBoolean(true); // 真偽は SetBoolean で入れる（operator= は型が衝突する）
+		beyond = static_cast<Boolean>(true); // TVariableBlock に setter は無い（operator= で書く）
 		gSDK->SetObjectVariable(viewport, 1064, beyond);
 		VWFC::VWObjects::VWViewportObj(viewport).SetRenderType(renderFinalHiddenLine);
 		gSDK->UpdateViewport(viewport);
 		gSDK->SetCurrentLayer(sheet);
 		probe.log("  断面ビューポートを作った（シートレイヤ〈" + LmObjectName(sheet) + "〉の上）");
 
+		return viewport;
+	}
+
+	// SDK だけで作った文書（上の下ごしらえ）で、**3 つ組が注釈の高さを解決するか**を見る。
+	// 実機の図面（UI が作った断面ビューポート）では解決したので、ここで解決しなければ
+	// 差はビューポートの側にある——という切り分けのための実験。
+	void LmRunSdkOnlyExperiment(vwprobe::Report& probe, MCObjectHandle viewport)
+	{
+		if (viewport == nil)
+			return;
+
+		gSDK->DefineCustomObject(kLmBenchmark2, kCustomObjectPrefNever);
+
+		// --- A: SDK が作った断面ビューポートの注釈へ置いて 3 つ組 ---
+		probe.log("--- A: SDK 製の断面ビューポートの注釈へ置いて 3 つ組を書く ---");
+		MCObjectHandle marker = gSDK->CreateCustomObject(kLmBenchmark2, WorldPt(0, 0), 0.0);
+		if (marker == nil)
+		{
+			probe.fail("CreateCustomObject が nil を返した");
+			return;
+		}
+		gSDK->AddViewportAnnotationObject(viewport, marker);
+		VWFC::VWObjects::VWParametricObj(marker).SetPointObjectPos(VWPoint2D(0, 2800));
+		VWFC::VWObjects::VWParametricObj(marker).SetParamValue("__StoryName", "2 階");
+		VWFC::VWObjects::VWParametricObj(marker).SetParamValue("__LevelTypeName", "FL");
+		VWFC::VWObjects::VWParametricObj(marker).SetParamValue("Datum", "StoryLevel");
+		gSDK->ResetObject(marker);
+		LmLogStep(probe, marker, "注釈（Y=2800）＋ 3 つ組");
+
+		// --- B: このビューポートがストーリのレイヤを表示しているか ---
+		probe.log("--- B: ビューポートの表示レイヤ ---");
+		std::vector<MCObjectHandle> layers;
+		gSDK->ForEachLayerN(
+			[&layers](MCObjectHandle h)
+			{
+				if (h != nil)
+					layers.push_back(h);
+			});
+		for (size_t i = 0; i < layers.size(); ++i)
+		{
+			short visibility = -1;
+			const bool got = gSDK->GetViewportLayerVisibility(viewport, layers[i], visibility);
+			probe.log("  レイヤ〈" + LmObjectName(layers[i]) + "〉 読めた=" +
+					  (got ? "true" : "false") + " 表示=" + std::to_string(visibility) +
+					  " ストーリ=" + (gSDK->GetStoryOfLayer(layers[i]) == nil ? "無し" : "有り"));
+		}
+
+		// --- C: 全レイヤを表示にして更新してから、もう一度読む ---
+		probe.log("--- C: 全レイヤを表示にして更新してから読み直す ---");
+		for (size_t i = 0; i < layers.size(); ++i)
+			gSDK->SetViewportLayerVisibility(viewport, layers[i], 0); // 0 = 表示
+		gSDK->UpdateViewport(viewport);
+		gSDK->ResetObject(marker);
+		LmLogStep(probe, marker, "全レイヤ表示＋更新の後");
+
+		// --- D: 参考——同じ 3 つ組を、注釈の外（シートレイヤ・ストーリ従属レイヤ）で ---
+		probe.log("--- D: 参考（注釈の外）---");
+		MCObjectHandle sheet = gSDK->GetViewportGroupParent(viewport);
+		if (sheet == nil)
+			sheet = gSDK->GetCurrentLayer();
+		MCObjectHandle onSheet = gSDK->CreateCustomObject(kLmBenchmark2, WorldPt(0, 0), 0.0);
+		if (onSheet != nil)
+		{
+			VWFC::VWObjects::VWParametricObj(onSheet).SetParamValue("__StoryName", "2 階");
+			VWFC::VWObjects::VWParametricObj(onSheet).SetParamValue("__LevelTypeName", "FL");
+			VWFC::VWObjects::VWParametricObj(onSheet).SetParamValue("Datum", "StoryLevel");
+			gSDK->ResetObject(onSheet);
+			LmLogStep(probe, onSheet, "いまのレイヤへ直に置いて 3 つ組");
+		}
+
 		probe.log("");
-		probe.log("**次にしてほしいこと（これで最後）**");
-		probe.log("  1. いま開いているシートレイヤの断面ビューポートを右クリック →〈注釈を編集〉");
-		probe.log("  2. **レベル基準線ツール**で、注釈の中に 1 本置く"
-				  "（測定基準でストーリレベルを選び、`FL-2 階 2800` のように名前と高さが"
-				  "出る状態にする）");
-		probe.log("  3. 注釈の編集を終えて、**このプローブをもう一度走らせる**");
-		probe.log("     ——そこから先は自動で、UI 製と SDK 製の全欄を突き合わせる");
+		probe.log("この後、**UI のツールでも 1 本置いて、もう一度このプローブを走らせる**と、"
+				  "UI 製と SDK 製の全欄を突き合わせます"
+				  "（断面ビューポートを右クリック →〈注釈を編集〉→ レベル基準線ツール）。");
 	}
 
 	void LmDumpMarker(vwprobe::Report& probe, const LmFoundMarker& found, const std::string& tag)
@@ -442,7 +508,7 @@ VW_PROBE("level-marker-annotation-height",
 		// 「ツールで 1 本置いて、もう一度走らせる」だけにする。
 		probe.log("レベルオブジェクトが 1 つも無い図面だった"
 				  "（UI でレベル基準線を置いた図面を開いて走らせても、そのまま突き合わせる）。");
-		LmBuildScaffolding(probe);
+		LmRunSdkOnlyExperiment(probe, LmBuildScaffolding(probe));
 		return;
 	}
 
