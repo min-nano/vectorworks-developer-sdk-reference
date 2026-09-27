@@ -5,31 +5,60 @@
 実機確認（VW 2026 / mac）による。断面ビューポートそのものの作り方は
 [Viewports](Viewports.md)、注釈空間の座標は [Data Tags](Data%20Tags.md) にある。
 
+> **【訂正の記録】#131 でマージした 2 つの結論は誤りだった**（issue #130 を開き直して
+> 取り直した）。「ストーリレベルへの関連付けは SDK からできない」「レベル基準線には
+> 名前を書く口が無い」——**どちらもできる**。誤りの元は、`Datum` という**ポップアップ欄
+> 単体で関連付けを選ぶ**と思い込んだこと（実際は内部の 2 欄と合わせた**3 つ組**）と、
+> 名前を**パラメータ**で探したこと（実際は**マーカーレイアウト**が出す）。
+> 正しい内容は下記の各節にある。
+
 ## 先に結論
 
-**断面ビューポートの注釈に「名前＋高さ」を出すなら、レガシーの `Elevation Benchmark`
-（レベル（横断面）（レガシー））を使う。** 現行の `Elevation Benchmark2`（レベル基準線）は
-高さは出せるが、**名前を書く口が SDK から無い**（`Note` も前後記号もカスタム文字も絵に
-出ない。下記）。
+**断面ビューポートの注釈にも「名前＋高さ」は出せる。オブジェクトは 2 つとも使えて、
+名前の出し方が違う。**
+
+### 現行の `Elevation Benchmark2`（レベル基準線）——名前はレイアウトかストーリレベル
 
 ```cpp
-gSDK->DefineCustomObject("Elevation Benchmark", kCustomObjectPrefNever);  // 何かを作る前に 1 度
-MCObjectHandle h = gSDK->CreateCustomObject("Elevation Benchmark", WorldPt(x, y), 0.0);
+gSDK->DefineCustomObject("Elevation Benchmark2", kCustomObjectPrefNever);  // 作る前に 1 度
+MCObjectHandle h = gSDK->CreateCustomObject("Elevation Benchmark2", WorldPt(x, y), 0.0);
 gSDK->AddViewportAnnotationObject(hSectionVP, h);
 VWParametricObj obj(h);
-obj.SetPointObjectPos(VWPoint2D(x, y));              // 注釈空間の座標（横＝断面線からの距離、縦＝Z）
-obj.SetParamValue("Title", "1FL");                   // 名前。そのまま絵に出る
-obj.SetParamValue("Elevation Display",
-				  "Y value relative to reference elevation");  // 高さは注釈の Y から読む
-obj.SetParamValue("DatumY", "0");                    // 基準（この値を引いた数値が出る）
+obj.SetPointObjectPos(VWPoint2D(x, y));        // 注釈空間の座標（横＝断面線からの距離、縦＝Z）
+obj.SetParamValue("Axis", "YAxis2DMode");      // 高さは注釈の Y（＝Z）から読む
+gSDK->ResetObject(h);
+
+// 名前は 2 通り。(a) ストーリレベルへ結ぶ（レベル名が自動で出る）
+obj.SetParamValue("__StoryName", "2 階");
+obj.SetParamValue("__LevelTypeName", "FL");    // → 描かれる名前が 〈FL-2 階〉 になる
+// (b) マーカーレイアウトのテキストを作り直して渡し直す（任意の固定文字。下記）
 gSDK->ResetObject(h);
 ```
 
-数値を出さずに名前だけにしたいなら `Elevation Display` を `Custom` にして `Elevation`
-（文字欄）を空にする。数値も自分で決めたいならそこへ `"+2800"` のように書く。
+### レガシーの `Elevation Benchmark`（レベル（横断面）（レガシー））——名前はパラメータ
 
-**ストーリレベルとの関連付けは SDK からはできない**（`Datum` ＝ `StoryLevel` は書いても
-戻される。下記）ので、高さは注釈の Y から読ませ、名前は自分で書く。
+```cpp
+gSDK->DefineCustomObject("Elevation Benchmark", kCustomObjectPrefNever);
+MCObjectHandle h = gSDK->CreateCustomObject("Elevation Benchmark", WorldPt(x, y), 0.0);
+gSDK->AddViewportAnnotationObject(hSectionVP, h);
+VWParametricObj obj(h);
+obj.SetPointObjectPos(VWPoint2D(x, y));
+obj.SetParamValue("Title", "1FL");             // 名前。そのまま絵に出る
+obj.SetParamValue("Elevation Display",
+				  "Y value relative to reference elevation");  // 高さは注釈の Y から読む
+obj.SetParamValue("DatumY", "0");              // 基準（この値を引いた数値が出る）
+gSDK->ResetObject(h);
+```
+
+数値を出さずに名前だけにしたいなら、レガシーは `Elevation Display` ＝ `Custom` ＋
+`Elevation`（文字欄）を空に。レベル基準線はレイアウトのテキストを差し替える。
+
+**どちらも既定では注釈の Y を読まない**（高さが `0` のままになる）ので、上の
+`Axis` / `Elevation Display` の 1 行を必ず入れる。
+
+**ただしレベル基準線では、`Axis`＝`YAxis2DMode` と「ストーリレベルへの関連付け」は
+両立しない**（関連付けが外れる。下記）。注釈で名前と高さを両方出すなら、名前は
+**マーカーレイアウトの固定文字**にするか、**レガシーを使う**。
 
 ## どのオブジェクトか（VW 2026 には 3 つある）
 
@@ -96,7 +125,9 @@ Y=0 / 2800 / 5600 へ置いても描かれる高さは **3 本とも `0`** で�
 
 ## 名前（表示名）を書く口
 
-- **レガシーの `Title`（タイトル）は、書いた文字がそのまま絵に出る**（実測）。
+### レガシー（`Elevation Benchmark`）
+
+- **`Title`（タイトル）は、書いた文字がそのまま絵に出る**（実測）。
   位置は `TitleOrient` の 4 択（ただし `Above Marker` は入らない。下記）。
 - **`Elevation Display` ＝ `Custom` にすると、`Elevation`（文字欄）がそのまま
   高さの位置に出る。** 空にすれば数値は出ない。実測:
@@ -107,12 +138,38 @@ Y=0 / 2800 / 5600 へ置いても描かれる高さは **3 本とも `0`** で�
   | `Custom` ＋ `Elevation`＝`GL` ＋ `Title`＝空 | 〈 〉〈GL〉 |
   | `Custom` ＋ `Elevation`＝`+2800` ＋ `Title`＝`2FL` | 〈2FL〉〈+2800〉 |
 
-- **レベル基準線には名前を書く口が無い。** `Note`（備考）・`EPfx`（高さの前記号）・
-  `ESfx`（高さの後記号）へ書いても**絵には出ない**（欄には入る）。
-  **`Datum` ＝ `Custom` ＋ `CustElev` も同じで、`Elevation` 欄には `GL` が入るのに
-  描かれる文字は `0` のまま**（`Axis` の両方で、`ResetObject` を 2 度掛けても変わらず）。
-  絵の中の名前らしき文字はレイアウトのトークン `#STLT#-#STPS#`（ストーリレベル名）で、
-  これはストーリ従属のデザインレイヤに置いたときだけ埋まる（下記）。
+### レベル基準線（`Elevation Benchmark2`）——**パラメータではなくレイアウトが出す**
+
+名前を出す道は 2 つある。**どちらもパラメータではない**ので、`Note`（備考）・
+`EPfx` / `ESfx`（高さの前後記号）・`CustElev`（高さ（カスタム））をいくら書いても
+絵は変わらない（欄には入る。実測）。
+
+1. **ストーリレベルへ結ぶ**と、レベル名（`FL-2 階` のような「レベル種別-ストーリ」）が
+   自動で出る（下記「ストーリ…」）。
+2. **マーカーレイアウトのテキストを差し替える**と、任意の固定文字が出る（下記）。
+
+### マーカーレイアウトを差し替えて任意の名前を出す
+
+**レイアウトの実体は PIO 自身のプロファイルグループ**（`ISDK::GetCustomObjectProfileGroup` /
+`SetCustomObjectProfileGroup`。[Data Tags](Data%20Tags.md) のタグレイアウトと同じ作り）。
+実測した中身（型は `Objs.TDType.h`）:
+
+```
+プロファイルグループ: 型=11（グループ）
+  中身の型: 10（テキスト）/ 10（テキスト）/ 21 / 0
+  テキスト: 〈#Elev#〉（高さ）と 〈#STLT#-#STPS#〉（ストーリレベル名）＝**動的テキスト**
+```
+
+**差し替えは「新しいテキストを作ってグループへ入れ、`SetObjectProfileGroup` で渡し直す」。
+中身を入れ替えるだけでは絵に出ない**（実測。データタグの「中身を入れてから渡す」と同じ筋）:
+
+| 手 | レイアウトの中身 | **描かれた文字** |
+| --- | --- | --- |
+| `DeleteText` ＋ `AddTextFromBuffer` で中身を入れ替えるだけ | 〈#Elev#〉〈GL〉 | 〈2800〉〈**-**〉（**変わらない**） |
+| 古いテキストを消し、`CreateTextBlock` ＋ `AddObjectToContainer` で入れて**渡し直す** | 〈#Elev#〉〈GL〉 | 〈2800〉〈**GL**〉 |
+
+つまり**断面ビューポートの注釈でも「▼GL ＋ 高さ」を出せる**——高さは `Axis`＝
+`YAxis2DMode` で注釈の Y から、名前はレイアウトの固定文字から。
 
 ## 単位・丸め（レベル基準線）
 
@@ -139,32 +196,60 @@ Y=0 / 2800 / 5600 へ置いても描かれる高さは **3 本とも `0`** で�
 
 ## ストーリ／ストーリレベルとの関連付け
 
-**`Datum` ＝ `StoryLevel`（ストーリレベル）は SDK からは書けない。** ストーリを 2 つ
-（1 階＝0 / 2 階＝2800）作った文書で、**ストーリ従属のデザインレイヤ**に置いた個体でも、
-**断面ビューポートの注釈**に置いた個体でも、書くと読み戻しは **`GroundPlane`** になった
-（`Axis` は既定の `ZAxis3DMode` のまま。両方で同じ）。**置き場所の問題ではない**ので、
-「注釈だから紐づかない」ではなく「この欄は SDK からは倒せない」と読む。
+**関連付けは `Datum`（測定基準）で選ぶものではない。** 選ぶ口は 2 つある:
 
-一方で**ストーリとの連動そのものは、置き場所で決まる**:
+1. **ストーリ従属のデザインレイヤに置く**——**何も書かなくても関連付く**。
+2. **`__StoryName` ＋ `__LevelTypeName` ＋ `Datum`＝`StoryLevel` の 3 つを書く**
+   ——注釈の中でも効く（書く順番は問わない）。**3 つ揃って初めて効く**のが要点で、
+   `Datum` 単独だと `GroundPlane` へ倒され、名前欄だけだと `Datum` は
+   `UserReference` のまま名前も出ない（どちらも実測）。
 
-| 置いた場所 | 描かれた高さ（`Datum` を書かない素のまま） | 絵に出るストーリレベル名 |
-| --- | --- | --- |
-| ストーリ従属のデザインレイヤ（2 階・高さ 2800） | `2800` | **`FL-2 階`**（自動で出る） |
-| 断面ビューポートの注釈（Y=2800） | `0` | `-`（紐づかない） |
+実測（ストーリ 1 階＝0 / 2 階＝2800、レベル種別 `FL` の文書）:
 
-- **デザインレイヤに置けば、`Datum` を何も書かなくてもストーリレベル名が絵に出る**
-  （レイアウトのトークン `#STLT#-#STPS#` が解決される）。**注釈に置いた個体では最後まで
-  `-` のまま**で、どの `Datum` でも埋まらなかった。`__StoryName` / `__LevelTypeName` は
-  どちらの場所でも空のままで、書いても絵は変わらない。
-- **断面ビューポートの注釈では、Z を見る測定はすべて `0` になる**（`GroundPlane` /
-  `DesignLayerZ` / 素のまま、いずれも 0）。注釈空間に Z が無いためで、**注釈で高さを
-  出す道は「注釈の Y を読ませる」ことだけ**（上記の表）。
-- デザインレイヤに置いた個体では `DesignLayerZ` だけ `0` になった（レイヤの Z を基準に
-  するので、レイヤ原点からの高さ）。`GroundPlane` / `UserReference` は `2800`。
+| 置いた場所 | 書いたもの | `Datum` の読み戻し | 描かれた高さ | 描かれた名前 |
+| --- | --- | --- | --- | --- |
+| ストーリ従属のデザインレイヤ（2 階） | **何も書かない** | `UserReference`（既定のまま） | `2800` | **`FL-2 階`** |
+| 断面ビューポートの注釈（Y=2800） | 何も書かない | `UserReference` | `0` | `-` |
+| 断面ビューポートの注釈（Y=2800） | `__StoryName` ＋ `__LevelTypeName` ＋ `Datum`＝`StoryLevel` | **`StoryLevel`** | `0`（**埋まらない**） | **`FL-2 階`** |
+| 断面ビューポートの注釈（Y=2800） | 名前欄 2 つだけ（`Datum` を書かない） | `UserReference` | `0` | `-`（**出ない**） |
+| シートレイヤへ直に置く | 名前欄 2 つだけ | `UserReference` | **`2800`**（レベルの高さ） | `-` |
 
-**したがって「レベルオブジェクトをストーリレベルへ関連付けて、断面の高さに追従させる」
-ことは SDK からはできない。** 断面注釈では高さを注釈の Y から読ませ、名前は自分で
-書く（レガシーの `Title`）。
+- **ストーリの高さを変えると、デザインレイヤの個体は追う**（2800 → 3500 に変えたら
+  描かれた高さも `3500`）。
+- **`Datum` へ `StoryLevel` と書くだけでは入らない**（`GroundPlane` になる）——名前欄が
+  埋まっているときだけ入る。
+- **`Datum` に動的な選択肢は無い。** 実機の OIP は「測定基準」に `FL`（レベル種別名）を
+  見せるが、`VWParametricObj::PopupGetChoices`（欄名版・欄索引版とも）は **0 件**を返す
+  ——あの一覧はプラグインの UI が実行時に組んでいて、レコードには入っていない。
+  `Datum` へ `FL` や `GL` と書いても `GroundPlane` に倒される。
+### 断面ビューポートの注釈では、名前と高さは両立しない
+
+**注釈に置いた個体では、「ストーリレベル名を出す」と「高さを出す」が排他になる**（実測）:
+
+| 書いたもの | `Datum` | 描かれた高さ | 描かれた名前 |
+| --- | --- | --- | --- |
+| 3 つ組 | `StoryLevel` | **`0`** | **`FL-2 階`** |
+| 3 つ組 ＋ `Axis`＝`YAxis2DMode` | `UserReference` | `2800` / `5600`（注釈の Y） | **`-`** |
+
+**`Axis` を `YAxis2DMode` にすると関連付けが外れる**——`__StoryName` / `__LevelTypeName` が
+**空に戻り**、`Datum` も `UserReference` に戻る。**書く順を変えても同じ**（`Axis` を先に
+書いても後に書いても、結果は上の表のとおり）。
+
+**注釈で「名前＋高さ」を両方出したいなら、次のどちらかにする:**
+
+1. **レベル基準線 ＋ `Axis`＝`YAxis2DMode`（高さ）＋ マーカーレイアウトの差し替え（名前）**
+   ——名前は固定文字になる（ストーリレベルには追従しない）。
+2. **レガシーの `Elevation Benchmark`** ——`Title`（名前）と `Elevation Display`（高さ）は
+   互いに干渉しない。
+
+**シートレイヤへ直に置いた個体（注釈ではない）なら両立する**——3 つ組で `Datum` が
+`StoryLevel` になり、**高さ `2800`（レベルの高さ）と名前 `FL-2 階` が同時に出た**。
+注釈空間だけが Z を持たないことによる差である。
+
+- なお実機の UI で注釈へ置いた個体は、`Z軸（3Dモード）`のまま高さを出している。
+  **SDK から同じ状態を作る道は見つかっていない**（このプローブで作った個体は 0 のまま）
+  ——ツールが他の欄も埋めているものと思われる【推定】。切り出した調査は
+  [issue #135](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/135)。
 
 ## 拘束（`IsElevationBenchmarkConstrained`）
 

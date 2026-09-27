@@ -4,6 +4,25 @@
 - **高さは壁専用の `SetWallOverallHeights`**（`SStoryObjectData` 2 つ）で与える。汎用の
   `SetObjectStoryBound` では壁の高さ基準が確定せず、**デザインレイヤの「壁の高さ」設定に
   従ってしまう**（構造材・スラブでは効くが、壁だけは専用関数が要る）。
+- **`CreateWall` が建てた壁は、新規の空図面では高さ 0 になる。** 実測で、建てた直後に
+  `GetWallOverallHeights` を読むと**上 `0.00` / 下 `0.00`（差 0mm）**だった——`CreateWall`
+  は壁厚しか引数に取らず、高さはデザインレイヤの「壁の高さ」設定に従うので、その設定が
+  無い図面では 0 のまま**高さ 0 の板**ができる。
+  - **平面では気付けない。** `GetObjectBounds` は 2D の footprint（長さ×壁厚）を返すので、
+    高さ 0 でも「壁がある」ように見える。**断面ビューポートに何も写らなくて初めて気付いた。**
+  - **建てたら必ず高さを与える。** `SetWallOverallHeights` は `true` を返し、読み戻しでも
+    与えた値（実測: 上 `2800.00` / 下 `0.00`）が入る。
+    ```cpp
+    VectorWorks::SStoryObjectData bottomData;
+    bottomData.fBound = VectorWorks::eStoryObjectBound_LayerElevation;
+    bottomData.fBoundStory = 0;
+    bottomData.fOffset = 0.0;
+
+    VectorWorks::SStoryObjectData topData = bottomData;
+    topData.fOffset = 2800.0;   // 高さ 2800mm
+
+    gSDK->SetWallOverallHeights(wall, bottomData, topData);
+    ```
 - **`JoinWalls` の X（交差結合）は a の壁を交点で 2 本に分割する。** VW ヘルプにも
   「1 本目に選んだ壁が 2 本に分割され、2 本目へ結合される」とある。**バグではない**ので、
   結合後に壁の本数が増えるのは正常。ここから 2 つの規則が要る:
