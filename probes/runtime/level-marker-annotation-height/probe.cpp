@@ -172,7 +172,7 @@ namespace
 				  " 件数=" + std::to_string(count));
 		for (size_t i = 0; i < count; ++i)
 		{
-			const TObjectBoundID id = gSDK->GetObjectStoryBoundsAt(h, i);
+			const Sint32 id = gSDK->GetObjectStoryBoundsAt(h, i);
 			VectorWorks::SStoryObjectData data;
 			const bool got = gSDK->GetObjectStoryBound(h, id, data);
 			TXString choice;
@@ -186,9 +186,8 @@ namespace
 					  LmStr(choice) + "〉");
 		}
 		// 並んでいなくても、既知の ID を名指しで問い合わせてみる（-3 は PIO 用の汎用 ID）。
-		const TObjectBoundID knownIDs[] = {static_cast<TObjectBoundID>(-3),
-										   static_cast<TObjectBoundID>(0),
-										   static_cast<TObjectBoundID>(1)};
+		// TObjectBoundID は Sint32 の typedef（`ISDK.h`）。名前空間を跨がずに書くため素の型で持つ。
+		const Sint32 knownIDs[] = {-3, 0, 1};
 		std::string line = indent + "  名指しの HasObjectStoryBound:";
 		for (size_t i = 0; i < sizeof(knownIDs) / sizeof(knownIDs[0]); ++i)
 			line += " id=" + std::to_string(static_cast<int>(knownIDs[i])) + "→" +
@@ -445,7 +444,7 @@ VW_PROBE("level-marker-annotation-height",
 	{
 		for (size_t i = 0; i < uiBoundCount; ++i)
 		{
-			const TObjectBoundID id = gSDK->GetObjectStoryBoundsAt(target->fObject, i);
+			const Sint32 id = gSDK->GetObjectStoryBoundsAt(target->fObject, i);
 			VectorWorks::SStoryObjectData data;
 			if (!gSDK->GetObjectStoryBound(target->fObject, id, data))
 			{
