@@ -93,7 +93,8 @@ jobs:
       # ヘッダだけをトリムした SDK（scripts/fetch-vw-sdk.sh）。実プラグインのリポジトリ
       # と違いビルドはしないので、Lib / Tools は取り込まない（キャッシュも小さい）。
       VW_SDK_DIR: ${{ github.workspace }}/${{ inputs.platform == 'windows' && 'vw-sdk-win' || 'vw-sdk' }}
-      VW_SDK_CACHE_KEY: ${{ inputs.platform == 'windows' && 'vw-sdk-2026-NNA-win-headers-v1' || 'vw-sdk-2026-NNA-mac-headers-v1' }}
+      # キャッシュキーの前半。後半は配布中の SDK の版（ETag）で、scripts/vw-sdk-cache-key.sh が付ける。
+      VW_SDK_CACHE_PREFIX: ${{ inputs.platform == 'windows' && 'vw-sdk-2026-NNA-win-headers' || 'vw-sdk-2026-NNA-mac-headers' }}
       VW_SDK_URL: https://release.vectorworks.net/latest/Vectorworks/2026-NNA-eng-${{ inputs.platform == 'windows' && 'win' || 'mac' }}-SDK.zip
       # 入力は必ず環境変数として渡す（run: のスクリプト本文へ ${{ }} で展開しない）。
       MODE: ${{ inputs.mode }}
@@ -133,15 +134,23 @@ jobs:
           fi
           echo "need=$need" >> "$GITHUB_OUTPUT"
 
+      # キーに配布中の SDK の版を混ぜる。固定キーだと SDK が差し替わっても古い
+      # キャッシュがヒットし続け、古いヘッダを検索してしまう（scripts/vw-sdk-cache-key.sh）。
+      - name: Decide the SDK cache key
+        id: sdk-key
+        if: steps.sdk.outputs.need == 'yes'
+        run: scripts/vw-sdk-cache-key.sh "$VW_SDK_CACHE_PREFIX"
+
       # このリポジトリには SDK キャッシュを温める他のワークフローが無いので、restore
-      # 専用ではなく save もする通常の cache を使う（初回だけダウンロードが走り、
-      # 以後はヒットする）。
+      # 専用ではなく save もする通常の cache を使う（SDK の版ごとに初回だけダウンロードが
+      # 走り、以後はヒットする）。
       - name: Cache Vectorworks SDK headers
         if: steps.sdk.outputs.need == 'yes'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.VW_SDK_DIR }}
-          key: ${{ env.VW_SDK_CACHE_KEY }}
+          key: ${{ steps.sdk-key.outputs.key }}
+          restore-keys: ${{ steps.sdk-key.outputs.restore-keys }}
 
       # キャッシュミス時のみダウンロードし、ヒット時は検証だけして抜ける（その判断は
       # スクリプト側が $VW_SDK_DIR の中身を見て行うので、ここに cache-hit の分岐は
