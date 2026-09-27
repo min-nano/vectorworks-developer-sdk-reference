@@ -11,6 +11,12 @@
 > 単体で関連付けを選ぶ**と思い込んだこと（実際は内部の 2 欄と合わせた**3 つ組**）と、
 > 名前を**パラメータ**で探したこと（実際は**マーカーレイアウト**が出す）。
 > 正しい内容は下記の各節にある。
+>
+> **【訂正の記録 2】#133 でマージした「注釈では名前と高さは両立しない」も誤りだった**
+> （issue #135 で、**UI が置いた個体と SDK 製の個体を同じ図面で全欄突き合わせて**
+> 取り直した）。**3 つ組だけで両立する**——`Axis` は既定の `ZAxis3DMode` のままでよい。
+> 誤りの元は、**SDK だけで組み立てた文書で測って一般化したこと**（下記
+> 「注釈でも名前と高さは両立する」）。
 
 ## 先に結論
 
@@ -19,19 +25,27 @@
 
 ### 現行の `Elevation Benchmark2`（レベル基準線）——名前はレイアウトかストーリレベル
 
+**ストーリレベルへ結べるなら、それがいちばん良い**——名前も高さもストーリから来るので、
+階の高さを変えれば追う。
+
 ```cpp
 gSDK->DefineCustomObject("Elevation Benchmark2", kCustomObjectPrefNever);  // 作る前に 1 度
 MCObjectHandle h = gSDK->CreateCustomObject("Elevation Benchmark2", WorldPt(x, y), 0.0);
 gSDK->AddViewportAnnotationObject(hSectionVP, h);
 VWParametricObj obj(h);
-obj.SetPointObjectPos(VWPoint2D(x, y));        // 注釈空間の座標（横＝断面線からの距離、縦＝Z）
-obj.SetParamValue("Axis", "YAxis2DMode");      // 高さは注釈の Y（＝Z）から読む
-gSDK->ResetObject(h);
+obj.SetPointObjectPos(VWPoint2D(x, y));        // 注釈空間の座標（縦は**高さの数値に効かない**）
+obj.SetParamValue("__StoryName", "1階");       // ← この 3 つ組で「名前＋高さ」が両方出る
+obj.SetParamValue("__LevelTypeName", "FL");    //    （Axis は既定の ZAxis3DMode のまま）
+obj.SetParamValue("Datum", "StoryLevel");
+gSDK->ResetObject(h);                          // → 〈FL-1〉〈612〉（レベルの絶対高さ）
+```
 
-// 名前は 2 通り。(a) ストーリレベルへ結ぶ（レベル名が自動で出る）
-obj.SetParamValue("__StoryName", "2 階");
-obj.SetParamValue("__LevelTypeName", "FL");    // → 描かれる名前が 〈FL-2 階〉 になる
-// (b) マーカーレイアウトのテキストを作り直して渡し直す（任意の固定文字。下記）
+**ストーリを使っていない図面**では、高さを注釈の Y から読ませ、名前はレイアウトの
+固定文字にする（この 2 つは併用できる）。
+
+```cpp
+obj.SetParamValue("Axis", "YAxis2DMode");      // 高さは注釈の Y（＝Z）から読む
+// 名前はマーカーレイアウトのテキストを作り直して渡し直す（任意の固定文字。下記）
 gSDK->ResetObject(h);
 ```
 
@@ -53,12 +67,12 @@ gSDK->ResetObject(h);
 数値を出さずに名前だけにしたいなら、レガシーは `Elevation Display` ＝ `Custom` ＋
 `Elevation`（文字欄）を空に。レベル基準線はレイアウトのテキストを差し替える。
 
-**どちらも既定では注釈の Y を読まない**（高さが `0` のままになる）ので、上の
-`Axis` / `Elevation Display` の 1 行を必ず入れる。
+**ストーリレベルへ結ばないなら、どちらも既定では注釈の Y を読まない**
+（高さが `0` のままになる）ので、上の `Axis` / `Elevation Display` の 1 行を必ず入れる。
 
-**ただしレベル基準線では、`Axis`＝`YAxis2DMode` と「ストーリレベルへの関連付け」は
-両立しない**（関連付けが外れる。下記）。注釈で名前と高さを両方出すなら、名前は
-**マーカーレイアウトの固定文字**にするか、**レガシーを使う**。
+**`Axis`＝`YAxis2DMode` と「ストーリレベルへの関連付け」は両立しない**（関連付けが
+外れる。下記）。**だから両方を同時に書かない**——ストーリレベルへ結ぶなら `Axis` は
+既定のまま触らない。
 
 ## どのオブジェクトか（VW 2026 には 3 つある）
 
@@ -204,13 +218,15 @@ Y=0 / 2800 / 5600 へ置いても描かれる高さは **3 本とも `0`** で�
    `Datum` 単独だと `GroundPlane` へ倒され、名前欄だけだと `Datum` は
    `UserReference` のまま名前も出ない（どちらも実測）。
 
-実測（ストーリ 1 階＝0 / 2 階＝2800、レベル種別 `FL` の文書）:
+実測（**SDK だけで組み立てた文書**。ストーリ 1 階＝0 / 2 階＝2800、レベル種別 `FL`）
+——**実物件の図面では注釈でも高さが出る**ので、下の「注釈でも名前と高さは両立する」と
+併せて読むこと:
 
 | 置いた場所 | 書いたもの | `Datum` の読み戻し | 描かれた高さ | 描かれた名前 |
 | --- | --- | --- | --- | --- |
 | ストーリ従属のデザインレイヤ（2 階） | **何も書かない** | `UserReference`（既定のまま） | `2800` | **`FL-2 階`** |
 | 断面ビューポートの注釈（Y=2800） | 何も書かない | `UserReference` | `0` | `-` |
-| 断面ビューポートの注釈（Y=2800） | `__StoryName` ＋ `__LevelTypeName` ＋ `Datum`＝`StoryLevel` | **`StoryLevel`** | `0`（**埋まらない**） | **`FL-2 階`** |
+| 断面ビューポートの注釈（Y=2800） | `__StoryName` ＋ `__LevelTypeName` ＋ `Datum`＝`StoryLevel` | **`StoryLevel`** | `0`（**この文書では**。下記） | **`FL-2 階`** |
 | 断面ビューポートの注釈（Y=2800） | 名前欄 2 つだけ（`Datum` を書かない） | `UserReference` | `0` | `-`（**出ない**） |
 | シートレイヤへ直に置く | 名前欄 2 つだけ | `UserReference` | **`2800`**（レベルの高さ） | `-` |
 
@@ -222,42 +238,84 @@ Y=0 / 2800 / 5600 へ置いても描かれる高さは **3 本とも `0`** で�
   見せるが、`VWParametricObj::PopupGetChoices`（欄名版・欄索引版とも）は **0 件**を返す
   ——あの一覧はプラグインの UI が実行時に組んでいて、レコードには入っていない。
   `Datum` へ `FL` や `GL` と書いても `GroundPlane` に倒される。
-### 断面ビューポートの注釈では、名前と高さは両立しない
+### 断面ビューポートの注釈でも、名前と高さは両立する（3 つ組だけでよい）
 
-**注釈に置いた個体では、「ストーリレベル名を出す」と「高さを出す」が排他になる**（実測）:
+**実機の図面で、UI がツールで置いた個体と SDK 製の個体を同じ注釈の中で全欄突き合わせた**
+（[issue #135](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/135)。
+ストーリ 基礎/1階/2階/屋根、レベル種別 GL/FL/軒高 の実物件の図面）。
+
+- **UI が置いた個体が持っていたのは、3 つ組だけだった。** `Axis`＝`ZAxis3DMode`（既定）・
+  `Datum`＝`StoryLevel`・`__StoryName`・`__LevelTypeName`。これで `Elevation` 欄に
+  **レベルの絶対高さ**（`612` / `3571` / `6374` / `0`）が入り、名前
+  （`FL-1` / `FL-2` / `軒高-R` / `GL-F`）と一緒に描かれていた。
+- **SDK から同じ 3 つ組を書いた個体は、同じ注釈の中で同じ数値と名前を出した**
+  （`6374` / `軒高-R`）。**`Axis` は触っていない。**
+- **全 33 欄を写しても結果は変わらない**（写した後に残った差は **0 件**）。
+  UI 製と SDK 製（素のまま）の差は 7 欄で、効いていたのは 3 つ組の 3 欄だけ。
+  残りは見た目と内部フラグだった:
+
+  | 欄 | UI 製 | SDK 製（素） | 効き目 |
+  | --- | --- | --- | --- |
+  | `Datum` / `__StoryName` / `__LevelTypeName` | `StoryLevel` / `屋根` / `軒高` | `UserReference` / 空 / 空 | **これが効く** |
+  | `__IsHidden` / `__IsFlipped` / `__IsCreatedFromDialog` | `True` | `False` | 高さには効かない |
+  | `__kTextInsertOffsetX` | `-648.26664513` | `-300` | 文字の位置だけ |
+
+- **UI 製を複製（`DuplicateObject`）しても、複製は同じ高さと名前を出す**——状態は
+  すべて個体の中にある（外の拘束オブジェクトに依存していない）。
+- **注釈の中の個体の 3D 位置は `z=0`**（変換行列の原点も `z=0`）。つまり「注釈空間に Z は
+  無い」ままで、**高さは Z ではなくストーリレベルから来ている**。
+
+#### 「注釈だと 0 になる」のは、文書の作りで起きる
+
+**#133 では同じ 3 つ組で高さが `0` だった**（SDK だけで組み立てた文書。ストーリを
+`CreateStoryLevelTemplate` ＋ `AddStoryLevelFromTemplate` で作り、断面ビューポートも
+`CreateSectionViewport` で作った）。実物件の図面では同じ手順が `6374` を返すので、
+**「注釈だから 0」ではない**——差は文書の側にある。
+
+【調査中】どの条件が効くのかを切り分け中（PR
+[#137](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/137)）。
+
+#### ストーリバウンド（`SetObjectStoryBound` の一群）は使っていない
+
+`ISDK` にはオブジェクトを階／レベルへ結ぶ**ストーリバウンド**
+（`HasObjectStoryBounds` / `GetObjectStoryBound` / `SetObjectStoryBound` /
+`GetObjectBoundElevation`。構造材 PIO で使うもの。[Parametric Objects](Parametric%20Objects.md)）
+があり、注釈で高さが出る仕組みの第一候補だった。**実測では違った**——UI が置いた個体も
+`HasObjectStoryBounds=false` / 件数 0 で、名指しで引いた `id=-3 / 0 / 1` もすべて `false`。
+**レベル基準線の関連付けは、バウンドではなく 3 つ組（レコードの欄）で持たれている。**
+
+#### 高さを注釈の Y から読ませたいときだけ、`Axis` を倒す
+
+ストーリを使っていない図面では、`Axis`＝`YAxis2DMode` で注釈の Y を読ませ、名前は
+マーカーレイアウトの固定文字にする（上記）。**この 2 つは併用できない**:
 
 | 書いたもの | `Datum` | 描かれた高さ | 描かれた名前 |
 | --- | --- | --- | --- |
-| 3 つ組 | `StoryLevel` | **`0`** | **`FL-2 階`** |
-| 3 つ組 ＋ `Axis`＝`YAxis2DMode` | `UserReference` | `2800` / `5600`（注釈の Y） | **`-`** |
+| 3 つ組 | `StoryLevel` | レベルの高さ | **レベル名** |
+| 3 つ組 ＋ `Axis`＝`YAxis2DMode` | `UserReference` | 注釈の Y | **`-`** |
 
 **`Axis` を `YAxis2DMode` にすると関連付けが外れる**——`__StoryName` / `__LevelTypeName` が
-**空に戻り**、`Datum` も `UserReference` に戻る。**書く順を変えても同じ**（`Axis` を先に
-書いても後に書いても、結果は上の表のとおり）。
+**空に戻り**、`Datum` も `UserReference` に戻る（書く順を変えても同じ）。
 
-**注釈で「名前＋高さ」を両方出したいなら、次のどちらかにする:**
+#### 描かれる名前は「レベル種別名-ストーリの接尾語」
 
-1. **レベル基準線 ＋ `Axis`＝`YAxis2DMode`（高さ）＋ マーカーレイアウトの差し替え（名前）**
-   ——名前は固定文字になる（ストーリレベルには追従しない）。
-2. **レガシーの `Elevation Benchmark`** ——`Title`（名前）と `Elevation Display`（高さ）は
-   互いに干渉しない。
-
-**シートレイヤへ直に置いた個体（注釈ではない）なら両立する**——3 つ組で `Datum` が
-`StoryLevel` になり、**高さ `2800`（レベルの高さ）と名前 `FL-2 階` が同時に出た**。
-注釈空間だけが Z を持たないことによる差である。
-
-- なお実機の UI で注釈へ置いた個体は、`Z軸（3Dモード）`のまま高さを出している。
-  **SDK から同じ状態を作る道は見つかっていない**（このプローブで作った個体は 0 のまま）
-  ——ツールが他の欄も埋めているものと思われる【推定】。切り出した調査は
-  [issue #135](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/135)。
+レイアウトのトークン `#STLT#-#STPS#` はそう解決する。実測: ストーリ〈1階〉接尾語 `1` ＋
+レベル種別 `FL` → **`FL-1`**、〈屋根〉＋`軒高` → **`軒高-R`**、〈基礎〉＋`GL` → **`GL-F`**。
+**接尾語を空で作った文書では階の名前が出た**（#133 の `FL-2 階`）。
 
 ## 拘束（`IsElevationBenchmarkConstrained`）
 
 `Interfaces/VectorWorks/Extension/IMarkersPluginSupport.h` に
 `IsElevationBenchmarkConstrained(hObject)` と `RemoveElevationBenchmarkConstraining(hObject)`
 がある（**このヘッダは `VectorworksSDK.h` から引き込まれないので名指しで include する**）。
-**SDK から作って注釈へ置いた個体は、どの設定でも `false` だった**（拘束は UI の操作で
-付くものと思われる。【推定】）。
+**これは UI 固有の印ではない**——3 つ組を書いてストーリレベルへ結んだ時点で `true` に
+なる（実測。素の個体・`Axis`＝`YAxis2DMode` の個体はいずれも `false`、UI が置いた個体は
+`true`、SDK から 3 つ組を書いた個体も `true`）。つまり読み取れるのは
+**「ストーリレベルに拘束されているか」**であって、作った経路ではない。
+
+> 以前ここには「SDK から作った個体はどの設定でも `false` だった（拘束は UI の操作で
+> 付くものと思われる【推定】）」と書いていた。**3 つ組を書いていなかったからで、
+> 推定は誤り。**
 
 ## パラメータ（主なもの）
 

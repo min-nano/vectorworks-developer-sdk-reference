@@ -48,6 +48,39 @@
   [Level Objects](Level%20Objects.md) にある（**既定では注釈の Y を読まない**ので、
   欄を 1 つ切り替える必要がある）。
 
+## 注釈の中の図形は、検索条件（criteria）では見つからない
+
+**`ISDK::ForEachObjectInCriteria` は、ビューポートの注釈の中の図形を 1 件も返さない**
+（実測。UI で置いたレベル基準線が 2 つの断面ビューポートの注釈に計 8 本ある図面で、
+`(PON='Elevation Benchmark2')` の件数は **0**。自前で走査すれば 8 件見つかる）。
+注釈は「レイヤ直下の図形の連なり」の外にある容れ物なので、**探すなら自分で降りる**。
+
+```cpp
+// レイヤ → 直下 → グループ → **ビューポートの注釈群** の順に降りる。
+// kParametricNode=86 / kGroupNode=11 / kViewportNode=122（Objs.TDType.h）。
+void Walk(MCObjectHandle container, int depth)
+{
+	if (container == nil || depth > 8)
+		return;
+	for (MCObjectHandle h = gSDK->FirstMemberObj(container); h != nil; h = gSDK->NextObject(h))
+	{
+		const short type = gSDK->GetObjectTypeN(h);
+		if (type == kGroupNode)
+			Walk(h, depth + 1);
+		else if (type == kViewportNode)
+			Walk(gSDK->GetViewportGroup(h, kViewportGroupAnnotation), depth + 1);  // 注釈群
+		else
+			/* ここで用があるか見る */;
+	}
+}
+gSDK->ForEachLayerN([](MCObjectHandle layer) { Walk(layer, 0); });
+```
+
+- **注釈の中にいるかは `ISDK::IsViewportGroupContainedObject(h, kViewportGroupAnnotation)`**
+  で確かめられる（上の経路で拾った個体はすべて `true` だった）。
+- 注釈群そのものは `ISDK::GetViewportGroup(vp, kViewportGroupAnnotation)`、
+  逆向き（群 → ビューポート）は `GetViewportGroupParent`。
+
 ## 打ち切った調査: 断面ビューポートの範囲を「無限」にする
 
 UI で手作りすると〈無限〉が既定なので、公開ヘッダに載っていないオブジェクト変数
