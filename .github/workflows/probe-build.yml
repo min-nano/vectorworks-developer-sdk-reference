@@ -92,6 +92,7 @@ on:
       - "probes/runtime/**"
       - "scripts/gather-probes.sh"
       - "scripts/fetch-vw-sdk.sh"
+      - "scripts/vw-sdk-cache-key.sh"
       # リリース本文を組むスクリプト。**これは「読み物」ではない**——公開されている
       # リリースノートそのものなので、直しても作り直されないと、間違った案内が
       # 転がりタグに残り続ける（実際に残った: #43 を入れても公開分は古いままだった）。
@@ -110,6 +111,7 @@ on:
       - "plugin/CMakeLists.txt"
       - "scripts/gather-probes.sh"
       - "scripts/fetch-vw-sdk.sh"
+      - "scripts/vw-sdk-cache-key.sh"
       - ".github/workflows/probe-build.yml"
 
 permissions:
@@ -217,7 +219,8 @@ jobs:
       VW_SDK_URL: https://release.vectorworks.net/latest/Vectorworks/2026-NNA-eng-mac-SDK.zip
       VW_SDK_DIR: ${{ github.workspace }}/vw-sdk-plugin
       # ヘッダだけの ci-debug 用キャッシュとは**別のキー**（中身が違う。Lib と Tools を含む）。
-      VW_SDK_CACHE_KEY: vw-sdk-2026-NNA-mac-plugin-v1
+      # キャッシュキーの前半。後半は配布中の SDK の版（ETag）で、scripts/vw-sdk-cache-key.sh が付ける。
+      VW_SDK_CACHE_PREFIX: vw-sdk-2026-NNA-mac-plugin
       VW_SDK_PARTS: plugin
       BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       VW_BUILD_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -235,11 +238,19 @@ jobs:
         with:
           xcode-version: "16.2"
 
+      # 固定キーだと SDK が差し替わっても古いキャッシュでビルドし続けるので、
+      # 配布中の SDK の版をキーに混ぜる（scripts/vw-sdk-cache-key.sh）。
+      - name: Decide the SDK cache key
+        id: sdk-key
+        shell: bash
+        run: scripts/vw-sdk-cache-key.sh "$VW_SDK_CACHE_PREFIX"
+
       - name: Cache Vectorworks SDK
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.VW_SDK_DIR }}
-          key: ${{ env.VW_SDK_CACHE_KEY }}
+          key: ${{ steps.sdk-key.outputs.key }}
+          restore-keys: ${{ steps.sdk-key.outputs.restore-keys }}
 
       - name: Set up Vectorworks SDK
         run: scripts/fetch-vw-sdk.sh
@@ -387,7 +398,8 @@ jobs:
     env:
       VW_SDK_URL: https://release.vectorworks.net/latest/Vectorworks/2026-NNA-eng-win-SDK.zip
       VW_SDK_DIR: ${{ github.workspace }}/vw-sdk-plugin-win
-      VW_SDK_CACHE_KEY: vw-sdk-2026-NNA-win-plugin-v1
+      # キャッシュキーの前半。後半は配布中の SDK の版（ETag）で、scripts/vw-sdk-cache-key.sh が付ける。
+      VW_SDK_CACHE_PREFIX: vw-sdk-2026-NNA-win-plugin
       VW_SDK_PARTS: plugin
       BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       VW_BUILD_BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -398,11 +410,19 @@ jobs:
         with:
           ref: ${{ env.BUILD_SHA }}
 
+      # 固定キーだと SDK が差し替わっても古いキャッシュでビルドし続けるので、
+      # 配布中の SDK の版をキーに混ぜる（scripts/vw-sdk-cache-key.sh）。
+      - name: Decide the SDK cache key
+        id: sdk-key
+        shell: bash
+        run: scripts/vw-sdk-cache-key.sh "$VW_SDK_CACHE_PREFIX"
+
       - name: Cache Vectorworks SDK
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ${{ env.VW_SDK_DIR }}
-          key: ${{ env.VW_SDK_CACHE_KEY }}
+          key: ${{ steps.sdk-key.outputs.key }}
+          restore-keys: ${{ steps.sdk-key.outputs.restore-keys }}
 
       - name: Set up Vectorworks SDK
         shell: bash
