@@ -4,26 +4,30 @@
 //	[issue #134] 直線寸法の dimType（= ovDimClass）の 0（fix_ang）と 1（sloped）の
 //	違いが、実際にどこへ出るかを実測する。
 //
-//	分かっていること（#129 の実測。Findings「寸法」）:
-//	  - dimType はそのまま ovDimClass(26) に入る（0〜5 を渡して読み戻し、全一致）。
-//	  - **作った直後は 0 と 1 の区別が付かない。** 同じ 2 点に対して外接矩形も
-//	    ovDimDirection(12) も完全に同一で、斜めの 2 点を渡せば 0 でも斜めになる。
+//	【1 巡目で分かったこと】（PR #136 の 1 本目のログ＋利用者が送ってくれた図面の絵）
 //
-//	ヘッダには 0 と 1 の違いが**書かれていない**。ObjectVariables.h:292 は
-//	`(fix_ang) = 0, (sloped) = 1, …` と名前だけを並べ、APIBase.Legacy.Defs.h:2100 の
-//	CreateLinearDimension の説明も「水平と垂直だけを許すか、p1→p2 の向きへ回すか、
-//	ordinate を作るか」としか言わない（どの数値がどれかも書いていない）。SDK が同梱する
-//	実装ソース（SDKLib/Source）にも寸法の実装は入っていないので、**実機でしか答えが出ない**。
+//	  - **寸法線の角度は ovDimDirection(12) が単独で決めている。** SetObjectVariable で
+//	    書けて（true が返り、読み戻しも一致し、絵でも寸法線が回った）、**測点
+//	    （ovDimStartPt/ovDimEndPt）を動かしても再計算されない**。
+//	  - **表示される寸法値は「測点間ベクトルの ovDimDirection への射影」。** 実長ではない。
+//	    絵で確かめた 3 例:
+//	      dir=(1,0)     測点差 (1000,600) → 「1,000」   （実長 1166.19 ではない）
+//	      dir=(0.857,0.514) 測点差 (1000,0) → 「857 1/2」（実長 1000 ではない）
+//	      dir=(0.707,0.707) 測点差 (1000,0) → 「707 1/20」
+//	  - **ここまで dimType 0 と 1 はすべて同一**（値・向き・外接矩形・絵）。
+//	  - AssociateLinearDimension は**関連付かなかった**——軌跡点を 2 つ選んで寸法を
+//	    作り、片方を MoveObject しても測点は動かず、絵でも追従していない。
+//	    **これは「0 と 1 に差が無い」ではなく「試験が成立しなかった」**なので取り直す。
 //
-//	そこで「作った後に測点が動いたらどうなるか」を見る。名前どおりなら
-//	fix_ang は寸法線の角度を保ち（＝測点を結ぶ向きから外れる）、sloped は測点に追従する。
+//	【この 2 巡目が確かめること】
 //
-//	目視に頼らないための工夫:
-//	  - 寸法線の向きは ovDimDirection(12) を読む。
-//	  - **表示されている寸法値は、寸法（型 63 = dimHeaderNode）の中身を歩いて
-//	    GetTextChars で文字列として読む。** これが取れれば「fix_ang は射影した長さを
-//	    出すのか、測点間の実長を出すのか」まで、ログだけで決められる。
-//	  - 外接矩形も併せて出す（寸法線が回ったかどうかの裏取り）。
+//	  0. **いま図面にある寸法を先に全部読む。** 1 巡目で作った寸法を利用者が OIP や
+//	     ドラッグで触った後にもう一度走らせれば、**触った結果がそのままログに出る**
+//	     ——利用者はログを貼らなくてよいし、番号も打たなくてよい。
+//	  1. **関連付けを取り直す。** 軌跡点ではなく線分で、h に寸法／図形のどちらを渡すか、
+//	     selectedObjectsMode の true / false——組み合わせを総当たりする。
+//	     「平行移動でも追わない」を先に見るので、関連付いたか否かが切り分けられる。
+//	  2. **手で触ってもらう用の 1 組**を、どちらがどちらか分かるよう文字を添えて作る。
 //
 
 #include "Probe.h"
@@ -35,6 +39,9 @@ namespace
 {
 	// 短い名前・ありふれた名前は SDK と OS のヘッダとぶつかるので接頭辞を付ける
 	// （probes/runtime/README.md「短い名前・ありふれた名前を使わない」）。
+
+	// 寸法のオブジェクト型。Objs.TDType.h:129 の dimHeaderNode（Findings「寸法」）。
+	const short kDimClassDimHeaderNode = 63;
 
 	std::string DimClassNum(double value)
 	{
@@ -62,17 +69,16 @@ namespace
 		return DimClassInt(raw);
 	}
 
-	std::string DimClassReadBool(MCObjectHandle h, short selector)
+	std::string DimClassReadPoint(MCObjectHandle h, short selector)
 	{
 		TVariableBlock v;
 		if (!gSDK->GetObjectVariable(h, selector, v))
 			return "(GetObjectVariable が false)";
-		// GetBoolean は Boolean ではなく bool& を取る（ObjectVariables.h:108）。
-		bool raw = false;
-		if (!v.GetBoolean(raw))
-			return "(Boolean として読めない。型=" +
+		WorldPt raw;
+		if (!v.GetWorldPt(raw))
+			return "(WorldPt として読めない。型=" +
 				   DimClassInt(static_cast<long long>(v.GetType())) + ")";
-		return raw ? "true" : "false";
+		return "(" + DimClassNum(raw.x) + ", " + DimClassNum(raw.y) + ")";
 	}
 
 	std::string DimClassReadReal(MCObjectHandle h, short selector)
@@ -87,19 +93,6 @@ namespace
 		return DimClassNum(raw);
 	}
 
-	std::string DimClassReadPoint(MCObjectHandle h, short selector)
-	{
-		TVariableBlock v;
-		if (!gSDK->GetObjectVariable(h, selector, v))
-			return "(GetObjectVariable が false)";
-		WorldPt raw;
-		if (!v.GetWorldPt(raw))
-			return "(WorldPt として読めない。型=" +
-				   DimClassInt(static_cast<long long>(v.GetType())) + ")";
-		return "(" + DimClassNum(raw.x) + ", " + DimClassNum(raw.y) + ")";
-	}
-
-	// ovDimStartPt / ovDimEndPt を数値で取り出す（測点間の実長を計算するため）。
 	bool DimClassPointValue(MCObjectHandle h, short selector, WorldPt& outPt)
 	{
 		TVariableBlock v;
@@ -108,39 +101,9 @@ namespace
 		return v.GetWorldPt(outPt) != 0;
 	}
 
-	// 寸法の中身を歩いて、文字が入っているオブジェクトの文字列を拾う。
-	// 表示されている寸法値（"1000" など）がここに出れば、目視に頼らずに読める。
-	std::string DimClassTexts(MCObjectHandle dim)
-	{
-		if (dim == nil)
-			return "(寸法が nil)";
-		std::string result;
-		int guard = 0;
-		MCObjectHandle it = gSDK->FirstMemberObj(dim);
-		while (it != nil && guard < 200)
-		{
-			++guard;
-			const short type = gSDK->GetObjectTypeN(it);
-			// 型 0 = kTermNode（末尾の番兵）。歩きはこれも数える（Findings「寸法」）。
-			if (type != 0)
-			{
-				TXString chars = gSDK->GetTextChars(it);
-				const std::string text(static_cast<const char*>(chars));
-				if (!text.empty())
-				{
-					if (!result.empty())
-						result += " / ";
-					result += "型" + DimClassInt(type) + ":\"" + text + "\"";
-				}
-			}
-			it = gSDK->NextObject(it);
-		}
-		if (result.empty())
-			return "(文字を持つ中身は見つからなかった。歩いた数=" + DimClassInt(guard) + ")";
-		return result;
-	}
-
-	// 寸法 1 本の素性を 1 まとめでログへ出す。
+	// 寸法 1 本の素性をログへ出す。**射影も一緒に出す**——1 巡目で「表示値＝測点間
+	// ベクトルの ovDimDirection への射影」と分かったので、絵を見なくても表示値が
+	// 予想できる（予想と絵が食い違ったらそこが新しい知見）。
 	void DimClassReport(vwprobe::Report& probe, MCObjectHandle dim, const char* when)
 	{
 		if (dim == nil)
@@ -154,35 +117,31 @@ namespace
 		probe.log("    ovDimStartPt(13) = " + DimClassReadPoint(dim, ovDimStartPt) +
 				  " / ovDimEndPt(14) = " + DimClassReadPoint(dim, ovDimEndPt) +
 				  " / ovDimStartOffset(15) = " + DimClassReadReal(dim, ovDimStartOffset));
-		probe.log("    ovDimReferenceAngle(31) = " + DimClassReadBool(dim, ovDimReferenceAngle) +
-				  " / ovDim2ReferenceLinesAngle(42) = " +
-				  DimClassReadBool(dim, ovDim2ReferenceLinesAngle));
 
-		// 測点間の実長。表示値と突き合わせて「射影か実長か」を決める材料にする。
-		WorldPt a, b;
+		WorldPt a, b, dir;
 		if (DimClassPointValue(dim, ovDimStartPt, a) && DimClassPointValue(dim, ovDimEndPt, b))
 		{
 			const double dx = static_cast<double>(b.x) - static_cast<double>(a.x);
 			const double dy = static_cast<double>(b.y) - static_cast<double>(a.y);
-			probe.log("    測点間: dx=" + DimClassNum(dx) + " dy=" + DimClassNum(dy) +
-					  " 実長=" + DimClassNum(std::sqrt(dx * dx + dy * dy)) +
-					  " 水平射影=" + DimClassNum(dx < 0 ? -dx : dx) +
-					  " 垂直射影=" + DimClassNum(dy < 0 ? -dy : dy));
+			std::string line = "    測点間: dx=" + DimClassNum(dx) + " dy=" + DimClassNum(dy) +
+							   " 実長=" + DimClassNum(std::sqrt(dx * dx + dy * dy));
+			if (DimClassPointValue(dim, ovDimDirection, dir))
+			{
+				const double proj =
+					dx * static_cast<double>(dir.x) + dy * static_cast<double>(dir.y);
+				line += " / ovDimDirection への射影=" + DimClassNum(proj < 0 ? -proj : proj) +
+						" ← 表示値はこれになるはず";
+			}
+			probe.log(line);
 		}
 
 		WorldRect bounds;
 		if (gSDK->GetObjectBounds(dim, bounds))
-			probe.log(
-				"    外接矩形(mm) = 左" + DimClassNum(bounds.left) + " 上" +
-				DimClassNum(bounds.top) + " 右" + DimClassNum(bounds.right) + " 下" +
-				DimClassNum(bounds.bottom) + " 幅" +
-				DimClassNum(static_cast<double>(bounds.right) - static_cast<double>(bounds.left)) +
-				" 高" +
-				DimClassNum(static_cast<double>(bounds.top) - static_cast<double>(bounds.bottom)));
+			probe.log("    外接矩形(mm) = 左" + DimClassNum(bounds.left) + " 上" +
+					  DimClassNum(bounds.top) + " 右" + DimClassNum(bounds.right) + " 下" +
+					  DimClassNum(bounds.bottom));
 		else
 			probe.log("    GetObjectBounds が false");
-
-		probe.log("    表示文字 = " + DimClassTexts(dim));
 	}
 
 	MCObjectHandle DimClassCreate(vwprobe::Report& probe, const WorldPt& p1, const WorldPt& p2,
@@ -195,22 +154,76 @@ namespace
 		return dim;
 	}
 
-	// ovDimEndPt を書き換える。書けたかどうか（SetObjectVariable の戻り値）も返す。
-	bool DimClassSetEndPt(vwprobe::Report& probe, MCObjectHandle dim, const WorldPt& pt)
+	// 測点の位置に「端点を持つ線分」を 2 本立てる（関連付けの相手）。
+	// 寸法の測点とちょうど重なる端点を持たせるのが狙い。
+	void DimClassMakeStubs(WorldCoord x1, WorldCoord x2, WorldCoord y, MCObjectHandle& outLeft,
+						   MCObjectHandle& outRight)
 	{
-		TVariableBlock v;
-		// TVariableBlock の setter は operator= だけ（Findings「寸法」）。
-		v = pt;
-		const bool ok = gSDK->SetObjectVariable(dim, ovDimEndPt, v) != 0;
-		probe.log("    SetObjectVariable(ovDimEndPt=(" + DimClassNum(pt.x) + "," +
-				  DimClassNum(pt.y) + ")) = " + (ok ? "true" : "false"));
-		return ok;
+		outLeft = gSDK->CreateLine(WorldPt(x1, y), WorldPt(x1, y - 500));
+		outRight = gSDK->CreateLine(WorldPt(x2, y), WorldPt(x2, y - 500));
+	}
+
+	// 関連付けの 1 通りを試す。passDimToAssociate が false なら、寸法ではなく
+	// 図形のほうを AssociateLinearDimension へ渡す（ヘッダの h がどちらを指すのか
+	// 書かれていないため、両方試す）。
+	void DimClassTryAssociation(vwprobe::Report& probe, short dimType, WorldCoord baseY,
+								bool selectedObjectsMode, bool passDimToAssociate)
+	{
+		const std::string label =
+			std::string("dimType=") + DimClassInt(dimType) + " / " +
+			"selectedObjectsMode=" + (selectedObjectsMode ? "true" : "false") +
+			" / h に渡すもの=" + (passDimToAssociate ? "寸法" : "図形");
+		probe.log("");
+		probe.log("--- " + label);
+
+		MCObjectHandle stubLeft = nil;
+		MCObjectHandle stubRight = nil;
+		DimClassMakeStubs(0, 1000, baseY, stubLeft, stubRight);
+		if (stubLeft == nil || stubRight == nil)
+		{
+			probe.fail(label + ": CreateLine が nil を返した");
+			return;
+		}
+		MCObjectHandle dim = DimClassCreate(probe, WorldPt(0, baseY), WorldPt(1000, baseY), 300,
+											dimType, label.c_str());
+		if (dim == nil)
+			return;
+		DimClassReport(probe, dim, "作った直後");
+
+		gSDK->DeselectAll();
+		gSDK->SelectObject(stubLeft, true);
+		gSDK->SelectObject(stubRight, true);
+		if (passDimToAssociate)
+		{
+			gSDK->AssociateLinearDimension(dim, selectedObjectsMode);
+		}
+		else
+		{
+			gSDK->AssociateLinearDimension(stubLeft, selectedObjectsMode);
+			gSDK->AssociateLinearDimension(stubRight, selectedObjectsMode);
+		}
+		gSDK->DeselectAll();
+		probe.log("    AssociateLinearDimension を呼んだ（戻り値なし）");
+
+		// まず**平行移動**。関連付いていれば測点が両方とも追う。ここが動かないなら
+		// 「関連付いていない」——角度が変わる試験の結果を読んではいけない。
+		gSDK->MoveObject(stubLeft, 0, 400);
+		gSDK->MoveObject(stubRight, 0, 400);
+		gSDK->ResetObject(dim);
+		probe.log("    【対照】両方の線分を +400 平行移動して ResetObject");
+		DimClassReport(probe, dim, "平行移動の後（測点が追えば関連付いている）");
+
+		// 次に**片端だけ**。ここで角度が変わり、0 と 1 の差が出るなら出る。
+		gSDK->MoveObject(stubRight, 0, 600);
+		gSDK->ResetObject(dim);
+		probe.log("    【本番】終点側の線分だけを更に +600 動かして ResetObject");
+		DimClassReport(probe, dim, "片端だけ動かした後");
 	}
 } // namespace
 
 VW_PROBE("dim-class-fixang-vs-sloped", "寸法の dimType 0（fix_ang）と 1（sloped）の違い",
-		 "同じ 2 点で 0 と 1 を作り、測点を動かした後・関連付けた図形を動かした後の "
-		 "ovDimDirection・測点・外接矩形・表示文字を見比べる")
+		 "図面にある寸法を先に読み（触った後の再実行用）、関連付けを総当たりで取り直し、"
+		 "手で触ってもらう 1 組を文字つきで作る")
 {
 	MCObjectHandle layer = gSDK->GetActiveLayer();
 	if (layer == nil)
@@ -223,133 +236,89 @@ VW_PROBE("dim-class-fixang-vs-sloped", "寸法の dimType 0（fix_ang）と 1（
 		gSDK->GetObjectName(layer, layerName);
 		probe.log("アクティブレイヤ: \"" + std::string(static_cast<const char*>(layerName)) + "\"");
 	}
-	probe.log("ObjectVariables.h:292 が名前だけを並べている 0=fix_ang / 1=sloped の差を探す。");
 
 	// -----------------------------------------------------------------------
+	// 0. いま図面にある寸法を全部読む。**2 回目以降の実行では、ここが「利用者が
+	//    手で触った後の状態」になる**——これが目視の代わりになる。
 	probe.log("");
-	probe.log("== 1. 水平な 2 点で作り、終点だけを動かして角度を変える ==");
-	probe.log("(0,0)-(1000,0) で作り、ovDimEndPt を (1000,600) にする。");
-	probe.log("fix_ang が名前どおりなら ovDimDirection は (1,0) のまま残り、");
-	probe.log("sloped なら (1000,600) の正規化 (0.857,0.514) へ動く。");
-
-	for (short dimType = 0; dimType <= 1; ++dimType)
+	probe.log("== 0. いま図面にある寸法（型 63 = dimHeaderNode）を全部読む ==");
+	probe.log("1 巡目に作った寸法を OIP やドラッグで触った後にもう一度走らせると、");
+	probe.log("触った結果がここに出る（ログを貼る必要はありません）。");
+	long long found = 0;
 	{
-		const char* const label = (dimType == 0) ? "dimType=0 (fix_ang)" : "dimType=1 (sloped)";
-		probe.log("");
-		probe.log(std::string("--- ") + label);
-		// y をずらして重ならないように置く（図面で見比べたいとき用。判定はログで行う）。
-		const WorldCoord baseY = static_cast<WorldCoord>(dimType * 2000);
-		MCObjectHandle dim =
-			DimClassCreate(probe, WorldPt(0, baseY), WorldPt(1000, baseY), 300, dimType, label);
-		if (dim == nil)
-			continue;
-		DimClassReport(probe, dim, "作った直後");
-
-		DimClassSetEndPt(probe, dim, WorldPt(1000, baseY + 600));
-		DimClassReport(probe, dim, "ovDimEndPt を書いた直後（ResetObject 前）");
-
-		const bool reset = gSDK->ResetObject(dim) != 0;
-		probe.log("    ResetObject = " + std::string(reset ? "true" : "false"));
-		DimClassReport(probe, dim, "ResetObject の後");
-	}
-
-	// -----------------------------------------------------------------------
-	probe.log("");
-	probe.log("== 2. 斜めの 2 点で作り、終点を動かして水平に戻す ==");
-	probe.log("(0,y)-(1000,y+600) で作り、ovDimEndPt を (1000,y) にする（1 の逆向き）。");
-
-	for (short dimType = 0; dimType <= 1; ++dimType)
-	{
-		const char* const label = (dimType == 0) ? "dimType=0 (fix_ang)" : "dimType=1 (sloped)";
-		probe.log("");
-		probe.log(std::string("--- 斜め始まり ") + label);
-		const WorldCoord baseY = static_cast<WorldCoord>(5000 + dimType * 2000);
-		MCObjectHandle dim = DimClassCreate(probe, WorldPt(0, baseY), WorldPt(1000, baseY + 600),
-											300, dimType, label);
-		if (dim == nil)
-			continue;
-		DimClassReport(probe, dim, "作った直後");
-
-		DimClassSetEndPt(probe, dim, WorldPt(1000, baseY));
-		gSDK->ResetObject(dim);
-		DimClassReport(probe, dim, "ovDimEndPt を水平に戻して ResetObject した後");
-	}
-
-	// -----------------------------------------------------------------------
-	probe.log("");
-	probe.log("== 3. 関連付け（AssociateLinearDimension）した図形を動かす ==");
-	probe.log("測点の位置に軌跡点（CreateLocus）を 2 つ置いて寸法を作り、終点側の軌跡点だけを");
-	probe.log("上へ 600mm 動かす。関連付いていれば測点が追い、そこで 0 と 1 の差が出るはず。");
-
-	for (short dimType = 0; dimType <= 1; ++dimType)
-	{
-		const char* const label = (dimType == 0) ? "dimType=0 (fix_ang)" : "dimType=1 (sloped)";
-		probe.log("");
-		probe.log(std::string("--- 関連付け ") + label);
-		const WorldCoord baseY = static_cast<WorldCoord>(10000 + dimType * 2000);
-		const WorldPt a(0, baseY);
-		const WorldPt b(1000, baseY);
-
-		MCObjectHandle locusA = gSDK->CreateLocus(a);
-		MCObjectHandle locusB = gSDK->CreateLocus(b);
-		if (locusA == nil || locusB == nil)
+		int guard = 0;
+		MCObjectHandle it = gSDK->FirstMemberObj(layer);
+		while (it != nil && guard < 10000)
 		{
-			probe.fail(std::string(label) + ": CreateLocus が nil を返した");
-			continue;
+			++guard;
+			if (gSDK->GetObjectTypeN(it) == kDimClassDimHeaderNode)
+			{
+				++found;
+				DimClassReport(probe, it, ("図面にあった寸法 " + DimClassInt(found)).c_str());
+			}
+			it = gSDK->NextObject(it);
 		}
-		MCObjectHandle dim = DimClassCreate(probe, a, b, 300, dimType, label);
-		if (dim == nil)
-			continue;
-		DimClassReport(probe, dim, "作った直後");
+	}
+	if (found == 0)
+		probe.log("  （寸法は 1 本も見つかりませんでした＝まっさらな図面です）");
+	else
+		probe.log("  合計 " + DimClassInt(found) + " 本。");
 
-		gSDK->DeselectAll();
-		gSDK->SelectObject(locusA, true);
-		gSDK->SelectObject(locusB, true);
-		gSDK->AssociateLinearDimension(dim, true); // 戻り値は void
-		gSDK->DeselectAll();
-		probe.log(
-			"    AssociateLinearDimension(dim, selectedObjectsMode=true) を呼んだ（戻り値なし）");
-		DimClassReport(probe, dim, "関連付けた直後");
+	// 作るものが前回のぶんと重ならないように、見つかった本数ぶん下へずらす。
+	const WorldCoord shift = static_cast<WorldCoord>(-6000 * (found + 1));
 
-		gSDK->MoveObject(locusB, 0, 600);
-		probe.log("    MoveObject(終点側の軌跡点, dx=0, dy=+600)");
-		gSDK->ResetObject(dim);
-		DimClassReport(probe, dim, "終点側の軌跡点を動かして ResetObject した後");
+	// -----------------------------------------------------------------------
+	// 1. 関連付けを取り直す。1 巡目は軌跡点で試して関連付かなかったので、線分で、
+	//    引数の意味の解釈（h＝寸法／図形）と selectedObjectsMode を総当たりする。
+	probe.log("");
+	probe.log("== 1. AssociateLinearDimension を取り直す ==");
+	probe.log("ヘッダは h が寸法と図形のどちらを指すのかを書いていないので両方試す。");
+	probe.log("**平行移動の対照を先に置く**——そこで測点が追わなければ関連付いていない");
+	probe.log("ということなので、その組の「片端だけ」の結果は読んではいけない。");
+
+	{
+		WorldCoord y = shift;
+		for (short dimType = 0; dimType <= 1; ++dimType)
+		{
+			for (int passDim = 1; passDim >= 0; --passDim)
+			{
+				for (int selMode = 1; selMode >= 0; --selMode)
+				{
+					DimClassTryAssociation(probe, dimType, y, selMode != 0, passDim != 0);
+					y -= 3000;
+				}
+			}
+		}
 	}
 
 	// -----------------------------------------------------------------------
+	// 2. 手で触ってもらう 1 組。どちらがどちらか分かるよう文字を添える。
+	const WorldCoord dragBaseY = shift - 30000;
 	probe.log("");
-	probe.log("== 4. ovDimDirection を直に書くと寸法線の角度は動くか ==");
-	probe.log("fix_ang の「固定された角度」がここに入っているなら、これを書き換えれば");
-	probe.log("測点を動かさずに寸法線だけが回る（ovDimDirection はヘッダ上 FracPt / Not for public "
-			  "use）。");
+	probe.log("== 2. 手で触ってもらう 1 組を作りました ==");
+	probe.log("同じ 2 点・同じ startOffset で、dimType だけが違う寸法を 2 本、");
+	probe.log(
+		"それぞれの右に「dimType=0 (fix_ang)」「dimType=1 (sloped)」と文字を添えて置きます。");
 
 	for (short dimType = 0; dimType <= 1; ++dimType)
 	{
-		const char* const label = (dimType == 0) ? "dimType=0 (fix_ang)" : "dimType=1 (sloped)";
-		probe.log("");
-		probe.log(std::string("--- 向きを直書き ") + label);
-		const WorldCoord baseY = static_cast<WorldCoord>(15000 + dimType * 2000);
+		const WorldCoord y = static_cast<WorldCoord>(dragBaseY - dimType * 3000);
+		const char* const name = (dimType == 0) ? "dimType=0 (fix_ang)" : "dimType=1 (sloped)";
 		MCObjectHandle dim =
-			DimClassCreate(probe, WorldPt(0, baseY), WorldPt(1000, baseY), 300, dimType, label);
-		if (dim == nil)
-			continue;
+			DimClassCreate(probe, WorldPt(0, y), WorldPt(1000, y), 300, dimType, name);
+		gSDK->CreateTextBlock(TXString(name), WorldPt(1300, y), false, 0);
+		probe.log("");
+		probe.log(std::string("--- ") + name + "（文字は右側 x=1300 に置きました）");
 		DimClassReport(probe, dim, "作った直後");
-
-		TVariableBlock v;
-		// 45 度の単位ベクトル。読み戻せた型（WorldPt）でそのまま書いてみる。
-		v = WorldPt(0.7071, 0.7071);
-		const bool ok = gSDK->SetObjectVariable(dim, ovDimDirection, v) != 0;
-		probe.log("    SetObjectVariable(ovDimDirection=(0.7071,0.7071)) = " +
-				  std::string(ok ? "true" : "false"));
-		gSDK->ResetObject(dim);
-		DimClassReport(probe, dim, "ovDimDirection を書いて ResetObject した後");
 	}
 
 	probe.log("");
-	probe.log("== 読み方 ==");
-	probe.log("1〜3 で ovDimDirection / 外接矩形 / 表示文字が dimType 0 と 1 で違えば、そこが差。");
-	probe.log("どの節でも 0 と 1 が最後まで一致していたら、SDK から作る分には差が無いということ");
-	probe.log("——そのときは「OIP で触ったときだけ違う」か「意味を失っている」のどちらかで、");
-	probe.log("前者なら利用者の操作が要る（結論はそこで分かれる）。");
+	probe.log("== お願い ==");
+	probe.log("上の 2 本（文字が添えてある横向きの 1,000 の寸法）を、**同じように**手で");
+	probe.log("触ってください。知りたいのは「0 と 1 で違う動きをするか」だけです:");
+	probe.log("  (a) 寸法の端点（測点側の制御点）をつまんで、斜めになるように動かす");
+	probe.log("  (b) OIP に角度や向きの欄があれば、そこを触ってみる");
+	probe.log("そのうえで**このプローブをもう一度走らせてください**。上の「== 0 ==」に");
+	probe.log("触った後の ovDimDirection と測点が出るので、ログを貼る必要はありません。");
+	probe.log("（2 本が同じ動きなら、SDK から見ても手で触っても 0 と 1 は同じ、で確定します）");
 }
