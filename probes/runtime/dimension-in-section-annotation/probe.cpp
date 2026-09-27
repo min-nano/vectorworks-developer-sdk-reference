@@ -22,6 +22,16 @@
 //	**`ovViewportDisplay2DComponents`(1059) は `SetObjectVariable` が `true` を返すのに
 //	読み戻すと `false` のまま**（隠線消去を先に入れてあっても入らなかった）。
 //
+//	**4 巡目。** 3 巡目で壁の高さ 0 は直った（`GetWallOverallHeights` が 0 → 2800mm に
+//	なった）のに、**断面にはまだ壁が写らなかった**。絵を見せてもらって分かった原因は
+//	またプローブ側で、`ovSectionViewportDisplayObjectsBeyondCutPlane`(1064) を
+//	**`false`（＝切断面より奥は表示しない）にしていたこと**。
+//
+//	この図面は**断面線を壁の 1500mm 手前（y = -1500）に引いて、そこから壁の方（+y）を
+//	見る**配置なので、**壁は丸ごと「切断面より奥」にある**——奥を消せば壁も消える。
+//	Findings「Viewports」に「切断面より奥は表示しない … 1064」とあるのは**断面線が対象を
+//	切っているとき**の作法で、**軸組図のように対象の手前に断面線を引く使い方では逆**。
+//
 
 #include "Probe.h"
 
@@ -216,8 +226,13 @@ VW_PROBE("dimension-in-section-annotation", "断面ビューポートの注釈�
 	//（Findings「Viewports」）。いずれも更新より前。
 	probe.log("  ovViewportRenderType(1001) ← renderFinalHiddenLine(6): " +
 			  SecDimWriteLikeCurrent(section, ovViewportRenderType, renderFinalHiddenLine));
-	probe.log("  ovSectionViewportDisplayObjectsBeyondCutPlane(1064) ← false: " +
-			  SecDimWriteLikeCurrent(section, ovSectionViewportDisplayObjectsBeyondCutPlane, 0));
+	// **4 巡目の修正点。** 3 巡目はここを false（＝切断面より奥は表示しない）にして
+	// いたが、この図面は**断面線を壁の 1500mm 手前に引いて奥を見る**配置なので、
+	// 壁は丸ごと「奥」にある——つまり**壁ごと消していた**。軸組図のように対象の
+	// 手前に断面線を引く使い方では true でなければ何も見えない。
+	probe.log("  ovSectionViewportDisplayObjectsBeyondCutPlane(1064) ← **true**（奥を表示）: " +
+			  SecDimWriteLikeCurrent(section, ovSectionViewportDisplayObjectsBeyondCutPlane, 1) +
+			  "  ※3 巡目はここを false にしていて壁ごと消していた");
 	probe.log("  ovViewportDisplayPlanar(1035) ← false: " +
 			  SecDimWriteLikeCurrent(section, ovViewportDisplayPlanar, 0));
 	// 2 巡目の実測: ここは true が返るのに読み戻すと false のまま入らない。
@@ -229,9 +244,9 @@ VW_PROBE("dimension-in-section-annotation", "断面ビューポートの注釈�
 	probe.log("  クラスを全部表示へ戻した件数 = " + std::to_string(SecDimShowAllClasses(section)));
 	gSDK->UpdateViewport(section);
 	SecDimLogBounds(probe, "更新後の断面ビューポート", section);
-	probe.log("  ※ 1 巡目・2 巡目はここが 53.3mm 角の空枠（左-26.64 上26.64 右26.64 下-26.64）");
-	probe.log("  　 だった。今回それより大きくなっていれば、壁に高さを与えたことで");
-	probe.log("  　 中身が描かれたということ。同じままなら原因は高さではない。");
+	probe.log("  ※ ビューポートの外接矩形は中身を勘定に入れないので（注釈も断面の図形も）、");
+	probe.log("  　 ここが 53.3mm 角のままでも「何も描かれていない」ことにはならない。");
+	probe.log("  　 描かれたかどうかは絵を見るしかない。");
 	// 更新だけで足りないことがあるので、作り直しも試して前後を比べる。
 	gSDK->ResetObject(section);
 	gSDK->UpdateViewport(section);
@@ -278,7 +293,8 @@ VW_PROBE("dimension-in-section-annotation", "断面ビューポートの注釈�
 	probe.log("");
 	probe.log("== 目で見ないと分からないこと（利用者へ） ==");
 	probe.log("シートレイヤ「断面寸法調査シート」を開いて、断面ビューポートを見てほしい。");
-	probe.log("(1) 壁の断面が描かれているか（1 巡目は×印の空枠だった）。");
+	probe.log("(1) 壁が描かれているか（断面線は壁の手前にあるので、壁は「切断面より奥」");
+	probe.log("    に立って見えるはず。1〜3 巡目はここが空だった）。");
 	probe.log("(2) 寸法が 2 本（横と縦）見えているか。");
 	probe.log("(3) 横の寸法 (A) は、断面に写った壁の左端から右端までに掛かっているか");
 	probe.log("    （＝「4000」と読めるか）。ずれているなら、どちらへ何 mm ぶんか。");
