@@ -41,7 +41,7 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
 		 "レイヤを 3 枚作り、並べ替えてから読み戻す")
 {
 	probe.log("レイヤを作る");
-	MCObjectHandle layer = gSDK->CreateLayer("試験 1", kDesignLayerType);
+	MCObjectHandle layer = gSDK->CreateLayer("試験 1", kLayerDesign);
 	if (layer == nil)
 	{
 		probe.fail("CreateLayer が nil を返した");
