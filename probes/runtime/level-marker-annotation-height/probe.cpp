@@ -284,7 +284,14 @@ namespace
 		VWFC::VWObjects::VWParametricObj obj(found.fObject);
 		probe.log("  内部 ID: " + std::to_string(static_cast<int>(obj.GetInternalID())));
 		const VWPoint2D pos = obj.GetPointObjectPos();
-		probe.log("  位置: x=" + LmNum(pos.x) + " y=" + LmNum(pos.y));
+		const VWPoint3D pos3 = obj.GetObjectModelPos();
+		VWFC::Math::VWTransformMatrix matrix;
+		obj.GetObjectToWorldTransform(matrix);
+		const VWPoint3D offset = matrix.GetOffset();
+		// **注釈の個体が Z を持っているか**を見る（持っていれば「注釈に Z が無い」が崩れる）。
+		probe.log("  位置: 2D=(" + LmNum(pos.x) + ", " + LmNum(pos.y) + ") 3D=(" + LmNum(pos3.x) +
+				  ", " + LmNum(pos3.y) + ", " + LmNum(pos3.z) + ") 変換行列の原点=(" +
+				  LmNum(offset.x) + ", " + LmNum(offset.y) + ", " + LmNum(offset.z) + ")");
 		probe.log("  注釈の中か（IsViewportGroupContainedObject）: " +
 				  std::string(
 					  gSDK->IsViewportGroupContainedObject(found.fObject, kViewportGroupAnnotation)
@@ -483,6 +490,9 @@ VW_PROBE("level-marker-annotation-height",
 			break;
 		case kFieldClass:
 			to.SetParamClass(name, from.GetParamClass(name));
+			break;
+		case kFieldBuildingMaterial:
+			to.SetParamBuildingMaterial(name, from.GetParamBuildingMaterial(name));
 			break;
 		case kFieldTexture:
 			to.SetParamTexture(name, from.GetParamTexture(name));
