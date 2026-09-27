@@ -17,10 +17,18 @@
   `BuildList` で引ける名前付きリソースにも、寸法のスタイルは無い。あるのは**文書が
   配列で持つ寸法規格**（`dimStandardNode = 39` … "Holds an array of DimStandardType"）
   だけで、**index で指す**。
-- **寸法規格の index は組み込みが 1〜9、カスタムが 0〜-8。** 名前は
-  `GetDimensionStandardVariable(index, dimStdstandardName, …)` で引く。
+- **寸法規格の index は組み込みが 1〜9、カスタムが 0 から下へ。** 名前は
+  `GetDimensionStandardVariable(index, dimStdstandardName, …)` で引く。**`0` は有効な
+  index で、カスタム規格の 1 件目がそこに入る**（`ovDimStandard` のヘッダは「0 は無効」と
+  書いているが、実機はそうなっていない。下記「index の体系」）。
+- **規格は index（`ovDimStandard`）でも名前（`ovDimStandardName`）でも書ける。**
+  どちらを書いても他方が即座に追随し、**`ResetObject` は要らない**。存在しない名前を
+  書くと `SetObjectVariable` が `false` を返して値は変わらないので、**名前の検証に
+  そのまま使える**。
 - **規格の寸法値は「用紙インチ」**（`page inches`）で定義されている。つまり補助線の
-  長さ・文字と寸法線の間隔などは**縮尺に依らず紙の上の大きさ**で決まる。
+  長さ・文字と寸法線の間隔などは**縮尺に依らず紙の上の大きさ**で決まる。実測でも
+  文字は紙の上で規格どおりの大きさに出る（下記「文字の大きさ」）。
+- **作った寸法はその場でアクティブレイヤの中に入る。** 未挿入のハンドルは返らない。
 
 ## `CreateLinearDimension` の引数
 
@@ -52,7 +60,59 @@ virtual MCObjectHandle CreateLinearDimension(
 - **`Vector2` は `WorldPt` の別名**（`MathCoordTypes.h:329` の `typedef WorldPt Vector2;`）
   なので、`Vector2(0, 0)` と書ける。
 - 作った寸法のオブジェクト型は **`dimHeaderNode = 63`**（`Objs.TDType.h:129`）。
-  `GetObjectTypeN` はこれを返す。
+  `GetObjectTypeN` はこれを返す（実測で確認）。
+
+### 作った寸法はアクティブレイヤに入る
+
+**`CreateLinearDimension` は「未挿入のハンドル」を返さない。** 呼んだ時点で
+**アクティブレイヤ（`GetActiveLayer()`）の中に入っている**——実測でレイヤ直下の要素数が
+1 本あたり 1 つ増え、`FirstMemberObj`／`NextObject` で歩くと当の寸法が見つかった。
+
+- したがって**注釈へ入れたいだけの寸法も、いったんどこかのレイヤに置かれる**。
+  `AddViewportAnnotationObject` はそこから注釈へ移す（下記）。
+- **シートレイヤを作るとアクティブレイヤがそちらへ移る。** 「作った寸法がどこへ
+  入ったか」を確かめるときは、**作る直前に `GetActiveLayer()` を取り直す**こと
+  （取り違えると「どこにも入っていない」ように見える）。
+
+### 読み戻すときの型（`ovDimClass` は符号付き）
+
+オブジェクト変数は `TVariableBlock` で受け取るが、**ヘッダのコメントの型と実体が
+一致しないものがある**。`ovDimClass` はヘッダに `unsigned char` と書いてあるのに、
+実体は **`t_Sint8`（型番号 11）**で、`GetUint8` では読めない（`GetSint8` で読む）。
+
+```cpp
+// 型を決め打ちせず、効いたものを使う。決め打つと「読めない」で 1 往復むだになる。
+TVariableBlock v;
+if (gSDK->GetObjectVariable(h, ovDimClass, v))
+{
+    Sint8 value = 0;
+    if (v.GetSint8(value)) { /* … */ }
+}
+```
+
+型番号は `ObjectVariables.h` の無名 enum:
+`t_Boolean=0 / t_Sint16=1 / t_WorldPt=2 / t_Real64=3 / t_TransformMatrix=4 /
+t_WorldRect=5 / t_WorldPt3=6 / t_Sint32=7 / t_Str255=8 / t_ViewRect=10 /
+t_Sint8=11 / t_Uint8=12 / t_FracPt=13 / t_Fract=14 / t_XCoordPt3=15 /
+t_XCoordPt=16 / t_Uint32=17 / t_MCObjectHandle=18 / t_TXString=19`。
+
+**`TVariableBlock` に `SetSint8` のような setter は無い。** `DEFINE_TYPE` が作る setter は
+`operator=` だけで、明示的に定義されているのは `SetUint8` と `SetBoolean`（「型が
+衝突するので」）の 2 つだけ。書くときは `v = static_cast<Sint8>(index);` とする。
+
+### 文字の大きさは紙の上で決まる
+
+実測（図面の縮尺 1:100）:
+
+| セレクタ | 値 | 意味 |
+| --- | --- | --- |
+| `ovDimTextSizeInPoints`(40) | `6.000` | **紙の上のポイント** |
+| `ovDimFontSize`(17) | `211.666` | 図面上の mm |
+
+6 pt = 6 × 25.4 / 72 = **2.1167 mm**、これを縮尺 1:100 で割り戻すと **211.67 mm** で
+`ovDimFontSize` と一致する。つまり**文字は紙の上で規格どおりの大きさに出て、
+図面上の実寸のほうが縮尺に応じて変わる**。規格の長さが「用紙インチ」で定義されて
+いることと整合している。
 
 ## 寸法規格（dimension standard）
 
@@ -70,6 +130,31 @@ virtual MCObjectHandle CreateLinearDimension(
 | --- | --- |
 | `1` 〜 `9` | **組み込みの規格 9 つ**（リソース由来。変更できない） |
 | `0` 〜 `-8` | **カスタム規格（利用者が作ったもの）最大 9 つ** |
+
+**実機（VW 2026 / macOS）で index −12〜12 を総当たりした結果**
+（`GetDimensionStandardVariable` が `true` を返した index だけ）:
+
+| index | 名前 |
+| --- | --- |
+| `1` | `Arch` |
+| `2` | `ASME` |
+| `3` | `BSI` |
+| `4` | `DIN` |
+| `5` | `ISO` |
+| `6` | `JIS` |
+| `7` | `SIA` |
+| `8` | `ASME Dual SideBySide` |
+| `9` | `ASME Dual Stacked` |
+| `0` | `min-nano`（その図面のカスタム規格） |
+
+- **組み込みは 1〜9 でヘッダどおり**、名前もこの順で固定。
+- **カスタムは 0 から下へ詰まる。** この図面は `NumberCustomDimensionStandards() = 1` で、
+  index は `0` だった（`-1` 以下は `false`）。
+- **`ovDimStandard` のヘッダの「zero is invalid」は実機と合わない。** 0 は正常な
+  カスタム規格の index で、この図面では**文書の既定**でもあった
+  （`GetProgramVariable(varDimStandard)` が `0` を返した。`varDimStandard` は `short`）。
+- それでも**名前で書くほうを勧める**——index の意味（何番が何か）は図面ごとに変わる
+  のに対し、名前は利用者が選んだものそのままだから。
 
 - **カスタム規格の本数は `ISDK::NumberCustomDimensionStandards()`。**
 - **カスタム規格だけが `SetCustomDimensionStandardVariable` で書ける。**
@@ -124,13 +209,34 @@ for (short index = 9; index >= -8; --index)
 - 利用者に「図面にある規格を名前で選ばせる」用途なら、**一覧を名前で出し、
   `ovDimStandardName` に書き戻す**のが素直。
 
+**実測（VW 2026 / macOS）。作った直後の寸法（`ovDimStandard = 0` / `min-nano`）に対して:**
+
+| やったこと | `SetObjectVariable` | 直後の `ovDimStandard` | 直後の `ovDimStandardName` |
+| --- | --- | --- | --- |
+| `ovDimStandard` に `1` を書く | `true` | `1` | `Arch` |
+| `ovDimStandardName` に `"ASME Dual Stacked"` を書く | `true` | `9` | `ASME Dual Stacked` |
+| `ovDimStandardName` に存在しない名前を書く | **`false`** | `9`（変わらず） | `ASME Dual Stacked`（変わらず） |
+
+- **index と名前は同じ 1 つの値の 2 つの顔で、どちらを書いても他方が即座に追随する。**
+- **`ResetObject` は要らない。** 書いた直後にもう新しい値が読み戻せる（`ResetObject` を
+  呼んだ後も値は同じ）。
+- **存在しない名前は `false` で弾かれ、元の値が残る。** 「利用者が選んだ名前が図面に
+  あるか」を別途照合しなくても、**書いてみて戻り値を見れば済む**。
+
 ## 連続寸法（チェーン寸法）
 
 - **`ISDK::CreateChainDimension(h1, h2)` がある。** ヘッダ:
   「渡された 2 つの寸法または連続寸法が 1 つの連続寸法オブジェクトになる条件を満たす
   とき、新しい連続寸法オブジェクトを作って返す」。
   つまり**まず直線寸法を 1 本ずつ作り、それを 2 本ずつ繋いでいく**形になる。
-- 連続寸法は**プラグインオブジェクト**らしい（`kInternalID_NNA_ChainDim = 222`）。
+- 連続寸法は**プラグインオブジェクト**（`kInternalID_NNA_ChainDim = 222`）。実測の
+  `GetObjectTypeN` は **86**（直線寸法の 63 とは別）。
+- **実測で、端点を共有する同じ向きの直線寸法 2 本は 1 つの連続寸法になった。**
+  元の 2 本は**レイヤ直下から消えて**連続寸法の中へ取り込まれる
+  （`FirstMemberObj`/`NextObject` で歩くと中身が 4 件あった）。
+- **連続寸法そのものには寸法のオブジェクト変数が効かない。** `ovDimStandardName` を
+  読もうとすると `GetObjectVariable` が `false` を返す。**規格は繋ぐ前の直線寸法へ
+  当てる**のが素直。
 
 ## 寸法をビューポートの注釈へ入れる
 
@@ -143,3 +249,28 @@ for (short index = 9; index >= -8; --index)
   想定された使い方**だという証拠になる）。
 - **注釈へ後から足した図形のクラスはビューポートで非表示のまま**（[Viewports](Viewports.md)）。
   寸法も同じなので、足した後に全クラスを表示へ戻して再更新する。
+
+**実測（VW 2026 / macOS）:**
+
+- `AddViewportAnnotationObject(viewport, dimension)` は **`true`** を返し、移した後も
+  その寸法は**型 63 のまま生きていて**、`ovDimStandardName` などのオブジェクト変数も
+  そのまま読める。
+- **外接矩形は移す前後で変わらない。** 注釈空間の座標は `CreateLinearDimension` に
+  渡した座標そのままで、移動や座標変換は掛からない。
+- 平面ビューポートの `GetObjectTypeN` は **122**。
+
+## まだ確かめていないもの（[#129](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/129) で調査中）
+
+**この節は調査が終わったら消す。** 印を付けて残すためのものではない。
+
+- **`dimType` のどの数値がどの種類か。** ヘッダは「水平/垂直だけ」「p1→p2 の向きへ
+  回す」「ordinate」の 3 択としか書いておらず、数値との対応が無い。1 巡目の実測では
+  同じ 2 点に対して **`dimType` 0 と 1 は外接矩形まで完全に同じ**、2 と 3 はそれぞれ
+  違う矩形になった（水平 2 点・`startOffset=300`: 0/1 は `上654.800 右1000.000`、
+  2 は `上832.976 右1152.400`、3 は `上354.800 右1421.708`）。**斜めの 2 点でも 0 と 1 は
+  同じ**だった。種類そのものは `ovDimClass` で決まるが、1 巡目は型を取り違えて
+  読めていない（`t_Sint8`）。2 巡目で読み直す。
+- **`startOffset` の符号がどちら側を指すのか。** 1 巡目は水平（`+` で上）と垂直
+  （`+` で右）の 2 例だけで、一般の規則にならなかった。2 巡目で 4 方向を測る。
+- **連続寸法を作るとレイヤ直下の要素数が 11 → 13（`+2`）になった理由。**
+  元の 2 本は直下から消えているのに増えている。2 巡目で直下の型を列挙する。
