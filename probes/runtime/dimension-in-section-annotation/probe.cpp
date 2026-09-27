@@ -22,6 +22,14 @@
 //	**`ovViewportDisplay2DComponents`(1059) は `SetObjectVariable` が `true` を返すのに
 //	読み戻すと `false` のまま**（隠線消去を先に入れてあっても入らなかった）。
 //
+//	**5 巡目。** 4 巡目で壁は断面に写るようになった（1064 を true にしたため）。そこで
+//	分かったのが**座標の約束の取り違え**——「横＝断面線の**始点**からの距離」と決め打って
+//	寸法を 500〜4500 に置いたが、壁は約 **-4500〜-500** に描かれていた。**ずれはちょうど
+//	5000mm ＝ 断面線の長さ**なので、**原点は断面線の「終点」**である。
+//	issue #129 に最初から「横＝断面線の終点からの距離」と書いてあったとおりで、
+//	こちらが読み替えていた。この版は終点基準へ直して置き直す。
+//	**縦＝Z は確認済み**（「底の高さは合っていそう」）。
+//
 //	**4 巡目。** 3 巡目で壁の高さ 0 は直った（`GetWallOverallHeights` が 0 → 2800mm に
 //	なった）のに、**断面にはまだ壁が写らなかった**。絵を見せてもらって分かった原因は
 //	またプローブ側で、`ovSectionViewportDisplayObjectsBeyondCutPlane`(1064) を
@@ -254,30 +262,39 @@ VW_PROBE("dimension-in-section-annotation", "断面ビューポートの注釈�
 
 	probe.log("");
 	probe.log("== 注釈へ寸法を 2 本置く ==");
-	probe.log("データタグで実機確認済みの約束（Findings「Data Tags」）に合わせて置く:");
-	probe.log("  横 = 断面線の**始点**からの距離 / 縦 = Z");
-	probe.log("断面線は (-500,-1500) から (4500,-1500) なので、壁の左端 x=0 は始点から");
-	probe.log("500mm、右端 x=4000 は 4500mm の位置にあたる。");
+	probe.log("**5 巡目で座標の約束を直した。** 4 巡目は「横＝断面線の**始点**からの距離」と");
+	probe.log("決め打って 500〜4500 に置いたが、実機では壁が約 -4500〜-500 に描かれていた");
+	probe.log("——ずれはちょうど 5000mm ＝ 断面線の長さ。つまり**原点は断面線の終点**で、");
+	probe.log("issue #129 に最初から書いてあった「横＝断面線の終点からの距離」が正しい。");
+	probe.log("  横 = （断面線に沿った位置） - （断面線の終点） / 縦 = Z");
+	probe.log("断面線は (-500,-1500) から (4500,-1500)。終点は x=4500 なので、");
+	probe.log("  壁の左端 x=0    → 0    - 4500 = -4500");
+	probe.log("  壁の右端 x=4000 → 4000 - 4500 =  -500");
 
 	MCObjectHandle horiz =
-		gSDK->CreateLinearDimension(WorldPt(500, 0), WorldPt(4500, 0), -500, 0, Vector2(0, 0), 0);
+		// 壁の左端 → 右端。startOffset は負で壁の下へ出す（水平な寸法は + が上）。
+		gSDK->CreateLinearDimension(WorldPt(-4500, 0), WorldPt(-500, 0), -500, 0, Vector2(0, 0), 0);
 	if (horiz == nil)
 		probe.fail("(A) 横方向の寸法を作れなかった");
 	else
 	{
 		probe.log(
-			"(A) 横 500→4500・Z=0・startOffset=-500 … AddViewportAnnotationObject = " +
+			"(A) 横 -4500→-500（壁の左端→右端）・Z=0・startOffset=-500 … "
+			"AddViewportAnnotationObject = " +
 			std::string(gSDK->AddViewportAnnotationObject(section, horiz) ? "true" : "false"));
 		SecDimLogBounds(probe, "(A)", horiz);
 	}
 
 	MCObjectHandle vert =
-		gSDK->CreateLinearDimension(WorldPt(500, 0), WorldPt(500, 2400), -500, 0, Vector2(0, 0), 0);
+		// 壁の左端で Z 0→2400。startOffset は負で壁の左へ出す（垂直な寸法は + が右）。
+		gSDK->CreateLinearDimension(WorldPt(-4500, 0), WorldPt(-4500, 2400), -500, 0, Vector2(0, 0),
+									0);
 	if (vert == nil)
 		probe.fail("(B) 縦方向の寸法を作れなかった");
 	else
 	{
-		probe.log("(B) 横 500 固定・Z 0→2400・startOffset=-500 … AddViewportAnnotationObject = " +
+		probe.log("(B) 横 -4500 固定（壁の左端）・Z 0→2400・startOffset=-500 … "
+				  "AddViewportAnnotationObject = " +
 				  std::string(gSDK->AddViewportAnnotationObject(section, vert) ? "true" : "false"));
 		SecDimLogBounds(probe, "(B)", vert);
 	}
@@ -296,7 +313,8 @@ VW_PROBE("dimension-in-section-annotation", "断面ビューポートの注釈�
 	probe.log("(1) 壁が描かれているか（断面線は壁の手前にあるので、壁は「切断面より奥」");
 	probe.log("    に立って見えるはず。1〜3 巡目はここが空だった）。");
 	probe.log("(2) 寸法が 2 本（横と縦）見えているか。");
-	probe.log("(3) 横の寸法 (A) は、断面に写った壁の左端から右端までに掛かっているか");
-	probe.log("    （＝「4000」と読めるか）。ずれているなら、どちらへ何 mm ぶんか。");
-	probe.log("(4) 縦の寸法 (B) は、壁の足元（Z=0）から Z=2400 までに掛かっているか。");
+	probe.log("(3) 横の寸法 (A) は、**今度こそ壁の左端から右端までに掛かっているか**");
+	probe.log("    （4 巡目は 5000mm ぶん右へずれていた）。まだずれるなら、どちらへ");
+	probe.log("    何 mm ぶんか。");
+	probe.log("(4) 縦の寸法 (B) は、壁の左端で足元（Z=0）から上へ掛かっているか。");
 }
