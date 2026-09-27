@@ -46,6 +46,7 @@
 | [Viewports](Viewports.md) | ビューポートのクラス表示・2D/平面への作り直し・断面ビューポートの新規作成と範囲 |
 | [Sheet Layers and Page Layout](Sheet%20Layers%20and%20Page%20Layout.md) | 用紙と印刷可能領域の読み取り（単位の癖）・用紙の位置は読めない・置いた後に測って動かす作法 |
 | [Data Tags](Data%20Tags.md) | データタグのタグレイアウト・式・関連付け・配置の落とし穴 |
+| [Dimensions](Dimensions.md) | 寸法。直線寸法を作る唯一の口 `CreateLinearDimension`（**`textOffset` は使われない**・`dir` は `(0,0)` で自動計算）・**寸法「スタイル」という名前付きリソースは無い**（あるのは文書が配列で持つ**寸法規格**だけ）・規格の index は組み込み 1〜9／カスタム 0〜-8 で名前は `dimStdstandardName` で引く・規格の長さは**用紙インチ**・連続寸法は `CreateChainDimension` で 2 本ずつ繋ぐ・注釈へは`AddViewportAnnotationObject` |
 | [Graphic Legends](Graphic%20Legends.md) | グラフィック凡例の内部構造・ソース定義とフィルタの保存先・縮率（打ち切り） |
 | [Tagged Data](Tagged%20Data.md) | タグ付きデータ（`TaggedData*`）の型・読み書きの癖・補助オブジェクトの生バイト構造 |
 | [Undo](Undo.md) | undo イベントの開き方・登録の作法・戻らないもの |
