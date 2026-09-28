@@ -167,6 +167,38 @@ namespace
 		return names;
 	}
 
+	// 下で定義している（この関数より後ろに置いてあるので前方宣言する）。
+	std::vector<MCObjectHandle> SlhAllLayers();
+
+	// ビューポートの素性——**断面ビューポートか**（オブジェクト変数 1054
+	// ＝`ovIsSectionViewport`）と、**表示になっているレイヤの数**。
+	//
+	// 1 回目の実測で、同じ文書の UI 製ビューポート 37 件が**きれいに 2 つに割れた**
+	// （数値が出たもの／`0` のもの）。名前からは断面図と伏図の差に見えるので、
+	// **名前ではなくこの 2 つの値で割れているのかを確かめる。**
+	std::string SlhViewportKind(MCObjectHandle vp)
+	{
+		TVariableBlock var;
+		bool isSection = false;
+		const bool got = gSDK->GetObjectVariable(vp, 1054, var);
+		if (got)
+			var.GetBoolean(isSection);
+		int shown = 0;
+		int readable = 0;
+		const std::vector<MCObjectHandle> layers = SlhAllLayers();
+		for (size_t i = 0; i < layers.size(); ++i)
+		{
+			short visibility = -99;
+			if (!gSDK->GetViewportLayerVisibility(vp, layers[i], visibility))
+				continue;
+			++readable;
+			if (visibility == 0)
+				++shown;
+		}
+		return std::string(got ? (isSection ? "断面VP" : "平面VP") : "種別読めず") +
+			   " 表示レイヤ=" + std::to_string(shown) + "/" + std::to_string(readable);
+	}
+
 	// 1 つのストーリを、階の高さ・レベルの高さ・レイヤ・解決Z の 4 つの口で読む。
 	// **段 1（UI 製）と段 2（SDK 製）で同じ関数を通す**ので、並べたときに比較できる。
 	void SlhDumpStory(vwprobe::Report& probe, MCObjectHandle story, const std::string& indent)
@@ -485,7 +517,8 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 			for (size_t i = 0; i < existingViewports.size(); ++i)
 			{
 				const std::string label =
-					"ビューポート〈" + SlhName(existingViewports[i]) + "〉の注釈（" +
+					"ビューポート〈" + SlhName(existingViewports[i]) + "〉[" +
+					SlhViewportKind(existingViewports[i]) + "] の注釈（" +
 					SlhName(probeStories[0]) + " / " + SlhStr(probeTypes[0]) +
 					"。レベルの絶対Z=" + SlhResolvedLevelZ(layer0, probeTypes[0]) + "）";
 				made.push_back(SlhPlaceMarker(probe, existingViewports[i],
@@ -522,11 +555,36 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 				TXString storyName;
 				gSDK->GetObjectName(probeStories[0], storyName);
 				MCObjectHandle layer0 = gSDK->GetLayerForStory(probeStories[0], probeTypes[0]);
-				const std::string label = "SDK 製ビューポートの注釈（" + SlhName(probeStories[0]) +
-										  " / " + SlhStr(probeTypes[0]) + "。レベルの絶対Z=" +
-										  SlhResolvedLevelZ(layer0, probeTypes[0]) + "）";
-				made.push_back(SlhPlaceMarker(probe, vpB, static_cast<const char*>(storyName),
-											  probeTypes[0], 0.0, label));
+				const std::string zInfo =
+					"。レベルの絶対Z=" + SlhResolvedLevelZ(layer0, probeTypes[0]) + "）";
+				const std::string who =
+					"（" + SlhName(probeStories[0]) + " / " + SlhStr(probeTypes[0]);
+				// 3a: 作ったまま（表示レイヤは VW が決めた既定のまま）。
+				made.push_back(SlhPlaceMarker(
+					probe, vpB, static_cast<const char*>(storyName), probeTypes[0], 0.0,
+					"3a 作ったまま [" + SlhViewportKind(vpB) + "] " + who + zInfo));
+
+				// 3b: **全レイヤを表示にしてから**もう 1 本。1 回目の段 4 では書いたまま
+				// 読み戻していなかったので、ここは 1 枚ずつ読み戻して効いたかを出す。
+				probe.log("  3b の下ごしらえ: 全レイヤを表示にする（書いて読み戻す）");
+				const std::vector<MCObjectHandle> allLayers = SlhAllLayers();
+				int wroteOk = 0;
+				int nowShown = 0;
+				for (size_t k = 0; k < allLayers.size(); ++k)
+				{
+					if (gSDK->SetViewportLayerVisibility(vpB, allLayers[k], 0))
+						++wroteOk;
+					short after = -99;
+					if (gSDK->GetViewportLayerVisibility(vpB, allLayers[k], after) && after == 0)
+						++nowShown;
+				}
+				probe.log("    Set が true を返した数=" + std::to_string(wroteOk) +
+						  " / 読み戻しで表示になっていた数=" + std::to_string(nowShown) +
+						  " / レイヤ数=" + std::to_string(allLayers.size()));
+				gSDK->UpdateViewport(vpB);
+				made.push_back(SlhPlaceMarker(
+					probe, vpB, static_cast<const char*>(storyName), probeTypes[0], 0.0,
+					"3b 全レイヤ表示の後 [" + SlhViewportKind(vpB) + "] " + who + zInfo));
 				// 消す順（後ろから消えるので、先に積んだものが後に消える）。
 				made.push_back(vpB);
 				made.push_back(sheetB);
@@ -538,12 +596,16 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 		SlhDeleteAll(made);
 		probe.log("  作った " + std::to_string(madeCount) + " 個を消した");
 		probe.log("");
-		probe.log("**読みどころ 1**: 1B-1 の「描かれた数値」が、同じ行の「レベルの絶対Z」と");
+		probe.log("**読みどころ 1**: 1B-2 で数値が出たビューポートと `0` のものを、行頭の");
+		probe.log("[断面VP/平面VP 表示レイヤ=n/m] で見分ける。1 回目は 37 件が 2 つに割れた");
+		probe.log("（断面図らしい名前は数値、伏図らしい名前は 0）——**名前ではなくこの 2 つの");
+		probe.log("値で割れているのか**がここで分かる。");
 		probe.log(
-			"「レイヤの高さ」のどちらと一致するか——これでマーカーが何を読んでいるかが決まる。");
+			"**読みどころ 2**: 3a が `0` で 3b が数値なら、**SDK で作った断面ビューポートでも");
+		probe.log("「表示レイヤを入れてから置けば」注釈に高さが出る**——それが求めていた手順。");
 		probe.log(
-			"**読みどころ 2**: 1B-2（UI 製ビューポート）で数値が出て 1B-3（SDK 製）で 0 なら、");
-		probe.log("注釈で解決する条件は**ビューポートの出自**である。両方出れば、条件は文書の側。");
+			"3b も `0` なら、上の「読み戻しで表示になっていた数」を見る——効いていて 0 なら、");
+		probe.log("条件はレイヤの表示ではない。");
 		return;
 	}
 
