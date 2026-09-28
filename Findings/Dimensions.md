@@ -40,9 +40,10 @@
   勝手に解かれるのではなく、**`CreateConstraintModel(nil, true)`（動かす前）→ 動かす →
   `UpdateConstraintModel()`（解く）**という段を呼び出し側が踏む。これを呼べば測点が
   追う。`MoveObject` ＋ `ResetObject` だけでは 1mm も動かない（[下記](#寸法の関連付け図形が動いたら寸法も追うか)）。
-- **関連付いたかは `HasConstraint(h)` で読める**（`void` の代わり）。**文書環境設定
-  `varAssociateDims`(28) / `varAutoAssociateDims`(134) を両方 off にすると、
-  `AssociateLinearDimension` は何もしない。**
+- **関連付いたかは `HasConstraint(h)` で読める**（`void` の代わり）。**門は文書環境設定
+  `varAssociateDims`(28) ただ 1 つ**で、これが off だと `AssociateLinearDimension` は
+  何もしない（`varAutoAssociateDims`(134) は関与しない）。**新規図面の既定は on** なので、
+  ふつうは読んで確かめるだけでよい。
 
 ## `CreateLinearDimension` の引数
 
@@ -504,7 +505,7 @@ gSDK->UpdateConstraintModel();   // ← これを呼ばないと測点は 1mm �
 使ってはいけない**——`CreateConstraintModel(nil, true)`（選択で渡す）なら出ない。
 **このダイアログを抑止する環境設定は SDK に無い**（`ProgramVariables.h` を当たった）。
 
-#### 文書環境設定が門になっている
+#### 門は `varAssociateDims`(28) ただ 1 つ——`varAutoAssociateDims`(134) は関与しない
 
 | selector | 名前 | 置き場所 |
 | --- | --- | --- |
@@ -512,18 +513,24 @@ gSDK->UpdateConstraintModel();   // ← これを呼ばないと測点は 1mm �
 | `134` | `varAutoAssociateDims` | `ProgramVariables.h:162`（More Boolean Selectors） |
 
 どちらも `ISDK::GetProgramVariable` / `SetProgramVariable` で読み書きする
-（**Boolean selector** なので 1 バイト）。
+（**Boolean selector** なので 1 バイト）。4 通りを総当たりした実測:
 
-**両方 `0` にして呼ぶと、
-`AssociateLinearDimension` は何もしない。** `HasConstraint` は `いいえ` のまま、
-補助オブジェクトの型も `[76]` のままで、`UpdateConstraintModel` を呼んでも追わない。
+| `varAssociateDims`(28) | `varAutoAssociateDims`(134) | 関連付いたか | 測点が追ったか |
+| --- | --- | --- | --- |
+| `1` | `1` | はい | **追従した** |
+| `1` | `0` | はい | **追従した** |
+| `0` | `1` | **いいえ** | しない |
+| `0` | `0` | **いいえ** | しない |
 
-実機（VW 2026）の**新規図面の走り出しの値は `varAssociateDims=1` /
-`varAutoAssociateDims=0`**。
+**`varAssociateDims`(28) が `0` だと、`AssociateLinearDimension` は何もしない**
+——`HasConstraint` は `いいえ` のまま、補助オブジェクトの型も `[76]` のままで、
+その後 `UpdateConstraintModel` を呼んでも当然追わない。**`varAutoAssociateDims`(134)
+は、`1` でも `0` でも結果を変えなかった。**
 
-【未確認】**どちらか一方だけで足りるのか**は、この実行では分けていない（両方 on と
-両方 off しか見ていない）。プラグインは利用者の文書設定を勝手に変えたくないので、
-どちらを見ればよいかは要る——2 巡目で 4 通りを総当たりして決める。
+**実機（VW 2026）の新規図面の走り出しは `28=1` / `134=0`** なので、**ふつうは何も
+しなくてよい**。プラグイン側は `varAssociateDims` を**読んで確かめるだけ**でよく、
+書き換える必要は無い（利用者が文書環境設定で切っている場合に備えるなら、
+書き換えるのではなく「関連付けができない」と伝えるほうが筋が通る）。
 
 #### 通らなかった道
 
