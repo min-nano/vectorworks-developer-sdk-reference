@@ -137,6 +137,26 @@ namespace
 		return SlhNum(gSDK->GetStoryObjectDataBoundHeight(data, container));
 	}
 
+	// **レイヤそのものの高さ**を読む。VS の `GetLayerElevation` に当たる ISDK の口は
+	// 無いが、`eStoryObjectBound_LayerElevation`（＝そのオブジェクトが乗っている
+	// レイヤの高さ）のバウンドを、そのレイヤを入れ物にして解かせれば読める。
+	//
+	// **これはストーリレベルの絶対Z とは別物になり得る。** 1 回目の実測（実物件の図面）で
+	// レベル基準線が描いた数値（576 / 3176 / 6776）は、ストーリレベルの絶対Z
+	// （612 / 3571 / 6374）と一致しなかった——**マーカーが読んでいるのはレベルの高さでは
+	// なくレイヤの高さではないか**という筋を、この 1 行で切り分ける。
+	std::string SlhLayerZ(MCObjectHandle layer)
+	{
+		if (layer == nil)
+			return "(レイヤが無い)";
+		VectorWorks::SStoryObjectData data;
+		data.fBound = VectorWorks::eStoryObjectBound_LayerElevation;
+		data.fBoundStory = 0;
+		data.fLayerLevelType = "";
+		data.fOffset = 0;
+		return SlhNum(gSDK->GetStoryObjectDataBoundHeight(data, layer));
+	}
+
 	// 登録されているレベル種別の名前（**添字は 1 始まり**。0 始まりで回すと末尾を落とす）。
 	std::vector<TXString> SlhLevelTypeNames()
 	{
@@ -174,9 +194,10 @@ namespace
 			// **レベルが生えていないレベル種別は飛ばす**（全種別 × 全階を出すと読めなくなる）。
 			if (layer == nil)
 				continue;
-			probe.log(indent + "  レベル種別〈" + SlhStr(types[i]) + "〉 GetStoryLevelElevation=" +
-					  SlhNum(gSDK->GetStoryLevelElevation(story, types[i])) + " バウンド解決Z=" +
-					  SlhResolvedLevelZ(layer, types[i]) + " レイヤ=〈" + SlhName(layer) + "〉");
+			probe.log(indent + "  レベル種別〈" + SlhStr(types[i]) +
+					  "〉 相対Z=" + SlhNum(gSDK->GetStoryLevelElevation(story, types[i])) +
+					  " レベルの絶対Z=" + SlhResolvedLevelZ(layer, types[i]) +
+					  " レイヤの高さ=" + SlhLayerZ(layer) + " レイヤ=〈" + SlhName(layer) + "〉");
 		}
 	}
 
@@ -369,6 +390,11 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 		probe.log("この図面には既にストーリがあるので、段 2・3 は行わない（試験用のストーリを");
 		probe.log("生やさないため）。**上の数値が「UI で作ったストーリ」側の実測値**になる。");
 		probe.log("**新規の空図面でもう一度走らせる**と、SDK で作った側が同じ形で並ぶ。");
+		probe.log("");
+		probe.log("**見るところ: 「レベルの絶対Z」と「レイヤの高さ」が一致しているか。**");
+		probe.log("1 回目の実測では、この図面のレベル基準線が描いた数値（576 / 3176 / 6776）が");
+		probe.log("レベルの絶対Z（612 / 3571 / 6374）と一致しなかった。レイヤの高さのほうが");
+		probe.log("描かれた数値と一致するなら、マーカーが読んでいるのはレイヤの高さである。");
 		return;
 	}
 
@@ -404,8 +430,9 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 			continue;
 		}
 		probe.log(std::string("  ") + v.fTag + ": 階=" + SlhNum(gSDK->GetStoryElevation(v.fStory)) +
-				  " レベル=" + SlhNum(gSDK->GetStoryLevelElevation(v.fStory, levelType)) +
-				  " 解決Z=" + SlhResolvedLevelZ(v.fLayer, levelType) + " レイヤ=" +
+				  " 相対Z=" + SlhNum(gSDK->GetStoryLevelElevation(v.fStory, levelType)) +
+				  " レベルの絶対Z=" + SlhResolvedLevelZ(v.fLayer, levelType) +
+				  " レイヤの高さ=" + SlhLayerZ(v.fLayer) + " レイヤ=" +
 				  (v.fLayer == nil ? "生えていない" : "〈" + SlhName(v.fLayer) + "〉"));
 	}
 
