@@ -42,7 +42,7 @@
 | [Walls](Walls.md) | 壁の生成・高さ・結合（`JoinWalls`）・キャップ・2D 表現の更新 |
 | [Slabs and Extrudes](Slabs%20and%20Extrudes.md) | スラブの構成層・`VWExtrudeObj` の平行移動・`ModifySlab` の不具合（打ち切り） |
 | [Roof Faces](Roof%20Faces.md) | 屋根面オブジェクトの正しい作り方（コンストラクタは使えない・オブジェクト変数で与える） |
-| [Layers and Stories](Layers%20and%20Stories.md) | デザインレイヤの重ね順（高さの降順）・並べ替えの唯一の手段・**階を SDK から作る**（レベルはレベルテンプレート経由）・重ね順上書きは書けない（打ち切り） |
+| [Layers and Stories](Layers%20and%20Stories.md) | デザインレイヤの重ね順（高さの降順）・並べ替えの唯一の手段・**階を SDK から作る**（レベルはレベルテンプレート経由）・**レベルの高さは「階の高さ＋階内の相対Z」**（`GetStoryLevelElevation` / `SetStoryLevelElevation` が扱うのは相対Z・テンプレートの `elevationOffset` がその値・`SetStoryElevation` の呼ぶ順は高さに効かない・**相対Z の `0` を「高さが無い」と読み違えない**）・重ね順上書きは書けない（打ち切り） |
 | [Viewports](Viewports.md) | ビューポートのクラス表示・2D/平面への作り直し・断面ビューポートの新規作成と範囲 |
 | [Sheet Layers and Page Layout](Sheet%20Layers%20and%20Page%20Layout.md) | 用紙と印刷可能領域の読み取り（単位の癖）・用紙の位置は読めない・置いた後に測って動かす作法 |
 | [Level Objects](Level%20Objects.md) | レベル（標高）オブジェクト。**断面ビューポートの注釈へ GL・FL・軒高を置く**。VW 2026 に 3 つある PIO（レベル基準線 / レガシー / レベル）・**既定では注釈の Y を読まない**（読ませる欄はそれぞれ 1 つ）・移動に追従する・数値を出さない設定・**ストーリレベルへ結ぶ口は `Datum` ではなく `__StoryName` ＋ `__LevelTypeName`**・**マーカーレイアウト（＝プロファイルグループ）を渡し直せば任意の名前を出せる**・**注釈でも名前と高さは両立する（3 つ組だけでよい）**・`Elev` は出力で書けない・SDK で作ったストーリでは高さが 0 になる（#141） |

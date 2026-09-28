@@ -23,6 +23,22 @@
 //	  3) **断面ビューポートを作り、注釈へ 3 つ組のレベル基準線を変種ごとに置いて
 //	     `Elev` を読む。** 対照として同じ 3 つ組をそのレベルのデザインレイヤにも置く
 //	     （#133 ではそちらだけ `2800` を出していた）。
+//	  4) **段 3 で注釈だけが `0` になったときに、その理由をビューポートの側で探す。**
+//
+//	【1 回目の実測で分かったこと（2026-09-28。新規の空図面）】**段 2 の 4 変種すべてで
+//	ストーリレベルは高さを持っていた**（解決Z ＝ 2800 / 5900 / 8400 / 11300）。
+//	`GetStoryLevelElevation` は階内の相対Z、`SetStoryLevelElevation` も相対Z、
+//	テンプレートの `elevationOffset` がその相対Z になる。`SetStoryElevation` を
+//	レベルの前に呼ぶか後に呼ぶかは高さに効かない。**つまり issue #141 の見当
+//	（「SDK で作ったレベルは高さを持っていない」）は外れ**だった。
+//	段 3 では**デザインレイヤもシートレイヤも解決Z をそのまま描いた**（シートレイヤは
+//	ストーリに属さないので、**レイヤの Z ではなく解決Z を読んでいる**ことも確定）。
+//	**注釈の中だけが 4 変種とも `0`**（名前は出た）。残っているのは「注釈の中で
+//	解決させる条件」だけなので、段 4 でビューポートの側を潰す:
+//	  4-1) このビューポートはストーリのレイヤを表示しているか（`GetViewportLayerVisibility`）
+//	  4-2) **全レイヤを表示にして更新してから作り直す**と解決するか
+//	  4-3) そのうえで**新しい 1 本**を注釈へ置いたら解決するか
+//	  4-4) **はじめから全レイヤを表示にして作った 2 つ目の断面ビューポート**ならどうか
 //
 //	【走らせる図面】**新規の空図面**。段 2・3 はストーリが 1 つも無い図面でしか走らない
 //	（実物件の図面へ試験用のストーリを生やさないため）。ストーリのある図面で走らせた
@@ -264,16 +280,18 @@ namespace
 	}
 
 	// レベル基準線を 1 本置いて 3 つ組を書き、**絵に出た数値と名前**まで読む。
-	// `container` が nil なら「いまのレイヤ」へ、`viewport` が非 nil ならその注釈へ入れる。
-	void SlhPlaceMarker(vwprobe::Report& probe, MCObjectHandle viewport, const char* storyName,
-						const TXString& levelType, double y, const std::string& what)
+	// `viewport` が nil なら「いまのレイヤ」へ、非 nil ならその注釈へ入れる。
+	// 置いた個体を返す（段 4 で作り直して読み直すため）。
+	MCObjectHandle SlhPlaceMarker(vwprobe::Report& probe, MCObjectHandle viewport,
+								  const char* storyName, const TXString& levelType, double y,
+								  const std::string& what)
 	{
 		MCObjectHandle marker = gSDK->CreateCustomObject(kSlhBenchmark2, WorldPt(0, y), 0.0);
 		if (marker == nil)
 		{
 			probe.fail(std::string("CreateCustomObject(") + kSlhBenchmark2 + ") が nil を返した（" +
 					   what + "）");
-			return;
+			return nil;
 		}
 		if (viewport != nil)
 			gSDK->AddViewportAnnotationObject(viewport, marker);
@@ -292,6 +310,34 @@ namespace
 				  SlhStr(obj.GetParamValue("__StoryName")) + "〉 __LevelTypeName=〈" +
 				  SlhStr(obj.GetParamValue("__LevelTypeName")) + "〉");
 		probe.log("    絵に出た文字: " + SlhDrawnTexts(marker));
+		return marker;
+	}
+
+	// 置いてある個体を作り直して、同じ形でもう一度読む（段 4 で「条件を変えたら
+	// 解決するか」を見るため）。**作り直さないと欄は更新されない。**
+	void SlhResetAndLog(vwprobe::Report& probe, MCObjectHandle marker, const std::string& what)
+	{
+		if (marker == nil)
+			return;
+		gSDK->ResetObject(marker);
+		VWFC::VWObjects::VWParametricObj obj(marker);
+		probe.log("  " + what + ": Datum=〈" + SlhStr(obj.GetParamValue("Datum")) +
+				  "〉 Elevation 欄=〈" + SlhStr(obj.GetParamValue("Elevation")) + "〉 Elev 欄=〈" +
+				  SlhStr(obj.GetParamValue("Elev")) + "〉");
+		probe.log("    絵に出た文字: " + SlhDrawnTexts(marker));
+	}
+
+	// 文書の全レイヤ（`ForEachLayerN` が返すもの）。
+	std::vector<MCObjectHandle> SlhAllLayers()
+	{
+		std::vector<MCObjectHandle> layers;
+		gSDK->ForEachLayerN(
+			[&layers](MCObjectHandle h)
+			{
+				if (h != nil)
+					layers.push_back(h);
+			});
+		return layers;
 	}
 } // namespace
 
@@ -404,13 +450,14 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 	probe.log("断面ビューポートを作った（シートレイヤ〈" + SlhName(sheet) + "〉の上）");
 
 	probe.log("--- 3-1: 注釈の中（各変種のレベルへ 3 つ組で結ぶ）---");
+	std::vector<MCObjectHandle> annotationMarkers(variantCount, nil);
 	for (size_t i = 0; i < variantCount; ++i)
 	{
 		if (variants[i].fStory == nil)
 			continue;
-		SlhPlaceMarker(probe, viewport, variants[i].fStoryName, levelType,
-					   gSDK->GetStoryElevation(variants[i].fStory),
-					   std::string("注釈〈") + variants[i].fTag + "〉");
+		annotationMarkers[i] = SlhPlaceMarker(probe, viewport, variants[i].fStoryName, levelType,
+											  gSDK->GetStoryElevation(variants[i].fStory),
+											  std::string("注釈〈") + variants[i].fTag + "〉");
 	}
 
 	probe.log("--- 3-2: 対照（そのレベルのデザインレイヤへ直に置く）---");
@@ -434,10 +481,79 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 	}
 
 	gSDK->UpdateViewport(viewport);
+
+	// ---------------------------------------------------------------- 段 4
+	// 1 回目の実測で「ストーリの側は正しく、注釈の中だけが 0」まで絞れた。
+	// **残りはビューポートの側**なので、ここで潰す。
 	probe.log("");
-	probe.log("読み方: 段 2 のまとめで**レベルの高さと解決Z が階の高さと噛み合っているか**を、");
-	probe.log("段 3 で**その値が絵に出たか**を見る。両方出ていれば「SDK で作ったストーリの");
-	probe.log("レベルも高さを持つ」で、#133 の `0` は別の原因（段 3 の 3 つ組の書き方か、");
-	probe.log("断面ビューポートの側）になる。段 2 が噛み合っていなければ、噛み合わせた変種が");
-	probe.log("そのまま「SDK からレベル基準線に高さを出させる手順」になる。");
+	probe.log("=== 段 4: 注釈だけが 0 になる理由を、ビューポートの側で探す ===");
+
+	probe.log("--- 4-1: このビューポートが表示しているレイヤ ---");
+	const std::vector<MCObjectHandle> layers = SlhAllLayers();
+	for (size_t i = 0; i < layers.size(); ++i)
+	{
+		short visibility = -1;
+		const bool got = gSDK->GetViewportLayerVisibility(viewport, layers[i], visibility);
+		probe.log("  レイヤ〈" + SlhName(layers[i]) + "〉 読めた=" + SlhBool(got) +
+				  " 表示=" + std::to_string(visibility) +
+				  " ストーリ=" + (gSDK->GetStoryOfLayer(layers[i]) == nil ? "無し" : "有り"));
+	}
+
+	probe.log("--- 4-2: 全レイヤを表示にして更新し、注釈の個体を作り直す ---");
+	for (size_t i = 0; i < layers.size(); ++i)
+		gSDK->SetViewportLayerVisibility(viewport, layers[i], 0); // 0 = 表示
+	gSDK->UpdateViewport(viewport);
+	for (size_t i = 0; i < variantCount; ++i)
+		SlhResetAndLog(probe, annotationMarkers[i],
+					   std::string("全レイヤ表示＋更新の後〈") + variants[i].fTag + "〉");
+
+	probe.log("--- 4-3: そのうえで注釈へ新しい 1 本を置く ---");
+	for (size_t i = 0; i < variantCount; ++i)
+	{
+		if (variants[i].fStory == nil)
+			continue;
+		SlhPlaceMarker(probe, viewport, variants[i].fStoryName, levelType,
+					   gSDK->GetStoryElevation(variants[i].fStory),
+					   std::string("全レイヤ表示の後に新しい 1 本〈") + variants[i].fTag + "〉");
+	}
+
+	probe.log("--- 4-4: はじめから全レイヤを表示にして作った 2 つ目の断面ビューポート ---");
+	MCObjectHandle sheet2 = gSDK->CreateLayer("断面 2（#141 の調査用）", kLayerSheet);
+	MCObjectHandle viewport2 = nil;
+	if (sheet2 != nil)
+		viewport2 = gSDK->CreateSectionViewport(WorldPt(-1000, -1500), WorldPt(7000, -1500),
+												WorldPt(0, 3000), 0, -1000, 13000, sheet2);
+	if (viewport2 == nil)
+	{
+		probe.log("  2 つ目の断面ビューポートを作れなかった（4-4 は行えない）");
+	}
+	else
+	{
+		TVariableBlock beyond2;
+		beyond2 = static_cast<Boolean>(true);
+		gSDK->SetObjectVariable(viewport2, 1064, beyond2);
+		VWFC::VWObjects::VWViewportObj(viewport2).SetRenderType(renderFinalHiddenLine);
+		for (size_t i = 0; i < layers.size(); ++i)
+			gSDK->SetViewportLayerVisibility(viewport2, layers[i], 0);
+		gSDK->UpdateViewport(viewport2);
+		gSDK->SetCurrentLayer(sheet2);
+		for (size_t i = 0; i < variantCount; ++i)
+		{
+			if (variants[i].fStory == nil)
+				continue;
+			SlhPlaceMarker(probe, viewport2, variants[i].fStoryName, levelType,
+						   gSDK->GetStoryElevation(variants[i].fStory),
+						   std::string("2 つ目の注釈〈") + variants[i].fTag + "〉");
+		}
+		gSDK->UpdateViewport(viewport2);
+	}
+
+	probe.log("");
+	probe.log("読み方: 段 2 で**ストーリレベルが高さを持っているか**（解決Z が階の高さと");
+	probe.log("噛み合っているか）を、段 3 で**その値が絵に出たか**を場所ごとに見る。");
+	probe.log("1 回目の実測では段 2 は 4 変種とも噛み合い、段 3 でもデザインレイヤと");
+	probe.log("シートレイヤは解決Z を描いて、**注釈の中だけが 0** だった。だから段 4 で");
+	probe.log("**注釈で解決させる条件**を探す——4-2 / 4-3 / 4-4 のどこかで数値が出れば、");
+	probe.log("それが「SDK から注釈へ高さを出させる手順」になる。どれも 0 のままなら、");
+	probe.log("条件はレイヤの表示ではなく、ビューポートの別の性質か作り方の側にある。");
 }
