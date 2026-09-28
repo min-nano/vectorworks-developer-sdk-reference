@@ -726,6 +726,15 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 	probe.log("");
 	probe.log("=== 段 4: 注釈だけが 0 になる理由を、ビューポートの側で探す ===");
 
+	// **ここが決め手になり得る**——UI が作った断面ビューポートの注釈では数値が出るのに、
+	// `CreateSectionViewport` で作ったものでは出ない。**そもそも断面ビューポートとして
+	// 成立しているのか**を `ovIsSectionViewport`（1054）で読む。平面VP と出るなら、
+	// 「UI 製の伏図の注釈でも 0 だった」ことと合わせて筋が通る。
+	probe.log("--- 4-0: この SDK 製ビューポートの素性 ---");
+	probe.log("  " + SlhViewportKind(viewport) +
+			  "（UI 製の断面図では数値が出て、UI 製の"
+			  "伏図では 0 だった——ここが 平面VP なら説明がつく）");
+
 	probe.log("--- 4-1: このビューポートが表示しているレイヤ ---");
 	const std::vector<MCObjectHandle> layers = SlhAllLayers();
 	for (size_t i = 0; i < layers.size(); ++i)
@@ -783,6 +792,7 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 			gSDK->SetViewportLayerVisibility(viewport2, layers[i], 0);
 		gSDK->UpdateViewport(viewport2);
 		gSDK->SetCurrentLayer(sheet2);
+		probe.log("  2 つ目の素性: " + SlhViewportKind(viewport2));
 		for (size_t i = 0; i < variantCount; ++i)
 		{
 			if (variants[i].fStory == nil)
@@ -802,4 +812,7 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 	probe.log("**注釈で解決させる条件**を探す——4-2 / 4-3 / 4-4 のどこかで数値が出れば、");
 	probe.log("それが「SDK から注釈へ高さを出させる手順」になる。どれも 0 のままなら、");
 	probe.log("条件はレイヤの表示ではなく、ビューポートの別の性質か作り方の側にある。");
+	probe.log("**いちばん上の 4-0 を先に見る**——SDK 製が〈平面VP〉と出るなら、"
+			  "`CreateSectionViewport`");
+	probe.log("が断面ビューポートを作れていないということで、それが `0` の理由になる。");
 }
