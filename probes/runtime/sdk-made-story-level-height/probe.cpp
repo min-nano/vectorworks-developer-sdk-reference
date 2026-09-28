@@ -348,6 +348,37 @@ namespace
 		probe.log("    絵に出た文字: " + SlhDrawnTexts(marker));
 	}
 
+	// 文書にあるビューポートを全部集める（シートレイヤの中を 1 段見れば足りる）。
+	// 型 122 ＝ `kViewportNode`（`Objs.TDType.h`）。
+	std::vector<MCObjectHandle> SlhCollectViewports()
+	{
+		std::vector<MCObjectHandle> viewports;
+		std::vector<MCObjectHandle> layers;
+		gSDK->ForEachLayerN(
+			[&layers](MCObjectHandle h)
+			{
+				if (h != nil)
+					layers.push_back(h);
+			});
+		for (size_t i = 0; i < layers.size(); ++i)
+			for (MCObjectHandle h = gSDK->FirstMemberObj(layers[i]); h != nil;
+				 h = gSDK->NextObject(h))
+				if (gSDK->GetObjectTypeN(h) == kViewportNode)
+					viewports.push_back(h);
+		return viewports;
+	}
+
+	// **比較のために作った個体を消す。** undo イベントは開いていないので
+	// `useUndo = false` で消す（Findings「Undo」——半端な記録を残さない）。
+	void SlhDeleteAll(std::vector<MCObjectHandle>& made)
+	{
+		// 後ろから消す（注釈の個体 → ビューポート → シートレイヤ の順になるように積む）。
+		for (size_t i = made.size(); i > 0; --i)
+			if (made[i - 1] != nil)
+				gSDK->DeleteObject(made[i - 1], false);
+		made.clear();
+	}
+
 	// 文書の全レイヤ（`ForEachLayerN` が返すもの）。
 	std::vector<MCObjectHandle> SlhAllLayers()
 	{
@@ -395,6 +426,124 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 		probe.log("1 回目の実測では、この図面のレベル基準線が描いた数値（576 / 3176 / 6776）が");
 		probe.log("レベルの絶対Z（612 / 3571 / 6374）と一致しなかった。レイヤの高さのほうが");
 		probe.log("描かれた数値と一致するなら、マーカーが読んでいるのはレイヤの高さである。");
+
+		// ------------------------------------------------------------ 段 1B
+		// **読むだけでは足りなかった。** 描かれた数値（#135 の実測）と絶対Z が一致しない
+		// 件は、**同じ 1 回の実行で両方を測らないと**決まらない（別の日の別の図面と
+		// 突き合わせている疑いが残る）。だから**比較用の個体を自分で作って読み、必ず消す**。
+		// UI が置いた個体には一切触らない。
+		probe.log("");
+		probe.log("=== 段 1B: 同じレベルへ 3 つ組で結んだ個体が何を描くか（作って消す）===");
+		probe.log("**UI が置いた個体には触らない。** ここで作る個体は、この段の最後に全部消す。");
+		probe.log("ビューポートが「更新が必要」になるかもしれない（更新すれば元に戻る）。");
+		gSDK->DefineCustomObject(kSlhBenchmark2, kCustomObjectPrefNever);
+		std::vector<MCObjectHandle> made;
+
+		// 各ストーリの「レイヤが生えている最初のレベル種別」を 1 つずつ拾う。
+		std::vector<MCObjectHandle> probeStories;
+		std::vector<TXString> probeTypes;
+		for (size_t i = 0; i < existingStories.size(); ++i)
+			for (size_t j = 0; j < existingTypes.size(); ++j)
+				if (gSDK->GetLayerForStory(existingStories[i], existingTypes[j]) != nil)
+				{
+					probeStories.push_back(existingStories[i]);
+					probeTypes.push_back(existingTypes[j]);
+					j = existingTypes.size();
+				}
+
+		probe.log("--- 1B-1: そのレベルのデザインレイヤへ置く（注釈の外）---");
+		for (size_t i = 0; i < probeStories.size(); ++i)
+		{
+			MCObjectHandle layer = gSDK->GetLayerForStory(probeStories[i], probeTypes[i]);
+			if (layer == nil)
+				continue;
+			gSDK->SetCurrentLayer(layer);
+			const std::string label =
+				"〈" + SlhName(probeStories[i]) + " / " + SlhStr(probeTypes[i]) +
+				"〉 レベルの絶対Z=" + SlhResolvedLevelZ(layer, probeTypes[i]) +
+				" レイヤの高さ=" + SlhLayerZ(layer);
+			TXString storyName;
+			gSDK->GetObjectName(probeStories[i], storyName);
+			made.push_back(SlhPlaceMarker(probe, nil, static_cast<const char*>(storyName),
+										  probeTypes[i], 0.0, label));
+		}
+
+		// **UI が作ったビューポートの注釈**と**SDK が作った断面ビューポートの注釈**を、
+		// 同じ文書の中で並べる。片方だけ数値が出れば、条件はビューポートの出自である。
+		const std::vector<MCObjectHandle> existingViewports = SlhCollectViewports();
+		probe.log("--- 1B-2: 既にあるビューポート（UI 製）の注釈へ置く ---");
+		probe.log("  この図面のビューポート: " + std::to_string(existingViewports.size()) + " 件");
+		if (existingViewports.empty())
+		{
+			probe.log("  ビューポートが 1 件も無いので、この段は行えない");
+		}
+		else if (!probeStories.empty())
+		{
+			TXString storyName;
+			gSDK->GetObjectName(probeStories[0], storyName);
+			MCObjectHandle layer0 = gSDK->GetLayerForStory(probeStories[0], probeTypes[0]);
+			for (size_t i = 0; i < existingViewports.size(); ++i)
+			{
+				const std::string label =
+					"ビューポート〈" + SlhName(existingViewports[i]) + "〉の注釈（" +
+					SlhName(probeStories[0]) + " / " + SlhStr(probeTypes[0]) +
+					"。レベルの絶対Z=" + SlhResolvedLevelZ(layer0, probeTypes[0]) + "）";
+				made.push_back(SlhPlaceMarker(probe, existingViewports[i],
+											  static_cast<const char*>(storyName), probeTypes[0],
+											  0.0, label));
+			}
+		}
+
+		probe.log("--- 1B-3: SDK で作った断面ビューポートの注釈へ置く（同じ文書で）---");
+		if (probeStories.empty())
+		{
+			probe.log("  レイヤの生えているレベルが無いので、この段は行えない");
+		}
+		else
+		{
+			MCObjectHandle sheetB = gSDK->CreateLayer("断面（#141 の突き合わせ用）", kLayerSheet);
+			MCObjectHandle vpB = nil;
+			if (sheetB != nil)
+				vpB = gSDK->CreateSectionViewport(WorldPt(-1000, -1500), WorldPt(7000, -1500),
+												  WorldPt(0, 3000), 0, -10000, 30000, sheetB);
+			if (vpB == nil)
+			{
+				probe.log("  SDK で断面ビューポートを作れなかった（この段は行えない）");
+				if (sheetB != nil)
+					made.push_back(sheetB);
+			}
+			else
+			{
+				TVariableBlock beyondB;
+				beyondB = static_cast<Boolean>(true);
+				gSDK->SetObjectVariable(vpB, 1064, beyondB);
+				VWFC::VWObjects::VWViewportObj(vpB).SetRenderType(renderFinalHiddenLine);
+				gSDK->UpdateViewport(vpB);
+				TXString storyName;
+				gSDK->GetObjectName(probeStories[0], storyName);
+				MCObjectHandle layer0 = gSDK->GetLayerForStory(probeStories[0], probeTypes[0]);
+				const std::string label = "SDK 製ビューポートの注釈（" + SlhName(probeStories[0]) +
+										  " / " + SlhStr(probeTypes[0]) + "。レベルの絶対Z=" +
+										  SlhResolvedLevelZ(layer0, probeTypes[0]) + "）";
+				made.push_back(SlhPlaceMarker(probe, vpB, static_cast<const char*>(storyName),
+											  probeTypes[0], 0.0, label));
+				// 消す順（後ろから消えるので、先に積んだものが後に消える）。
+				made.push_back(vpB);
+				made.push_back(sheetB);
+			}
+		}
+
+		probe.log("--- 1B-4: 片付け ---");
+		const size_t madeCount = made.size();
+		SlhDeleteAll(made);
+		probe.log("  作った " + std::to_string(madeCount) + " 個を消した");
+		probe.log("");
+		probe.log("**読みどころ 1**: 1B-1 の「描かれた数値」が、同じ行の「レベルの絶対Z」と");
+		probe.log(
+			"「レイヤの高さ」のどちらと一致するか——これでマーカーが何を読んでいるかが決まる。");
+		probe.log(
+			"**読みどころ 2**: 1B-2（UI 製ビューポート）で数値が出て 1B-3（SDK 製）で 0 なら、");
+		probe.log("注釈で解決する条件は**ビューポートの出自**である。両方出れば、条件は文書の側。");
 		return;
 	}
 
@@ -527,8 +676,16 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 	}
 
 	probe.log("--- 4-2: 全レイヤを表示にして更新し、注釈の個体を作り直す ---");
+	// **書いたら読み戻す**（1 回目は読み戻さなかったので「表示にできたのか」が分からず、
+	// レイヤの表示を潰し切れていなかった。Findings「調査の作法」）。
 	for (size_t i = 0; i < layers.size(); ++i)
-		gSDK->SetViewportLayerVisibility(viewport, layers[i], 0); // 0 = 表示
+	{
+		const bool wrote = gSDK->SetViewportLayerVisibility(viewport, layers[i], 0); // 0 = 表示
+		short after = -99;
+		const bool readBack = gSDK->GetViewportLayerVisibility(viewport, layers[i], after);
+		probe.log("  レイヤ〈" + SlhName(layers[i]) + "〉 Set=" + SlhBool(wrote) +
+				  " 読み戻し=" + SlhBool(readBack) + " 表示=" + std::to_string(after));
+	}
 	gSDK->UpdateViewport(viewport);
 	for (size_t i = 0; i < variantCount; ++i)
 		SlhResetAndLog(probe, annotationMarkers[i],
