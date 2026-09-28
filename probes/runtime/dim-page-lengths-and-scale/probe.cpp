@@ -139,7 +139,8 @@ namespace
 	std::string DimPglWriteBool(MCObjectHandle h, short selector, bool value)
 	{
 		TVariableBlock v;
-		v.SetBoolean(value);
+		// **`SetBoolean` は無い**（`DEFINE_TYPE(Boolean)` が作る `operator=` で書く）。
+		v = static_cast<Boolean>(value ? 1 : 0);
 		const bool ok = gSDK->SetObjectVariable(h, selector, v) != 0;
 		return std::string(ok ? "true" : "false");
 	}
@@ -331,7 +332,7 @@ namespace
 		if (h != nil)
 		{
 			TVariableBlock v;
-			v.SetBoolean(showValue);
+			v = static_cast<Boolean>(showValue ? 1 : 0);
 			gSDK->SetObjectVariable(h, ovDimShowValue, v);
 		}
 		return h;
