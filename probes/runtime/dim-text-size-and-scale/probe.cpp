@@ -118,7 +118,7 @@ namespace
 	std::string DimTxtWriteBool(MCObjectHandle h, short selector, bool value)
 	{
 		TVariableBlock v;
-		v.SetBoolean(value);
+		v = static_cast<Boolean>(value);
 		const bool ok = gSDK->SetObjectVariable(h, selector, v) != 0;
 		return std::string(ok ? "true" : "false");
 	}
@@ -169,7 +169,7 @@ namespace
 		{
 			// 値を出す設定は明示しておく（利用側もそうしている）。
 			TVariableBlock v;
-			v.SetBoolean(true);
+			v = static_cast<Boolean>(true);
 			gSDK->SetObjectVariable(h, ovDimShowValue, v);
 		}
 		return h;
@@ -215,7 +215,7 @@ namespace
 		else if (current.GetSint32(s32))
 			next = static_cast<Sint32>(value);
 		else if (current.GetBoolean(b))
-			next.SetBoolean(value != 0);
+			next = static_cast<Boolean>(value != 0);
 		else
 			return "(型が分からないので書かなかった)";
 
