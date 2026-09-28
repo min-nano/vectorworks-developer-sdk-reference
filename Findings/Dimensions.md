@@ -29,11 +29,14 @@
   長さ・文字と寸法線の間隔などは**縮尺に依らず紙の上の大きさ**で決まる。実測でも
   文字は紙の上で規格どおりの大きさに出る（下記「文字の大きさ」）。
 - **作った寸法はその場でアクティブレイヤの中に入る。** 未挿入のハンドルは返らない。
-- **寸法の関連付け（図形が動いたら追う）は、パラメトリック制約の仕組みの一部である**
-  【ヘッダ根拠】。制約は図形を動かせば勝手に解かれるのではなく、**「動かす前に
-  `CreateConstraintModel`、動かした後に `UpdateConstraintModel`」**という段を呼び出し側が
-  踏む作り。関連付いたかは `HasConstraint` で読める。実機の結末は
-  [下記](#寸法の関連付け図形が動いたら寸法も追うか)（**調査中**）。
+- **`AssociateLinearDimension` は効く。ただし「解く段」を自分で呼ぶ。** 関連付けは
+  パラメトリック制約（**同一点上＝coincident**）の仕組みの一部で、制約は図形を動かせば
+  勝手に解かれるのではなく、**`CreateConstraintModel(nil, true)`（動かす前）→ 動かす →
+  `UpdateConstraintModel()`（解く）**という段を呼び出し側が踏む。これを呼べば測点が
+  追う。`MoveObject` ＋ `ResetObject` だけでは 1mm も動かない（[下記](#寸法の関連付け図形が動いたら寸法も追うか)）。
+- **関連付いたかは `HasConstraint(h)` で読める**（`void` の代わり）。**文書環境設定
+  `varAssociateDims`(28) / `varAutoAssociateDims`(134) を両方 off にすると、
+  `AssociateLinearDimension` は何もしない。**
 
 ## `CreateLinearDimension` の引数
 
@@ -312,11 +315,15 @@ for (short index = 9; index >= -8; --index)
 
 [#138](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/138) の調査。
 `ISDK::AssociateLinearDimension(h, selectedObjectsMode)` を**どう呼べば、図形が動いたときに
-寸法が追従するのか**。[#134](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/134)
-では 8 通り試して測点が 1mm も動かなかったが、そのとき**読んでも呼んでもいなかったもの**が
-SDK にある。
+寸法が追従するのか**。
 
-### 関連付けは「パラメトリック制約」の仕組みの一部である【ヘッダ根拠】
+**答えは「効く」。** [#134](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/134)
+の 8 通りが空振りだったのは関連付けの失敗ではなく、**制約を解く段を呼んでいなかった**
+だけだった（[下記](#こう呼べば効く関連付けは成立していて足りなかったのは解く段だった)）。
+
+### 関連付けは「パラメトリック制約」の仕組みの一部である
+
+制約の口の一覧（宣言と説明はヘッダの写し。仕組みそのものは下記のとおり実機で確かめた）。
 
 寸法の関連付けは寸法だけの特別な仕掛けではなく、SDK が持つ**パラメトリック制約**
 （parametric constraints）の一部として持たれている。制約は図形にぶら下がる
@@ -351,17 +358,78 @@ if (!gSDK->UpdateConstraintModel())       // ③ 解く
 
 **#134 が呼んだのは `MoveObject` と `ResetObject` だけ**なので、③ が一度も走っていない。
 
-### 関連付いたかは `HasConstraint` で読める【ヘッダ根拠】
+### こう呼べば効く——関連付けは成立していて、足りなかったのは「解く段」だった
 
-`AssociateLinearDimension` は `void` で成否を返さないが、**追従を見る以外の手立てが
-無いわけではない**。
+**`AssociateLinearDimension` はちゃんと関連付けていた。** [#134](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/134)
+の「8 通り空振り」は関連付けの失敗ではなく、**制約を解く段を一度も呼んでいなかった**
+だけだった。効く手順:
 
-- `HasConstraint(寸法)` … 制約ノードを持つか（ヘッダの説明そのもの）。
-- `FindAuxObject(寸法, 110)` … 制約ノード（`kConstraintNode`）を名指しで引く。
-- `GetDimensionsAssociatedToPlugin(hPlugin, dimHandles)` は**引数が PIO** なので、
-  一般の図形には使えない（#138 の見立てどおり）。
+```cpp
+// ① 関連付ける。h は **寸法**。false は「図面の全図形を調べる」（選択は要らない）
+gSDK->AssociateLinearDimension(dim, false);
 
-### 文書環境設定が 2 つある【ヘッダ根拠】
+// ② 動かすときは、動かす **前** に模型を作り、動かした **後** に解く
+gSDK->DeselectAll();
+gSDK->SelectObject(line, true);
+gSDK->CreateConstraintModel(nil, true);
+gSDK->MoveObject(line, 1200, 0);
+gSDK->UpdateConstraintModel();   // ← これを呼ばないと測点は 1mm も動かない
+```
+
+実測（測点 `(0, y)`→`(3000, y)` の寸法と、両端に端点を重ねた縦棒 2 本。**線A だけを
+`+1200` 平行移動**して、測点の x が `0` のままか `1200` になるかを見た）:
+
+| 更新の引き金 | 関連付いたか（`HasConstraint`） | 測点が追ったか |
+| --- | --- | --- |
+| `MoveObject` + `ResetObject` だけ（#134 の経路） | **はい** | **いいえ**（`0` のまま） |
+| `CreateConstraintModel(nil, true)` → `MoveObject` → `UpdateConstraintModel` | はい | **はい**（`1200`） |
+| `BuildConstraintModelForObject` → `MoveObject` → `RecordModifiedObjectInConstraintModel` → `UpdateConstraintModel` | はい | **はい**（`1200`） |
+| `CreateConstraintModel(線分, false)` + `AddToConstraintModel(寸法)` → `MoveObject` → `UpdateConstraintModel` | はい → **消える** | いいえ（※下記） |
+
+- **`selectedObjectsMode` は `true` でも `false` でも同じ**（どちらでも関連付き、
+  どちらでも追った）。ヘッダどおり `false` は「図面の全図形を調べる」の意味なので、
+  **呼ぶ前に選択しておく必要は無い**。
+- 表は 1 つの `dimType`（`0`）で取ったが、[上記](#0fix_ang-と-1sloped-に差は無い角度は-ovdimdirection-が決める)の
+  とおり `dimType` は追従に関与しない。
+- **`UpdateConstraintModel` は 4 通りとも `true`（解けた）を返した。** 4 行目が追わない
+  のは「解けなかった」からではない（下記）。
+
+#### 関連付いたかは `HasConstraint` で読める
+
+`AssociateLinearDimension` は `void` だが、**成否は読める**。実測で
+`HasConstraint(寸法)` と `FindAuxObject(寸法, 110)` は**常に一致**した。
+
+| | 寸法 | 相手の線分 |
+| --- | --- | --- |
+| 関連付ける前 | `HasConstraint=いいえ` / 補助オブジェクトの型 `[76]` | 同左 |
+| `AssociateLinearDimension` の後 | **`はい`** / `[110]`（`kConstraintNode`） | **`はい`** / `[110]` |
+| 拘束が消えた後 | `いいえ` / `[90]`（`kUndoPlaceholderNode`） | — |
+
+**これが [#138](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/138)
+の「関連付いているかを問い合わせる口はあるか」の答え**である。`[76]` は関連付けとは
+無関係に最初から付いている別物なので、**型 `110` の有無で見る**（または
+`HasConstraint`）。`GetDimensionsAssociatedToPlugin` は引数が PIO で、一般の図形には
+使えない。
+
+#### 関連付けの正体は「同一点上（coincident）」の拘束——VW 自身がそう名乗る
+
+拘束と両立しない編集をしようとすると、VW は確認ダイアログを出す:
+
+> **関連する拘束を削除しますか？**
+> 1 つ以上の関連する拘束がありこの編集操作を実行できません。関連する拘束を削除すると
+> 操作が続行されます。
+
+続く「拘束確認」の一覧に並ぶのは **タイプ「同一点上」／カテゴリ「寸法」**。つまり
+関連付けは、寸法の測点と図形の頂点を重ねる **coincident 拘束**（`SetBinaryConstraint`
+の `type = 1` と同じもの）そのものである。
+
+**上の表の 4 行目はこのダイアログを出す。** 「はい」を押すと拘束が消え
+（`HasConstraint` が `いいえ` に戻り、補助オブジェクトの型が `[90]` になる）、当然
+追従しない。**`CreateConstraintModel(obj, false)` + `AddToConstraintModel` の経路を
+使ってはいけない**——`CreateConstraintModel(nil, true)`（選択で渡す）なら出ない。
+**このダイアログを抑止する環境設定は SDK に無い**（`ProgramVariables.h` を当たった）。
+
+#### 文書環境設定が門になっている
 
 | selector | 名前 | 置き場所 |
 | --- | --- | --- |
@@ -369,19 +437,36 @@ if (!gSDK->UpdateConstraintModel())       // ③ 解く
 | `134` | `varAutoAssociateDims` | `ProgramVariables.h:162`（More Boolean Selectors） |
 
 どちらも `ISDK::GetProgramVariable` / `SetProgramVariable` で読み書きする
-（**Boolean selector** なので 1 バイト）。**#134 はこれを読んでも書いていない**ので、
-既定が off の文書で試していたなら、8 通りすべてがそれだけで空振りになる。
+（**Boolean selector** なので 1 バイト）。
 
-### 実機ではどうか【調査中】
+**両方 `0` にして呼ぶと、
+`AssociateLinearDimension` は何もしない。** `HasConstraint` は `いいえ` のまま、
+補助オブジェクトの型も `[76]` のままで、`UpdateConstraintModel` を呼んでも追わない。
 
-[#138](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/138) の
-プローブ（`probes/runtime/dim-association/`）で、上の 3 つ——環境設定・制約モデルの
-3 段・`HasConstraint` による成否の読み取り——を添えて取り直している最中である。
-**実機の結果が出るまで、この節に結論は書かない。**
+実機（VW 2026）の**新規図面の走り出しの値は `varAssociateDims=1` /
+`varAutoAssociateDims=0`**。
 
-いまの時点で確定しているのは #134 の実測だけ:
-**`AssociateLinearDimension` を呼んで `MoveObject` + `ResetObject` した経路では、
-測点は 1mm も動かない。**
+【未確認】**どちらか一方だけで足りるのか**は、この実行では分けていない（両方 on と
+両方 off しか見ていない）。プラグインは利用者の文書設定を勝手に変えたくないので、
+どちらを見ればよいかは要る——2 巡目で 4 通りを総当たりして決める。
+
+#### 通らなかった道
+
+- **`SetBinaryConstraint` で自分で coincident を張ることはできない。** 頂点番号を引く
+  `GetClosestPt` が、**寸法に対して `-1`（＝型が非対応）**を返す（線分側は `1` を返す
+  ので、非対応なのは寸法のほう）。`-1` のまま呼ぶと `SetBinaryConstraint` は `false`。
+  **関連付けを張る口は `AssociateLinearDimension` の 1 本だけ**と考えてよい。
+- **`SetHorizontalDimensionConstraint(線分, pt1, pt2, distance, offset)` は寸法を作らない。**
+  戻り値は `true` で、渡した線分に拘束ノード（`[110]`）は付くが、**レイヤの図形数は
+  増えない**（32 → 32）。これは「図形自身に寸法拘束を掛ける」口であって、追従する
+  寸法図形を作る口ではない。
+
+#### 画面でドラッグしたら追うか【調査中】
+
+**SDK から動かす経路は上で確定したが、「利用者が画面で図形を動かしたときに追うか」は
+まだ取れていない。** プラグインの用途——伏図・軸組図の寸法——では動かすのはたいてい
+利用者なので、ここは要る。2 巡目のプローブが、固定座標に残した名前付きの 1 組を
+利用者がドラッグした後に読んで判定する。
 
 ## 寸法をビューポートの注釈へ入れる
 
