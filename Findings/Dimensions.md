@@ -29,6 +29,11 @@
   長さ・文字と寸法線の間隔などは**縮尺に依らず紙の上の大きさ**で決まる。実測でも
   文字は紙の上で規格どおりの大きさに出る（下記「文字の大きさ」）。
 - **作った寸法はその場でアクティブレイヤの中に入る。** 未挿入のハンドルは返らない。
+- **寸法の関連付け（図形が動いたら追う）は、パラメトリック制約の仕組みの一部である**
+  【ヘッダ根拠】。制約は図形を動かせば勝手に解かれるのではなく、**「動かす前に
+  `CreateConstraintModel`、動かした後に `UpdateConstraintModel`」**という段を呼び出し側が
+  踏む作り。関連付いたかは `HasConstraint` で読める。実機の結末は
+  [下記](#寸法の関連付け図形が動いたら寸法も追うか)（**調査中**）。
 
 ## `CreateLinearDimension` の引数
 
@@ -302,6 +307,81 @@ for (short index = 9; index >= -8; --index)
 `FirstMemberObj` → `NextObject` で歩いて数えると、**実際の図形より 1 多く出る**。
 件数を使うなら終端を除くか、そもそも件数ではなく**型の並び**を見る
 （上の連続寸法の件は、型を見なければ原因に辿り着けなかった）。
+
+## 寸法の関連付け（図形が動いたら寸法も追うか）
+
+[#138](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/138) の調査。
+`ISDK::AssociateLinearDimension(h, selectedObjectsMode)` を**どう呼べば、図形が動いたときに
+寸法が追従するのか**。[#134](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/134)
+では 8 通り試して測点が 1mm も動かなかったが、そのとき**読んでも呼んでもいなかったもの**が
+SDK にある。
+
+### 関連付けは「パラメトリック制約」の仕組みの一部である【ヘッダ根拠】
+
+寸法の関連付けは寸法だけの特別な仕掛けではなく、SDK が持つ**パラメトリック制約**
+（parametric constraints）の一部として持たれている。制約は図形にぶら下がる
+**制約ノード**（`kConstraintNode = 110`。`Objs.TDType.h:176`）で、`ISDK` にはそれを
+張る・読む・**解く**ための一式がある。
+
+| 口 | 宣言 | ヘッダの説明 |
+| --- | --- | --- |
+| `AssociateLinearDimension` | `void (MCObjectHandle h, Boolean selectedObjectsMode)` | 「**寸法**の端点が図面の図形と一致しているとき、その直線寸法を図形に関連付ける。`selectedObjectsMode` が true のときは、**選択されている図形だけ**を調べる」 |
+| `HasConstraint` | `Boolean (MCObjectHandle obj)` | 「その図形が制約ノードを持つか」 |
+| `CreateConstraintModel` | `void (MCObjectHandle obj, Boolean useSelection)` | 「パラメトリック制約を持ちうる図形の**位置や幾何を変える前に**呼ぶ。`useSelection` が true なら選択中の図形すべてと、それらに制約された図形・関係する制約が模型に入る」 |
+| `AddToConstraintModel` | `void (MCObjectHandle obj)` | 「その図形を、いま組み立て中の模型へ足す（その図形の制約と、その図形に制約された他の図形・その制約も一緒に）」 |
+| `UpdateConstraintModel` | `Boolean ()` | 「模型へ明示的に入れた図形の幾何を**図面の今の位置・幾何へ合わせ**、そのうえで模型のパラメトリック制約を**すべて解こうとする**。解けなかった制約があれば `false` を返し、**そのときは undo を呼ぶべきである**」 |
+| `SetBinaryConstraint` | `Boolean (short type, MCObjectHandle obj1, MCObjectHandle obj2, short obj1VertexA, short obj1VertexB, short obj2VertexA, short obj2VertexB, Sint32 containedObj1, Sint32 containedObj2)` | 2 つの図形（または 1 図形の 2 か所）の間に制約を張る。`type` は **1 coincident / 2 colinear / 3 parallel / 6 tangent / 7 concentric / 8 distance / 9 horizontal distance / 10 vertical distance / 12 angle / 13 perpendicular**。頂点が要らない引数は `-1` |
+| `SetSingularConstraint` | `Boolean (short type, MCObjectHandle obj, short vertexA, short vertexB)` | 1 図形への制約。`type` は **4 vertical / 5 horizontal / 8 distance / 9 vertical distance / 10 horizontal distance / 11 radius** |
+| `GetSingularConstraint` / `GetBinaryConstraint` | `MCObjectHandle (…)` | その制約ノードを引く（**無ければ 0**） |
+| `DeleteConstraint` | `void (MCObjectHandle obj, MCObjectHandle constraint)` | その図形からその制約ノードを消す |
+| `GetClosestPt` | `void (MCObjectHandle& obj, const WorldPt& pt, short& index, Sint32& containedObj)` | 制約に渡す**頂点番号**を座標から引く（2D 図形のみ。近い頂点が無ければ `0`、型が非対応なら `-1`） |
+| `BuildConstraintModelForObject` / `RecordModifiedObjectInConstraintModel` | `void (…)` | **説明文が SDK に無い**（名前から見て上の一式の別入口） |
+| `SetHorizontalDimensionConstraint` / `SetVerticalDimensionConstraint` / `DeleteDimensionConstraints` | VW 2021 で追加 | **説明文が SDK に無い**。`Set…(obj1, pt1, pt2, distance, offset)` |
+
+**ここで要点は `UpdateConstraintModel` の説明**である。制約は「図形を動かせば勝手に
+解かれる」ものではなく、**呼び出し側が「動かす前に模型を作り、動かした後に解く」段を
+踏む**作りになっている。
+
+```cpp
+gSDK->CreateConstraintModel(nil, true);   // ① 動かす **前** に（選択中の図形で模型を作る）
+gSDK->MoveObject(line, 1200, 0);          // ② 動かす
+if (!gSDK->UpdateConstraintModel())       // ③ 解く
+	/* 解けなかった。undo すべき */;
+```
+
+**#134 が呼んだのは `MoveObject` と `ResetObject` だけ**なので、③ が一度も走っていない。
+
+### 関連付いたかは `HasConstraint` で読める【ヘッダ根拠】
+
+`AssociateLinearDimension` は `void` で成否を返さないが、**追従を見る以外の手立てが
+無いわけではない**。
+
+- `HasConstraint(寸法)` … 制約ノードを持つか（ヘッダの説明そのもの）。
+- `FindAuxObject(寸法, 110)` … 制約ノード（`kConstraintNode`）を名指しで引く。
+- `GetDimensionsAssociatedToPlugin(hPlugin, dimHandles)` は**引数が PIO** なので、
+  一般の図形には使えない（#138 の見立てどおり）。
+
+### 文書環境設定が 2 つある【ヘッダ根拠】
+
+| selector | 名前 | 置き場所 |
+| --- | --- | --- |
+| `28` | `varAssociateDims` | `ProgramVariables.h:43`（Boolean selectors） |
+| `134` | `varAutoAssociateDims` | `ProgramVariables.h:162`（More Boolean Selectors） |
+
+どちらも `ISDK::GetProgramVariable` / `SetProgramVariable` で読み書きする
+（**Boolean selector** なので 1 バイト）。**#134 はこれを読んでも書いていない**ので、
+既定が off の文書で試していたなら、8 通りすべてがそれだけで空振りになる。
+
+### 実機ではどうか【調査中】
+
+[#138](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/138) の
+プローブ（`probes/runtime/dim-association/`）で、上の 3 つ——環境設定・制約モデルの
+3 段・`HasConstraint` による成否の読み取り——を添えて取り直している最中である。
+**実機の結果が出るまで、この節に結論は書かない。**
+
+いまの時点で確定しているのは #134 の実測だけ:
+**`AssociateLinearDimension` を呼んで `MoveObject` + `ResetObject` した経路では、
+測点は 1mm も動かない。**
 
 ## 寸法をビューポートの注釈へ入れる
 
