@@ -141,6 +141,31 @@ virtual MCObjectHandle CreateLinearDimension(
 VectorScript には `GetDimText(h)` があるが、**`ISDK` に対応するものは無い**。
 値を確かめたいときは、上の射影を自分で計算する（実測 3 例はすべてそれと一致した）。
 
+#### `AssociateLinearDimension` は、SDK から図形を動かしたぶんには効かない
+
+寸法の測点とちょうど重なる端点を持つ線分を 2 本立て、`AssociateLinearDimension` を
+呼んでから線分を `MoveObject` で動かし、`ResetObject` を呼ぶ——を **8 通り**
+（`h` に**寸法**を渡す／**図形**を渡す × `selectedObjectsMode` `true`／`false` ×
+`dimType` `0`／`1`）試した。
+
+**どれも測点が 1mm も動かなかった。** しかも**平行移動の対照（線分を 2 本とも同じだけ
+動かす）すら追わない**ので、これは「関連付いたが向きが変わらなかった」ではなく
+**そもそも追従が起きていない**。当然 `dimType` `0` と `1` の差も出ない。
+
+- **ヘッダは `h` が寸法と図形のどちらを指すのか書いていない**（"Associates a linear
+  dimension with an object when the dimension's endpoints are coincident with objects
+  in the drawing"）。**両方試したが、どちらでも変わらなかった。**
+- `AssociateLinearDimension` は **`void`** なので、成否は戻り値から分からない。
+  **追従したかどうかを自分で確かめる以外に、関連付いたかを知る手立てが無い。**
+- 軌跡点（`CreateLocus`）を相手にしても同じだった。
+
+**「関連付けという仕組みが無い」とまでは言えない**——確かめたのは
+「`MoveObject` で動かして `ResetObject` を呼ぶ」という SDK の経路だけで、
+**利用者が VW の画面でドラッグしたときに追うかどうかは別の話**（未確認）。
+
+**プラグインから寸法を入れる用途では、図形が動いたら寸法を作り直す前提でよい。**
+「関連付けておけば後は VW が面倒を見てくれる」とは期待しないこと。
+
 ### `startOffset` の符号は図面の座標軸で決まる（測る向きには依らない）
 
 **`+` は水平な寸法なら上（`+y`）、垂直な寸法なら右（`+x`）。** `p1`→`p2` をどちら向きに
