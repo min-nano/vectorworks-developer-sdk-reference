@@ -58,7 +58,12 @@
   `ovDimFontSize` を正しく書いても値（数字）が描かれない**（実機の絵で確定）。既定の
   〈クラスの文字スタイル〉（`ovDimTextStyle` が **`-2`**）のままでも、
   `ovDimTextStyle` へ番号を書いただけでも出ない。**しかも 3 つは読み戻しで見分けが
-  付かない**。寸法規格も文字スタイルを持ち、`GetDimensionStandardVariable(index,
+  付かない。**
+- **大きさも文字スタイルが握る**——**`ovTextStyleSize`（インチ）＝ 紙の pt ÷ 72 ×
+  ビューポートの縮尺**。**`ovDimFontSize` は触らない**（触ると直線寸法と連続寸法で
+  食い違う）。**これに伴い #143 の「`ovDimFontSize` を書く」手順は、新しいコードでは
+  使わない**（再現しなかった。[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)）。
+  寸法規格も文字スタイルを持ち、`GetDimensionStandardVariable(index,
   `dimStdTextStyle`(51), …)` で ref number として読める（組み込み規格 1〜9 は `0`
   ＝持たない）。下記「[寸法の文字スタイル](#寸法の文字スタイル)」。
 - **ビューポートの注釈は、そのビューポートの縮尺で描かれる**（用紙 1:1 ではない）。
@@ -623,6 +628,11 @@ for (short index = 9; index >= -8; --index)
 - **文字スタイルを当てる 2 つの口は `ovDimFontSize` の扱いも違う**——
   **`SetTextStyleRef` は `ovDimFontSize` を書き換える**が、
   **`ovDimTextStyle` へ番号を書く道は動かさない。**
+- **大きさを決めるのは文字スタイルであって `ovDimFontSize` ではない。**
+  狙いの大きさは文字スタイルへ書く——**`ovTextStyleSize`（インチ）＝ 紙の pt ÷ 72 ×
+  ビューポートの縮尺**（実測で確定）。**`ovDimFontSize` は触らない**——触ると
+  直線寸法（文字スタイルの大きさで描く）と連続寸法（中の `ovDimFontSize` で描く）で
+  **大きさが食い違う**のに、読み戻しでは気付けない。
 - **連続寸法へ繋いでも残る。** 繋ぐ前に直線寸法へ当てておけば、中の型 63 は
   `ovDimTextStyle` も `ovDimFontSize` も保つ。
 - **注釈へ移しても何も変わらない**（`AddViewportAnnotationObject` は文字スタイルにも
@@ -787,7 +797,7 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 （`ovDimFontSize = 105.8333` → 1/125 の紙で 0.85mm ≒ 2.4pt の小さな数字として読めた）。
 **出なくなるのは、注釈へ置いた by-class の寸法だけ**である。
 
-### 文字スタイルを明示すると `ovDimFontSize` は絵に効かなくなる（実機の絵で確定）
+### 大きさを決めるのは文字スタイルであって `ovDimFontSize` ではない（実機の絵で確定）
 
 **`SetTextStyleRef` を呼んだ後に `ovDimFontSize` をいくら書いても、描かれる文字の
 大きさは変わらない。** 同じ文字スタイル（6 インチ）を当てた直線寸法を 3 本、
@@ -804,26 +814,53 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 - **`ovDimFontSize` は書けて読み戻せるのに、絵には効いていない**——文字スタイルを
   当てた時点で**大きさは文字スタイルのほうが握り**、`ovDimFontSize` は古くなった写しに
   なる。**読み戻しで確かめられない**のは D2/D4（上記）と同じ筋の罠である。
-- **注釈へ移しても値は 1 つも動かない**（3 本とも移す前後で `ovDimFontSize` が同じ）。
+- **注釈へ移しても値は 1 つも動かない**（移す前後で `ovDimFontSize` が同じ）。
   つまり大きさの違いは「移動で書き換わった」せいではない。
-- **連続寸法（型 86）だけ扱いが違う。** 中の直線寸法が E2 と**まったく同じ設定**
-  （同じ文字スタイル・`ovDimFontSize` = `264.5833`）なのに、**絵では E1〜E3 より
-  明らかに大きく出た**。直線寸法と同じ規則では描かれていない。
-- **〈クラスの文字スタイル〉のままの対照（`ovDimFontSize` = `264.5833`）は、やはり
-  出なかった**（上記 D1/D5 の再確認）。
 
-> **【#143 の記述と衝突している——決着待ち】**
-> [#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143) は
-> 「**1:1 生まれの寸法へ `ovDimFontSize` だけ書けば、1/50 生まれと見分けが付かない
-> 大きさで注釈に出る**」を絵で確定させている（上記
-> 「[注釈へ寸法を置くときの作り方](#注釈へ寸法を置くときの作り方ここだけ読めばよい)」）。
-> 今回はそれが効いていない。**違いは「当たっている寸法規格が文字スタイルを持っているか
-> どうか」ではないか**というのが目下の見立てで——この図面のカスタム規格 `min-nano` は
-> `寸法(6pt)` を持つが、組み込み規格（`JIS` など）はどれも `dimStdTextStyle = 0` で
-> 持たない（上表）——**規格を `JIS` に替えて `ovDimFontSize` が効くかを 3 巡目の
-> プローブで確かめている。** 効けば #143 は撤回不要で「**文字スタイルが在るときだけ
-> 話が変わる**」と書ける。効かなければ #143 のほうを訂正する。
-> **決着するまで、上記「注釈へ寸法を置くときの作り方」を鵜呑みにしないこと。**
+### 紙で狙った大きさを出す——文字スタイルの大きさの決め方（確定）
+
+大きさは文字スタイルが握っているので、**狙いの pt は文字スタイルの大きさへ書く。**
+
+> **`ovTextStyleSize`（インチ）＝ 紙の pt ÷ 72 × ビューポートの縮尺**
+
+**0 倍・1 倍・2 倍の 3 本を 1/125 の注釈へならべて確かめた**（`ovDimFontSize` は
+いっさい触らず、文字スタイルの大きさだけを変えてある）:
+
+| 行 | `ovTextStyleSize` | 狙い | **絵** |
+| --- | --- | --- | --- |
+| F1 | `0.0833`（＝ 6/72。素直に「6pt」と書いたつもりの値） | — | **見えない**（紙で 6/125 ＝ 0.048pt） |
+| F2 | `10.4167`（＝ 6/72 × 125） | 紙 6pt | **読める** |
+| F3 | `20.8333`（＝ 12/72 × 125） | 紙 12pt | **F2 のちょうど 2 倍** |
+
+- **「6pt の文字スタイル」をそのまま当てても紙で 6pt にはならない。**
+  文字スタイルの大きさは**図面上の長さ**として扱われ、ビューポートの縮尺で割られて
+  紙に出る——つまり
+  [#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143)
+  の「焼き付き」とまったく同じ扱いである。
+- **数としては #143 の式そのまま。** #143 が `ovDimFontSize` へ書けと言っている
+  `紙pt × 25.4/72 × 縮尺`（mm）を、インチに直して（÷ 25.4）文字スタイルへ書くだけ:
+  `紙pt / 72 × 縮尺`。**変わったのは「どこへ書くか」だけ。**
+- 図面に既にある文字スタイル（規格が持つ `寸法(6pt)` など）は**紙の pt で名付けられて
+  いても、その縮尺でしか正しくない**。ビューポートの縮尺ごとに別の文字スタイルが要る。
+
+### 連続寸法は中の `ovDimFontSize` で描かれる（直線寸法と食い違う）
+
+**`ovDimFontSize` を触らなければ、直線寸法と連続寸法は同じ大きさになる。**
+触ると食い違う——2 つの実行の絵を突き合わせると、こうなっていた:
+
+| | 直線寸法へ当てたもの | 直線寸法の絵 | 連続寸法の絵 |
+| --- | --- | --- | --- |
+| 2 巡目 | 文字スタイル（6 インチ ＝ `152.4`）→ **`ovDimFontSize` を `264.5833` で上書き** | `152.4` の大きさ | **`264.5833` の大きさ**（明らかに大きい） |
+| 3 巡目 | 文字スタイル（`10.4167` インチ ＝ `264.5833`）**だけ**。上書きしない | `264.5833` の大きさ | **同じ**（食い違わない） |
+
+> **直線寸法（型 63）は文字スタイルの大きさで描かれ、連続寸法（型 86）は中の直線寸法の
+> `ovDimFontSize` で描かれている。** 両者が一致するのは、`ovDimFontSize` を触らず
+> `SetTextStyleRef` に書かせたときだけである（そのとき同じ値が入るため）。
+
+- **だから `ovDimFontSize` は触らない。** 文字スタイルの大きさだけで決めれば、
+  直線寸法でも連続寸法でも同じ絵になる（3 巡目で確認済み）。
+- 上書きしてしまうと、**同じ設定に見える 2 本が違う大きさで出る**——しかも
+  読み戻しでは 4 つとも同じ値なので、**気付けない。**
 
 ### 連続寸法へ繋いでも残る
 
@@ -850,6 +887,76 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 6 本すべて `AddViewportAnnotationObject` が `true` を返し、**移した後の読み戻しは移す前と
 完全に同じ**だった（`GetTextStyleByClass` / `GetTextStyleRef` / `ovDimTextStyle` /
 `ovDimFontSize` の 4 つとも）。**移動は文字スタイルにも大きさにも触らない。**
+
+### 注釈へ寸法を置くときの作り方（文字スタイル版。#157 以降はこちら）
+
+上記「[注釈へ寸法を置くときの作り方](#注釈へ寸法を置くときの作り方ここだけ読めばよい)」
+（#143）は **`ovDimFontSize` を書く**手順だった。**当たっている文字スタイルがあると
+それは効かない**ので、文字スタイル側で決める。
+
+```cpp
+// 1. ビューポートの縮尺を読む（1/125 なら 125）。
+double vpScale = 1.0;
+TVariableBlock scaleVar;
+if (gSDK->GetObjectVariable(viewport, ovViewportScale, scaleVar))
+{
+    Real64 s = 0.0;
+    if (scaleVar.GetReal64(s) && s > 0.0)
+        vpScale = s;
+}
+
+// 2. そのビューポート用の文字スタイルを 1 つ用意する（縮尺ごとに 1 つ要る）。
+//    **ovTextStyleSize の単位はインチ**。紙で 6pt にしたいなら 6/72 × 縮尺。
+MCObjectHandle style = gSDK->CreateTextStyleResource("注釈 6pt 1-125");
+TVariableBlock sizeVar;
+sizeVar = static_cast<Real64>(6.0 / 72.0 * vpScale);
+gSDK->SetObjectVariable(style, ovTextStyleSize, sizeVar);
+const InternalIndex styleRef = gSDK->GetObjectInternalIndex(style);
+
+// 3. ふつうに寸法を作り、**文字スタイルを明示する**。
+MCObjectHandle dim = gSDK->CreateLinearDimension(p1, p2, startOffset, 0, Vector2(0, 0), 0);
+// … ovDimStandardName / ovDimShowValue などをここで当てる
+gSDK->SetTextStyleRef(dim, styleRef);      // ← これを呼ばないと値が描かれない
+
+// 4. **ovDimFontSize は触らない。** 触ると直線寸法と連続寸法で大きさが食い違う。
+// 5. 連続寸法にするなら、ここまでを 2 本ぶん済ませてから CreateChainDimension。
+// 6. 注釈へ移す。
+gSDK->AddViewportAnnotationObject(viewport, dim);
+```
+
+- **文字スタイルはビューポートの縮尺ごとに要る。** 名前に縮尺を入れておくと、同じ
+  図面で 1/50 と 1/125 を混ぜたときに取り違えない。
+- **既に図面にある文字スタイルを使い回すなら、`ovTextStyleSize` を読んで確かめる。**
+  名前が `寸法(6pt)` でも、それが紙の 6pt になるのは 1 つの縮尺のときだけである。
+- 規格が持つ文字スタイルは `GetDimensionStandardVariable(index, dimStdTextStyle, …)`
+  で引ける（上記）。**そのまま当てても紙の pt にはならない**ので、大きさは作り直す。
+
+### #143 の「`ovDimFontSize` を書く」手順が再現しない（[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161) へ切り出し）
+
+**[#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143)
+は「1:1 生まれの寸法へ `ovDimFontSize` だけ書けば、1/50 生まれと見分けが付かない
+大きさで注釈に出る」を絵で確定させている。今回それが再現しなかった**——同じ作り方
+（by-class のまま `ovDimFontSize` ＝ 紙 6pt 相当）の寸法は、3 回とも値が出なかった
+（D1 / E5 / F5）。
+
+**切り分けようとしたが、届かなかった。** 見立ては「**文字スタイルが当たっているときだけ
+話が変わる**」（この図面のカスタム規格 `min-nano` は `寸法(6pt)` を持つ）で、寸法の規格を
+**文字スタイルを持たない `JIS`** へ替えて確かめた。結果:
+
+| 行 | やったこと | 読み戻し | 絵 |
+| --- | --- | --- | --- |
+| F5 | `ovDimStandardName` ← `JIS`、その後 `ovDimFontSize` ＝ `264.5833` | `GetTextStyleRef` = **`30`** / `ovDimTextStyle` = **`-2`**（どちらも変わらず） | **出ない** |
+| F6 | `ovDimStandardName` ← `JIS` だけ | 同上 | 出ない |
+
+**規格を替えても寸法の文字スタイルは外れない**（`30` ＝ `寸法(6pt)` を指したまま）。
+つまり**「文字スタイルがどこにも当たっていない寸法」を作れておらず、見立ての検証に
+なっていない**——**反証でもない。**
+
+- **この節の手順（文字スタイル版）を使えば、この不明点に触れずに済む。**
+- **`ovDimFontSize` がいつ絵に効くのかを決める調査は
+  [#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
+  へ切り出した**（文字スタイルを外す口があるのか、#143 の当時と図面の何が違うのか）。
+  **それまで #143 の手順を新しいコードで使わないこと。**
 
 ## 連続寸法（チェーン寸法）
 
@@ -1215,6 +1322,14 @@ gSDK->UpdateConstraintModel();   // ← これを呼ばないと測点は 1mm �
   （実測。どちらも直後の `ovViewportScale` が `1.0` だった）。**縮尺は自分で書く。**
 
 ### 注釈へ寸法を置くときの作り方（ここだけ読めばよい）
+
+> **【この手順は、当たっている文字スタイルがあると効かない】**
+> [#157](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/157)
+> で分かった——**寸法に文字スタイルが当たっていると、`ovDimFontSize` を書いても絵は
+> 変わらない**（値そのものが描かれないことさえある）。文字スタイルは**既定で当たって
+> いる**（〈クラスの文字スタイル〉）ので、**新しく書くコードは下記
+> 「[注釈へ寸法を置くときの作り方（文字スタイル版）](#注釈へ寸法を置くときの作り方文字スタイル版157-以降はこちら)」
+> に従うこと。** 以下は #143 当時の記録として残してある。
 
 紙で 6pt に見せたい寸法を、ビューポートの注釈へ置く手順:
 
