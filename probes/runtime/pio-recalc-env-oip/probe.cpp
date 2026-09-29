@@ -18,14 +18,82 @@
 //
 
 #include "Probe.h"
-#include "PioRecalcTrace.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
 namespace
 {
+	// -------------------------------------------------------------------
+	// **殻（plugin/src/PioRecalcTrace.h）と同じ約束事を、ここへ書き写したもの。**
+	//
+	// 【なぜ include しないのか】公開ビルドは **main の殻 ＋ 各 PR の
+	// `probes/runtime/` だけ**で組まれる（`scripts/gather-probes.sh` は PR の木から
+	// `probes/runtime` しか取り出さない）。だから**プローブは、同じ PR で足した殻の
+	// ヘッダを include できない**——include するとその群だけコンパイルが落ちる
+	// （実測: この PR の 1 回目の `Probe auto update / publish` がそれで落ちた）。
+	// 値を変えるときは `plugin/src/PioRecalcTrace.h` と**両方**直すこと（食い違うと
+	// 「見つからない」としか出ない）。
+	constexpr const char* kPioUniversalName = "VwSdkProbesRecalcEnv";
+	constexpr const char* kTargetObjectName = "VwSdkProbes-Target";
+	constexpr const char* kPioObjectName = "VwSdkProbes-Pio";
+	constexpr const char* kOtherLayerName = "VwSdkProbes-Other";
+	constexpr const char* kParamNote = "TraceNote";
+	constexpr const char* kParamLength = "TraceLength";
+
+	// 書き溜め先（殻の `pioTrace::Path()` と同じ規則）。
+	std::string TracePath()
+	{
+		const char* custom = std::getenv("VW_PROBE_PIO_TRACE");
+		if (custom != nullptr && custom[0] != '\0')
+			return std::string(custom);
+#if defined(_WINDOWS)
+		const char* env = std::getenv("TEMP");
+		if (env == nullptr || env[0] == '\0')
+			env = std::getenv("TMP");
+		std::string dir = (env != nullptr && env[0] != '\0') ? std::string(env)
+															 : std::string("C:\\Windows\\Temp");
+		const char separator = '\\';
+#else
+		const char* env = std::getenv("TMPDIR");
+		std::string dir =
+			(env != nullptr && env[0] != '\0') ? std::string(env) : std::string("/tmp");
+		const char separator = '/';
+#endif
+		if (!dir.empty() && (dir.back() == '/' || dir.back() == '\\'))
+			dir.pop_back();
+		return dir + separator + "VwSdkProbes-pio-recalc-trace.log";
+	}
+
+	// 溜まった行を読む（無ければ空）。
+	std::vector<std::string> TraceRead()
+	{
+		std::vector<std::string> lines;
+		// NOLINTNEXTLINE(cppcoreguidelines-owning-memory): その場で fclose する。
+		std::FILE* file = std::fopen(TracePath().c_str(), "rb");
+		if (file == nullptr)
+			return lines;
+		std::string current;
+		int character = 0;
+		while ((character = std::fgetc(file)) != EOF)
+		{
+			if (character == '\n')
+			{
+				lines.push_back(current);
+				current.clear();
+				continue;
+			}
+			if (character != '\r')
+				current.push_back(static_cast<char>(character));
+		}
+		if (!current.empty())
+			lines.push_back(current);
+		(void)std::fclose(file);
+		return lines;
+	}
+
 	std::string Int(long value)
 	{
 		char buffer[32];
@@ -129,10 +197,8 @@ VW_PROBE("pio-recalc-env-oip",
 		 "溜まった行を Recalculate ごとに割り、kObjectExternalReset の回と "
 		 "kParameterChangedReset の回を同じ鍵どうしで突き合わせて一致／不一致を出す")
 {
-	using namespace vwprobe;
-
-	probe.log(std::string("書き溜め先: ") + pioTrace::Path());
-	const std::vector<std::string> lines = pioTrace::Read();
+	probe.log(std::string("書き溜め先: ") + TracePath());
+	const std::vector<std::string> lines = TraceRead();
 	if (lines.empty())
 	{
 		probe.fail("書き溜め先が空。**先に pio-recalc-env-reset を走らせてください**"
@@ -221,17 +287,17 @@ VW_PROBE("pio-recalc-env-oip",
 	}
 
 	// --- 4) いまの PIO を外から見た値（参考）-------------------------------
-	const MCObjectHandle pio = gSDK->GetNamedObject(pioTrace::kPioObjectName);
+	const MCObjectHandle pio = gSDK->GetNamedObject(kPioObjectName);
 	probe.log("");
 	if (pio == nullptr)
 	{
-		probe.log(std::string("図面に \"") + pioTrace::kPioObjectName +
+		probe.log(std::string("図面に \"") + kPioObjectName +
 				  "\" が見つからない（消したか、別の図面で走らせている）");
 		return;
 	}
 	VWParametricObj obj(pio);
-	probe.log(std::string("外から見た ") + pioTrace::kPioObjectName + ": " +
+	probe.log(std::string("外から見た ") + kPioObjectName + ": " +
 			  static_cast<const char*>(obj.GetParamName(0)) + " ほか " +
 			  Int(static_cast<long>(obj.GetParamsCount())) + " 個 / TraceNote=\"" +
-			  static_cast<const char*>(obj.GetParamValue(pioTrace::kParamNote)) + "\"");
+			  static_cast<const char*>(obj.GetParamValue(kParamNote)) + "\"");
 }
