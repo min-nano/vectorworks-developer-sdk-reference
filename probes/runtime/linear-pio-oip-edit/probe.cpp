@@ -196,7 +196,16 @@ VW_PROBE("linear-pio-oip-edit", "OIP 編集で線分 PIO の行列・長さが�
 	for (size_t i = 0; i < candidateCount; ++i)
 	{
 		const char* const name = kProbeOipCandidateNames[i];
-		probe.log(std::string("  候補 \"") + name + "\" を引く");
+		EVSPluginType pluginType = kVSPluginMenu;
+		const Boolean isPlugin = gSDK->GetPluginType(name, pluginType);
+		probe.log(std::string("  候補 \"") + name +
+				  "\": GetPluginType=" + (isPlugin ? "true" : "false") +
+				  " 種別=" + ProbeOipInt(static_cast<long>(pluginType)) + "（2=オブジェクト）");
+		if (!isPlugin || pluginType != kVSPluginObject)
+		{
+			probe.log("    → この綴りのオブジェクトプラグインは無い。飛ばす");
+			continue;
+		}
 		if (gSDK->DefineCustomObject(name, kCustomObjectPrefNever) == nil)
 		{
 			probe.log("    → 定義が引けなかった。飛ばす");

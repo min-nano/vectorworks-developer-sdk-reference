@@ -68,6 +68,22 @@ namespace
 		return std::string(buffer);
 	}
 
+	// プラグインフォルダに実在する定義のファイル名を舐めて、**線分らしい綴りだけ**を出す。
+	// 候補の綴りを全部外したときに、次の round で使う正しい名前がここから拾えるように。
+	const char* const kProbeStemHints[] = {
+		"Line", "Straight", "Joist",  "Truss", "Rod",  "Bar",
+		"Duct", "Pipe",		"Member", "Rail",  "Beam", "Linear",
+	};
+
+	bool ProbeStemLooksLinear(const std::string& stem)
+	{
+		const size_t hintCount = sizeof(kProbeStemHints) / sizeof(kProbeStemHints[0]);
+		for (size_t i = 0; i < hintCount; ++i)
+			if (stem.find(kProbeStemHints[i]) != std::string::npos)
+				return true;
+		return false;
+	}
+
 	// PIO の内部 ID（ovParametricInternalID）。読めなければ -1。
 	long ProbeInternalID(MCObjectHandle h)
 	{
@@ -135,6 +151,36 @@ namespace
 VW_PROBE("linear-pio-endpoints", "線分 PIO の両端と長さを与えて読み戻す",
 		 "組み込み PIO を被験体に Set/GetLinearObjectPos と LineLength を実測する")
 {
+	// --- 0) プラグインフォルダに実在する定義の綴りを拾う ---------------------
+	// 組み込み PIO の universal 名は SDK から引けないので、**候補の綴りを全部外したときの
+	// 逃げ道**として、実在するファイル名（線分らしいものだけ）をここで出しておく。
+	{
+		size_t shown = 0;
+		size_t total = 0;
+		const EForEachFileResult walked = gSDK->ForEachFilePathInPluginFolderN(
+			[&probe, &shown, &total](const char* fullPath, const char* fileName,
+									 const char* fileExtension) -> EForEachFileResult
+			{
+				(void)fullPath;
+				++total;
+				const std::string ext(fileExtension != nullptr ? fileExtension : "");
+				const std::string name(fileName != nullptr ? fileName : "");
+				if (ext != "vso" && ext != "vst")
+					return kContinueForEachFile;
+				const size_t dot = name.rfind('.');
+				const std::string stem = (dot == std::string::npos) ? name : name.substr(0, dot);
+				if (!ProbeStemLooksLinear(stem))
+					return kContinueForEachFile;
+				if (shown < 60)
+					probe.log("  実在: \"" + stem + "\" (." + ext + ")");
+				++shown;
+				return kContinueForEachFile;
+			});
+		probe.log("[0] プラグインフォルダ: 走査結果=" + ProbeInt(static_cast<long>(walked)) +
+				  " 全ファイル=" + ProbeInt(static_cast<long>(total)) + " 線分らしい定義=" +
+				  ProbeInt(static_cast<long>(shown)) + "（60 件まで上に出した）");
+	}
+
 	const size_t candidateCount = sizeof(kProbeCandidateNames) / sizeof(kProbeCandidateNames[0]);
 	size_t subjectCount = 0;
 
@@ -142,13 +188,25 @@ VW_PROBE("linear-pio-endpoints", "線分 PIO の両端と長さを与えて読�
 	{
 		const char* const name = kProbeCandidateNames[i];
 
-		// ダイアログを止めてから作る（止めないと 1 個目で待たされて先へ進めない）。
 		// **作る前に名前をログへ出す**——ここで落ちたらどの候補で落ちたかが残るように。
-		probe.log(std::string("[候補] \"") + name + "\" を DefineCustomObject で引く");
+		// まず GetPluginType で綴りを確かめる（図形を作らずに済むので安い）。
+		EVSPluginType pluginType = kVSPluginMenu;
+		const Boolean isPlugin = gSDK->GetPluginType(name, pluginType);
+		probe.log(std::string("[候補] \"") + name +
+				  "\": GetPluginType=" + (isPlugin ? "true" : "false") +
+				  " 種別=" + ProbeInt(static_cast<long>(pluginType)) + "（2=オブジェクト）");
+		if (!isPlugin || pluginType != kVSPluginObject)
+		{
+			probe.log("  → この綴りのオブジェクトプラグインは無い。飛ばす");
+			continue;
+		}
+
+		// ダイアログを止めてから作る（止めないと 1 個目で待たされて先へ進めない）。
+		probe.log("  DefineCustomObject → CreateCustomObject を呼ぶ");
 		const MCObjectHandle definition = gSDK->DefineCustomObject(name, kCustomObjectPrefNever);
 		if (definition == nil)
 		{
-			probe.log("  → 定義が引けなかった（この綴りの組み込み PIO は無い）。飛ばす");
+			probe.log("  → 定義が引けなかった。飛ばす");
 			continue;
 		}
 
