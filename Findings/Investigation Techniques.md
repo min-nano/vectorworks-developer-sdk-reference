@@ -33,6 +33,47 @@
   を設定の前と後で 2 回取り、diff を見る。`ModifySlab` の噛み合わせも断面ビューポートの
   範囲も凡例のフィルタも、この見比べで決着した（実装例: ホームズ君プラグインの
   `scripts/vw-dump-pio-fields.py`）。
+- **「絵で読める大きさか」は目視に頼らず測れる——中に描かれている文字図形を引く。**
+  寸法や PIO は、描いた結果を**子の図形として持っている**。深さ数段まで潜って最初の
+  型 `10`（`kTextNode`）を拾い、`GetTextSize(text, 1, charSize)` で 1 文字目の大きさを
+  読めば、**紙の上で何 pt で出るかが数値で分かる**（容れ物の縮尺で割る）。
+
+  ```cpp
+  // container の中から最初の文字図形を探し、その大きさ（図面上の mm）を返す。
+  bool FindDrawnTextSize(MCObjectHandle container, int depth, double& outMM)
+  {
+      if (container == nil || depth > 4) return false;
+      for (MCObjectHandle m = gSDK->FirstMemberObj(container); m != nil;
+           m = gSDK->NextObject(m))
+      {
+          const short type = gSDK->GetObjectTypeN(m);
+          if (type == 0) break;                      // kTermNode（walk の終端）
+          if (type == kTextNode)
+          {
+              WorldCoord size = 0;
+              gSDK->GetTextSize(m, 1, size);
+              outMM = static_cast<double>(size);
+              return true;
+          }
+          if (FindDrawnTextSize(m, depth + 1, outMM)) return true;
+      }
+      return false;
+  }
+  ```
+
+  **実機の絵と突き合わせて確かめてある**（[issue #161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)）。
+  1/50 のビューポートの注釈へ作り方を変えた寸法を 7 行ならべ、この物差しが「紙 6pt」と
+  言った行だけが絵で読め、「紙 0.12pt」と言った行は寸法線だけだった——**7 行とも一致**。
+  2 巡目では「紙 12pt」と言った 1 行だけが絵でも 2 倍に見えた。
+  - **これが効くのは、`ISDK` の読み戻しが当てにならない場面**である。#157 は
+    「`GetTextStyleByClass` / `GetTextStyleRef` / `ovDimTextStyle` / `ovDimFontSize` の
+    4 つとも同じなのに絵が違う」で行き止まりになったが、**描かれている文字を測れば
+    その場で割れた**（[Dimensions](Dimensions.md)）。
+  - **落とし穴: 古い写しを拾うことがある。** 連続寸法（型 86）は中に 2D 表現のグループ
+    （型 11）を持ち、**そこだけ引き直される前の文字が残っていることがある**
+    （[issue #156](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/156)
+    で実際に踏んだ）。**直線寸法では信用してよいが、PIO では外接矩形（`GetObjectBounds`）
+    と併せて読む**——両方が同じ向きに動いていれば確か。
 - **オブジェクトの中身を型で数えるのがいちばん早い。** コンテナの中の節点型
   （`GetObjectTypeN`）を数える 1 行を診断へ出すだけで、正体が割れることがある（実例:
   凡例イメージがビューポートだと分かった）。**中を見ずにヘッダだけで推測していた間は

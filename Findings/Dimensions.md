@@ -54,26 +54,35 @@
 - **`ovDimTextSizeInPoints` は寸法が持っている値ではない。** 読むたびに
   「`ovDimFontSize` ÷ **読む時点のアクティブレイヤ**の縮尺」を pt に直したものが返る
   （入れ物の縮尺ですらない）。**紙の上で何 pt かの判断に使ってはいけない。**
-- **注釈へ置く寸法には `gSDK->SetTextStyleRef(dim, ref)` を呼ぶ**——**これを呼ばないと、
-  `ovDimFontSize` を正しく書いても値（数字）が描かれない**（実機の絵で確定）。既定の
-  〈クラスの文字スタイル〉（`ovDimTextStyle` が **`-2`**）のままでも、
-  `ovDimTextStyle` へ番号を書いただけでも出ない。**しかも 3 つは読み戻しで見分けが
-  付かない。**
-- **大きさも文字スタイルが握る**——**`ovTextStyleSize`（インチ）＝ 紙の pt ÷ 72 ×
-  ビューポートの縮尺**。**`ovDimFontSize` は触らない**（触ると直線寸法と連続寸法で
-  食い違う）。**これに伴い #143 の「`ovDimFontSize` を書く」手順は、新しいコードでは
-  使わない**（再現しなかった。[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)）。
+- **★ `ovDimFontSize` へ書いた大きさは、書いた瞬間には絵に出ない——`ResetObject` を
+  呼ぶまで絵は書く前のままである**（実機の絵で確定。[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)）。
+  **読み戻しは書いた値を返すので、呼び忘れても読み戻しでは気付けない。**
+  引き直しになるのは `ResetObject` / `CreateChainDimension` / ビューポートの縮尺変更で、
+  **`AddViewportAnnotationObject` も `UpdateViewport` も引き直しではない。**
+  下記「[★ 絵の文字の大きさは、書いた瞬間には変わらない](#-絵の文字の大きさは書いた瞬間には変わらない引き直しで反映される確定)」。
+- **注釈へ値（数字）を出す道は 2 つあり、どちらでもよい。**
+  (a) **`ovDimFontSize` を書いて `ResetObject`**（#143 の道。図面に何も増やさない）、
+  (b) **`gSDK->SetTextStyleRef(dim, ref)` で文字スタイルを明示**（#157 の道。
+  `SetTextStyleRef` は絵の側もその場で書き換えるので引き直しが要らない。大きさは
+  **`ovTextStyleSize`（インチ）＝ 紙の pt ÷ 72 × ビューポートの縮尺**）。
+  **`ovDimTextStyle`(1248) へ番号を書くだけの道は使えない**——番号は変わるが大きさが
+  付いてこない。**3 つは読み戻しで見分けが付かない。**
   寸法規格も文字スタイルを持ち、`GetDimensionStandardVariable(index,
   `dimStdTextStyle`(51), …)` で ref number として読める（組み込み規格 1〜9 は `0`
   ＝持たない）。下記「[寸法の文字スタイル](#寸法の文字スタイル)」。
+- **寸法から文字スタイルを外す口は `gSDK->SetTextStyleRef(dim, 0)`**（＝ Un-Styled。
+  `ResetObject` を越えて残る）。**ただし外しても絵は変わらない**ので、大きさを直したい
+  だけなら外さなくてよい（#161）。
 - **ビューポートの注釈は、そのビューポートの縮尺で描かれる**（用紙 1:1 ではない）。
   注釈へ置く寸法には **`ovDimFontSize` ＝ 紙の pt × 25.4 / 72 × ビューポートの縮尺**
   を書く（下記「注釈へ寸法を置くときの作り方」）。**`CreateViewport` /
   `CreateSectionViewport` が作るビューポートの縮尺の既定は `1:1`** なので、
   縮尺は自分で書く。
 - **連続寸法（チェーン寸法）の中の直線寸法は、繋ぐときに作り直される。**
-  だから**〈クラスの文字スタイル〉のままの寸法では `ovDimFontSize` を書く道が無い**
-  ——繋ぐ前・繋いだ後・連続寸法そのもの（型 86）・注釈の中、どこへ書いても捨てられ、
+  （**繋ぐ直前に `ovDimFontSize` を書いておけばその値で作り直される**——#161 の実測で、
+  繋いだ後の中の直線寸法も絵も書いた値どおりだった。以下は**書かずに繋いだとき**の話。）
+  〈クラスの文字スタイル〉のままで**後から**直そうとすると道が無い
+  ——繋いだ後・連続寸法そのもの（型 86）・注釈の中、どこへ書いても捨てられ、
   **入る値は「規格が紙で決めた大きさ × 繋ぐときのアクティブレイヤの縮尺」ただ 1 つ**に
   なる（元の寸法をどこで作ったかも、容れ物の縮尺も、後から変えたアクティブレイヤも
   効かない。双方向で実測）。**文字スタイルを明示してあれば保つ**ので（すぐ上・#157）、
@@ -772,7 +781,81 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
   そのまま読み戻せた）。**順番は「文字スタイル → `ovDimFontSize`」にする**
   ——逆にすると `SetTextStyleRef` が書いた値を潰す。
 
-### 注釈で値が出るのは `SetTextStyleRef` で明示したときだけ（実機の絵で確定）
+### ★ 絵の文字の大きさは、書いた瞬間には変わらない——引き直しで反映される（確定）
+
+> **この節は [#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
+> の結論で、以下の 2 節（#157 の観察）はこの法則の特別な場合である。** 先にここを読む。
+
+**寸法が絵に使う文字の大きさは、`ovDimFontSize` へ書いた時点では変わらない。**
+書いた値は保持され、**その寸法が次に「引き直された」ときに初めて絵へ反映される。**
+
+| 書いたあとに通したもの | 絵に反映されるか |
+| --- | --- |
+| 何も通さない | **されない**（書く前の大きさのまま） |
+| **`ResetObject(dim)`** | **される**（これが最短の 1 手） |
+| `CreateChainDimension` で繋ぐ | される（繋ぎ直しが引き直しになる） |
+| ビューポートの縮尺を変える | される（注釈の中身が引き直される） |
+| `AddViewportAnnotationObject` / `UpdateViewport` | **されない**——移動も更新も引き直しではない |
+
+**`SetTextStyleRef` だけは例外で、呼んだその場で絵の側も書き換える**（だから引き直し
+無しでも効く。下記 2 節で「文字スタイルを明示したときだけ出た」と見えたのはこれが理由）。
+
+実測（VW 2026 / macOS。1/50 の平面ビューポートの注釈へ 7 行。**測る長さを行ごとに
+変えてあるので、出た数字がそのまま行の名前になる**。絵で確認済み）:
+
+| 行 | やったこと | `ovDimFontSize`（読み戻し） | **実際に描かれた文字** | 絵 |
+| --- | --- | --- | --- | --- |
+| H1 | 外す → 紙 6pt を書く → **`ResetObject`** | `105.8333` | **`105.8333`mm ＝紙 6pt** | **読める** |
+| H2 | **外さず**（by-class のまま）紙 6pt を書く → **`ResetObject`** | `105.8333` | **`105.8333`mm ＝紙 6pt** | **読める** |
+| H3 | 外す → 紙 6pt を書く（`ResetObject` を呼ばない） | `105.8333` | `2.1167`mm ＝紙 0.12pt | 出ない（**縮尺を往復させたら紙 6pt になった**） |
+| H4 | 外す → **紙 12pt** を書く → `ResetObject` | `211.6667` | **`211.6667`mm ＝紙 12pt** | **読める。H1 のちょうど 2 倍** |
+| H5 | `SetTextStyleRef`（紙 6pt の文字スタイル）だけ | `105.8333` | `105.8333`mm ＝紙 6pt | 読める |
+| H6 | 外す → 紙 6pt を書く（`ResetObject` を呼ばない） | `105.8333` | `2.1167`mm ＝紙 0.12pt | 出ない（H3 と同じく縮尺の往復で出た） |
+| H7 | 繋ぐ前に紙 6pt を書いて `CreateChainDimension` | `105.8333` | `105.8333`mm ＝紙 6pt | 読める |
+
+- **`ovDimFontSize` は効く。** H4 が H1 のちょうど 2 倍で出たので、**書いた値どおりの
+  大きさになる**（「たまたま合った」ではない）。
+- **文字スタイルを外す必要は無い。** H2 は〈クラスの文字スタイル〉のままで効いている。
+- **書いた値は捨てられていない。** H3 / H6 は `ResetObject` を呼ばなかったので絵は
+  変わらなかったが、**後からビューポートの縮尺を往復させたら紙 6pt になった**
+  ——値は寸法の中にずっと残っていて、引き直しを待っていただけである。
+- **読み戻しでは絶対に気付けない。** H1 と H6 は `GetTextStyleByClass` /
+  `GetTextStyleRef` / `ovDimTextStyle` / `ovDimFontSize` の **4 つとも完全に同じ**なのに、
+  絵は片方しか出ない。違うのは「`ResetObject` を通したかどうか」だけ。
+  → **読み戻しの代わりに「実際に描かれている文字の大きさ」を測る**
+  （[調査の作法「絵の文字の大きさを目視に頼らず測る」](Investigation%20Techniques.md)）。
+
+#### 寸法から文字スタイルを外す口（`SetTextStyleRef(dim, 0)`）
+
+ついでに確定した。ヘッダ（`SDKLib/Include/vs.py`）が言うとおりだった:
+
+> `SetTextStyleRef`: … **Reference 0 means Un-Styled.** This procedure will replace
+> by-class styling.
+> `GetTextStyleRef`: … If the text object is using class text style, this returns the
+> **effective** style.
+
+| 道 | 結果（実測） |
+| --- | --- |
+| **`gSDK->SetTextStyleRef(dim, 0)`** | **外れる。** `GetTextStyleByClass` = `false` / `GetTextStyleRef` = `0` / `ovDimTextStyle` = `0`。**`ResetObject` を越えて残る** |
+| `ovDimTextStyle`(1248) ← `0` | 外れる（読み戻しは上と完全に同じ） |
+| `ovDimTextStyle` ← `-1` | **外れない。**「番号 `-1` が当たっている」という別の状態になる |
+| クラスを Un-Styled にして `SetTextStyleByClass` | **外れない。** by-class のまま、実効は `30`（`寸法(6pt)`） |
+
+- **ただし外しても絵は変わらない**（H3 / H6）。**外すこと自体に効き目は無い**ので、
+  大きさを直したいだけなら**外さずに `ovDimFontSize` を書いて `ResetObject`** でよい。
+- `GetTextStyleRef` が by-class の寸法に対して返すのが**実効値**だという裏取りでもある
+  ——クラスから文字スタイルを取り去っても実効は `30` のままだった（下記
+  「作った直後は〈クラスの文字スタイル〉」の観察と一致する）。
+
+### 注釈で値が出るのは `SetTextStyleRef` で明示したときだけ（← 誤り。原因は上記の引き直し）
+
+> **この節の表（D1〜D6）の実測は正しいが、そこから引いた法則が誤っていた。**
+> [#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
+> で原因が分かった——**どの行も `ResetObject` を呼んでいなかった**ので、`ovDimFontSize`
+> を書いた行は絵が書く前のままだっただけである（上記「★ 絵の文字の大きさは…」）。
+> **「`SetTextStyleRef` で明示しないと値が出ない」は成り立たない**——`ovDimFontSize` を
+> 書いて `ResetObject` すれば、by-class のままでも出る。**表はそのまま残す**（どの作り方
+> がどう見えたかの記録として正しいので）。
 
 **読み戻した値では「値が出るか」を判定できない。** 1/125 の平面ビューポートの注釈へ、
 作り方だけを変えた寸法を 6 行ならべて絵を見た（VW 2026 / macOS）。**測る長さを行ごとに
@@ -791,13 +874,20 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 > つまり **`SetTextStyleRef` は、`ovDimTextStyle` へ番号を書くのとは違うことをしている**
 > ——そしてその違いは **`ISDK` から読めない**。
 
-- **【利用側への答え】注釈へ置く寸法には `gSDK->SetTextStyleRef(dim, ref)` を呼ぶ。**
-  `ovDimTextStyle`(1248) へ番号を書く道は**使ってはいけない**（D4）。
-  〈クラスの文字スタイル〉のままでは、`ovDimFontSize` を正しく書いても出ない（D1）。
-- **`ovDimFontSize` を正しく書いたかどうかは関係なかった。** D1 は `264.5833`
-  （紙 6pt ぴったり）を持っているのに出ない。**「大きさが小さすぎて見えない」のでは
-  ない**——[#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143)
-  の「1:1 生まれだから小さい」とは別の原因である。
+**その「違うこと」が #161 で分かった: `SetTextStyleRef` は絵に使う文字の大きさを
+その場で書き換え、`ovDimTextStyle` への書き込みは書き換えない。** D4 は番号だけが
+変わって大きさが元のまま（`2.1167`mm ＝紙 0.017mm）だったので、小さすぎて読めなかった。
+
+- **【利用側への答え】** 注釈へ置く寸法には `gSDK->SetTextStyleRef(dim, ref)` を呼ぶか、
+  **`ovDimFontSize` を書いて `gSDK->ResetObject(dim)` を呼ぶ**。どちらでも出る。
+  `ovDimTextStyle`(1248) へ番号を書くだけの道は**使ってはいけない**（D4。大きさが
+  付いてこない）。
+- ~~**`ovDimFontSize` を正しく書いたかどうかは関係なかった。**~~ **← 誤り。**
+  D1 が `264.5833` を持っているのに出なかったのは、**`ResetObject` を呼んでおらず
+  絵が書き換わっていなかった**ため。実際に描かれていた文字は `2.1167`mm
+  （1/125 の紙で 0.048pt）で、**まさに「小さすぎて見えない」だった**
+  ——[#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143)
+  の「1:1 生まれだから小さい」と**同じ原因**である（#161 で実測）。
 - **当てる文字スタイルは何でもよい。** D2・D3・D4 が使ったのはプローブが作った
   無名の文字スタイルで、寸法規格の `寸法(6pt)` ではない。**「明示されている」こと自体が
   効いている。**
@@ -809,10 +899,17 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 （`ovDimFontSize = 105.8333` → 1/125 の紙で 0.85mm ≒ 2.4pt の小さな数字として読めた）。
 **出なくなるのは、注釈へ置いた by-class の寸法だけ**である。
 
-### 大きさを決めるのは文字スタイルであって `ovDimFontSize` ではない（実機の絵で確定）
+### 文字スタイルを当てた後に `ovDimFontSize` を書いても、その場では絵が変わらない
 
-**`SetTextStyleRef` を呼んだ後に `ovDimFontSize` をいくら書いても、描かれる文字の
-大きさは変わらない。** 同じ文字スタイル（6 インチ）を当てた直線寸法を 3 本、
+> **見出しはもと「大きさを決めるのは文字スタイルであって `ovDimFontSize` ではない」
+> だった。誤りである**（[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)）。
+> 下の実測（E1〜E3 が同じ大きさ）は正しいが、**3 本とも `ResetObject` を呼んでいない**
+> ——だから絵が `SetTextStyleRef` の書いた大きさのままだっただけで、`ovDimFontSize` が
+> 無力なのではない。**`ResetObject` を通せば書いた値のとおりになる**（上記「★ 絵の
+> 文字の大きさは、書いた瞬間には変わらない」の H4 が、H1 のちょうど 2 倍で出た）。
+
+**`SetTextStyleRef` を呼んだ後に `ovDimFontSize` をいくら書いても、（引き直すまでは）
+描かれる文字の大きさは変わらない。** 同じ文字スタイル（6 インチ）を当てた直線寸法を 3 本、
 `ovDimFontSize` だけ変えて 1/125 の注釈へならべた:
 
 | 行 | `ovDimFontSize` | 紙の上の見込み | **絵の大きさ** |
@@ -823,9 +920,10 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 
 **3.47 倍まで違う値を持たせても、絵は 3 本ともまったく同じ大きさだった。**
 
-- **`ovDimFontSize` は書けて読み戻せるのに、絵には効いていない**——文字スタイルを
-  当てた時点で**大きさは文字スタイルのほうが握り**、`ovDimFontSize` は古くなった写しに
-  なる。**読み戻しで確かめられない**のは D2/D4（上記）と同じ筋の罠である。
+- **`ovDimFontSize` は書けて読み戻せるのに、絵には効いていない**——ただしそれは
+  **引き直していないから**であって、`ovDimFontSize` が無視されているからではない
+  （#161）。書いた値は残っていて、`ResetObject` を呼べばその大きさで描き直される。
+  **読み戻しで確かめられない**のは D2/D4（上記）と同じ筋の罠である。
 - **注釈へ移しても値は 1 つも動かない**（移す前後で `ovDimFontSize` が同じ）。
   つまり大きさの違いは「移動で書き換わった」せいではない。
 
@@ -908,9 +1006,20 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 
 ### 注釈へ寸法を置くときの作り方（文字スタイル版。#157 以降はこちら）
 
-上記「[注釈へ寸法を置くときの作り方](#注釈へ寸法を置くときの作り方ここだけ読めばよい)」
-（#143）は **`ovDimFontSize` を書く**手順だった。**当たっている文字スタイルがあると
-それは効かない**ので、文字スタイル側で決める。
+**この手順と、上記「[注釈へ寸法を置くときの作り方](#注釈へ寸法を置くときの作り方ここだけ読めばよい)」
+（#143 の `ovDimFontSize` を書く手順）は、どちらも正しい。**
+[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
+で「当たっている文字スタイルがあると `ovDimFontSize` が効かない」が**否定された**ので、
+好きなほうを使ってよい。選び方だけ書いておく:
+
+| | 文字スタイル版（この節） | `ovDimFontSize` 版（#143） |
+| --- | --- | --- |
+| 呼ぶもの | `CreateTextStyleResource` ＋ `SetTextStyleRef` | `SetObjectVariable(ovDimFontSize)` ＋ **`ResetObject`** |
+| 図面に増えるもの | **文字スタイルが縮尺ごとに 1 つ** | 増えない |
+| 引き直し | 要らない（`SetTextStyleRef` がその場で絵を書き換える） | **`ResetObject` が要る**（忘れると絵が変わらない） |
+| 向くところ | 図面の中で大きさを揃えたい・利用者が後から触る | 1 本ずつ大きさを決めたい・図面を汚したくない |
+
+以下は文字スタイル版の手順である。
 
 ```cpp
 // 1. ビューポートの縮尺を読む（1/125 なら 125）。
@@ -936,7 +1045,8 @@ MCObjectHandle dim = gSDK->CreateLinearDimension(p1, p2, startOffset, 0, Vector2
 // … ovDimStandardName / ovDimShowValue などをここで当てる
 gSDK->SetTextStyleRef(dim, styleRef);      // ← これを呼ばないと値が描かれない
 
-// 4. **ovDimFontSize は触らない。** 触ると直線寸法と連続寸法で大きさが食い違う。
+// 4. **ovDimFontSize は触らない**（この版では文字スタイルに決めさせる。触るなら
+//    書いたあとに ResetObject まで呼ぶこと——中途半端だと読み戻しと絵がずれる）。
 // 5. 連続寸法にするなら、ここまでを 2 本ぶん済ませてから CreateChainDimension。
 // 6. 注釈へ移す。
 gSDK->AddViewportAnnotationObject(viewport, dim);
@@ -949,32 +1059,28 @@ gSDK->AddViewportAnnotationObject(viewport, dim);
 - 規格が持つ文字スタイルは `GetDimensionStandardVariable(index, dimStdTextStyle, …)`
   で引ける（上記）。**そのまま当てても紙の pt にはならない**ので、大きさは作り直す。
 
-### #143 の「`ovDimFontSize` を書く」手順が再現しない（[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161) へ切り出し）
+### #143 の「`ovDimFontSize` を書く」手順は正しかった——抜けていたのは `ResetObject`
 
-**[#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143)
-は「1:1 生まれの寸法へ `ovDimFontSize` だけ書けば、1/50 生まれと見分けが付かない
-大きさで注釈に出る」を絵で確定させている。今回それが再現しなかった**——同じ作り方
-（by-class のまま `ovDimFontSize` ＝ 紙 6pt 相当）の寸法は、3 回とも値が出なかった
-（D1 / E5 / F5）。
+**[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
+で決着した。** #157 の 3 回の実行（D1 / E5 / F5）で
+[#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143)
+の手順が再現しなかった理由は、**図面の違いでも文字スタイルでもなく、
+`ovDimFontSize` を書いたあと寸法を引き直していなかったこと**だった。
 
-**切り分けようとしたが、届かなかった。** 見立ては「**文字スタイルが当たっているときだけ
-話が変わる**」（この図面のカスタム規格 `min-nano` は `寸法(6pt)` を持つ）で、寸法の規格を
-**文字スタイルを持たない `JIS`** へ替えて確かめた。結果:
+**by-class のまま `ovDimFontSize` ＝紙 6pt 相当を書き、`ResetObject` を呼んだ寸法は、
+注釈で紙 6pt に出た**（上記「[★ 絵の文字の大きさは、書いた瞬間には変わらない](#-絵の文字の大きさは書いた瞬間には変わらない引き直しで反映される確定)」の H2）。
+**#143 の記述に足りなかったのは `ResetObject` の 1 行だけ**で、手順そのものは生きている。
 
-| 行 | やったこと | 読み戻し | 絵 |
-| --- | --- | --- | --- |
-| F5 | `ovDimStandardName` ← `JIS`、その後 `ovDimFontSize` ＝ `264.5833` | `GetTextStyleRef` = **`30`** / `ovDimTextStyle` = **`-2`**（どちらも変わらず） | **出ない** |
-| F6 | `ovDimStandardName` ← `JIS` だけ | 同上 | 出ない |
+当初の見立て（「**文字スタイルが当たっているときだけ効かない**」）は**反証された**:
 
-**規格を替えても寸法の文字スタイルは外れない**（`30` ＝ `寸法(6pt)` を指したまま）。
-つまり**「文字スタイルがどこにも当たっていない寸法」を作れておらず、見立ての検証に
-なっていない**——**反証でもない。**
+| 確かめたこと | 結果 |
+| --- | --- |
+| 文字スタイルを外せるか | **外せる**（`SetTextStyleRef(dim, 0)`。上記） |
+| 外したら `ovDimFontSize` は効くか | **外しても外さなくても同じ**——効くかどうかは `ResetObject` を通したかだけで決まった（H1 と H2 が同じ絵） |
+| 外したまま `ResetObject` を呼ばなければ | **効かない**（H3 / H6）。＝ 文字スタイルの有無は関係が無い |
 
-- **この節の手順（文字スタイル版）を使えば、この不明点に触れずに済む。**
-- **`ovDimFontSize` がいつ絵に効くのかを決める調査は
-  [#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
-  へ切り出した**（文字スタイルを外す口があるのか、#143 の当時と図面の何が違うのか）。
-  **それまで #143 の手順を新しいコードで使わないこと。**
+**#157 が「規格を `JIS` に替えても `GetTextStyleRef` が `30` のまま」で行き詰まったのは、
+そもそも外す必要が無かったから**でもある（外す口は別にあり、外しても結論は変わらない）。
 
 ## 連続寸法（チェーン寸法）
 
@@ -1461,13 +1567,14 @@ gSDK->UpdateConstraintModel();   // ← これを呼ばないと測点は 1mm �
 
 ### 注釈へ寸法を置くときの作り方（ここだけ読めばよい）
 
-> **【この手順は、当たっている文字スタイルがあると効かない】**
-> [#157](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/157)
-> で分かった——**寸法に文字スタイルが当たっていると、`ovDimFontSize` を書いても絵は
-> 変わらない**（値そのものが描かれないことさえある）。文字スタイルは**既定で当たって
-> いる**（〈クラスの文字スタイル〉）ので、**新しく書くコードは下記
+> **【この手順には `ResetObject` が 1 行足りなかった】**
+> ここには一時「当たっている文字スタイルがあると効かないので使うな」と書いていた
+> （#157）。**それは誤りで、[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
+> が取り消した**——効かなかったのは文字スタイルのせいではなく、**書いたあとに寸法を
+> 引き直していなかった**せいである。手順 4 に `ResetObject` を足してあるので、
+> **この道はそのまま使ってよい。** 文字スタイル側で決める道
 > 「[注釈へ寸法を置くときの作り方（文字スタイル版）](#注釈へ寸法を置くときの作り方文字スタイル版157-以降はこちら)」
-> に従うこと。** 以下は #143 当時の記録として残してある。
+> も同じく正しいので、あちらの表を見て選ぶ。
 
 紙で 6pt に見せたい寸法を、ビューポートの注釈へ置く手順:
 
@@ -1491,14 +1598,22 @@ TVariableBlock fontSize;
 fontSize = static_cast<Real64>(6.0 * 25.4 / 72.0 * vpScale);   // 紙で 6pt
 gSDK->SetObjectVariable(dim, ovDimFontSize, fontSize);
 
-// 4. **連続寸法へ繋ぐなら、この道（ovDimFontSize を書く道）は使えない。** 繋ぐと
-//    中の直線寸法が作り直されて、書いた値は捨てられる。連続寸法は
-//    「文字スタイルを明示してから繋ぐ」（上記「注釈へ寸法を置くときの作り方
-//    （文字スタイル版）」）。by-class のままの大きさの決まり方は上記
-//    「[連続寸法](#クラスの文字スタイルのままなら文字の大きさは繋ぐときのアクティブレイヤで決まる)」。
-// 5. 注釈へ移す。
+// 4. **書いたら引き直す。これを忘れると絵は 1 ミリも変わらない**（#161）。
+//    読み戻しは書いた値を返すので、呼び忘れても読み戻しでは気付けない。
+gSDK->ResetObject(dim);
+
+// 5. **連続寸法へ繋ぐなら、繋ぐこと自体が引き直しになる**ので 4 は省いてよい
+//    （#161 の実測で、繋ぐ前に書いた値が中の直線寸法に残って絵にも出た）。
+//    ただし by-class のままだと「繋ぐときのアクティブレイヤ」で焼き直される道もある
+//    ——上記「[連続寸法](#クラスの文字スタイルのままなら文字の大きさは繋ぐときのアクティブレイヤで決まる)」。
+// 6. 注釈へ移す。
 gSDK->AddViewportAnnotationObject(viewport, dim);
 ```
+
+> **手順 4 は [#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
+> で足した。** #143 当時の記述にこれが無く、そのせいで #157 の再現実験は 3 回とも
+> 「値が出ない」になった（上記
+> 「[★ 絵の文字の大きさは、書いた瞬間には変わらない](#-絵の文字の大きさは書いた瞬間には変わらない引き直しで反映される確定)」）。
 
 - **この `ovDimFontSize` を書く道を勧める。** 作るときのアクティブレイヤが何であっても
   結果が同じになるので、**伏図のデザインレイヤの縮尺と断面ビューポートの縮尺が違って
@@ -1514,7 +1629,10 @@ gSDK->AddViewportAnnotationObject(viewport, dim);
   決まらない**（アクティブが 1:1 なら `6` ではなく `6 × ビューポート縮尺` を書くことに
   なる）。`ovDimFontSize` なら容れ物にも状態にも依らない。
 - **直すのは注釈へ移す前でも後でもよい**（実測では移した後に書いて効いた）。
-- **直すのは `ovDimFontSize` だけでよい——ほかに書くものは無い**
+  **ただしどちらの場合も、書いたあとに `ResetObject` が要る**——
+  `AddViewportAnnotationObject` も `UpdateViewport` も引き直しにはならない（#161）。
+- **直すのは `ovDimFontSize`（と、そのあとの `ResetObject`）だけでよい——ほかに書く
+  ものは無い**
   （[#145](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/145)
   で確定）。補助線・寸法線の出・端記号・文字と寸法線の間隔は規格の用紙インチから
   **ビューポートの縮尺で描くたびに解き直される**ので、1:1 で作った寸法でも狂わない
