@@ -54,6 +54,13 @@
 - **`ovDimTextSizeInPoints` は寸法が持っている値ではない。** 読むたびに
   「`ovDimFontSize` ÷ **読む時点のアクティブレイヤ**の縮尺」を pt に直したものが返る
   （入れ物の縮尺ですらない）。**紙の上で何 pt かの判断に使ってはいけない。**
+- **寸法は文字の大きさとは別に「文字スタイル」への参照を 1 つ持つ**（OIP の
+  「文字 → スタイル」。既定は〈クラスの文字スタイル〉＝ `ovDimTextStyle` が **`-2`**）。
+  **`ovDimFontSize` に焼き付く「素」はこの文字スタイルの大きさ**で、
+  **`SetTextStyleRef` は `ovDimFontSize` を書き換える**（`ovDimTextStyle` へ番号を書く道は
+  書き換えない）。**寸法規格も文字スタイルを持ち**、`GetDimensionStandardVariable(index,
+  `dimStdTextStyle`(51), …)` で ref number として読める（組み込み規格 1〜9 は `0`
+  ＝持たない）。下記「[寸法の文字スタイル](#寸法の文字スタイル)」。
 - **ビューポートの注釈は、そのビューポートの縮尺で描かれる**（用紙 1:1 ではない）。
   注釈へ置く寸法には **`ovDimFontSize` ＝ 紙の pt × 25.4 / 72 × ビューポートの縮尺**
   を書く（下記「注釈へ寸法を置くときの作り方」）。**`CreateViewport` /
@@ -592,70 +599,171 @@ for (short index = 9; index >= -8; --index)
 
 **文字の大きさ（`ovDimFontSize`）とは別に、寸法は「文字スタイル」という名前付きリソース
 への参照を 1 つ持つ。** OIP の「文字 → スタイル」がそれで、既定は
-**〈クラスの文字スタイル〉**——寸法自身は参照を持たず、クラス側に置かれたものを使う、
-という状態である。
+**〈クラスの文字スタイル〉**。[#157](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/157)
+で実機（VW 2026 / macOS）から測った。
 
-> **【この節はまだ実機確認前】**
-> 下の口の並びは**すべて【ヘッダ根拠】**（`Include/Interfaces/VectorWorks/ISDK.h` /
-> `Include/Kernel/API/ObjectVariables.h` / `Include/Kernel/API/MiniCadCallBacks.h`）で、
-> 「宣言がある」以上のことは言っていない。実機で何が起きるかは
-> [issue #157](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/157)
-> のプローブ（`probes/runtime/dim-text-style`）の結果で確定させる。
+### まず結論
 
-### 触る口の一覧【ヘッダ根拠】
+- **寸法規格は文字スタイルを持つ。** `GetDimensionStandardVariable(index,
+  **`dimStdTextStyle`（= 51）**, block)` で読む。返るのは **`t_Sint32`（型番号 7）の
+  ref number**——名前ではない（名前は `InternalIndexToNameN` で引く）。
+- **組み込み規格（1〜9）はどれも `0`（文字スタイル無し）。持つのはカスタム規格だけ。**
+- **`ovTextStyleSize`(1361) の単位は「インチ」**（ヘッダは "the size of the text" としか
+  書いていない）。pt で指定したいなら **`pt / 72`** を書く。
+- **作った直後の寸法は〈クラスの文字スタイル〉**（`GetTextStyleByClass` = `true`、
+  `ovDimTextStyle` = **`-2`**）。**`-2` は「クラス由来」を表す番兵で、ref number ではない。**
+- **その状態でも `GetTextStyleRef` は番号を返す。ただし返るのはクラスに置いた文字
+  スタイルではなく、当たっている寸法規格の文字スタイルだった。**
+- **文字スタイルを当てる口は 2 つあり、`ovDimFontSize` の扱いが違う**——
+  **`SetTextStyleRef` は `ovDimFontSize` を書き換える**が、
+  **`ovDimTextStyle` へ番号を書く道は動かさない。**
+- **連続寸法へ繋いでも残る。** 繋ぐ前に直線寸法へ当てておけば、中の型 63 は
+  `ovDimTextStyle` も `ovDimFontSize` も保つ。
+- **注釈へ移しても何も変わらない**（`AddViewportAnnotationObject` は文字スタイルにも
+  `ovDimFontSize` にも触らない）。
+
+### 触る口の一覧
 
 **寸法 1 本の文字スタイル**——`ISDK` の口とオブジェクト変数の 2 通りがある。
 
 | 何 | 口 | 型・値 |
 | --- | --- | --- |
 | 読む | `ISDK::GetTextStyleRef(h)` | `InternalIndex`（文字スタイルの ref number） |
-| 書く | `ISDK::SetTextStyleRef(h, styleRef)` | `void` |
+| 書く | `ISDK::SetTextStyleRef(h, styleRef)` | `void`。**`ovDimFontSize` も書き換わる**（下記） |
 | 〈クラスの文字スタイル〉か | `ISDK::GetTextStyleByClass(h)` | `bool` |
-| 〈クラスの文字スタイル〉へ戻す | `ISDK::SetTextStyleByClass(h)` | `void` |
-| 同じものをオブジェクト変数で | `ovDimTextStyle`(**1248**) | `Sint32` — "the ref number of the text style that the dimension is linked to"。**`Public for VS`** |
+| 〈クラスの文字スタイル〉へ戻す | `ISDK::SetTextStyleByClass(h)` | `void`。**`ovDimFontSize` も戻る** |
+| 同じものをオブジェクト変数で | `ovDimTextStyle`(**1248**) | `Sint32`。**`-2` ＝ クラス由来**。**書いても `ovDimFontSize` は動かない** |
 
 - **`ovObjectTextStyle` は `ovDimTextStyle` と同じ番号**（`= ovDimTextStyle`）だが、
   ヘッダに `char - Not for public use` と付いている。**使うなら `ovDimTextStyle` のほう。**
 - 文字**列**（1 字ごと）用の `…RefN` 系（`SetTextStyleRefN` / `GetTextStyleByClassN`）は
   文字ブロック用で、寸法には要らない。
 
-**クラスが持つ文字スタイル**（OIP の〈クラスの文字スタイル〉の実体）:
+**クラスが持つ文字スタイル**（by-class 属性 7 つとは別口。[Attributes and Classes](Attributes%20and%20Classes.md)）:
 
 | 何 | 口 |
 | --- | --- |
 | クラスが文字スタイルを持つか | `ISDK::GetClUseTextStyle(classId)` / `SetClUseTextStyle(classId, use)` |
 | その文字スタイル | `ISDK::GetClTextStyleRef(classId)` / `SetClTextStyleRef(classId, ref)` |
 
-**寸法規格が持つ文字スタイル**——`GetDimensionStandardVariable` の**セレクタ
-`dimStdTextStyle`（= 51）**で読む。ヘッダの但し書きは
-`(Sint32) the ref number of the text style that the dimension standard is linked to`。
+**文字スタイルそのもの**は `ISDK::CreateTextStyleResource(name)` で作り、
+`ovTextStyleSize`(1361。`double`。**インチ**)・`ovTextStyleFontIndex`(1360) などの
+オブジェクト変数で触る。
+
+### 寸法規格が持つ文字スタイルを読む
 
 ```cpp
 TVariableBlock block;
 if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 {
     Sint32 styleRef = 0;
-    if (block.GetSint32(styleRef))
+    if (block.GetSint32(styleRef) && styleRef != 0)
     {
         TXString styleName;
-        gSDK->InternalIndexToNameN(static_cast<InternalIndex>(styleRef), styleName); // 名前が要るとき
+        gSDK->InternalIndexToNameN(static_cast<InternalIndex>(styleRef), styleName);
     }
 }
 ```
 
-- **返るのは名前ではなく番号（`InternalIndex` ＝ 名前付きリソースの ref number）。**
-  名前が要るなら `ISDK::InternalIndexToNameN(index, outName)` で引く。
+**実測（利用者の図面環境。index 1〜9 と 0〜−5 を総当り）:**
+
+| index | 規格名 | `dimStdTextStyle` | 指す名前 |
+| --- | --- | --- | --- |
+| 1〜9 | `Arch` / `ASME` / `BSI` / `DIN` / `ISO` / `JIS` / `SIA` / `ASME Dual SideBySide` / `ASME Dual Stacked` | **`0`** | (なし) |
+| **0** | **`min-nano`** | **`30`** | **`寸法(6pt)`** |
+| −1〜−5 | — | `GetDimensionStandardVariable` が **`false`** | — |
+
+- **組み込み規格は文字スタイルを持たない。** 文字スタイルを持つのは
+  **カスタム規格だけ**で、この図面ではカスタムは index `0` の 1 件しかない
+  （−1 以下は「無い」と返る。上記「[index の体系](#index-の体系)」の裏取りにもなっている）。
 - 書くほうは**カスタム規格だけ**——`SetCustomDimensionStandardVariable(index, 51, block)`
   （組み込み規格 1〜9 を書き換える口は無い）。
-- 文字スタイルそのものを作る口は `ISDK::CreateTextStyleResource(name)`。中身は
-  `ovTextStyleSize`(1361。`double`)・`ovTextStyleFontIndex`(1360) などのオブジェクト変数
-  で触る。
 
-**連続寸法（型 86 の PIO）には PIO 用の口がある**——`ISDK::SetPIOTextStyle(paramObj,
-textStyleRef, copyStyleSettings = true)`。PIO が文字スタイルを受け付けるかどうかは
-オブジェクトプロパティ `kObjXPropTextStyleSupport`(42)
-（"Controls whether parametric objects can use class text style attribute and get Text
-Style on OIP"）で決まる。**連続寸法がこれを立てているかは実機で確かめる。**
+### `ovTextStyleSize` の単位はインチ（pt ではない）
+
+`CreateTextStyleResource` で作った直後の `ovTextStyleSize` は **`0.1667`**
+（= 1/6 インチ = **12pt**）。ここへ `6` を書くと **6 インチ = 432pt** になり、
+その文字スタイルを当てた寸法の `ovDimTextSizeInPoints` は実際に **`432`** を返した。
+
+> **pt で指定したいなら `ovTextStyleSize` へ `pt / 72` を書く。** 6pt なら `0.08333`。
+
+### 作った直後は〈クラスの文字スタイル〉——解決先は「寸法規格の文字スタイル」だった
+
+作った直後の寸法（型 63）は:
+
+| 読むもの | 値 |
+| --- | --- |
+| `GetTextStyleByClass(dim)` | **`true`** |
+| `ovDimTextStyle`(1248) | **`-2`**（＝「クラス由来」の番兵。ref number ではない） |
+| `GetTextStyleRef(dim)` | **`30` ＝ `寸法(6pt)`** |
+
+**`30` は、当たっている寸法規格（`min-nano`）の `dimStdTextStyle` そのものである。**
+クラス側ではない——次の 3 つを同じ実行の中で測って確かめた:
+
+1. 寸法を作った時点で、アクティブクラス（`一般`）は文字スタイルを**持っていなかった**
+   （`GetClUseTextStyle` = `false` / `GetClTextStyleRef` = `0`）。それでも
+   `GetTextStyleRef` は `30` を返した。
+2. そのあとクラスへ**別の文字スタイル**を与えても（`SetClUseTextStyle(true)` ＋
+   `SetClTextStyleRef(113)`。読み戻しで `use=true ref=113` を確認）、**同じ寸法は
+   `30` のまま**。`ResetObject` を挟んでも変わらない。
+3. **その後に新しく作った寸法**も `30` のままだった。
+
+> **つまり「〈クラスの文字スタイル〉のまま」の寸法から SDK が返す文字スタイルは、
+> クラスに置いたものではなく寸法規格のものである。** 文字スタイルの出どころを
+> 調べるときに、`GetClTextStyleRef` を見に行っても答えは出ない。
+
+### 文字スタイルを当てる 2 つの口は、`ovDimFontSize` の扱いが違う
+
+**同じ 1 本（1:1 のシートレイヤがアクティブなときに作った寸法）で往復した実測:**
+
+| やったこと | `GetTextStyleByClass` | `ovDimTextStyle` | **`ovDimFontSize`** |
+| --- | --- | --- | --- |
+| 作った直後 | `true` | `-2` | `2.1167` |
+| `SetTextStyleRef(dim, 113)` | `false` | `113` | **`152.4000` へ書き換わる** |
+| `SetTextStyleByClass(dim)` で戻す | `true` | `-2` | **`2.1167` へ戻る** |
+| `SetObjectVariable(dim, ovDimTextStyle, 113)` | `false` | `113` | **`2.1167` のまま（動かない）** |
+
+- **`SetTextStyleRef` は、当てた文字スタイルの大きさを `ovDimFontSize` へ焼き直す。**
+  入る値は
+
+  > **`ovDimFontSize` ＝ `ovTextStyleSize`（インチ）× 25.4 ×（そのときのアクティブレイヤの縮尺）**
+
+  で説明が付く（6 インチ × 25.4 × 1 = `152.4`。シートレイヤがアクティブなので縮尺 1）。
+  **同じ式が「作った直後」にも当てはまる**——`寸法(6pt)` は 6/72 インチなので、
+  1:1 では `6/72 × 25.4 × 1 = 2.1167`、1/50 のデザインレイヤでは `× 50` して
+  `105.8333`。**上記「[文字の大きさは作るときのアクティブレイヤの縮尺で焼き付く](#文字の大きさは作るときのアクティブレイヤの縮尺で焼き付く)」
+  の「焼き付く素」は、当たっている文字スタイルの大きさだった。**
+- **`ovDimTextStyle`(1248) へ番号を書く道は `ovDimFontSize` を動かさない。**
+  結び付けだけを変えたいならこちら。
+- **どちらの道でも、後から `ovDimFontSize` を書けばその値が残る**（`264.5833` を書いて
+  そのまま読み戻せた）。**順番は「文字スタイル → `ovDimFontSize`」にする**
+  ——逆にすると `SetTextStyleRef` が書いた値を潰す。
+
+### 連続寸法へ繋いでも残る
+
+繋ぐ前に直線寸法 2 本へ `SetTextStyleRef(113)` と `ovDimFontSize = 264.5833` を当ててから
+`CreateChainDimension` した結果:
+
+| 読んだ相手 | `GetTextStyleByClass` | `GetTextStyleRef` | `ovDimTextStyle` | `ovDimFontSize` |
+| --- | --- | --- | --- | --- |
+| 中の直線寸法（型 63）2 本とも | `false` | `113` | `113` | `264.5833` |
+| 連続寸法そのもの（型 86） | `false` | `113` | **読めず** | `152.4000` |
+
+- **繋ぐ前に当てれば、中の直線寸法はそのまま保つ**（[#155](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/155)
+  と同じ筋）。
+- **連続寸法そのもの（型 86 の PIO）も文字スタイルを持つ。** `GetTextStyleByClass` /
+  `GetTextStyleRef` は**読める**（上記「連続寸法には寸法の ov\* が効かない」の例外ではない
+  ——これらは `ISDK` の口であってオブジェクト変数ではない）。一方 `ovDimTextStyle` は
+  `GetObjectVariable` が `false` を返す。
+- **`ISDK::SetPIOTextStyle(chain, 113, true)` を当てても何も変わらなかった**が、**既に
+  `113` が入っていたので「効かない」ことの証明にはならない**【未確認】。
+  **繋ぐ前に直線寸法へ当てる道が通っているので、この口は要らない。**
+
+### 注釈へ移しても変わらない
+
+6 本すべて `AddViewportAnnotationObject` が `true` を返し、**移した後の読み戻しは移す前と
+完全に同じ**だった（`GetTextStyleByClass` / `GetTextStyleRef` / `ovDimTextStyle` /
+`ovDimFontSize` の 4 つとも）。**移動は文字スタイルにも大きさにも触らない。**
 
 ## 連続寸法（チェーン寸法）
 
