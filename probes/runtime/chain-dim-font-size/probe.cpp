@@ -329,7 +329,8 @@ namespace
 			probe.log("      外接矩形: " + ProbeBoundsText(member));
 			ProbeLogDrawnText(probe, "      ", member);
 		}
-		ProbeLogDrawnText(probe, "    連続寸法の直下ふくみ: ", chain);
+		probe.log("    連続寸法の直下（2D 表現のグループの中まで）:");
+		ProbeLogDrawnText(probe, "      ", chain);
 	}
 
 	double ProbeLayerScale(MCObjectHandle layer)
