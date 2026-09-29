@@ -1,38 +1,42 @@
 //
 //	probes/runtime/member-minor-dims/probe.cpp
 //
-//	[issue #173] **構造材の `MinorBreadth` / `MinorDepth` は何の寸法か。**
-//	（ある値を書くと 3D 実体——型 84 `kCSGTree`——が消える。#169 / PR #170 の副産物）
+//	[issue #173] **構造材の `MinorBreadth` / `MinorDepth` は何の寸法か。第 2 版。**
 //
-//	いま分かっていること（PR #170 の 4 本目 `[N2]`。VW 2026 / mac・新規の空図面）
-//	------------------------------------------------------------------------
-//	`MemberType`=`1`（コンクリート）/ `2`（木）では **`MajorBreadth` × `MajorDepth` が
-//	そのまま外接になる**（300 × 600 → 200 × 800）。`Minor` の 2 欄は**外接に出ない**が、
-//	`MajorBreadth`=300 / `MajorDepth`=600 のまま
+//	第 1 版で確定したこと（PR #174 の 1 本目。VW 2026 / mac・新規の空図面・26 個体）
+//	--------------------------------------------------------------------------
+//	**`MemberType`=`1`（コンクリート）/ `2`（木）の断面は矩形ではなく H 形である**
+//	（群の子は常に 12 頂点の `Polygon`）。4 欄はその H 形の寸法で、頂点は必ずこの形:
 //
-//	  ・`MinorBreadth`=250 だけ    → 変化なし（型 84 あり・高さ 600）
-//	  ・さらに `MinorDepth`=500    → **型 84 が消え、`GetObjectCube` の高さが 0.0**
-//	                                 群の子が `Polyline` → `Polygon` へ変わった
+//	  (-B/2,0) (-B/2,d) (-b/2,d) (-b/2,D-d) (-B/2,D-d) (-B/2,D)
+//	  ( B/2,D) ( B/2,D-d) ( b/2,D-d) ( b/2,d) ( B/2,d) ( B/2,0)
 //
-//	`ResetObject` は `true`・4 欄とも読み戻せる・`B`/`B1`/`D`/`D1` も追随する——
-//	**書き手からは成功と区別が付かない。** 既定は `B`=300 `B1`=100 `D`=600 `D1`=100
-//	なので、`Minor` の既定は 100 / 100 である（PR #170 の `[M0]` の表示欄）。
+//	    B = `MajorBreadth`（主幅＝フランジ幅）   D = `MajorDepth`（主高さ＝全せい）
+//	    b = `MinorBreadth`（副幅＝**ウェブ厚**） d = `MinorDepth`（副高さ＝**フランジ厚**）
 //
-//	この版で採ること
-//	----------------
-//	  A **断面の頂点を読む。** 外接だけでは「矩形のどこにも効かない」としか言えない。
-//	    プロファイル（断面）群の子の**頂点列**を出せば、断面が矩形なのか H 形なのかが
-//	    その場で分かり、`Minor` を振ったときにどの座標が動くかで**何の寸法か**が決まる。
-//	    群の 2D 座標は x＝材の幅(Y)・y＝材の高さ(Z)（外接 `(-150,0→150,600)` より）。
-//	  B **3D が消える境界を振る。** `Minor` を 1 欄ずつ動かし、どちらがいくつで壊れるかを
-//	    採る。**`Major` の半分**（`MajorDepth`=600 に対する 300）が境なら、`Minor` は
-//	    「両側に 2 回効く寸法」＝フランジ厚・ウェブ厚の類だと言い切れる。`2`（木）も同じ。
-//	  C **壊れたことを知る道と、直る道。** 型 84 の有無・`GetObjectCube` の高さ・
-//	    群の子の型のうち、どれが指標になるか。良い値を書き戻せば戻るのか。
-//	  D **`ProfileShape` は `MemberType`=1 でも断面の形を選ぶのか。** #170 は外接しか
-//	    見ていないので、`角形鋼管` / `溝形鋼` を与えて**頂点で**確かめる。
+//	  ・**`d` は上下 2 枚のフランジに 1 回ずつ効く**（下 `0`〜`d`・上 `D-d`〜`D`）。
+//	    だから `2d > D` になると上下が交差して輪郭が自己交差し、**3D 実体（型 84
+//	    `kCSGTree`）が作られない**——`d`=300（＝`D`/2 ちょうど）は生きて、301 で壊れた。
+//	  ・**`b` に壊れる閾値は無い。** 149 / 150 / 151 / 299 / 300 / 400 すべて実体あり。
+//	    `b`>`B` ではウェブがフランジから食み出し、**外接がウェブ幅まで広がった**
+//	    （`b`=400 で 幅Y=400）。
+//	  ・木（`2`）はコンクリート（`1`）と**同一**。`ProfileShape`（`角形鋼管` / `溝形鋼`）は
+//	    **完全に無視される**（頂点列が 1 つも動かない）。
+//	  ・**壊しても直る。** `d` を戻して `ResetObject` すると実体 84 が戻った。
+//	    壊れている間も `ResetObject`=`true`・読み戻し一致・`B1`/`D1` は書いた値を写す。
 //
-//	判定は外接（**幅Y** / **高さZ**）と**型 84 の有無**、そして**群の子の頂点列**。
+//	この版で閉じること——**残っている 3 つ。どれも issue の問 2 の範囲内**
+//	----------------------------------------------------------------
+//	  G **`0` と負で壊れるのはどちらの欄か。** 第 1 版は副幅・副高さを**同時に** `0` に
+//	    した回しか無く、切り分けが付いていない。1 欄ずつ `0` と負を与える。
+//	  H **境界は「主高さの半分」か、それとも 300 という絶対値か。** 第 1 版は主高さ 600
+//	    しか振っていない。主高さ 400 / 1000 でも `D`/2 が境かを確かめる。
+//	  I **副を 1 文字も書かなくても壊れるのではないか。** 副高さの既定は **100** なので、
+//	    `2*100 > D` すなわち**主高さが 200 未満の部材を作っただけで壊れる**見込み。
+//	    そうなら「Minor を触らない」という当面の指針は**安全ではない**ことになる。
+//	    ここは取り込み側の実装に直結するので、必ず取りに行く。
+//
+//	判定は第 1 版と同じ **(1) 実体84 の有無 (2) 高さZ (3) 群の子の頂点列**。
 //	走らせるのは新規の空図面。図面は壊れる前提（undo イベントは開かない）。
 //
 
@@ -45,10 +49,6 @@
 namespace
 {
 	const char* const kMnrPioName = "StructuralMember";
-
-	// 断面の既定（`MemberType`=1 / 2 のとき）。この 2 つは全試験で固定する。
-	const double kMnrMajorBreadth = 300.0;
-	const double kMnrMajorDepth = 600.0;
 
 	std::string MnrText(const TXString& src)
 	{
@@ -107,8 +107,7 @@ namespace
 			   MnrCoord(double(rect.right)) + "," + MnrCoord(double(rect.top)) + ")";
 	}
 
-	// **この調査の本命。** 断面の輪郭を頂点で出す。矩形なら 4、H 形なら 12 のはず。
-	// 型 3（Rect）は頂点を持たないので外接だけ、型 5 / 21 は VWPolygon2DObj で読む。
+	// 断面の輪郭を頂点で出す（種別 1 / 2 では必ず 12 頂点の H 形になる）。
 	void MnrDumpVertices(vwprobe::Report& probe, MCObjectHandle kid, const std::string& indent)
 	{
 		const short type = gSDK->GetObjectTypeN(kid);
@@ -193,11 +192,11 @@ namespace
 		MCObjectHandle group = gSDK->GetCustomObjectProfileGroup(pio);
 		if (group == nil)
 		{
-			probe.log("  " + tag + " 群=nil");
+			probe.log("  群=nil");
 			return;
 		}
 		WorldRect groupBounds;
-		std::string head = "  " + tag + " 群";
+		std::string head = "  群";
 		if (gSDK->GetObjectBounds(group, groupBounds))
 			head += MnrRectText(groupBounds);
 		probe.log(head);
@@ -207,13 +206,12 @@ namespace
 			const short type = gSDK->GetObjectTypeN(kid);
 			if (type == 0)
 				continue;
-			std::string kidLine =
-				"    " + tag + " 群の子 型" + MnrWhole(type) + "(" + MnrTypeName(type) + ")";
+			std::string kidLine = "    群の子 型" + MnrWhole(type) + "(" + MnrTypeName(type) + ")";
 			WorldRect kidBounds;
 			if (gSDK->GetObjectBounds(kid, kidBounds))
 				kidLine += " 外接" + MnrRectText(kidBounds);
 			probe.log(kidLine);
-			MnrDumpVertices(probe, kid, "      " + tag + " ");
+			MnrDumpVertices(probe, kid, "      ");
 		}
 	}
 
@@ -247,15 +245,14 @@ namespace
 		pio.SetParamValue(index, TXString(value.c_str()));
 	}
 
-	// 4 欄をそのまま読み戻して 1 行に出す（**書けたこと**と**効いたこと**を分けて見る）。
-	void MnrDumpFields(vwprobe::Report& probe, MCObjectHandle member, const std::string& tag)
+	// 4 欄を読み戻す。**[I] では「副を書いていない」ことの証拠になる**（既定 100 / 100）。
+	void MnrDumpFields(vwprobe::Report& probe, MCObjectHandle member)
 	{
 		VWParametricObj pio(member);
-		probe.log("  " + tag +
-				  " 読み戻し MajorBreadth=" + MnrCoord(pio.GetParamReal(TXString("MajorBreadth"))) +
-				  " MinorBreadth=" + MnrCoord(pio.GetParamReal(TXString("MinorBreadth"))) +
-				  " MajorDepth=" + MnrCoord(pio.GetParamReal(TXString("MajorDepth"))) +
-				  " MinorDepth=" + MnrCoord(pio.GetParamReal(TXString("MinorDepth"))) +
+		probe.log("  読み戻し 主幅=" + MnrCoord(pio.GetParamReal(TXString("MajorBreadth"))) +
+				  " 副幅=" + MnrCoord(pio.GetParamReal(TXString("MinorBreadth"))) +
+				  " 主高さ=" + MnrCoord(pio.GetParamReal(TXString("MajorDepth"))) +
+				  " 副高さ=" + MnrCoord(pio.GetParamReal(TXString("MinorDepth"))) +
 				  " ／ 表示欄 B=[" + MnrText(pio.GetParamValue(TXString("B"))) + "] B1=[" +
 				  MnrText(pio.GetParamValue(TXString("B1"))) + "] D=[" +
 				  MnrText(pio.GetParamValue(TXString("D"))) + "] D1=[" +
@@ -277,113 +274,74 @@ namespace
 		return member;
 	}
 
-	// 1 個体を「`MemberType` を倒して 4 欄を書いて reset して測る」まで通す。
-	// **4 欄は毎回 4 つとも明示的に書く**（既定に頼らない）。
-	MCObjectHandle MnrCase(vwprobe::Report& probe, const std::string& tag, double& originY,
-						   int memberType, double minorBreadth, double minorDepth)
+	// 1 個体。**`writeMinor` が false のときは副 2 欄へ 1 文字も書かない**（[I] 用）。
+	void MnrCase(vwprobe::Report& probe, const std::string& tag, double& originY, int memberType,
+				 double majorBreadth, double majorDepth, bool writeMinor, double minorBreadth,
+				 double minorDepth)
 	{
 		MCObjectHandle member = MnrMake(probe, tag, originY);
 		originY += 2000.0;
 		if (member == nil)
-			return nil;
+			return;
 		gSDK->ResetObject(member);
 		MnrSetValue(probe, member, "MemberType", MnrWhole(memberType));
-		MnrSetReal(probe, member, "MajorBreadth", kMnrMajorBreadth);
-		MnrSetReal(probe, member, "MajorDepth", kMnrMajorDepth);
-		MnrSetReal(probe, member, "MinorBreadth", minorBreadth);
-		MnrSetReal(probe, member, "MinorDepth", minorDepth);
+		MnrSetReal(probe, member, "MajorBreadth", majorBreadth);
+		MnrSetReal(probe, member, "MajorDepth", majorDepth);
+		if (writeMinor)
+		{
+			MnrSetReal(probe, member, "MinorBreadth", minorBreadth);
+			MnrSetReal(probe, member, "MinorDepth", minorDepth);
+		}
 		const std::string reset = MnrReset(member);
-		MnrSnap(probe,
-				tag + " 種別" + MnrWhole(memberType) + " 主" + MnrCoord(kMnrMajorBreadth) + "x" +
-					MnrCoord(kMnrMajorDepth) + " 副幅" + MnrCoord(minorBreadth) + " 副高さ" +
-					MnrCoord(minorDepth) + " reset=" + reset,
-				member);
-		return member;
+		std::string head = tag + " 種別" + MnrWhole(memberType) + " 主" + MnrCoord(majorBreadth) +
+						   "x" + MnrCoord(majorDepth);
+		if (writeMinor)
+			head += " 副幅" + MnrCoord(minorBreadth) + " 副高さ" + MnrCoord(minorDepth);
+		else
+			head += " **副は書かない**";
+		MnrSnap(probe, head + " reset=" + reset, member);
+		MnrDumpFields(probe, member);
 	}
 } // namespace
 
-VW_PROBE("member-minor-dims", "構造材の副幅・副高さは何の寸法か（#173）",
-		 "断面の頂点を読み、3D 実体が消える境界を振る")
+VW_PROBE("member-minor-dims", "構造材の副幅・副高さ 第 2 版（#173）",
+		 "0 と負・境界が主高さの半分か・副を書かなくても壊れるかを採る")
 {
 	gSDK->DefineCustomObject(kMnrPioName, kCustomObjectPrefNever);
-	probe.log("主幅=300 / 主高さ=600 に固定し、副幅・副高さだけを振る。群の 2D 座標は "
-			  "x=材の幅(Y) / y=材の高さ(Z)。");
-	probe.log("見どころ: (1) 群の子の頂点列——矩形なら 4 頂点、H 形なら 12 頂点 "
-			  "(2) 実体84 の有無 (3) 高さZ が 0 になるか。");
+	probe.log("第 1 版で確定: 種別 1/2 の断面は H 形（12 頂点）。主幅=フランジ幅 B / "
+			  "主高さ=全せい D / 副幅=ウェブ厚 b / 副高さ=フランジ厚 d。");
+	probe.log("頂点は (-B/2,0) (-B/2,d) (-b/2,d) (-b/2,D-d) (-B/2,D-d) (-B/2,D) "
+			  "と、その点対称の 6 点。2d>D で自己交差して実体 84 が作られない。");
 
 	double originY = 0.0;
 
-	// ---- [A] 断面の形と、副 2 欄がどの座標を動かすか ------------------------
-	probe.log("=== [A] 断面の頂点を読む（副 2 欄がどの座標を動かすか）===");
-	MnrCase(probe, "[A0]", originY, 1, 100.0, 100.0); // 既定の副（B1=D1=100）
-	MnrCase(probe, "[A1]", originY, 1, 50.0, 100.0);  // 副幅だけ小さく
-	MnrCase(probe, "[A2]", originY, 1, 100.0, 50.0);  // 副高さだけ小さく
-	MnrCase(probe, "[A3]", originY, 1, 200.0, 100.0); // 副幅だけ大きく
-	MnrCase(probe, "[A4]", originY, 1, 100.0, 200.0); // 副高さだけ大きく
-	MnrCase(probe, "[A5]", originY, 1, 0.0, 0.0);	  // 両方 0
+	// ---- [G] 0 と負で壊れるのはどちらの欄か --------------------------------
+	// 第 1 版は副幅・副高さを**同時に** 0 にした回しか無く、切り分けが付いていない。
+	probe.log("=== [G] 0 と負を 1 欄ずつ（主 300x600 固定）===");
+	MnrCase(probe, "[G1] 副幅だけ 0", originY, 1, 300.0, 600.0, true, 0.0, 100.0);
+	MnrCase(probe, "[G2] 副高さだけ 0", originY, 1, 300.0, 600.0, true, 100.0, 0.0);
+	MnrCase(probe, "[G3] 両方 0（第 1 版 [A5] の再現）", originY, 1, 300.0, 600.0, true, 0.0, 0.0);
+	MnrCase(probe, "[G4] 副幅だけ負", originY, 1, 300.0, 600.0, true, -100.0, 100.0);
+	MnrCase(probe, "[G5] 副高さだけ負", originY, 1, 300.0, 600.0, true, 100.0, -100.0);
 
-	// ---- [B] 3D が消える境界 -----------------------------------------------
-	// 主高さ 600 の**半分**（300）が境なら、副高さは「上下 2 回効く寸法」である。
-	probe.log("=== [B] 副高さを振る（主高さ 600・副幅 100 固定）===");
-	MnrCase(probe, "[B1]", originY, 1, 100.0, 250.0);
-	MnrCase(probe, "[B2]", originY, 1, 100.0, 299.0);
-	MnrCase(probe, "[B3]", originY, 1, 100.0, 300.0);
-	MnrCase(probe, "[B4]", originY, 1, 100.0, 301.0);
-	MnrCase(probe, "[B5]", originY, 1, 100.0, 500.0);
-	MnrCase(probe, "[B6]", originY, 1, 100.0, 600.0);
+	// ---- [H] 境界は「主高さの半分」か、300 という絶対値か --------------------
+	probe.log("=== [H] 主高さを変えて境界を採る（副高さ＝主高さの半分とその +1）===");
+	MnrCase(probe, "[H1] 主高さ400 副高さ200", originY, 1, 300.0, 400.0, true, 100.0, 200.0);
+	MnrCase(probe, "[H2] 主高さ400 副高さ201", originY, 1, 300.0, 400.0, true, 100.0, 201.0);
+	MnrCase(probe, "[H3] 主高さ1000 副高さ500", originY, 1, 300.0, 1000.0, true, 100.0, 500.0);
+	MnrCase(probe, "[H4] 主高さ1000 副高さ501", originY, 1, 300.0, 1000.0, true, 100.0, 501.0);
 
-	probe.log("=== [C] 副幅を振る（主幅 300・副高さ 100 固定）===");
-	MnrCase(probe, "[C1]", originY, 1, 149.0, 100.0);
-	MnrCase(probe, "[C2]", originY, 1, 150.0, 100.0);
-	MnrCase(probe, "[C3]", originY, 1, 151.0, 100.0);
-	MnrCase(probe, "[C4]", originY, 1, 299.0, 100.0);
-	MnrCase(probe, "[C5]", originY, 1, 300.0, 100.0);
-	MnrCase(probe, "[C6]", originY, 1, 400.0, 100.0);
-
-	// PR #170 の [N2] と同じ組み合わせ（250 / 500）。再現するかを確かめる。
-	probe.log("=== [D] PR #170 [N2] の再現（副 250 / 500）と、木（種別 2）で同じか ===");
-	MnrCase(probe, "[D1]", originY, 1, 250.0, 500.0);
-	MnrCase(probe, "[D2]", originY, 2, 250.0, 500.0);
-	MnrCase(probe, "[D3]", originY, 2, 100.0, 100.0);
-	MnrCase(probe, "[D4]", originY, 2, 100.0, 300.0);
-	MnrCase(probe, "[D5]", originY, 2, 100.0, 301.0);
-	MnrCase(probe, "[D6]", originY, 2, 300.0, 100.0);
-
-	// ---- [E] 壊れたことを知る道・直る道 -------------------------------------
-	probe.log("=== [E] 壊してから良い値を書き戻す（直るか・何が指標になるか）===");
-	{
-		MCObjectHandle member = MnrCase(probe, "[E1] 壊す", originY, 1, 250.0, 500.0);
-		if (member != nil)
-		{
-			MnrDumpFields(probe, member, "[E1] 壊れた直後");
-			MnrSetReal(probe, member, "MinorDepth", 100.0);
-			const std::string reset = MnrReset(member);
-			MnrSnap(probe, "[E1] 副高さ=100 へ書き戻した reset=" + reset, member);
-			MnrDumpFields(probe, member, "[E1] 戻した後");
-		}
-	}
-
-	// ---- [F] `ProfileShape` は種別 1 でも断面の形を選ぶのか -------------------
-	// #170 は外接しか見ていない。頂点で見れば「矩形のまま」か「形が変わる」かが分かる。
-	probe.log("=== [F] 種別 1 で ProfileShape を振る（頂点で見る）===");
-	{
-		MCObjectHandle member = MnrCase(probe, "[F1] 角形鋼管", originY, 1, 100.0, 100.0);
-		if (member != nil)
-		{
-			MnrSetValue(probe, member, "ProfileShape", "角形鋼管");
-			const std::string reset = MnrReset(member);
-			MnrSnap(probe, "[F1] ProfileShape=角形鋼管 reset=" + reset, member);
-		}
-	}
-	{
-		MCObjectHandle member = MnrCase(probe, "[F2] 溝形鋼", originY, 1, 100.0, 100.0);
-		if (member != nil)
-		{
-			MnrSetValue(probe, member, "ProfileShape", "溝形鋼");
-			const std::string reset = MnrReset(member);
-			MnrSnap(probe, "[F2] ProfileShape=溝形鋼 reset=" + reset, member);
-		}
-	}
+	// ---- [I] 副を 1 文字も書かなくても壊れるのではないか ---------------------
+	// **本命。** 副高さの既定は 100 なので、主高さが 200 未満なら 2d > D になる。
+	// そうなら「Minor を触らない」という当面の指針は安全ではない。
+	probe.log("=== [I] 副 2 欄へ**書かずに**主高さだけ小さくする（既定は副 100 / 100）===");
+	MnrCase(probe, "[I1] 主高さ250", originY, 1, 300.0, 250.0, false, 0.0, 0.0);
+	MnrCase(probe, "[I2] 主高さ200", originY, 1, 300.0, 200.0, false, 0.0, 0.0);
+	MnrCase(probe, "[I3] 主高さ199", originY, 1, 300.0, 199.0, false, 0.0, 0.0);
+	MnrCase(probe, "[I4] 主高さ150", originY, 1, 300.0, 150.0, false, 0.0, 0.0);
+	MnrCase(probe, "[I5] 主高さ105（2x4 の実寸）", originY, 1, 89.0, 105.0, false, 0.0, 0.0);
+	MnrCase(probe, "[I6] 主幅50（副幅 100 が食み出す）", originY, 1, 50.0, 600.0, false, 0.0, 0.0);
+	MnrCase(probe, "[I7] 木で主高さ150", originY, 2, 300.0, 150.0, false, 0.0, 0.0);
 
 	probe.log("おわり");
 }
