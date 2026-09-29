@@ -3,43 +3,42 @@
 //
 //	[issue #179] 図面ラベル（`Drawing Label2`）の図番（`Drawing`）の自動採番の規則を決める。
 //
-//	Findings「Drawing Labels」は #149 の実測から「**同じシートレイヤに置くたび 1 ずつ増える**」と
-//	書いているが、#177 / PR #178 の走行では **1,2,1,3,4,5,4,6,4,7,4** と戻る回があり、
-//	**同じシートレイヤに同じ図番が 4 本並んだ**。「どういう条件なら 1 ずつ増えるのか」が
-//	決まっていないので、効きそうな因子を 1 つずつ振り分けて測る。
+//	## 1 巡目（ビルド 805aaf940f89）で割れたこと
 //
-//	## 振り分ける因子
+//	作った瞬間の図番は「**そのシートレイヤで、いま図番として使われている正整数のうち、
+//	使われていない最小のもの**」である。1 巡目の A〜H に加えて、**#177 の 11 本
+//	（1,2,1,3,4,5,4,6,4,7,4）が 1 本の例外も無くこの規則で説明できた**ので、規則そのものは
+//	確定してよい。
 //
-//	1. **`CreateCustomObject` の `bInsert`。** #149 も #177 も `false` で呼んでいる。
-//	   `false` だと**どの容れ物にも入らないまま生まれる**見込みで、そうなら「同じ
-//	   シートレイヤに何本あるか」を数えようがない。ここが本命の疑い。
-//	2. **注釈へ入れるか。** 作ってすぐ `AddViewportAnnotationObject` で
-//	   ビューポートの注釈へ移すと、シートレイヤの直下からは消える。
-//	3. **ビューポートを跨ぐか。** #177 では跨いだ直後に戻る回があった。
-//	4. **シートレイヤが変わると番号は戻るか**（採番の単位が文書か、シートレイヤか）。
-//	   →**1 フェーズ 1 シートレイヤ**にしてあるので、各フェーズの 1 本目を見れば分かる。
-//	5. **空いた番号を埋めるか**（`max + 1` なのか「一番小さい空き」なのか）。
-//	6. **自分で書いた番号は次の採番に効くか。また、書いた値は残るか。**
-//	7. **`varUseAutoDrawCoord`（プログラム変数 544）が効くか。** SDK のヘッダに
-//	   `whether to coordinate sheet and drawing numbers for various items` とある
-//	   read/write の真偽値で、**SDK で「図番の自動採番」に触れている唯一の口**
-//	   （`sdk-grep` で `DrawingNumber|DrawingNo|NextDrawing|drawing number|DrawingLabel`
-//	   を引いて出たのは、内部 ID 2 つ・スタイルのフォルダ・これだけ）。切って作れば
-//	   採番が止まるのか、止まるとしたら何が入るのかを見る。
+//	  * シートレイヤ直下に置きっぱなしなら 1,2,3,… と素直に増える（A=1..6 / H=1..8）。
+//	  * 消して空いた番号は埋める（F: 2 を消したら次が 2）。max+1 ではない。
+//	  * `bInsert=false` でどこへも入れないと、その本は誰からも見えないので**常に 1**（B）。
+//	  * `varUseAutoDrawCoord`（544）は無関係（H: 切っても 1,2,3,4 のまま）。
 //
-//	## 読み方
+//	戻る回がある理由も同じ規則で説明が付く——**ビューポートの注釈へ 2 本目を入れると、
+//	その注釈の先頭のラベルが「使われている番号」から外れる**（番号が 1 つ空く）ため、
+//	次の 1 本がその空きへ落ちる。最後に読み直すと、先頭のラベルは**その注釈へ最後に
+//	入れたラベルと同じ値**になっている（C: 1 本目が 5 ＝ 6 本目と同じ／E: VP2 は 3 が 2 本・
+//	VP3 は 4 が 2 本）。
 //
-//	各フェーズの終わりに【いまのシート】として、**シートレイヤの直下に居るラベル**と
-//	**ビューポートの注釈の中に居るラベル**を図番付きで並べる。採番が「何を見ているか」は、
-//	次の 1 本の番号とこの並びを突き合わせれば決まる。
-//	最後に全部のラベルをもう一度読み直し、**後から番号が動くか**も見る。
+//	## この 2 巡目が決めること
+//
+//	1. **先頭のラベルは、番号を手放してから何を持っているのか**（P）。1 巡目は「作る →
+//	   入れる → reset」の 3 点しか読んでいないので、**他の本を足したときに先頭が何に
+//	   変わるか**を見ていない。1 本足すたびに**全員を読み直す**。
+//	2. **自分で書いた図番は、あとから同じ注釈へ 2 本目・3 本目を入れても残るか**（Q・R）。
+//	   ここが実用の要——「SDK 任せでは重複するから自分で書け」と言えるかどうかが懸かる。
+//	   1 巡目の G は**その注釈にラベルが 1 本しか無い**状態しか見ていない。文字列
+//	   （`A-01`）と数字（`7`）で分ける。
+//	3. **全部に自分で書けば安全か**（S）。実際に使う手順をそのままなぞる。
+//
+//	`Link State`（リンク状況）も併せて読む。先頭だけが書き換わるなら、そこに差が出る。
 //
 
 #include "Probe.h"
 
 #include <cstdio>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace
@@ -66,13 +65,6 @@ namespace
 		return WorldPt(0, -2000.0 * (gProbeSpot++));
 	}
 
-	// ラベルの型番号。1 本目を作った時点で引いて、以後の走査の目印にする
-	// （型番号をコードに書き込まないので、版が変わっても外れない）。
-	short gProbeLabelType = 0;
-
-	// 作ったラベル全部（最後にもう一度読み直すため）。消したものは外す。
-	std::vector<std::pair<std::string, MCObjectHandle>> gProbeMade;
-
 	std::string ProbeDrawingOf(MCObjectHandle h)
 	{
 		if (h == nil)
@@ -80,73 +72,57 @@ namespace
 		return ProbeStr(VWFC::VWObjects::VWParametricObj(h).GetParamString("Drawing"));
 	}
 
-	// ラベルを 1 本作る。vp が nil でなければ、作った直後に注釈へ移す。
-	// 各段（作った直後 / 注釈へ入れた後 / ResetObject の後）の図番をすべて出す。
-	MCObjectHandle ProbeMakeLabel(vwprobe::Report& probe, const std::string& tag, bool insert,
-								  MCObjectHandle vp)
+	// 「図番＋リンク状況」を 1 本ぶん。手放した先頭が何を持っているかは、この 2 つで見る。
+	std::string ProbeStateOf(MCObjectHandle h)
 	{
-		MCObjectHandle h = gSDK->CreateCustomObject("Drawing Label2", ProbeNextSpot(), 0.0, insert);
+		if (h == nil)
+			return "(nil)";
+		VWFC::VWObjects::VWParametricObj obj(h);
+		return "図番=「" + ProbeStr(obj.GetParamString("Drawing")) +
+			   "」/リンク=" + ProbeInt(obj.GetParamLong("Link State"));
+	}
+
+	// そのフェーズで作った全部を、入れた順に 1 行で並べ直す。
+	void ProbeDumpAll(vwprobe::Report& probe, const std::string& tag,
+					  const std::vector<MCObjectHandle>& labels)
+	{
+		std::string line = tag + ": 【全員】";
+		for (size_t i = 0; i < labels.size(); ++i)
+			line += " " + ProbeInt(static_cast<Sint32>(i) + 1) + ":" + ProbeStateOf(labels[i]);
+		probe.log(line);
+	}
+
+	// ラベルを 1 本作って、vp の注釈へ入れる（vp が nil なら入れない）。
+	MCObjectHandle ProbeMakeLabel(vwprobe::Report& probe, const std::string& tag, MCObjectHandle vp)
+	{
+		MCObjectHandle h = gSDK->CreateCustomObject("Drawing Label2", ProbeNextSpot(), 0.0, true);
 		if (h == nil)
 		{
-			probe.fail(tag + ": CreateCustomObject が nil（bInsert=" +
-					   std::string(insert ? "true" : "false") + "）");
+			probe.fail(tag + ": CreateCustomObject が nil");
 			return nil;
 		}
-		if (gProbeLabelType == 0)
-			gProbeLabelType = gSDK->GetObjectTypeN(h);
-
-		std::string line = tag + ": bInsert=" + std::string(insert ? "true " : "false") +
-						   " 作った直後 図番=「" + ProbeDrawingOf(h) + "」";
+		std::string line = tag + ": 作った直後 " + ProbeStateOf(h);
 		if (vp != nil)
 		{
 			const bool added = (gSDK->AddViewportAnnotationObject(vp, h) != 0);
-			line += " → 注釈へ入れた=" + std::string(added ? "true" : "false") + " 図番=「" +
-					ProbeDrawingOf(h) + "」";
+			line +=
+				" → 注釈へ入れた=" + std::string(added ? "true" : "false") + " " + ProbeStateOf(h);
 			gSDK->ResetObject(h);
-			line += " → ResetObject 後 図番=「" + ProbeDrawingOf(h) + "」";
+			line += " → ResetObject 後 " + ProbeStateOf(h);
 		}
 		probe.log(line);
-		gProbeMade.push_back(std::make_pair(tag, h));
 		return h;
 	}
 
-	// そのシートレイヤに「いま」居るラベルを、図番付きで並べる。
-	// 直下（レイヤの直接の子）と、注釈の中（渡されたビューポートの注釈群）を分けて数える。
-	void ProbeCensus(vwprobe::Report& probe, const std::string& tag, MCObjectHandle sheet,
-					 const std::vector<MCObjectHandle>& vps)
+	void ProbeWrite(vwprobe::Report& probe, const std::string& tag, MCObjectHandle h,
+					const char* value)
 	{
-		if (gProbeLabelType == 0)
-		{
-			probe.log(tag + ": 【いまのシート】ラベルの型がまだ分からない（1 本も作れていない）");
+		if (h == nil)
 			return;
-		}
-		int nDirect = 0;
-		std::string direct;
-		for (MCObjectHandle m = gSDK->FirstMemberObj(sheet); m != nil; m = gSDK->NextObject(m))
-		{
-			if (gSDK->GetObjectTypeN(m) != gProbeLabelType)
-				continue;
-			++nDirect;
-			direct += (direct.empty() ? "" : " ") + ProbeDrawingOf(m);
-		}
-		int nAnno = 0;
-		std::string anno;
-		for (size_t i = 0; i < vps.size(); ++i)
-		{
-			MCObjectHandle group = gSDK->GetViewportGroup(vps[i], kViewportGroupAnnotation);
-			if (group == nil)
-				continue;
-			for (MCObjectHandle a = gSDK->FirstMemberObj(group); a != nil; a = gSDK->NextObject(a))
-			{
-				if (gSDK->GetObjectTypeN(a) != gProbeLabelType)
-					continue;
-				++nAnno;
-				anno += (anno.empty() ? "" : " ") + ProbeDrawingOf(a);
-			}
-		}
-		probe.log(tag + ": 【いまのシート】直下 " + ProbeInt(nDirect) + " 本 [" + direct +
-				  "] / 注釈の中（ビューポート " + ProbeInt(static_cast<Sint32>(vps.size())) +
-				  " 枚） " + ProbeInt(nAnno) + " 本 [" + anno + "]");
+		VWFC::VWObjects::VWParametricObj(h).SetParamValue("Drawing", value);
+		gSDK->ResetObject(h);
+		probe.log(tag + ": 図番へ「" + std::string(value) + "」を書いて ResetObject → " +
+				  ProbeStateOf(h));
 	}
 
 	MCObjectHandle ProbeMakeSheet(vwprobe::Report& probe, const char* name)
@@ -177,10 +153,26 @@ namespace
 		gSDK->UpdateViewport(vp);
 		return vp;
 	}
+
+	// 「1 本足すたびに全員を読み直す」を count 本ぶん繰り返す。
+	void ProbeAddAndDump(vwprobe::Report& probe, const std::string& phase, MCObjectHandle vp,
+						 std::vector<MCObjectHandle>& labels, int count)
+	{
+		for (int i = 0; i < count; ++i)
+		{
+			const std::string tag =
+				phase + ProbeInt(static_cast<Sint32>(labels.size()) + 1) + " 本目";
+			MCObjectHandle h = ProbeMakeLabel(probe, tag, vp);
+			if (h == nil)
+				return;
+			labels.push_back(h);
+			ProbeDumpAll(probe, tag + "の直後", labels);
+		}
+	}
 } // namespace
 
-VW_PROBE("drawing-label-auto-number", "図面ラベルの図番の自動採番",
-		 "図番が 1 ずつ増える条件と、増えない条件を振り分ける")
+VW_PROBE("drawing-label-auto-number", "図面ラベルの図番の自動採番（2 巡目）",
+		 "先頭のラベルが番号を手放したあと何を持つか、自分で書いた図番は守られるか")
 {
 	gSDK->DefineCustomObject("Drawing Label2", kCustomObjectPrefNever);
 
@@ -193,178 +185,84 @@ VW_PROBE("drawing-label-auto-number", "図面ラベルの図番の自動採番",
 	}
 	gSDK->SetLayerScaleN(design, kProbeVpScale);
 	gSDK->CreateRectangleN(WorldPt(0, 0), Vector2(1, 0), 10000.0, 10000.0);
-	probe.log("フェーズごとに別のシートレイヤを使う（採番の単位がシートレイヤなら、"
-			  "各フェーズの 1 本目が 1 に戻る）");
-
-	std::vector<MCObjectHandle> noVp;
 
 	// -----------------------------------------------------------------------
-	probe.log("=== A: bInsert=true・シートレイヤ直下に置きっぱなし（6 本）===");
-	MCObjectHandle sheetA = ProbeMakeSheet(probe, "調査シート A");
-	if (sheetA == nil)
+	probe.log("=== P: 1 枚の注釈へ 6 本。1 本足すたびに全員を読み直す ===");
+	probe.log("P: 見たいのは「先頭が番号を手放す瞬間」と、手放してから何を持っているか");
+	MCObjectHandle sheetP = ProbeMakeSheet(probe, "調査シート P");
+	if (sheetP == nil)
 		return;
-	for (int i = 1; i <= 6; ++i)
-		ProbeMakeLabel(probe, "A" + ProbeInt(i), true, nil);
-	ProbeCensus(probe, "A 終わり", sheetA, noVp);
-
-	// -----------------------------------------------------------------------
-	probe.log("=== B: bInsert=false・どこへも入れない（6 本）===");
-	MCObjectHandle sheetB = ProbeMakeSheet(probe, "調査シート B");
-	if (sheetB == nil)
-		return;
-	for (int i = 1; i <= 6; ++i)
-		ProbeMakeLabel(probe, "B" + ProbeInt(i), false, nil);
-	ProbeCensus(probe, "B 終わり", sheetB, noVp);
-
-	// -----------------------------------------------------------------------
-	probe.log("=== C: bInsert=true・作ってすぐ 1 枚のビューポートの注釈へ（6 本）===");
-	MCObjectHandle sheetC = ProbeMakeSheet(probe, "調査シート C");
-	if (sheetC == nil)
-		return;
-	MCObjectHandle vpC = ProbeMakeViewport(probe, "C", sheetC, design);
-	std::vector<MCObjectHandle> vpsC;
-	if (vpC != nil)
-		vpsC.push_back(vpC);
-	for (int i = 1; i <= 6; ++i)
-		ProbeMakeLabel(probe, "C" + ProbeInt(i), true, vpC);
-	ProbeCensus(probe, "C 終わり", sheetC, vpsC);
-
-	// -----------------------------------------------------------------------
-	probe.log("=== D: bInsert=false・作ってすぐ注釈へ（6 本。#177 と同じ条件）===");
-	MCObjectHandle sheetD = ProbeMakeSheet(probe, "調査シート D");
-	if (sheetD == nil)
-		return;
-	MCObjectHandle vpD = ProbeMakeViewport(probe, "D", sheetD, design);
-	std::vector<MCObjectHandle> vpsD;
-	if (vpD != nil)
-		vpsD.push_back(vpD);
-	for (int i = 1; i <= 6; ++i)
-		ProbeMakeLabel(probe, "D" + ProbeInt(i), false, vpD);
-	ProbeCensus(probe, "D 終わり", sheetD, vpsD);
-
-	// -----------------------------------------------------------------------
-	probe.log("=== E: bInsert=true・ビューポートを 3 枚跨ぐ（2 本ずつ＋最後に 1 枚目へ戻る）===");
-	MCObjectHandle sheetE = ProbeMakeSheet(probe, "調査シート E");
-	if (sheetE == nil)
-		return;
-	std::vector<MCObjectHandle> vpsE;
-	for (int i = 1; i <= 3; ++i)
+	MCObjectHandle vpP = ProbeMakeViewport(probe, "P", sheetP, design);
+	std::vector<MCObjectHandle> labelsP;
+	ProbeAddAndDump(probe, "P ", vpP, labelsP, 6);
+	if (vpP != nil)
 	{
-		MCObjectHandle vp = ProbeMakeViewport(probe, "E の VP" + ProbeInt(i), sheetE, design);
-		if (vp != nil)
-			vpsE.push_back(vp);
+		gSDK->UpdateViewport(vpP);
+		ProbeDumpAll(probe, "P UpdateViewport 後", labelsP);
 	}
-	for (size_t i = 0; i < vpsE.size(); ++i)
-	{
-		const std::string vpTag = "VP" + ProbeInt(static_cast<Sint32>(i) + 1);
-		ProbeMakeLabel(probe, "E " + vpTag + " の 1 本目", true, vpsE[i]);
-		ProbeMakeLabel(probe, "E " + vpTag + " の 2 本目", true, vpsE[i]);
-	}
-	if (!vpsE.empty())
-		ProbeMakeLabel(probe, "E VP1 へ戻って 3 本目", true, vpsE[0]);
-	ProbeCensus(probe, "E 終わり", sheetE, vpsE);
 
 	// -----------------------------------------------------------------------
-	probe.log("=== F: 空いた番号を埋めるか / 自分で書いた番号は効くか ===");
-	MCObjectHandle sheetF = ProbeMakeSheet(probe, "調査シート F");
-	if (sheetF == nil)
+	probe.log("=== Q: 先頭へ文字列「A-01」を書いてから、2 本目・3 本目を足す ===");
+	probe.log("Q: 書いた値が守られるかどうかで「自分で書けば確実」と言えるかが決まる");
+	MCObjectHandle sheetQ = ProbeMakeSheet(probe, "調査シート Q");
+	if (sheetQ == nil)
 		return;
-	MCObjectHandle f1 = ProbeMakeLabel(probe, "F1", true, nil);
-	MCObjectHandle f2 = ProbeMakeLabel(probe, "F2", true, nil);
-	ProbeMakeLabel(probe, "F3", true, nil);
-	ProbeMakeLabel(probe, "F4", true, nil);
-	ProbeCensus(probe, "F 4 本を置いた", sheetF, noVp);
-
-	if (f2 != nil)
+	MCObjectHandle vpQ = ProbeMakeViewport(probe, "Q", sheetQ, design);
+	std::vector<MCObjectHandle> labelsQ;
+	ProbeAddAndDump(probe, "Q ", vpQ, labelsQ, 1);
+	if (!labelsQ.empty())
+		ProbeWrite(probe, "Q1", labelsQ[0], "A-01");
+	ProbeAddAndDump(probe, "Q ", vpQ, labelsQ, 2);
+	if (vpQ != nil)
 	{
-		probe.log("F: 2 本目（図番「" + ProbeDrawingOf(f2) + "」）を消す");
-		for (size_t i = 0; i < gProbeMade.size(); ++i)
-		{
-			if (gProbeMade[i].second == f2)
-			{
-				gProbeMade.erase(gProbeMade.begin() + static_cast<long>(i));
-				break;
-			}
-		}
-		gSDK->DeleteObject(f2, false);
-		f2 = nil;
-		ProbeCensus(probe, "F 2 本目を消した", sheetF, noVp);
+		gSDK->UpdateViewport(vpQ);
+		ProbeDumpAll(probe, "Q UpdateViewport 後", labelsQ);
 	}
-	ProbeMakeLabel(probe, "F5（穴を埋めるか）", true, nil);
-
-	if (f1 != nil)
-	{
-		VWFC::VWObjects::VWParametricObj(f1).SetParamValue("Drawing", "100");
-		probe.log("F: 1 本目へ「100」を書いた → 図番=「" + ProbeDrawingOf(f1) + "」");
-		gSDK->ResetObject(f1);
-		probe.log("F: ResetObject 後 → 図番=「" + ProbeDrawingOf(f1) + "」");
-	}
-	ProbeMakeLabel(probe, "F6（書いた 100 の次になるか）", true, nil);
-	ProbeCensus(probe, "F 終わり", sheetF, noVp);
 
 	// -----------------------------------------------------------------------
-	probe.log("=== G: 自分で書いた図番は、注釈へ入れても ResetObject しても残るか ===");
-	MCObjectHandle sheetG = ProbeMakeSheet(probe, "調査シート G");
-	if (sheetG == nil)
+	probe.log("=== R: 先頭へ数字「7」を書いてから、2 本目・3 本目を足す ===");
+	probe.log("R: 数字なら乗っ取られる／文字列なら守られる、という分かれ方をするかを見る");
+	MCObjectHandle sheetR = ProbeMakeSheet(probe, "調査シート R");
+	if (sheetR == nil)
 		return;
-	MCObjectHandle vpG = ProbeMakeViewport(probe, "G", sheetG, design);
-	std::vector<MCObjectHandle> vpsG;
-	if (vpG != nil)
-		vpsG.push_back(vpG);
-	MCObjectHandle g1 = ProbeMakeLabel(probe, "G1", true, nil);
-	if (g1 != nil)
+	MCObjectHandle vpR = ProbeMakeViewport(probe, "R", sheetR, design);
+	std::vector<MCObjectHandle> labelsR;
+	ProbeAddAndDump(probe, "R ", vpR, labelsR, 1);
+	if (!labelsR.empty())
+		ProbeWrite(probe, "R1", labelsR[0], "7");
+	ProbeAddAndDump(probe, "R ", vpR, labelsR, 2);
+	if (vpR != nil)
 	{
-		VWFC::VWObjects::VWParametricObj(g1).SetParamValue("Drawing", "A-01");
-		probe.log("G1: 「A-01」を書いた → 図番=「" + ProbeDrawingOf(g1) + "」");
-		const bool added = (gSDK->AddViewportAnnotationObject(vpG, g1) != 0);
-		probe.log("G1: 注釈へ入れた=" + std::string(added ? "true" : "false") + " → 図番=「" +
-				  ProbeDrawingOf(g1) + "」");
-		gSDK->ResetObject(g1);
-		probe.log("G1: ResetObject 後 → 図番=「" + ProbeDrawingOf(g1) + "」");
-		if (vpG != nil)
-		{
-			gSDK->UpdateViewport(vpG);
-			probe.log("G1: UpdateViewport 後 → 図番=「" + ProbeDrawingOf(g1) + "」");
-		}
+		gSDK->UpdateViewport(vpR);
+		ProbeDumpAll(probe, "R UpdateViewport 後", labelsR);
 	}
-	ProbeMakeLabel(probe, "G2（文字の図番の次はどうなるか）", true, nil);
-	ProbeCensus(probe, "G 終わり", sheetG, vpsG);
 
 	// -----------------------------------------------------------------------
-	probe.log("=== H: varUseAutoDrawCoord（544）を切ると採番は止まるか ===");
-	MCObjectHandle sheetH = ProbeMakeSheet(probe, "調査シート H");
-	if (sheetH == nil)
+	probe.log("=== S: 実用の手順——3 本すべてに自分で書く ===");
+	probe.log("S: 入れてから書く。最後に引き直して、3 本とも書いたままかを見る");
+	MCObjectHandle sheetS = ProbeMakeSheet(probe, "調査シート S");
+	if (sheetS == nil)
 		return;
-	Boolean coordWas = false;
-	const bool coordRead = (gSDK->GetProgramVariable(varUseAutoDrawCoord, &coordWas) != 0);
-	probe.log("H: varUseAutoDrawCoord を読めた=" + std::string(coordRead ? "true" : "false") +
-			  " 値=" + std::string(coordWas ? "true" : "false"));
-	Boolean coordOff = false;
-	const bool coordSet = (gSDK->SetProgramVariable(varUseAutoDrawCoord, &coordOff) != 0);
-	probe.log("H: false を書けた=" + std::string(coordSet ? "true" : "false"));
-	for (int i = 1; i <= 4; ++i)
-		ProbeMakeLabel(probe, "H" + ProbeInt(i) + "（採番の協調を切って）", true, nil);
-	Boolean coordOn = true;
-	gSDK->SetProgramVariable(varUseAutoDrawCoord, &coordOn);
-	probe.log("H: true へ戻した");
-	for (int i = 5; i <= 8; ++i)
-		ProbeMakeLabel(probe, "H" + ProbeInt(i) + "（戻してから）", true, nil);
-	gSDK->SetProgramVariable(varUseAutoDrawCoord, &coordWas);
-	ProbeCensus(probe, "H 終わり", sheetH, noVp);
-
-	// -----------------------------------------------------------------------
-	probe.log("=== Z: 全部のビューポートを引き直してから、全部のラベルを読み直す ===");
-	for (size_t i = 0; i < vpsC.size(); ++i)
-		gSDK->UpdateViewport(vpsC[i]);
-	for (size_t i = 0; i < vpsD.size(); ++i)
-		gSDK->UpdateViewport(vpsD[i]);
-	for (size_t i = 0; i < vpsE.size(); ++i)
-		gSDK->UpdateViewport(vpsE[i]);
-	for (size_t i = 0; i < vpsG.size(); ++i)
-		gSDK->UpdateViewport(vpsG[i]);
-	for (size_t i = 0; i < gProbeMade.size(); ++i)
-		probe.log("Z: " + gProbeMade[i].first + " の図番 = 「" +
-				  ProbeDrawingOf(gProbeMade[i].second) + "」");
+	MCObjectHandle vpS = ProbeMakeViewport(probe, "S", sheetS, design);
+	std::vector<MCObjectHandle> labelsS;
+	ProbeAddAndDump(probe, "S ", vpS, labelsS, 3);
+	const char* kProbeSheetSValues[] = {"S-1", "S-2", "S-3"};
+	for (size_t i = 0; i < labelsS.size() && i < 3; ++i)
+		ProbeWrite(probe, "S" + ProbeInt(static_cast<Sint32>(i) + 1), labelsS[i],
+				   kProbeSheetSValues[i]);
+	ProbeDumpAll(probe, "S 3 本とも書いた", labelsS);
+	if (vpS != nil)
+	{
+		gSDK->UpdateViewport(vpS);
+		ProbeDumpAll(probe, "S UpdateViewport 後", labelsS);
+	}
+	probe.log("=== T: そのうえで、もう 1 本足したら何番になるか ===");
+	ProbeAddAndDump(probe, "S ", vpS, labelsS, 1);
+	if (vpS != nil)
+	{
+		gSDK->UpdateViewport(vpS);
+		ProbeDumpAll(probe, "S 最後に引き直した", labelsS);
+	}
 
 	probe.log("おわり");
 }
