@@ -279,23 +279,37 @@ Y=0 / 2800 / 5600 へ置いても描かれる高さは **3 本とも `0`** で�
 - **注釈の中の個体の 3D 位置は `z=0`**（変換行列の原点も `z=0`）。「注釈空間に Z は無い」
   ままで、**高さは Z ではなくストーリレベルから来ている**。
 
-#### 同じ 3 つ組でも `0` になる文書がある（#133。切り出した調査）
+#### 同じ 3 つ組でも `0` になるビューポートがある（#141）
 
-**#133 の実測（SDK だけで組み立てた文書。`CreateStory` ＋ `SetStoryElevation` ＋
-`CreateStoryLevelTemplate`（offset 0）＋ `AddStoryLevelFromTemplate` で作ったストーリ）では、
-同じ 3 つ組で高さが `0` だった**（名前 `FL-2 階` は出た）。**UI で作ったストーリの図面では
-同じ 3 つ組がレベルの高さを返す**ので、**差は個体ではなく文書（ストーリ）の側にある**。
+**`0` になるかを決めているのは、ストーリの作り方ではなくビューポートである。**
+[issue #141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141) で
+実機確認した（実測値と潰した筋は
+[Layers and Stories](Layers%20and%20Stories.md)「注釈に高さが出るかは、ビューポートで決まる」）。
 
-マーカーが読むのは「ストーリレベルの高さ」なので、**SDK で作ったストーリでは
-その高さが入っていない（0 のまま）のではないか【推定】**——`SetStoryElevation` は
-階を動かすが、テンプレート（offset 0）で生やしたレベルの高さは別に持たれている、
-という筋。**切り出した調査は
-[issue #141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141)**
-（そちらは「SDK で作ったストーリのレベルの高さ」の問題なので
-[Layers and Stories](Layers%20and%20Stories.md) の領分）。
+> **【訂正の記録】#133 の `0` を「SDK で作ったストーリのレベルに高さが入っていない」と
+> 見当を付けたが、外れだった。** SDK で `CreateStory` ＋ `SetStoryElevation` ＋
+> `CreateStoryLevelTemplate`（offset 0）＋ `AddStoryLevelFromTemplate` で作ったストーリも、
+> **レベルの絶対Z をきちんと持っている**（4 通りの作り方で確認）。誤りの元は
+> **`GetStoryLevelElevation` が返す `0` を「高さが無い」と読んだこと**——あれは
+> **階内の相対Z** で、`elevationOffset` を 0 にしたなら 0 が正しい。
 
-**プラグインで使うときは、レベルの高さが入っていることを読み戻して確かめる**
-——`Elev` 欄（または `Elevation`）が `0` のままなら、ストーリレベルの側を疑う。
+**描かれるのはストーリレベルの絶対Z**（＝階の高さ ＋ 階内の相対Z）。3 つの実物件の図面で、
+同じ 1 回の実行のうちに「描かれた数値」と「絶対Z」を並べて測り、**全行一致**した。
+シートレイヤ（ストーリに属さない）へ置いた個体でも正しく出るので、
+**「その個体が乗っているレイヤの Z」ではない。**
+
+**置き先で決まる**（名前はどこでも出る。`0` になるのは数値だけ）:
+
+| 置き先 | 高さ |
+| --- | --- |
+| そのレベルのデザインレイヤ / シートレイヤへ直に | **絶対Z** |
+| **UI が作った断面ビューポートの注釈** | **絶対Z** |
+| 伏図（平面）ビューポートの注釈 | **`0`**（`ovIsSectionViewport` が `false`） |
+| SDK の `CreateSectionViewport` で作った断面ビューポートの注釈 | **`0`**（[#147](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/147)） |
+
+**使うときは `Elev` 欄（または `Elevation`）を読み戻して `0` でないことを確かめる。**
+`0` なら疑うのは**ストーリではなくビューポート**——同じ 3 つ組をデザインレイヤか
+シートレイヤへ置けば数値は出る。
 
 #### ストーリバウンド（`SetObjectStoryBound` の一群）は使っていない
 
