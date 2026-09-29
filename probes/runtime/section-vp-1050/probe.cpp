@@ -5,8 +5,11 @@
 //	（`ovViewportViewMatrix` ＝ 1050）が単位行列へ戻る。その理由を突き止めるために、
 //	**同じ図面・同じ 1 回の実行のうちに**次を測る。
 //
-//	  1. UI 製の断面ビューポートを更新したら 1050 はどうなるのか（＝非対称はあるのか）
-//	  2. 更新の前後で 1050 以外に変わる欄はあるか（UI 製・SDK 製の両方で総当り）
+//	  1. **既存の断面ビューポート**（1050 が入っているもの。UI 製でもインポータ製でもよい）を
+//	     更新したら 1050 はどうなるのか（＝非対称はあるのか）。1050 の中身だけでは出どころは
+//	     分からないので、素性は名乗らせない。
+//	  2. 更新の前後で 1050 以外に変わる欄はあるか（既存・SDK 製の両方で総当り）。
+//	     あわせて「ラベルを動かす・書き換える・線の太さを変える」で高さが落ちるかも測る。
 //	  3. SDK 製の断面はそもそも描かれているのか（キャッシュ群の中身を種類ごとに数える）
 //	  4. レベル基準線の高さは、属性・クラス・パラメータの変更で落ちるのか
 //	     （＝人が後から触る図面で壊れるのか）
@@ -414,73 +417,104 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 			  " 件 / デザインレイヤ " +
 			  ProbeFormatInt(static_cast<long long>(designLayers.size())) + " 枚");
 
-	MCObjectHandle uiViewport = nil;
+	// **「UI 製」と決めつけない。** インポータ（SDK）が作った図面でも、1055 を 1050 へ
+	// 写した直後なら 1050 は単位行列ではない——1050 の中身だけでは出どころは分からない。
+	// だから素性は名乗らせず、**1050 が入っている断面ビューポート**を「既存の断面 VP」と
+	// 呼んで測る（それが UI 製なのかインポータ製なのかは、走らせた人が知っている）。
+	std::vector<MCObjectHandle> existingSectionViewports;
 	for (size_t index = 0; index < viewports.size(); ++index)
 	{
 		MCObjectHandle viewport = viewports[index];
 		const bool isSection = ProbeIsSectionViewport(viewport);
 		const bool identity = ProbeIs1050Identity(viewport);
+		MCObjectHandle benchmark = ProbeFindBenchmark(viewport);
 		probe.log("  [" + ProbeFormatInt(static_cast<long long>(index)) + "] 名前=\"" +
 				  ProbeObjectName(viewport) + "\" 断面か=" + (isSection ? "はい" : "いいえ") +
-				  " 1050 が単位行列か=" + (identity ? "はい" : "いいえ") +
-				  " ビューの向き(1007)=" + ProbeReadVariable(viewport, 1007));
-		if (isSection && !identity && uiViewport == nil)
-			uiViewport = viewport;
+				  " 1050 が単位行列か=" + (identity ? "はい" : "いいえ") + " ビューの向き(1007)=" +
+				  ProbeReadVariable(viewport, 1007) + " 注釈のレベル基準線=" +
+				  (benchmark != nil ? std::string("有 Elev=") + ProbeReadElev(benchmark)
+									: std::string("無")));
+		if (isSection && !identity)
+			existingSectionViewports.push_back(viewport);
 	}
 
 	// =====================================================================
 	probe.log("");
-	probe.log("== 2. UI 製の断面ビューポートを更新したら 1050 はどうなるか");
+	probe.log("== 2. 既存の断面ビューポート（1050 が入っているもの）を更新したら何が起きるか");
+	probe.log("  ※ ここで更新すると、その図面のレベル基準線は（作り直された時点で）0 に");
+	probe.log("     落ちる見込みである。**この図面は保存しないこと。**");
 	ProbeBenchmarkTriple triple;
-	if (uiViewport == nil)
+	if (existingSectionViewports.empty())
 	{
-		probe.fail(
-			"この図面には UI 製の断面ビューポートが無い（＝この調査の主問は測れていない）。"
-			"**UI の断面ツールで作った断面ビューポートが既にある実物件の図面を開いて、"
-			"もう一度走らせてください。** 新規の空図面では、UI 製と SDK 製の非対称"
-			"——この調査の要——が測れません。3 以降は測れているので、そのぶんは載っています。");
+		probe.log("  1050 が入っている断面ビューポートが無い（この段は測れない）。");
+		probe.log("  ・UI の断面ツールで作った断面ビューポートのある図面、または");
+		probe.log("  ・インポータが 1050 を写して作った図面");
+		probe.log("  のどちらかで走らせると、ここが埋まる。3 以降は測れている。");
 	}
-	else
+	for (size_t index = 0; index < existingSectionViewports.size() && index < 2; ++index)
 	{
-		probe.log("対象: \"" + ProbeObjectName(uiViewport) + "\"");
-		ProbeLogMatrices(probe, "更新前", uiViewport);
-		ProbeLogGroups(probe, "更新前", uiViewport);
+		MCObjectHandle viewport = existingSectionViewports[index];
+		const std::string label = "既存[" + ProbeFormatInt(static_cast<long long>(index)) + "]";
+		probe.log("  --- " + label + " \"" + ProbeObjectName(viewport) + "\"");
+		ProbeLogMatrices(probe, "  " + label + " 更新前", viewport);
+		ProbeLogGroups(probe, "  " + label + " 更新前", viewport);
 
-		MCObjectHandle uiBenchmark = ProbeFindBenchmark(uiViewport);
-		if (uiBenchmark != nil)
+		MCObjectHandle benchmark = ProbeFindBenchmark(viewport);
+		if (benchmark != nil)
 		{
-			VWParametricObj parametric(uiBenchmark);
-			triple.fStoryName = parametric.GetParamValue("__StoryName");
-			triple.fLevelTypeName = parametric.GetParamValue("__LevelTypeName");
-			triple.fDatum = parametric.GetParamValue("Datum");
-			triple.fFound = true;
-			probe.log("  注釈にある UI 製のレベル基準線から 3 つ組を借りる: __StoryName=\"" +
-					  std::string(static_cast<const char*>(triple.fStoryName)) +
-					  "\" __LevelTypeName=\"" +
-					  std::string(static_cast<const char*>(triple.fLevelTypeName)) + "\" Datum=\"" +
-					  std::string(static_cast<const char*>(triple.fDatum)) +
-					  "\" Elev=" + ProbeReadElev(uiBenchmark));
+			VWParametricObj parametric(benchmark);
+			if (!triple.fFound)
+			{
+				triple.fStoryName = parametric.GetParamValue("__StoryName");
+				triple.fLevelTypeName = parametric.GetParamValue("__LevelTypeName");
+				triple.fDatum = parametric.GetParamValue("Datum");
+				triple.fFound = true;
+				probe.log("  " + label + " の注釈から 3 つ組を借りる: __StoryName=\"" +
+						  std::string(static_cast<const char*>(triple.fStoryName)) +
+						  "\" __LevelTypeName=\"" +
+						  std::string(static_cast<const char*>(triple.fLevelTypeName)) +
+						  "\" Datum=\"" + std::string(static_cast<const char*>(triple.fDatum)) +
+						  "\"");
+			}
+			probe.log("  " + label + " 更新前の Elev = " + ProbeReadElev(benchmark));
 			VectorWorks::Extension::IMarkersPluginSupportPtr markers(
 				VectorWorks::Extension::IID_MarkersPluginSupport);
 			if (markers)
-				probe.log(
-					std::string("  IsElevationBenchmarkConstrained(UI 製の個体) = ") +
-					(markers->IsElevationBenchmarkConstrained(uiBenchmark) ? "true" : "false"));
-			else
-				probe.log("  IMarkersPluginSupport を取れなかった");
-		}
-		else
-		{
-			probe.log("  注釈に UI 製のレベル基準線は無い（3 つ組は借りられない）");
+				probe.log(std::string("  ") + label + " IsElevationBenchmarkConstrained = " +
+						  (markers->IsElevationBenchmarkConstrained(benchmark) ? "true" : "false"));
+
+			// **「ラベルを動かす・書き換える」で落ちるのか**を機械で測る（触った人の観測の裏取り）。
+			const VWPoint2D where = parametric.GetPointObjectPos();
+			parametric.SetPointObjectPos(VWPoint2D(where.x + 100.0, where.y + 100.0));
+			probe.log("  " + label +
+					  " ラベルを 100mm 動かした後の Elev = " + ProbeReadElev(benchmark));
+			parametric.SetParamValue("EPfx", "+");
+			probe.log("  " + label +
+					  " 見た目の欄（EPfx）を書いた後の Elev = " + ProbeReadElev(benchmark));
+			GS_SetLineWeight(gCBP, benchmark, 50);
+			probe.log("  " + label + " 線の太さを変えた後の Elev = " + ProbeReadElev(benchmark));
+			gSDK->ResetObject(benchmark);
+			probe.log("  " + label + " ResetObject した後の Elev = " + ProbeReadElev(benchmark) +
+					  "（1050 はまだ入っている: 単位行列か=" +
+					  (ProbeIs1050Identity(viewport) ? "はい" : "いいえ") + "）");
 		}
 
-		std::vector<std::string> before = ProbeSnapshotVariables(uiViewport);
-		probe.log("  UpdateViewport を呼ぶ");
-		gSDK->UpdateViewport(uiViewport);
-		std::vector<std::string> after = ProbeSnapshotVariables(uiViewport);
-		ProbeLogVariableDiff(probe, "UI 製", before, after);
-		ProbeLogMatrices(probe, "更新後", uiViewport);
-		probe.log("  ↑ 1050 が単位行列になっていなければ「UI 製では保たれる」＝非対称が確定する");
+		std::vector<std::string> before = ProbeSnapshotVariables(viewport);
+		probe.log("  " + label + " UpdateViewport を呼ぶ");
+		gSDK->UpdateViewport(viewport);
+		std::vector<std::string> after = ProbeSnapshotVariables(viewport);
+		ProbeLogVariableDiff(probe, "  " + label, before, after);
+		ProbeLogMatrices(probe, "  " + label + " 更新後", viewport);
+		probe.log("  " + label +
+				  " ↑ 1050 が単位行列になっていなければ**この作り方では保たれる**"
+				  "——非対称の正体がそこにある");
+		if (benchmark != nil)
+		{
+			probe.log("  " + label + " 更新後の Elev = " + ProbeReadElev(benchmark));
+			gSDK->ResetObject(benchmark);
+			probe.log("  " + label +
+					  " 更新後に ResetObject した Elev = " + ProbeReadElev(benchmark));
+		}
 	}
 
 	// =====================================================================
@@ -691,25 +725,28 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 		}
 	}
 
-	if (uiViewport != nil)
+	if (!existingSectionViewports.empty())
 	{
-		probe.log("  --- 対照: UI 製の注釈へ同じことをする（ビューポートの側だけが違う）");
+		MCObjectHandle controlViewport = existingSectionViewports[0];
+		probe.log("  --- 対照: 既存の断面ビューポートの注釈へ同じことをする");
+		probe.log("      （2 で既に更新してあるので、その 1050 の状態ごと比べる）");
 		MCObjectHandle control = nil;
-		probe.log("  UI 製の注釈へレベル基準線を置いて 3 つ組を書く: " +
-				  ProbePlaceBenchmark(uiViewport, triple, 0.0, 0.0, control));
+		probe.log("  既存の注釈へレベル基準線を置いて 3 つ組を書く: " +
+				  ProbePlaceBenchmark(controlViewport, triple, 0.0, 0.0, control));
 		if (control != nil)
 		{
 			probe.log("  1050 へは何も写さない（いま 1050 が単位行列か=" +
-					  std::string(ProbeIs1050Identity(uiViewport) ? "はい" : "いいえ") + "）");
+					  std::string(ProbeIs1050Identity(controlViewport) ? "はい" : "いいえ") + "）");
 			gSDK->ResetObject(control);
-			probe.log("  写さずに ResetObject した Elev = " + ProbeReadElev(control) +
-					  " ← ここが数値なら「UI 製では写す手順がそもそも要らない」");
-			gSDK->UpdateViewport(uiViewport);
+			probe.log("  写さずに ResetObject した Elev = " + ProbeReadElev(control));
+			probe.log("  既存の 1055 を 1050 へ写す: " +
+					  std::string(ProbeCopy1055To1050(controlViewport) ? "成功" : "失敗"));
+			gSDK->ResetObject(control);
+			probe.log("  写してから ResetObject した Elev = " + ProbeReadElev(control) +
+					  " ← 数値が出るなら、既存の図面でも回復手順は同じ");
+			gSDK->UpdateViewport(controlViewport);
 			probe.log("  更新した後の Elev = " + ProbeReadElev(control) + "（1050 が単位行列か=" +
-					  (ProbeIs1050Identity(uiViewport) ? "はい" : "いいえ") + "）");
-			gSDK->ResetObject(control);
-			probe.log("  更新した後に ResetObject した Elev = " + ProbeReadElev(control) +
-					  " ← ここが数値なら「UI 製では 1050 を写す必要がそもそも無い」");
+					  (ProbeIs1050Identity(controlViewport) ? "はい" : "いいえ") + "）");
 			GS_SetLineWeight(gCBP, control, 50);
 			probe.log("  線の太さを変えた後の Elev = " + ProbeReadElev(control));
 		}
