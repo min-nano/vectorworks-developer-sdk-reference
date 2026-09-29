@@ -8,6 +8,19 @@
   開く呼び出しがある**ため。この半端な記録を取り消すと**図面が壊れる**（実機: ビューポート
   だけ消え、レイヤは戻らず、オブジェクトが断面を失って単線・2D 面になった）。
   `GS_EndUndoEvent` の説明にある「外部の終了時に自動で**閉じる**」は「自動で開く」ではない。
+  - **PIO を作って `ResetObject` するだけでも開く。** 走り出しに
+    `IsCurrentlyBuildingAnUndoEvent()` が `no` だったプローブが、構造材 PIO をいくつか作って
+    `ResetObject` を重ねた後には `yes` になっていた（実測。
+    [#166](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/166)。
+    そのプローブはイベントを一度も開いていない）。**断面ビューポートだけの話ではない。**
+- **`kUndoPlaceholderNode`（型 90）は `ResetObject` 1 回ごとに PIO の子へ 1 つ積もるが、
+  何個積もっても描画には影響しない。** 11 個積んだ構造材でも、描かれた子の数・型の内訳・
+  外接・立方は既定のままだった（実測。
+  [Parametric Objects](Parametric%20Objects.md) の「構造材 PIO の子を消すのは…」）。
+  - **undo イベントが開いていても積もる。** 「イベントを開かない経路だから残る」ではない。
+  - **消せない。** 型 90 の子へ `DeleteObject(h, useUndo=false)` を呼んでも 1 つも減らず、
+    `ClearUndoTableDueToUnsupportedAction()` でも減らない。**掃除する口は見つかっていない**
+    ので、**数が増えること自体を異常と読まない**こと。
 - **`SetUndoMethod(kUndoSwapObjects)` ＋ `NameUndoEvent(...)` が開始も兼ねる**（ISDK に開始
   専用の呼び出しは無い）。RAII で包み、破棄で `EndUndoEvent()` するのが安全。
 - **登録するのは「この処理が新しく作ったレイヤ」だけ**で足りる。レイヤを消せば上の図形も

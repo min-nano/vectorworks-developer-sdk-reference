@@ -2214,3 +2214,110 @@ true / false で 1 文字も違わなかった**（6 通り × 2）。**この 2
 6. 念のため長さを読み戻す。1〜5 を守っていれば狂わないが、狂っていたら
    `SetCustomObjectPath` で正しい最終形へ差し替えて `ResetObject` をもう 1 回
    （上記「自己修復」）。**ここが走ったら 1 を疑う。**
+
+## 構造材 PIO の子を消すのは「表示欄」で、属性モード（`AttributesMode`）ではない——しかも可逆
+
+「同じ構造材へ `AttributesMode` を 0 → 1 → 2 → 3 と書き換えて毎回 `ResetObject` を呼ぶと
+描画が段階的に消えていき、値を既定へ戻しても戻らない」という観測があった
+（[issue #166](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/166)）。
+**実機で採り直した結果、これは起きない。** 消していたのは別の欄で、しかも戻せば戻る。
+
+**結論を 3 行で**（VW 2026 / mac・新規の空図面。`probes/runtime/pio-value-sweep-breaks-draw/` の
+実行ログ 2 本。以下の数値はすべてそこから）:
+
+1. **`AttributesMode` / `AttributesMode3D` / `MemberAttributes_3D` は PIO の子を 1 つも
+   増減させない。** 素の個体でも、クラスやスタイルを先に書いた個体でも、同じ個体で
+   何度振っても、子の数・型の内訳・外接・立方が 1 度も動かなかった。
+2. **子を消すのは表示欄**（`MemberDisplay` / `CenterlineDisplay` / `StartCapDisplay` /
+   `EndCapDisplay` の `_Above` / `_At` / `_Below`）で、**欄と消える子は 1 対 1 に対応する**。
+3. **消えても可逆。** 欄を `true` へ戻して `ResetObject` を呼べば、子の数も型の内訳も
+   既定と寸分違わず戻る。
+
+### どの欄がどの子を消すか（実測）
+
+素の構造材（`CreateCustomObjectPath("StructuralMember", 2 点のパス, nil, doRegen=false)` ＋
+`ResetObject` 1 回）の子は、**置き石と終端を除いて 9 つ**——
+`11(Group)×2` `84(CSGTreeNode)×1` `21(Polyline)×4` `5(Polygon)×2`。
+そこから表示欄を**上から順に累積で** `false` にしていった:
+
+| 書いた欄（累積） | 子（幾何） | 減ったもの |
+| --- | --- | --- |
+| （既定） | **9** = Group×2, CSGTree×1, Polyline×4, Polygon×2 | — |
+| `MemberDisplay_*` = false | **8** | Polyline 1 本 |
+| `CoverDisplay_*` = false | **8** | **なし**（既定の構造材は被覆を持たないため） |
+| `CenterlineDisplay_*` = false | **7** | Polyline 1 本 |
+| `StartCapDisplay_*` = false | **6** | Polygon 1 つ |
+| `EndCapDisplay_*` = false | **5** = Group×2, CSGTree×1, Polyline×2 | Polygon 1 つ |
+
+そこから**逆順に `true` へ戻す**と、5 → 6 → 7 → 8 → 8 → **9** と 1 段ずつ戻り、
+最後は型の内訳まで既定と一致した。**「戻らない」は起きない。**
+
+- **型 84（`kCSGTreeNode`＝3D 実体）は、どの欄でも 1 度も消えなかった。** 表示欄でも
+  `AttributesMode` でも `AttributesMode3D` でも `MemberAttributes_3D` でも減らない。
+  **2D の表示欄で 3D の実体は消せない。**
+- 3 面（`_Above` / `_At` / `_Below`）へ同じ値を書いての結果である。平面図で使われる面は
+  `_Below` だけ（[#158](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/158)）。
+
+### 属性モードは何をしても子を動かさない（実測の網）
+
+| 振り方 | 子（幾何） |
+| --- | --- |
+| 1 個体で `AttributesMode` を 0→1→2→3→**0**（＝#166 の再現手順そのもの） | **9 のまま**（5 段とも） |
+| 1 値 1 個体（0 / 1 / 2 / 3 を別々の個体で） | 9 ×4 |
+| 同じ値（0）を 4 回書いて毎回 `ResetObject` | 9 ×4 |
+| `MemberID`（文字欄）を 4 回振る／`MajorDepth` を 4 回振る | 9 ×4 |
+| `ResetObject` だけを 4 回 | 9 ×4 |
+| 置き石を 10 個積んでから `AttributesMode`=3 を 1 回、さらに 0 へ | 9 |
+| undo イベント中で 0→1→2→3→0 | 9 ×5 |
+| **per-part のクラス・`MemberFillStyle`=6・`MemberPenStyle`=4 を先に書いてから** 0→1→2→3→0 | 9 ×5 |
+| `AttributesMode3D` を 0→1→2→3→0 ／ `MemberAttributes_3D` を 0 / 1 | 9 |
+
+**直後に作った新しい個体も、全部やり終えた後の新しい個体も既定どおり**だったので、
+「壊れが文書（PIO の定義）に及ぶ」も否定された。
+
+### なぜ「消えた」と読めてしまったか——**子の型を決め打ちして数えない**
+
+元の観測は、**描かれた子を「型 5 / 21 / 84 のどれか」と決め打ちして数えていた**。
+構造材の子には**型 11（`kGroupNode`）が 2 つ**居り、これが網から漏れる。加えて、同じ
+プローブが `AttributesMode` を振る前の段で**表示欄を `false` にしていた**。
+**表示欄で減った子を、直前に振っていた `AttributesMode` のせいだと読んだ**ものである。
+
+**教訓は 2 つ**（[Investigation Techniques](Investigation%20Techniques.md) にも置いた）:
+
+- **型を決め打ちせず、置き石以外の子を全部数えて型の内訳ごと出す。** 決め打ちの網は、
+  漏れたときに「消えた」という**いちばん間違えやすい形**で嘘をつく。
+- **1 個体に複数の欄を順に書いて測ると、原因が前の段へずれる。** 欄ごとに個体を分けるか、
+  少なくとも**1 段ごとに内訳を出して差分で読む**。
+
+### ついでに確定したこと
+
+- **置き石（型 90 = `kUndoPlaceholderNode`）は `ResetObject` 1 回ごとに 1 つ積もるが、
+  何個積もっても描画には影響しない。** 11 個積んだ状態でも子の内訳は既定のままだった。
+- **置き石は undo イベントが開いていても積もる。** 「プローブが undo イベントを開かない
+  から置き石が残る」という見立ては**誤り**。
+- **置き石は消せない。** 型 90 の子へ `DeleteObject(h, useUndo=false)` を 7 個ぶん呼んでも
+  1 つも減らず、`ClearUndoTableDueToUnsupportedAction()` を呼んでも減らない。
+- **`DeleteRegenerableSubObjects(hParametric)` は PIO の外から呼んでも効く。**
+  子（幾何）が 9 → 3（Group×2 と終端だけ）になり、次の `ResetObject` で 9 へ戻った。
+  置き石は減らない。ヘッダは「`kObjXPropPreserveContents` を宣言した PIO の Regenerate
+  イベント中に使え」と言っているが、**外から「子を作り直させる口」としても使える**。
+- **子には常に型 0（`kTermNode`【ヘッダ根拠】）が 1 つ在る。** `DeleteRegenerableSubObjects`
+  でも消えないので、描かれた子として数えない。
+- **`ResetObject` を通す前の `GetObjectBounds` は、`true` を返すのに中身が無効。**
+  `doRegen=false` で作った直後に呼ぶと ±`DBL_MAX` の**反転した矩形**が返る
+  （`GetObjectCube` も同じ）。**戻り値を信じて中身を使わないこと**——`ResetObject` を
+  1 回通してから読む。
+- **`MajorDepth` は書けて読み戻せるのに断面が変わらなかった**（600 → 800 → 1000 と
+  書いても外接も立方も 1mm も動かない）。この調査では対照として振っただけなので、
+  何が断面を決めているかは
+  [#169](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/169) で
+  別に確かめる。**「書けて読み戻せる」は「効く」ではない。**
+
+### 実務上の指針
+
+- **「同じ個体へ値を書き直して描き直す」流れ（スタイルの当て直し・再取り込み・OIP からの
+  編集）で壊れる心配は要らない。** 取り込みプラグインが 1 本につき `ResetObject` を
+  1〜2 回しか呼ばないのは所要のためであって、壊れを避けるためではない（
+  上記「リセット（再生成）をまとめられるか」）。
+- **絵を消したい／出したいときに触るのは表示欄。** `AttributesMode` は**何を描くか**では
+  なく**どの属性で描くか**の欄である。
