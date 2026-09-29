@@ -3,36 +3,37 @@
 //
 //	[issue #179] 図面ラベル（`Drawing Label2`）の図番（`Drawing`）の自動採番の規則を決める。
 //
-//	## 1 巡目（ビルド 805aaf940f89）で割れたこと
+//	## 2 巡目（ビルド 00849e667e22）までに割れたこと
 //
-//	作った瞬間の図番は「**そのシートレイヤで、いま図番として使われている正整数のうち、
-//	使われていない最小のもの**」である。1 巡目の A〜H に加えて、**#177 の 11 本
-//	（1,2,1,3,4,5,4,6,4,7,4）が 1 本の例外も無くこの規則で説明できた**ので、規則そのものは
-//	確定してよい。
+//	**(1) 採番の規則。** 作った瞬間の図番は「**そのシートレイヤで、いま図番として使われて
+//	いる正整数のうち、使われていない最小のもの**」。`max + 1` ではない（消した番号は埋まる）。
+//	数として読めない図番（`A-01` など）は「使われている」に入らない。
 //
-//	  * シートレイヤ直下に置きっぱなしなら 1,2,3,… と素直に増える（A=1..6 / H=1..8）。
-//	  * 消して空いた番号は埋める（F: 2 を消したら次が 2）。max+1 ではない。
-//	  * `bInsert=false` でどこへも入れないと、その本は誰からも見えないので**常に 1**（B）。
-//	  * `varUseAutoDrawCoord`（544）は無関係（H: 切っても 1,2,3,4 のまま）。
+//	**(2) なぜ番号が戻るのか。** **ビューポートの注釈の「先頭のラベル」は、その注釈へ
+//	最後に入れたラベルの図番を映し続ける。** 2 巡目の P で 1 本足すたびに全員を読んだら、
+//	先頭が毎回いちばん新しい本と同じ値になっていた:
 //
-//	戻る回がある理由も同じ規則で説明が付く——**ビューポートの注釈へ 2 本目を入れると、
-//	その注釈の先頭のラベルが「使われている番号」から外れる**（番号が 1 つ空く）ため、
-//	次の 1 本がその空きへ落ちる。最後に読み直すと、先頭のラベルは**その注釈へ最後に
-//	入れたラベルと同じ値**になっている（C: 1 本目が 5 ＝ 6 本目と同じ／E: VP2 は 3 が 2 本・
-//	VP3 は 4 が 2 本）。
+//	    1 本目 [1] → 2 本目 [2,2] → 3 本目 [1,2,1] → 4 本目 [3,2,1,3] → 5 本目 [4,2,1,3,4]
 //
-//	## この 2 巡目が決めること
+//	先頭が新しい値へ移るたびに**それまでの値が空く**ので、次の 1 本がその空きへ落ちる。
+//	これで #177 の 11 本（1,2,1,3,4,5,4,6,4,7,4）が 1 本の例外も無く再現できる。
 //
-//	1. **先頭のラベルは、番号を手放してから何を持っているのか**（P）。1 巡目は「作る →
-//	   入れる → reset」の 3 点しか読んでいないので、**他の本を足したときに先頭が何に
-//	   変わるか**を見ていない。1 本足すたびに**全員を読み直す**。
-//	2. **自分で書いた図番は、あとから同じ注釈へ 2 本目・3 本目を入れても残るか**（Q・R）。
-//	   ここが実用の要——「SDK 任せでは重複するから自分で書け」と言えるかどうかが懸かる。
-//	   1 巡目の G は**その注釈にラベルが 1 本しか無い**状態しか見ていない。文字列
-//	   （`A-01`）と数字（`7`）で分ける。
-//	3. **全部に自分で書けば安全か**（S）。実際に使う手順をそのままなぞる。
+//	**(3) 先頭のラベルは自分の図番を持てない。** Q（文字列 `A-01`）でも R（数字 `7`）でも、
+//	**同じ注釈へ 2 本目を入れた瞬間に書いた値が消えた**。S では 3 本すべてに書いたのに
+//	`[S-3, S-2, S-3]`——先頭が 3 本目の値に乗っ取られ、さらに 4 本目を足すと `[1, S-2, S-3, 1]`。
 //
-//	`Link State`（リンク状況）も併せて読む。先頭だけが書き換わるなら、そこに差が出る。
+//	## この 3 巡目が決めること
+//
+//	**U: 1 つのビューポートに 1 本だけ置くなら重複しないか。** (2)(3) は「同じ注釈に 2 本
+//	以上」入れたときの話で、**先頭＝最後なら鏡は自分自身**になる。実際の使い方
+//	（ビューポートごとに 1 本、その真下へ）がこれなので、**「自分で書かなくてよい場面」が
+//	あるかどうかはここで決まる**。ビューポートを 5 枚作って 1 本ずつ入れ、毎回全員を読む。
+//	そのうえで 5 本すべてへ自分の値を書き、引き直して守られるかを見る。
+//
+//	**V: 「鏡」は並び順の先頭か、最初に入れた 1 本か。** 3 本入れてから先頭を消すと、
+//	2 本目が鏡になるのか（位置で決まる）、誰も鏡にならないのか（最初の 1 本に紐づく）。
+//	どちらでも「2 本以上入れるな」という結論は変わらないが、**先頭を消して直せるのか**が
+//	決まる。
 //
 
 #include "Probe.h"
@@ -65,24 +66,15 @@ namespace
 		return WorldPt(0, -2000.0 * (gProbeSpot++));
 	}
 
-	std::string ProbeDrawingOf(MCObjectHandle h)
-	{
-		if (h == nil)
-			return "(nil)";
-		return ProbeStr(VWFC::VWObjects::VWParametricObj(h).GetParamString("Drawing"));
-	}
-
-	// 「図番＋リンク状況」を 1 本ぶん。手放した先頭が何を持っているかは、この 2 つで見る。
 	std::string ProbeStateOf(MCObjectHandle h)
 	{
 		if (h == nil)
-			return "(nil)";
+			return "(消した)";
 		VWFC::VWObjects::VWParametricObj obj(h);
 		return "図番=「" + ProbeStr(obj.GetParamString("Drawing")) +
 			   "」/リンク=" + ProbeInt(obj.GetParamLong("Link State"));
 	}
 
-	// そのフェーズで作った全部を、入れた順に 1 行で並べ直す。
 	void ProbeDumpAll(vwprobe::Report& probe, const std::string& tag,
 					  const std::vector<MCObjectHandle>& labels)
 	{
@@ -92,7 +84,6 @@ namespace
 		probe.log(line);
 	}
 
-	// ラベルを 1 本作って、vp の注釈へ入れる（vp が nil なら入れない）。
 	MCObjectHandle ProbeMakeLabel(vwprobe::Report& probe, const std::string& tag, MCObjectHandle vp)
 	{
 		MCObjectHandle h = gSDK->CreateCustomObject("Drawing Label2", ProbeNextSpot(), 0.0, true);
@@ -115,14 +106,13 @@ namespace
 	}
 
 	void ProbeWrite(vwprobe::Report& probe, const std::string& tag, MCObjectHandle h,
-					const char* value)
+					const std::string& value)
 	{
 		if (h == nil)
 			return;
-		VWFC::VWObjects::VWParametricObj(h).SetParamValue("Drawing", value);
+		VWFC::VWObjects::VWParametricObj(h).SetParamValue("Drawing", value.c_str());
 		gSDK->ResetObject(h);
-		probe.log(tag + ": 図番へ「" + std::string(value) + "」を書いて ResetObject → " +
-				  ProbeStateOf(h));
+		probe.log(tag + ": 図番へ「" + value + "」を書いて ResetObject → " + ProbeStateOf(h));
 	}
 
 	MCObjectHandle ProbeMakeSheet(vwprobe::Report& probe, const char* name)
@@ -153,26 +143,10 @@ namespace
 		gSDK->UpdateViewport(vp);
 		return vp;
 	}
-
-	// 「1 本足すたびに全員を読み直す」を count 本ぶん繰り返す。
-	void ProbeAddAndDump(vwprobe::Report& probe, const std::string& phase, MCObjectHandle vp,
-						 std::vector<MCObjectHandle>& labels, int count)
-	{
-		for (int i = 0; i < count; ++i)
-		{
-			const std::string tag =
-				phase + ProbeInt(static_cast<Sint32>(labels.size()) + 1) + " 本目";
-			MCObjectHandle h = ProbeMakeLabel(probe, tag, vp);
-			if (h == nil)
-				return;
-			labels.push_back(h);
-			ProbeDumpAll(probe, tag + "の直後", labels);
-		}
-	}
 } // namespace
 
-VW_PROBE("drawing-label-auto-number", "図面ラベルの図番の自動採番（2 巡目）",
-		 "先頭のラベルが番号を手放したあと何を持つか、自分で書いた図番は守られるか")
+VW_PROBE("drawing-label-auto-number", "図面ラベルの図番の自動採番（3 巡目）",
+		 "1 ビューポートに 1 本だけなら重複しないか／鏡は並び順の先頭か")
 {
 	gSDK->DefineCustomObject("Drawing Label2", kCustomObjectPrefNever);
 
@@ -187,81 +161,78 @@ VW_PROBE("drawing-label-auto-number", "図面ラベルの図番の自動採番�
 	gSDK->CreateRectangleN(WorldPt(0, 0), Vector2(1, 0), 10000.0, 10000.0);
 
 	// -----------------------------------------------------------------------
-	probe.log("=== P: 1 枚の注釈へ 6 本。1 本足すたびに全員を読み直す ===");
-	probe.log("P: 見たいのは「先頭が番号を手放す瞬間」と、手放してから何を持っているか");
-	MCObjectHandle sheetP = ProbeMakeSheet(probe, "調査シート P");
-	if (sheetP == nil)
+	probe.log("=== U: ビューポート 5 枚へ 1 本ずつ（実際の使い方）===");
+	probe.log("U: 先頭＝最後なので鏡は自分自身のはず。1,2,3,4,5 と増えて重複しないかを見る");
+	MCObjectHandle sheetU = ProbeMakeSheet(probe, "調査シート U");
+	if (sheetU == nil)
 		return;
-	MCObjectHandle vpP = ProbeMakeViewport(probe, "P", sheetP, design);
-	std::vector<MCObjectHandle> labelsP;
-	ProbeAddAndDump(probe, "P ", vpP, labelsP, 6);
-	if (vpP != nil)
+	std::vector<MCObjectHandle> vpsU;
+	for (int i = 1; i <= 5; ++i)
 	{
-		gSDK->UpdateViewport(vpP);
-		ProbeDumpAll(probe, "P UpdateViewport 後", labelsP);
+		MCObjectHandle vp = ProbeMakeViewport(probe, "U の VP" + ProbeInt(i), sheetU, design);
+		if (vp != nil)
+			vpsU.push_back(vp);
 	}
+	std::vector<MCObjectHandle> labelsU;
+	for (size_t i = 0; i < vpsU.size(); ++i)
+	{
+		const std::string tag = "U VP" + ProbeInt(static_cast<Sint32>(i) + 1) + " の 1 本目";
+		MCObjectHandle h = ProbeMakeLabel(probe, tag, vpsU[i]);
+		if (h == nil)
+			return;
+		labelsU.push_back(h);
+		ProbeDumpAll(probe, tag + "の直後", labelsU);
+	}
+	probe.log("U: ここまでで重複が無ければ、1 ビューポート 1 本なら SDK 任せでよいことになる");
+
+	probe.log("--- U: そのうえで 5 本すべてへ自分の値を書く ---");
+	for (size_t i = 0; i < labelsU.size(); ++i)
+		ProbeWrite(probe, "U" + ProbeInt(static_cast<Sint32>(i) + 1), labelsU[i],
+				   "U-" + ProbeInt(static_cast<Sint32>(i) + 1));
+	ProbeDumpAll(probe, "U 5 本とも書いた", labelsU);
+	for (size_t i = 0; i < vpsU.size(); ++i)
+		gSDK->UpdateViewport(vpsU[i]);
+	ProbeDumpAll(probe, "U 全部を引き直した後", labelsU);
 
 	// -----------------------------------------------------------------------
-	probe.log("=== Q: 先頭へ文字列「A-01」を書いてから、2 本目・3 本目を足す ===");
-	probe.log("Q: 書いた値が守られるかどうかで「自分で書けば確実」と言えるかが決まる");
-	MCObjectHandle sheetQ = ProbeMakeSheet(probe, "調査シート Q");
-	if (sheetQ == nil)
+	probe.log("=== V: 3 本入れてから先頭を消す——鏡は並び順の先頭へ移るか ===");
+	MCObjectHandle sheetV = ProbeMakeSheet(probe, "調査シート V");
+	if (sheetV == nil)
 		return;
-	MCObjectHandle vpQ = ProbeMakeViewport(probe, "Q", sheetQ, design);
-	std::vector<MCObjectHandle> labelsQ;
-	ProbeAddAndDump(probe, "Q ", vpQ, labelsQ, 1);
-	if (!labelsQ.empty())
-		ProbeWrite(probe, "Q1", labelsQ[0], "A-01");
-	ProbeAddAndDump(probe, "Q ", vpQ, labelsQ, 2);
-	if (vpQ != nil)
+	MCObjectHandle vpV = ProbeMakeViewport(probe, "V", sheetV, design);
+	std::vector<MCObjectHandle> labelsV;
+	for (int i = 1; i <= 3; ++i)
 	{
-		gSDK->UpdateViewport(vpQ);
-		ProbeDumpAll(probe, "Q UpdateViewport 後", labelsQ);
+		const std::string tag = "V " + ProbeInt(i) + " 本目";
+		MCObjectHandle h = ProbeMakeLabel(probe, tag, vpV);
+		if (h == nil)
+			return;
+		labelsV.push_back(h);
+		ProbeDumpAll(probe, tag + "の直後", labelsV);
+	}
+	probe.log("V: 2 本目・3 本目へ自分の値を書いてから、先頭を消す");
+	ProbeWrite(probe, "V2", labelsV[1], "V-2");
+	ProbeWrite(probe, "V3", labelsV[2], "V-3");
+	ProbeDumpAll(probe, "V 2・3 へ書いた", labelsV);
+
+	gSDK->DeleteObject(labelsV[0], false);
+	labelsV[0] = nil;
+	probe.log("V: 先頭（1 本目）を消した");
+	ProbeDumpAll(probe, "V 先頭を消した直後", labelsV);
+	if (vpV != nil)
+	{
+		gSDK->UpdateViewport(vpV);
+		ProbeDumpAll(probe, "V 引き直した後", labelsV);
 	}
 
-	// -----------------------------------------------------------------------
-	probe.log("=== R: 先頭へ数字「7」を書いてから、2 本目・3 本目を足す ===");
-	probe.log("R: 数字なら乗っ取られる／文字列なら守られる、という分かれ方をするかを見る");
-	MCObjectHandle sheetR = ProbeMakeSheet(probe, "調査シート R");
-	if (sheetR == nil)
-		return;
-	MCObjectHandle vpR = ProbeMakeViewport(probe, "R", sheetR, design);
-	std::vector<MCObjectHandle> labelsR;
-	ProbeAddAndDump(probe, "R ", vpR, labelsR, 1);
-	if (!labelsR.empty())
-		ProbeWrite(probe, "R1", labelsR[0], "7");
-	ProbeAddAndDump(probe, "R ", vpR, labelsR, 2);
-	if (vpR != nil)
+	probe.log("V: さらに 1 本足す——いま誰が鏡になっているかが出る");
+	MCObjectHandle v4 = ProbeMakeLabel(probe, "V 4 本目", vpV);
+	labelsV.push_back(v4);
+	ProbeDumpAll(probe, "V 4 本目の直後", labelsV);
+	if (vpV != nil)
 	{
-		gSDK->UpdateViewport(vpR);
-		ProbeDumpAll(probe, "R UpdateViewport 後", labelsR);
-	}
-
-	// -----------------------------------------------------------------------
-	probe.log("=== S: 実用の手順——3 本すべてに自分で書く ===");
-	probe.log("S: 入れてから書く。最後に引き直して、3 本とも書いたままかを見る");
-	MCObjectHandle sheetS = ProbeMakeSheet(probe, "調査シート S");
-	if (sheetS == nil)
-		return;
-	MCObjectHandle vpS = ProbeMakeViewport(probe, "S", sheetS, design);
-	std::vector<MCObjectHandle> labelsS;
-	ProbeAddAndDump(probe, "S ", vpS, labelsS, 3);
-	const char* kProbeSheetSValues[] = {"S-1", "S-2", "S-3"};
-	for (size_t i = 0; i < labelsS.size() && i < 3; ++i)
-		ProbeWrite(probe, "S" + ProbeInt(static_cast<Sint32>(i) + 1), labelsS[i],
-				   kProbeSheetSValues[i]);
-	ProbeDumpAll(probe, "S 3 本とも書いた", labelsS);
-	if (vpS != nil)
-	{
-		gSDK->UpdateViewport(vpS);
-		ProbeDumpAll(probe, "S UpdateViewport 後", labelsS);
-	}
-	probe.log("=== T: そのうえで、もう 1 本足したら何番になるか ===");
-	ProbeAddAndDump(probe, "S ", vpS, labelsS, 1);
-	if (vpS != nil)
-	{
-		gSDK->UpdateViewport(vpS);
-		ProbeDumpAll(probe, "S 最後に引き直した", labelsS);
+		gSDK->UpdateViewport(vpV);
+		ProbeDumpAll(probe, "V 最後に引き直した", labelsV);
 	}
 
 	probe.log("おわり");
