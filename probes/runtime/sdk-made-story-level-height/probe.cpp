@@ -170,19 +170,42 @@ namespace
 	// 下で定義している（この関数より後ろに置いてあるので前方宣言する）。
 	std::vector<MCObjectHandle> SlhAllLayers();
 
-	// ビューポートの素性——**断面ビューポートか**（オブジェクト変数 1054
-	// ＝`ovIsSectionViewport`）と、**表示になっているレイヤの数**。
-	//
-	// 1 回目の実測で、同じ文書の UI 製ビューポート 37 件が**きれいに 2 つに割れた**
-	// （数値が出たもの／`0` のもの）。名前からは断面図と伏図の差に見えるので、
-	// **名前ではなくこの 2 つの値で割れているのかを確かめる。**
-	std::string SlhViewportKind(MCObjectHandle vp)
+	// 真偽のオブジェクト変数を 1 つ読む（読めなかったことと false を区別して出す）。
+	std::string SlhVarBool(MCObjectHandle h, short index)
 	{
 		TVariableBlock var;
-		bool isSection = false;
-		const bool got = gSDK->GetObjectVariable(vp, 1054, var);
-		if (got)
-			var.GetBoolean(isSection);
+		if (!gSDK->GetObjectVariable(h, index, var))
+			return "読めず";
+		bool value = false;
+		if (!var.GetBoolean(value))
+			return "真偽でない";
+		return value ? "true" : "false";
+	}
+
+	// オブジェクト変数が読めるか＋中身の型番号だけを出す（構造体の中身には踏み込まない）。
+	// **断面の見え方を持っている行列**（1055 / 1056）が、UI 製と SDK 製で同じ形かを見る。
+	std::string SlhVarType(MCObjectHandle h, short index)
+	{
+		TVariableBlock var;
+		if (!gSDK->GetObjectVariable(h, index, var))
+			return "読めず";
+		return "型" + std::to_string(static_cast<int>(var.GetType()));
+	}
+
+	// 下で定義している（この関数より後ろに置いてあるので前方宣言する）。
+	std::vector<MCObjectHandle> SlhAllLayers();
+
+	// ビューポートの素性を 1 行で。**UI 製で数値が出るものと、SDK 製で `0` になるものを
+	// この 1 行で見比べて、違っている欄を探す**のがこの関数の役目。
+	//
+	// 分かっていること: SDK の `CreateSectionViewport` で作ったものも
+	// `ovIsSectionViewport`（1054）は **true**（＝断面ビューポートとしては成立している）で、
+	// レイヤを表示にしても `0` のままだった。だから差は別の欄にある。
+	//   1043 `ovIsDesignLayerSectionViewport` / 1039 `ovViewportCropVisible`
+	//   1055 `ovSheetLayerSectionViewportViewMatrix` / 1056 `ovSectionViewportSectionViewMatrix`
+	//   1064 切断面より奥を表示 / 1065 切断面より前を表示
+	std::string SlhViewportKind(MCObjectHandle vp)
+	{
 		int shown = 0;
 		int readable = 0;
 		const std::vector<MCObjectHandle> layers = SlhAllLayers();
@@ -195,8 +218,11 @@ namespace
 			if (visibility == 0)
 				++shown;
 		}
-		return std::string(got ? (isSection ? "断面VP" : "平面VP") : "種別読めず") +
-			   " 表示レイヤ=" + std::to_string(shown) + "/" + std::to_string(readable);
+		return "断面VP=" + SlhVarBool(vp, 1054) + " 設計層断面VP=" + SlhVarBool(vp, 1043) +
+			   " 奥=" + SlhVarBool(vp, 1064) + " 前=" + SlhVarBool(vp, 1065) +
+			   " クロップ=" + SlhVarBool(vp, 1039) + " 行列1055=" + SlhVarType(vp, 1055) +
+			   " 行列1056=" + SlhVarType(vp, 1056) + " 表示レイヤ=" + std::to_string(shown) + "/" +
+			   std::to_string(readable);
 	}
 
 	// 1 つのストーリを、階の高さ・レベルの高さ・レイヤ・解決Z の 4 つの口で読む。
@@ -804,15 +830,68 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 		gSDK->UpdateViewport(viewport2);
 	}
 
+	// --- 4-5: 作り方を変えた断面ビューポートを何通りか試す -------------------
+	// 4-0 で「断面VP としては成立している」と分かったので、残るのは**作り方の引数**か、
+	// UI が作るときに一緒に用意する何か。ここでは引数を振って当たりを探す。
+	probe.log("--- 4-5: 作り方（depth / 高さの範囲 / 断面線の位置）を振ってみる ---");
+	struct SlhVpRecipe
+	{
+		const char* fTag;
+		WorldPt fP1;
+		WorldPt fP2;
+		WorldPt fP3;
+		double fDepth;
+		double fStart;
+		double fEnd;
+	};
+	const SlhVpRecipe recipes[] = {
+		{"depth=3000（0 以外）", WorldPt(-1000, -1500), WorldPt(7000, -1500), WorldPt(0, 3000),
+		 3000, -1000, 13000},
+		{"高さの範囲を階に合わせる", WorldPt(-1000, -1500), WorldPt(7000, -1500), WorldPt(0, 3000),
+		 0, 0, 12000},
+		{"断面線を壁の上に載せる", WorldPt(-1000, 0), WorldPt(7000, 0), WorldPt(0, 3000), 3000,
+		 -1000, 13000},
+	};
+	for (size_t r = 0; r < sizeof(recipes) / sizeof(recipes[0]); ++r)
+	{
+		MCObjectHandle sheetR = gSDK->CreateLayer(
+			TXString("断面 4-5-") + TXString(static_cast<Sint32>(r + 1)), kLayerSheet);
+		if (sheetR == nil)
+		{
+			probe.log(std::string("  ") + recipes[r].fTag + ": シートレイヤを作れなかった");
+			continue;
+		}
+		MCObjectHandle vpR = gSDK->CreateSectionViewport(
+			recipes[r].fP1, recipes[r].fP2, recipes[r].fP3, recipes[r].fDepth, recipes[r].fStart,
+			recipes[r].fEnd, sheetR);
+		if (vpR == nil)
+		{
+			probe.log(std::string("  ") + recipes[r].fTag + ": 断面ビューポートを作れなかった");
+			continue;
+		}
+		TVariableBlock beyondR;
+		beyondR = static_cast<Boolean>(true);
+		gSDK->SetObjectVariable(vpR, 1064, beyondR);
+		VWFC::VWObjects::VWViewportObj(vpR).SetRenderType(renderFinalHiddenLine);
+		for (size_t i = 0; i < layers.size(); ++i)
+			gSDK->SetViewportLayerVisibility(vpR, layers[i], 0);
+		gSDK->UpdateViewport(vpR);
+		gSDK->SetCurrentLayer(sheetR);
+		probe.log(std::string("  ") + recipes[r].fTag + " の素性: " + SlhViewportKind(vpR));
+		SlhPlaceMarker(probe, vpR, variants[0].fStoryName, levelType,
+					   gSDK->GetStoryElevation(variants[0].fStory),
+					   std::string("  → 注釈〈") + recipes[r].fTag + "〉");
+		gSDK->UpdateViewport(vpR);
+	}
+
 	probe.log("");
-	probe.log("読み方: 段 2 で**ストーリレベルが高さを持っているか**（解決Z が階の高さと");
-	probe.log("噛み合っているか）を、段 3 で**その値が絵に出たか**を場所ごとに見る。");
-	probe.log("1 回目の実測では段 2 は 4 変種とも噛み合い、段 3 でもデザインレイヤと");
-	probe.log("シートレイヤは解決Z を描いて、**注釈の中だけが 0** だった。だから段 4 で");
-	probe.log("**注釈で解決させる条件**を探す——4-2 / 4-3 / 4-4 のどこかで数値が出れば、");
-	probe.log("それが「SDK から注釈へ高さを出させる手順」になる。どれも 0 のままなら、");
-	probe.log("条件はレイヤの表示ではなく、ビューポートの別の性質か作り方の側にある。");
-	probe.log("**いちばん上の 4-0 を先に見る**——SDK 製が〈平面VP〉と出るなら、"
-			  "`CreateSectionViewport`");
-	probe.log("が断面ビューポートを作れていないということで、それが `0` の理由になる。");
+	probe.log("読み方: 段 2 でストーリレベルが高さを持っているか、段 3 でその値が絵に出たかを");
+	probe.log("場所ごとに見る。ここまでで分かっているのは——段 2 は 4 変種とも噛み合い、");
+	probe.log("デザインレイヤとシートレイヤは絶対Z を描き、**注釈の中だけが 0**。そして");
+	probe.log("4-0 で SDK 製も〈断面VP=true〉（断面としては成立している）、4-2 でレイヤを");
+	probe.log("表示にしても（読み戻しで確認）0 のまま。**だから残るのは作り方の引数か、");
+	probe.log("UI が一緒に用意している何か**で、そこを 4-5 で振っている。");
+	probe.log("4-5 のどれかで数値が出れば、それが探していた手順。全部 0 なら、素性の行");
+	probe.log("（断面VP / 設計層断面VP / 奥 / 前 / クロップ / 行列1055 / 行列1056）を");
+	probe.log("**実物件の図面の 1B-2（UI 製で数値が出るもの）と見比べて**、違う欄を探す。");
 }
