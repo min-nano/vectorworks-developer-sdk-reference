@@ -13,11 +13,19 @@
 //	  * 置き場の縮尺が掛かる: レイアウトへ与えた大きさ × その容れ物の縮尺が描かれる
 //	    （シートレイヤ 1:1 で ×1、デザインレイヤ 1/50 で ×50）。
 //
-//	2 回目で測れなかったのは**注釈**だけで、原因は段取りにあった:
-//	**CreateLayer(…, kLayerSheet) はアクティブレイヤを切り替えない**（文字スタイルが
-//	1/50 で解けたこと、置かないラベルが ×50 で描かれたことから分かる）。そのため
-//	ビューポートがシートレイヤに載らず、AddViewportAnnotationObject が常に false だった。
-//	**ISDK には SetCurrentLayer がある**ので、ここではそれで明示的に切り替える。
+//	3 回目（9a7a05167243）で更に割れたこと:
+//	  * **文字スタイルは当てたときのアクティブレイヤの縮尺で焼き付く**
+//	    （1/50 で当てると 10pt が 176.38889、1:1 で当てると 3.52778）。
+//	  * CreateLayer(…, kLayerSheet) は**ちゃんとアクティブレイヤを切り替えていた**
+//	    （2 回目の読みは外れ）。
+//	  * **AddViewportAnnotationObject が false だった本当の理由は CreateViewport の
+//	    引数**——ParentObject(vp) がデザインレイヤだった。`CreateViewport(parentHandle)`
+//	    の parentHandle は「**どの容れ物に置くか**」であって「どのデザインレイヤを
+//	    表示するか」ではない（Findings「Undo」の【ヘッダ根拠】: "The specified parent
+//	    handle may only be a layer or a group contained within a layer"）。表示する
+//	    デザインレイヤは作成後に SetViewportLayerVisibility で決める。
+//
+//	4 回目のここは**シートレイヤの上にビューポートを作り直し、注釈の中だけを測る**。
 //
 
 #include "Probe.h"
@@ -260,7 +268,9 @@ VW_PROBE("drawing-label-style-textsize", "図面ラベルのスタイルと文�
 	probe.log("★ SetCurrentLayer(sheet) の後のアクティブレイヤ: " +
 			  ProbeLayerInfo(gSDK->GetActiveLayer()));
 
-	MCObjectHandle vp = gSDK->CreateViewport(design);
+	// ★ 4 回目の直し: **parentHandle は「置く容れ物」**なのでシートレイヤを渡す。
+	//	 表示するデザインレイヤは SetViewportLayerVisibility で後から決める。
+	MCObjectHandle vp = gSDK->CreateViewport(sheet);
 	if (vp == nil)
 	{
 		probe.fail("CreateViewport が nil を返した");
@@ -269,6 +279,9 @@ VW_PROBE("drawing-label-style-textsize", "図面ラベルのスタイルと文�
 	probe.log(std::string("ビューポートの親はシートレイヤか: ") +
 			  ProbeBoolStr(gSDK->ParentObject(vp) == sheet) + " / 親 " +
 			  ProbeLayerInfo(gSDK->ParentObject(vp)));
+	probe.log(std::string("SetViewportLayerVisibility(design, 通常)=") +
+			  ProbeBoolStr(gSDK->SetViewportLayerVisibility(
+							   vp, design, VWFC::VWObjects::kLayerVisibilityNormal) != 0));
 	TVariableBlock scaleVar;
 	scaleVar = static_cast<Real64>(kProbeVpScale);
 	gSDK->SetObjectVariable(vp, ovViewportScale, scaleVar);
