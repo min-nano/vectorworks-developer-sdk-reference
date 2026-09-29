@@ -44,6 +44,42 @@
   のスタブ**だと分かり、実機での条件出しが丸ごと不要になった。
   [Layout Dialogs](Layout%20Dialogs.md)）。**宣言だけを読んで推測を重ねる前に、実装を
   探す。**
+- **`SDK Index/` で見つからなくても「無い」と決めない——マクロの中の宣言は索引に載らない。**
+  旧 API の一部は `Include/Kernel/API/APIBase.Legacy.h` の中で `APP_API_FUNCTION(...)` /
+  `APP_API_PROCEDURE(...)` の**引数として**書かれており、索引を作るパーサはそれを宣言として
+  読み取れない。**実例**: 断面ビューポートの作り方を調べていて、索引には 1 行も無い
+  `GS_CreateSectionLineInstance(CallBackPtr, MCObjectHandle inSectionView)` と
+  `GS_IsSectionLineLinkedToViewport(CallBackPtr, MCObjectHandle inSectionLine)` が
+  `sdk-grep` で出た（[issue #151](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/151)）。
+  **索引で当たりが無かったら、諦める前に `sdk-grep` で同じ語を引き直す**——
+  索引は「速い入口」であって「SDK の全部」ではない。
+- **ただし `APP_API_FUNCTION` / `APP_API_PROCEDURE` の 12 本は、宣言があっても呼べない**
+  （「未公開の API」＝ヘッダのコメントいわく *SDK APIs waiting to be published for
+  external use*）。マクロが作るのは `CB_<名前>` を呼ぶ**インライン**の `GS_<名前>` だけで、
+  **その `CB_` シンボルは `SDKLib/LibMac/Release/libVWSDK.a` に入っていない**——
+  `libVWSDK.a` にある `CB_` は**メモリ確保系の 8 本だけ**（`CB_NewHandle` 等）で、
+  残りは実体が無い。だから呼ぶと**リンクで落ちる**:
+
+  ```
+  Undefined symbols for architecture arm64:
+    "_CB_CreateSectionLineInstance", referenced from: …
+  ld: symbol(s) not found for architecture arm64
+  ```
+
+  **`compile`（`-fsyntax-only`）では通ってしまう**ので、構文チェックだけでは気付けない
+  （実際に、プローブの構文チェックが緑のままプラグインのビルドで落ちた。
+  [run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/36519158213)）。
+  該当するのは次の 12 本で、**この名前を見かけたら実装の当てにしない**:
+  `GS_CreateSectionLineInstance` / `GS_IsSectionLineLinkedToViewport` /
+  `GS_IsDetailCalloutLinkedToViewport` / `GS_DisplayImagePopup` /
+  `GS_{Begin,Cancel,Draw,End,Update}FreehandInteractive` /
+  `GS_GetFreehandInteractivePoly` / `GS_SetFreehandInteractivePen{,Style}`。
+  （`GS_DisplayImagePopup` が呼べないことは、`VWImagePopupCtrl::CreateControl` が
+  `return false` のスタブだったこと——[Layout Dialogs](Layout%20Dialogs.md)——と
+  同じ話の裏表である。）
+  **見分け方**: 宣言が `APIBase.Legacy.h` の `APP_API_*` の中にあるなら呼べない。
+  `APIBase.Legacy.Defs.h` に `extern "C" … GS_…(CallBackPtr, …);` として並んでいる
+  ふつうの旧 API は、`libVWSDK.a` に実体があるので呼べる。
 - **「絵に出ているか」は目視に頼らず、描かれている図形を測る。** オブジェクト変数を
   読み戻して「書けた」と確かめても、**絵が古いまま**のことがある（実例: 連続寸法の中の
   直線寸法は `ovDimFontSize` が書き換わっても文字の大きさが変わらなかった。
