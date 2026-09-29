@@ -1,22 +1,32 @@
 //
 //	probes/runtime/dim-text-style/probe.cpp
 //
-//	[issue #157] 寸法の文字スタイル——2 巡目。大きさが何で決まるかだけを確かめる。
+//	[issue #157] 寸法の文字スタイル——3 巡目。大きさの換算則と、#143 との矛盾を決着させる。
 //
-//	1 巡目で決まったこと（絵つきで確定済み。Findings へ反映済み）:
+//	1 巡目・2 巡目で絵つきで確定したこと（Findings へ反映済み）:
 //	  ・規格の文字スタイルは dimStdTextStyle(51) で読める（Sint32 の ref number）。
-//	  ・〈クラスの文字スタイル〉のままだと、ovDimFontSize を書いても注釈で値が出ない。
-//	  ・SetTextStyleRef で明示すると出る。連続寸法へ繋いでも残る。
-//	  ・ovDimTextStyle(1248) へ番号を書く道は、読み戻しが SetTextStyleRef と完全に
-//	    同一になるのに絵が出ない（＝読み戻しでは見分けられない）。
+//	  ・注釈で値が出るのは SetTextStyleRef を呼んだときだけ。〈クラスの文字スタイル〉の
+//	    ままでも、ovDimTextStyle(1248) へ番号を書いただけでも出ない（読み戻しは同じ）。
+//	  ・**文字スタイルを明示すると ovDimFontSize は絵に効かなくなる**——152.4 /
+//	    264.5833 / 529.1667 の 3 本が、絵ではまったく同じ大きさで出た。
+//	  ・連続寸法（型 86）だけ、中身が同じ設定でも明らかに大きく出る。
 //
-//	残っているのは 1 つだけ——**文字スタイルを明示したあと、大きさは何が決めるか**。
-//	1 巡目の絵では、ovDimFontSize が同じ 264.5833 の 2 本（直線寸法と連続寸法の中身）が
-//	違う大きさで出ていた。ここを分けるため、**ovDimFontSize だけが違う 3 本**を
-//	同じ注釈へならべる。
+//	ここで決めるのは 2 つ。
 //
-//	1 巡目の絵を濁らせた原因（デザインレイヤの寸法がビューポートに写り込んで注釈の
-//	寸法と重なっていた）も潰してある——このプローブはデザインレイヤを表示しない。
+//	(A) **紙で狙った pt を出すには ovTextStyleSize をいくつにすればよいか。**
+//	    仮説は「文字スタイルの大きさは 1:1 の図面 mm として扱われ、ビューポートの縮尺で
+//	    割られて紙に出る」＝ #143 の焼き付きと同じ扱い。だとすれば
+//	    **ovTextStyleSize（インチ）= 紙の pt / 72 × ビューポートの縮尺**。
+//	    F1/F2/F3 で 0 倍・1 倍・2 倍を作って確かめる。
+//
+//	(B) **#143 との矛盾。** #143 は「1:1 生まれへ ovDimFontSize を書けば注釈で正しく
+//	    出る」を絵で確定させている。今回それが効かなかった違いは「**当たっている寸法規格が
+//	    文字スタイルを持っているかどうか**」ではないか——この図面のカスタム規格
+//	    `min-nano` は 寸法(6pt) を持っている（1 巡目で実測）が、組み込み規格はどれも
+//	    持たない（dimStdTextStyle = 0）。そこで F5/F6 は**規格を JIS に替えて**、
+//	    文字スタイルがどこにも無い状態で ovDimFontSize が効くかを見る。
+//	    ここが効けば #143 は撤回不要で、「文字スタイルが在るときだけ話が変わる」と
+//	    書ける。効かなければ #143 のほうを訂正する必要がある。
 //
 
 #include "Probe.h"
@@ -29,10 +39,11 @@ namespace
 	// 利用側と同じ 1/125。紙で 6pt にしたいなら ovDimFontSize = 6 × 25.4/72 × 125。
 	const double kProbeDimVpScale = 125.0;
 
-	// 文字スタイルの大きさ。**ovTextStyleSize の単位はインチ**（1 巡目で確定）。
-	// 6 インチのままにしてあるのは、これを当てただけの E1 が注釈で見える大きさ
-	// （152.4 / 125 = 1.22mm ≒ 3.5pt）になり、比べる相手として使えるため。
-	const double kProbeDimStyleInch = 6.0;
+	// 仮説 (A): 紙で P pt に見せたい文字スタイルの大きさ（インチ）。
+	double ProbeDimPaperPtToStyleInch(double paperPt)
+	{
+		return paperPt / 72.0 * kProbeDimVpScale;
+	}
 
 	double ProbeDimPaperPtToFontSize(double paperPt)
 	{
@@ -147,6 +158,44 @@ namespace
 		probe.log(line);
 	}
 
+	// 大きさ（インチ）を指定した文字スタイルを 1 つ作り、その番号を返す。
+	InternalIndex ProbeDimMakeStyle(vwprobe::Report& probe, const char* name, double inches)
+	{
+		MCObjectHandle style = gSDK->CreateTextStyleResource(name);
+		if (style == nil)
+		{
+			probe.fail(std::string("CreateTextStyleResource が nil を返した: ") + name);
+			return 0;
+		}
+		ProbeDimSetReal(style, ovTextStyleSize, inches);
+		double readBack = 0.0;
+		ProbeDimGetReal(style, ovTextStyleSize, readBack);
+		const InternalIndex ref = gSDK->GetObjectInternalIndex(style);
+		probe.log(std::string("    ") + name + ": 番号=" + ProbeDimInt(static_cast<Sint32>(ref)) +
+				  " ovTextStyleSize=" + ProbeDimNum(readBack) +
+				  " インチ（= " + ProbeDimNum(readBack * 72.0) + "pt 相当）");
+		return ref;
+	}
+
+	// 寸法規格を名前で当てる（存在しない名前は false で弾かれる。Findings「寸法へ規格を当てる」）。
+	bool ProbeDimSetStandard(MCObjectHandle dim, const char* standardName)
+	{
+		TVariableBlock block;
+		block = TXString(standardName);
+		return gSDK->SetObjectVariable(dim, ovDimStandardName, block) != 0;
+	}
+
+	std::string ProbeDimStandardOf(MCObjectHandle dim)
+	{
+		TVariableBlock block;
+		if (!gSDK->GetObjectVariable(dim, ovDimStandardName, block))
+			return std::string("(読めず)");
+		TXString name;
+		if (!block.GetTXString(name))
+			return std::string("(読めず)");
+		return std::string(static_cast<const char*>(name));
+	}
+
 	MCObjectHandle ProbeDimMake(double y, double width)
 	{
 		MCObjectHandle dim = gSDK->CreateLinearDimension(WorldPt(0.0, y), WorldPt(width, y), 0.0,
@@ -174,37 +223,28 @@ namespace
 	}
 } // namespace
 
-VW_PROBE("dim-text-style", "寸法の文字スタイル 2 巡目——大きさを決めているのは何か",
-		 "文字スタイルを明示した寸法を、ovDimFontSize だけ変えて 3 本ならべる")
+VW_PROBE("dim-text-style", "寸法の文字スタイル 3 巡目——大きさの換算則と #143 との矛盾",
+		 "文字スタイルの大きさを 0/1/2 倍で作り分け、規格を替えて ovDimFontSize が効く条件も見る")
 {
-	probe.log("=== [#157] 寸法の文字スタイル（2 巡目） ===");
+	probe.log("=== [#157] 寸法の文字スタイル（3 巡目） ===");
 	probe.log("新規の空図面で走らせる前提。図面は壊れる。");
 	probe.log("");
 
 	// -----------------------------------------------------------------
-	probe.log("【1】文字スタイルを作る（ovTextStyleSize の単位はインチ）");
-	MCObjectHandle textStyle = gSDK->CreateTextStyleResource("プローブ文字スタイル");
-	if (textStyle == nil)
-	{
-		probe.fail("CreateTextStyleResource が nil を返した");
+	probe.log("【1】大きさの違う文字スタイルを 3 つ作る（ovTextStyleSize の単位はインチ）");
+	probe.log("    仮説: 紙で P pt に見せたいなら ovTextStyleSize = P / 72 × ビューポートの縮尺");
+	const InternalIndex styleTooSmall = ProbeDimMakeStyle(probe, "プローブ 素の6pt", 6.0 / 72.0);
+	const InternalIndex style6pt =
+		ProbeDimMakeStyle(probe, "プローブ 紙6pt", ProbeDimPaperPtToStyleInch(6.0));
+	const InternalIndex style12pt =
+		ProbeDimMakeStyle(probe, "プローブ 紙12pt", ProbeDimPaperPtToStyleInch(12.0));
+	if (styleTooSmall == 0 || style6pt == 0 || style12pt == 0)
 		return;
-	}
-	const InternalIndex textStyleRef = gSDK->GetObjectInternalIndex(textStyle);
-	ProbeDimSetReal(textStyle, ovTextStyleSize, kProbeDimStyleInch);
-	{
-		double size = 0.0;
-		ProbeDimGetReal(textStyle, ovTextStyleSize, size);
-		probe.log("    番号=" + ProbeDimInt(static_cast<Sint32>(textStyleRef)) +
-				  " 名前=" + ProbeDimIndexName(textStyleRef) +
-				  " ovTextStyleSize=" + ProbeDimNum(size) + " インチ");
-	}
 	probe.log("");
 
 	// -----------------------------------------------------------------
-	probe.log("【2】シートレイヤと 1/125 の平面ビューポートを作る");
-	probe.log(
-		"    ※ デザインレイヤは**表示しない**（1 巡目はここが写り込んで注釈の寸法と重なった）");
-	MCObjectHandle sheetLayer = gSDK->CreateLayer("プローブ 157 の 2", kLayerSheet);
+	probe.log("【2】シートレイヤと 1/125 の平面ビューポートを作る（デザインレイヤは表示しない）");
+	MCObjectHandle sheetLayer = gSDK->CreateLayer("プローブ 157 の 3", kLayerSheet);
 	if (sheetLayer == nil)
 	{
 		probe.fail("CreateLayer(kLayerSheet) が nil を返した");
@@ -222,42 +262,37 @@ VW_PROBE("dim-text-style", "寸法の文字スタイル 2 巡目——大きさ�
 		true, [viewport](MCObjectHandle cls)
 		{ gSDK->SetViewportClassVisibility(viewport, gSDK->GetObjectInternalIndex(cls), 0); });
 	gSDK->UpdateViewport(viewport);
-	{
-		double scale = 0.0;
-		ProbeDimGetReal(viewport, ovViewportScale, scale);
-		probe.log("    ビューポートの縮尺（読み戻し）=" + ProbeDimNum(scale));
-	}
 	probe.log("");
 
 	// -----------------------------------------------------------------
 	const double fs6pt = ProbeDimPaperPtToFontSize(6.0);
-	const double fs12pt = ProbeDimPaperPtToFontSize(12.0);
-	probe.log(
-		"【3】注釈へ 5 行。E1〜E3 は**文字スタイルを当てたあと ovDimFontSize だけを変えてある**");
-	probe.log("    紙 6pt = " + ProbeDimNum(fs6pt) + " / 紙 12pt = " + ProbeDimNum(fs12pt));
+	probe.log("【3】注釈へ 6 行");
+	probe.log("    紙 6pt 相当の ovDimFontSize = " + ProbeDimNum(fs6pt));
 	probe.log("");
 
-	MCObjectHandle rows[5] = {nil, nil, nil, nil, nil};
+	MCObjectHandle rows[6] = {nil, nil, nil, nil, nil, nil};
 
-	probe.log("  E1（長さ 1000）: SetTextStyleRef だけ（ovDimFontSize は触らない）");
+	// --- (A) 換算則を決める 3 本。違うのは文字スタイルの大きさだけ ---
+	probe.log("  F1（長さ 1000）: SetTextStyleRef に「素の 6pt」（6/72 インチ）を当てる");
+	probe.log("    → 仮説どおりなら紙で 6/125 = 0.048pt になり **見えない**");
 	rows[0] = ProbeDimMake(0.0, 1000.0);
-	gSDK->SetTextStyleRef(rows[0], textStyleRef);
-	ProbeDimDump(probe, "E1", rows[0]);
+	gSDK->SetTextStyleRef(rows[0], styleTooSmall);
+	ProbeDimDump(probe, "F1", rows[0]);
 
-	probe.log("  E2（長さ 2000）: SetTextStyleRef → ovDimFontSize = 紙 6pt");
+	probe.log(
+		"  F2（長さ 2000）: SetTextStyleRef に「紙 6pt」を当てる → 仮説どおりなら **紙で 6pt**");
 	rows[1] = ProbeDimMake(-1500.0, 2000.0);
-	gSDK->SetTextStyleRef(rows[1], textStyleRef);
-	ProbeDimSetReal(rows[1], ovDimFontSize, fs6pt);
-	ProbeDimDump(probe, "E2", rows[1]);
+	gSDK->SetTextStyleRef(rows[1], style6pt);
+	ProbeDimDump(probe, "F2", rows[1]);
 
-	probe.log("  E3（長さ 3000）: SetTextStyleRef → ovDimFontSize = 紙 12pt（E2 のちょうど 2 倍）");
+	probe.log("  F3（長さ 3000）: SetTextStyleRef に「紙 12pt」を当てる → 仮説どおりなら **F2 "
+			  "のちょうど 2 倍**");
 	rows[2] = ProbeDimMake(-3000.0, 3000.0);
-	gSDK->SetTextStyleRef(rows[2], textStyleRef);
-	ProbeDimSetReal(rows[2], ovDimFontSize, fs12pt);
-	ProbeDimDump(probe, "E3", rows[2]);
+	gSDK->SetTextStyleRef(rows[2], style12pt);
+	ProbeDimDump(probe, "F3", rows[2]);
 
-	probe.log("  E4（長さ 4000 + 5000 の連続寸法）: 繋ぐ前に両方へ SetTextStyleRef → 紙 6pt（E2 "
-			  "と同じ）");
+	// --- 連続寸法が本当に別扱いなのか ---
+	probe.log("  F4（長さ 4000 + 5000 の連続寸法）: 両方へ「紙 6pt」→ F2 と同じ大きさになるはず");
 	{
 		const double chainY = -4500.0;
 		MCObjectHandle leftDim = gSDK->CreateLinearDimension(
@@ -270,43 +305,51 @@ VW_PROBE("dim-text-style", "寸法の文字スタイル 2 巡目——大きさ�
 		{
 			ProbeDimSetBoolean(leftDim, ovDimShowValue, true);
 			ProbeDimSetBoolean(rightDim, ovDimShowValue, true);
-			gSDK->SetTextStyleRef(leftDim, textStyleRef);
-			gSDK->SetTextStyleRef(rightDim, textStyleRef);
-			ProbeDimSetReal(leftDim, ovDimFontSize, fs6pt);
-			ProbeDimSetReal(rightDim, ovDimFontSize, fs6pt);
+			gSDK->SetTextStyleRef(leftDim, style6pt);
+			gSDK->SetTextStyleRef(rightDim, style6pt);
 			MCObjectHandle chain = gSDK->CreateChainDimension(leftDim, rightDim);
 			if (chain == nil)
 				probe.fail("CreateChainDimension が nil を返した");
 			else
 			{
 				rows[3] = chain;
-				ProbeDimDump(probe, "E4 連続寸法そのもの", chain);
-				ProbeDimDumpMembers(probe, "E4", chain);
+				ProbeDimDump(probe, "F4 連続寸法そのもの", chain);
+				ProbeDimDumpMembers(probe, "F4", chain);
 			}
 		}
 	}
 
-	probe.log("  E5（長さ 6000）: 対照。〈クラスの文字スタイル〉のまま ovDimFontSize = 紙 6pt");
+	// --- (B) #143 との矛盾。文字スタイルがどこにも無ければ ovDimFontSize は効くか ---
+	probe.log("  F5（長さ 6000）: **規格を JIS（文字スタイルを持たない）に替え**、");
+	probe.log("    〈クラスの文字スタイル〉のまま ovDimFontSize = 紙 6pt を書く（#143 の再現）");
 	rows[4] = ProbeDimMake(-6000.0, 6000.0);
+	probe.log("    規格を JIS にした=" + ProbeDimBool(ProbeDimSetStandard(rows[4], "JIS")) +
+			  " → 読み戻し=" + ProbeDimStandardOf(rows[4]));
+	ProbeDimDump(probe, "F5 規格を替えた直後", rows[4]);
 	ProbeDimSetReal(rows[4], ovDimFontSize, fs6pt);
-	ProbeDimDump(probe, "E5", rows[4]);
+	ProbeDimDump(probe, "F5 ovDimFontSize を書いた後", rows[4]);
+
+	probe.log("  F6（長さ 7000）: 対照。規格を JIS に替えるだけで ovDimFontSize は書かない");
+	rows[5] = ProbeDimMake(-7500.0, 7000.0);
+	ProbeDimSetStandard(rows[5], "JIS");
+	ProbeDimDump(probe, "F6", rows[5]);
 	probe.log("");
 
 	// -----------------------------------------------------------------
-	probe.log("【4】注釈へ移し、移った後にもう一度読む（1 巡目で読み落とした連続寸法の中身も）");
-	for (int i = 0; i < 5; ++i)
+	probe.log("【4】注釈へ移し、移った後にもう一度読む");
+	for (int i = 0; i < 6; ++i)
 	{
 		if (rows[i] == nil)
 		{
-			probe.log("    E" + ProbeDimInt(i + 1) + ": 作れていないので移せない");
+			probe.log("    F" + ProbeDimInt(i + 1) + ": 作れていないので移せない");
 			continue;
 		}
 		const Boolean moved = gSDK->AddViewportAnnotationObject(viewport, rows[i]);
-		probe.log("    E" + ProbeDimInt(i + 1) +
+		probe.log("    F" + ProbeDimInt(i + 1) +
 				  ": AddViewportAnnotationObject=" + ProbeDimBool(moved != 0));
-		ProbeDimDump(probe, "E" + ProbeDimInt(i + 1) + " 移した後", rows[i]);
+		ProbeDimDump(probe, "F" + ProbeDimInt(i + 1) + " 移した後", rows[i]);
 		if (gSDK->GetObjectTypeN(rows[i]) == 86)
-			ProbeDimDumpMembers(probe, "E" + ProbeDimInt(i + 1) + " 移した後", rows[i]);
+			ProbeDimDumpMembers(probe, "F" + ProbeDimInt(i + 1) + " 移した後", rows[i]);
 	}
 
 	gSDK->ForEachClass(
@@ -318,13 +361,13 @@ VW_PROBE("dim-text-style", "寸法の文字スタイル 2 巡目——大きさ�
 
 	// -----------------------------------------------------------------
 	probe.log("=== 目で見ないと分からないこと（このログには写らない） ===");
-	probe.log("シートレイヤ「プローブ 157 の 2」の 1/125 のビューポートに、上から");
-	probe.log("  E1 = 1,000 / E2 = 2,000 / E3 = 3,000 / E4 = 4,000 と 5,000 / E5 = 6,000");
-	probe.log("がならびます（E5 は 1 巡目と同じで、出ない見込みの対照です）。");
-	probe.log("伺いたいのは **数字の大きさ** だけで、2 つあります:");
-	probe.log("  (1) 1,000 → 2,000 → 3,000 と、下へ行くほど数字が大きくなっていますか？");
-	probe.log("      （3 つとも同じ大きさなら「同じ」と教えてください。）");
-	probe.log("  (2) E4 の 4,000 / 5,000 は、E2 の 2,000 と同じ大きさですか？ 違いますか？");
-	probe.log("この 2 つで「明示した文字スタイルと ovDimFontSize "
-			  "のどちらが大きさを決めるか」が決まります。");
+	probe.log("シートレイヤ「プローブ 157 の 3」の 1/125 のビューポートに、上から");
+	probe.log("  F1 = 1,000 / F2 = 2,000 / F3 = 3,000 / F4 = 4,000 と 5,000 /");
+	probe.log("  F5 = 6,000 / F6 = 7,000");
+	probe.log("がならびます。伺いたいのは **どれが読める大きさで出ているか** だけです。");
+	probe.log("  (1) 読める数字はどれですか（見えない行があれば、それも教えてください）。");
+	probe.log("  (2) 3,000 は 2,000 のちょうど 2 倍くらいの大きさですか。");
+	probe.log("  (3) 4,000 / 5,000 は 2,000 と同じ大きさですか、違いますか。");
+	probe.log("仮説どおりなら: F1 見えない / F2 読める / F3 は F2 の 2 倍 / F4 は F2 と同じ /");
+	probe.log("F5 読める（#143 は撤回不要）/ F6 見えない。**違っていたら、そう教えてください。**");
 }
