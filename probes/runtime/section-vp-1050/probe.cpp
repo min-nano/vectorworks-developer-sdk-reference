@@ -359,7 +359,9 @@ namespace
 		bool fFound = false;
 	};
 
-	// レベル基準線を注釈へ置いて、3 つ組を書いて作り直し、`Elev` を読む。
+	// レベル基準線を注釈へ置いて 3 つ組を書くところまで（**作り直さない**）。
+	// 1055 を 1050 へ写すのは「注釈を置き終えてから」なので、`ResetObject` は呼び手が
+	// 写した後に呼ぶ（Findings「ビューポート」の現行手順）。
 	std::string ProbePlaceBenchmark(MCObjectHandle viewport, const ProbeBenchmarkTriple& triple,
 									double x, double y, MCObjectHandle& outMarker)
 	{
@@ -378,9 +380,8 @@ namespace
 			parametric.SetParamValue("__LevelTypeName", triple.fLevelTypeName);
 			parametric.SetParamValue("Datum", triple.fDatum);
 		}
-		gSDK->ResetObject(marker);
 		outMarker = marker;
-		return std::string(static_cast<const char*>(parametric.GetParamValue("Elev")));
+		return "置けた";
 	}
 
 	std::string ProbeReadElev(MCObjectHandle marker)
@@ -392,10 +393,8 @@ namespace
 	}
 } // namespace
 
-VW_PROBE(
-	"section-vp-1050", "断面ビューポートの 1050 が更新で戻る理由を測る",
-	"UI 製と SDK 製を同じ図面で更新前後に総当りで比べ、キャッシュ群の中身・"
-	"レベル基準線の壊れ方・断面線インスタンスの作成まで測る（実物件の図面で走らせる／保存しない）")
+VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
+		 "UI 製と SDK 製を同じ図面で突き合わせ、更新前後の全欄・キャッシュ群・レベル基準線を測る")
 {
 	probe.log("【この調査は実物件の図面で走らせる】UI が断面ツールで作った断面ビューポートが");
 	probe.log(
@@ -609,13 +608,19 @@ VW_PROBE(
 	}
 	else
 	{
-		probe.log("  1055 を 1050 へ写す: " +
-				  std::string(ProbeCopy1055To1050(sdkViewport) ? "成功" : "失敗"));
 		MCObjectHandle marker = nil;
-		const std::string first = ProbePlaceBenchmark(sdkViewport, triple, 0.0, 0.0, marker);
-		probe.log("  SDK 製の注釈へ置いて 3 つ組を書き、ResetObject した直後の Elev = " + first);
+		probe.log("  SDK 製の注釈へレベル基準線を置いて 3 つ組を書く: " +
+				  ProbePlaceBenchmark(sdkViewport, triple, 0.0, 0.0, marker));
 		if (marker != nil)
 		{
+			probe.log("  置いた直後（まだ作り直していない）の Elev = " + ProbeReadElev(marker));
+			probe.log("  注釈を置き終えたので 1055 を 1050 へ写す: " +
+					  std::string(ProbeCopy1055To1050(sdkViewport) ? "成功" : "失敗") +
+					  "（1050 が単位行列か=" +
+					  (ProbeIs1050Identity(sdkViewport) ? "はい" : "いいえ") + "）");
+			gSDK->ResetObject(marker);
+			probe.log("  写してから ResetObject した後の Elev = " + ProbeReadElev(marker) +
+					  " ← ここが数値でなければ以降の①〜⑥は読めない");
 			VectorWorks::Extension::IMarkersPluginSupportPtr markers(
 				VectorWorks::Extension::IID_MarkersPluginSupport);
 			if (markers)
@@ -673,10 +678,15 @@ VW_PROBE(
 	{
 		probe.log("  --- 対照: UI 製の注釈へ同じことをする（ビューポートの側だけが違う）");
 		MCObjectHandle control = nil;
-		const std::string first = ProbePlaceBenchmark(uiViewport, triple, 0.0, 0.0, control);
-		probe.log("  UI 製の注釈へ置いて 3 つ組を書き、ResetObject した直後の Elev = " + first);
+		probe.log("  UI 製の注釈へレベル基準線を置いて 3 つ組を書く: " +
+				  ProbePlaceBenchmark(uiViewport, triple, 0.0, 0.0, control));
 		if (control != nil)
 		{
+			probe.log("  1050 へは何も写さない（いま 1050 が単位行列か=" +
+					  std::string(ProbeIs1050Identity(uiViewport) ? "はい" : "いいえ") + "）");
+			gSDK->ResetObject(control);
+			probe.log("  写さずに ResetObject した Elev = " + ProbeReadElev(control) +
+					  " ← ここが数値なら「UI 製では写す手順がそもそも要らない」");
 			gSDK->UpdateViewport(uiViewport);
 			probe.log("  更新した後の Elev = " + ProbeReadElev(control) + "（1050 が単位行列か=" +
 					  (ProbeIs1050Identity(uiViewport) ? "はい" : "いいえ") + "）");
