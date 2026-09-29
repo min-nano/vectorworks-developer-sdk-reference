@@ -588,6 +588,75 @@ for (short index = 9; index >= -8; --index)
 - **存在しない名前は `false` で弾かれ、元の値が残る。** 「利用者が選んだ名前が図面に
   あるか」を別途照合しなくても、**書いてみて戻り値を見れば済む**。
 
+## 寸法の文字スタイル
+
+**文字の大きさ（`ovDimFontSize`）とは別に、寸法は「文字スタイル」という名前付きリソース
+への参照を 1 つ持つ。** OIP の「文字 → スタイル」がそれで、既定は
+**〈クラスの文字スタイル〉**——寸法自身は参照を持たず、クラス側に置かれたものを使う、
+という状態である。
+
+> **【この節はまだ実機確認前】**
+> 下の口の並びは**すべて【ヘッダ根拠】**（`Include/Interfaces/VectorWorks/ISDK.h` /
+> `Include/Kernel/API/ObjectVariables.h` / `Include/Kernel/API/MiniCadCallBacks.h`）で、
+> 「宣言がある」以上のことは言っていない。実機で何が起きるかは
+> [issue #157](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/157)
+> のプローブ（`probes/runtime/dim-text-style`）の結果で確定させる。
+
+### 触る口の一覧【ヘッダ根拠】
+
+**寸法 1 本の文字スタイル**——`ISDK` の口とオブジェクト変数の 2 通りがある。
+
+| 何 | 口 | 型・値 |
+| --- | --- | --- |
+| 読む | `ISDK::GetTextStyleRef(h)` | `InternalIndex`（文字スタイルの ref number） |
+| 書く | `ISDK::SetTextStyleRef(h, styleRef)` | `void` |
+| 〈クラスの文字スタイル〉か | `ISDK::GetTextStyleByClass(h)` | `bool` |
+| 〈クラスの文字スタイル〉へ戻す | `ISDK::SetTextStyleByClass(h)` | `void` |
+| 同じものをオブジェクト変数で | `ovDimTextStyle`(**1248**) | `Sint32` — "the ref number of the text style that the dimension is linked to"。**`Public for VS`** |
+
+- **`ovObjectTextStyle` は `ovDimTextStyle` と同じ番号**（`= ovDimTextStyle`）だが、
+  ヘッダに `char - Not for public use` と付いている。**使うなら `ovDimTextStyle` のほう。**
+- 文字**列**（1 字ごと）用の `…RefN` 系（`SetTextStyleRefN` / `GetTextStyleByClassN`）は
+  文字ブロック用で、寸法には要らない。
+
+**クラスが持つ文字スタイル**（OIP の〈クラスの文字スタイル〉の実体）:
+
+| 何 | 口 |
+| --- | --- |
+| クラスが文字スタイルを持つか | `ISDK::GetClUseTextStyle(classId)` / `SetClUseTextStyle(classId, use)` |
+| その文字スタイル | `ISDK::GetClTextStyleRef(classId)` / `SetClTextStyleRef(classId, ref)` |
+
+**寸法規格が持つ文字スタイル**——`GetDimensionStandardVariable` の**セレクタ
+`dimStdTextStyle`（= 51）**で読む。ヘッダの但し書きは
+`(Sint32) the ref number of the text style that the dimension standard is linked to`。
+
+```cpp
+TVariableBlock block;
+if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
+{
+    Sint32 styleRef = 0;
+    if (block.GetSint32(styleRef))
+    {
+        TXString styleName;
+        gSDK->InternalIndexToNameN(static_cast<InternalIndex>(styleRef), styleName); // 名前が要るとき
+    }
+}
+```
+
+- **返るのは名前ではなく番号（`InternalIndex` ＝ 名前付きリソースの ref number）。**
+  名前が要るなら `ISDK::InternalIndexToNameN(index, outName)` で引く。
+- 書くほうは**カスタム規格だけ**——`SetCustomDimensionStandardVariable(index, 51, block)`
+  （組み込み規格 1〜9 を書き換える口は無い）。
+- 文字スタイルそのものを作る口は `ISDK::CreateTextStyleResource(name)`。中身は
+  `ovTextStyleSize`(1361。`double`)・`ovTextStyleFontIndex`(1360) などのオブジェクト変数
+  で触る。
+
+**連続寸法（型 86 の PIO）には PIO 用の口がある**——`ISDK::SetPIOTextStyle(paramObj,
+textStyleRef, copyStyleSettings = true)`。PIO が文字スタイルを受け付けるかどうかは
+オブジェクトプロパティ `kObjXPropTextStyleSupport`(42)
+（"Controls whether parametric objects can use class text style attribute and get Text
+Style on OIP"）で決まる。**連続寸法がこれを立てているかは実機で確かめる。**
+
 ## 連続寸法（チェーン寸法）
 
 - **`ISDK::CreateChainDimension(h1, h2)` がある。** ヘッダ:
