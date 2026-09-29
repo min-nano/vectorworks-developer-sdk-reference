@@ -10,7 +10,9 @@
 //	  3. SDK 製の断面はそもそも描かれているのか（キャッシュ群の中身を種類ごとに数える）
 //	  4. レベル基準線の高さは、属性・クラス・パラメータの変更で落ちるのか
 //	     （＝人が後から触る図面で壊れるのか）
-//	  5. UI 製の断面線（645）が持っている欄（UI と同じ経路の候補だった
+//	  5. 更新しても 1050 を保てる道（1007 を書き戻す／注釈だけの作り直し 1053／
+//	     「汚れている」旗 1004 を降ろす、の 3 通り）
+//	  6. UI 製の断面線（645）が持っている欄（UI と同じ経路の候補だった
 //	     `GS_CreateSectionLineInstance` は**リンクできない**ことが分かったので、
 //	     代わりに断面線そのものを読む）
 //
@@ -432,8 +434,11 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 	ProbeBenchmarkTriple triple;
 	if (uiViewport == nil)
 	{
-		probe.fail("UI 製の断面ビューポート（1050 が単位行列でない断面 VP）が図面に無い。"
-				   "UI の断面ツールで作った断面ビューポートのある図面で走らせること。");
+		probe.fail(
+			"この図面には UI 製の断面ビューポートが無い（＝この調査の主問は測れていない）。"
+			"**UI の断面ツールで作った断面ビューポートが既にある実物件の図面を開いて、"
+			"もう一度走らせてください。** 新規の空図面では、UI 製と SDK 製の非対称"
+			"——この調査の要——が測れません。3 以降は測れているので、そのぶんは載っています。");
 	}
 	else
 	{
@@ -518,6 +523,16 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 		bounds.top = 20000;
 		bounds.bottom = -20000;
 		probe.log("  デザインレイヤの図形の範囲が取れなかったので ±20000 で引く");
+		// **切るものが無いと「断面が描かれているか」を測れない。** 図面が空のときだけ
+		// 試験用の壁を 1 枚立てる（実物件の図面には足さない）。
+		if (!designLayers.empty())
+		{
+			MCObjectHandle wall = gSDK->CreateWall(WorldPt(-5000, 5000), WorldPt(5000, 5000), 200);
+			probe.log(std::string("  空図面なので試験用の壁を 1 枚立てた: ") +
+					  (wall != nil ? "成功" : "失敗（CreateWall が nil）"));
+			if (wall != nil)
+				gSDK->AddObjectToContainer(wall, designLayers[0]);
+		}
 	}
 	probe.log("  断面線を引く範囲: left=" + ProbeFormatNumber(bounds.left) + " right=" +
 			  ProbeFormatNumber(bounds.right) + " top=" + ProbeFormatNumber(bounds.top) +
@@ -608,9 +623,9 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 	{
 		probe.log("  SDK 製のビューポートが無いので測れない");
 	}
-	else
+	MCObjectHandle marker = nil;
+	if (sdkViewport != nil)
 	{
-		MCObjectHandle marker = nil;
 		probe.log("  SDK 製の注釈へレベル基準線を置いて 3 つ組を書く: " +
 				  ProbePlaceBenchmark(sdkViewport, triple, 0.0, 0.0, marker));
 		if (marker != nil)
@@ -702,7 +717,66 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 
 	// =====================================================================
 	probe.log("");
-	probe.log("== 5. UI 製の断面線（645）は何を持っているか");
+	probe.log("== 5. 更新しても 1050 を保てる道はあるか（3 通り試す）");
+	if (sdkViewport == nil)
+	{
+		probe.log("  SDK 製のビューポートが無いので測れない");
+	}
+	else
+	{
+		// (a) 1050 を書くと 1007（ビューの向き）が勝手に変わる。**それを書き戻せるか。**
+		//     #147 は「1050 を書く前に SetViewType」を試して false だった。順を逆にする。
+		probe.log("  (a) 1050 を写した後で 1007（ビューの向き）を書けるか");
+		probe.log("      1055 を 1050 へ写す: " +
+				  std::string(ProbeCopy1055To1050(sdkViewport) ? "成功" : "失敗"));
+		probe.log("      写した後の 1007 = " + ProbeReadVariable(sdkViewport, 1007) +
+				  "（作成直後は 7＝上。写すと VW が行列から引き直す）");
+		TVariableBlock viewTypeBlock;
+		gSDK->GetObjectVariable(sdkViewport, 1007, viewTypeBlock);
+		const Boolean wroteViewType = gSDK->SetObjectVariable(sdkViewport, 1007, viewTypeBlock);
+		probe.log(std::string("      同じ値を 1007 へ書き戻す: ") +
+				  (wroteViewType ? "true" : "false"));
+		gSDK->UpdateViewport(sdkViewport);
+		ProbeLogMatrices(probe, "      (a) 更新後", sdkViewport);
+		probe.log("      (a) 更新後の 1007 = " + ProbeReadVariable(sdkViewport, 1007));
+
+		// (b) **注釈だけの作り直し**（ovViewportResetForOnlyAnnotationsChange = 1053。void write）。
+		//     ふつうの更新の代わりにこれで済むなら、1050 を潰さずに注釈を反映できる。
+		probe.log("  (b) 注釈だけの作り直し（1053）なら 1050 は残るか");
+		probe.log("      1055 を 1050 へ写す: " +
+				  std::string(ProbeCopy1055To1050(sdkViewport) ? "成功" : "失敗"));
+		TVariableBlock voidBlock;
+		voidBlock = static_cast<Boolean>(true);
+		const Boolean wroteAnnotationReset = gSDK->SetObjectVariable(sdkViewport, 1053, voidBlock);
+		probe.log(std::string("      1053 へ書いた: ") + (wroteAnnotationReset ? "true" : "false"));
+		ProbeLogMatrices(probe, "      (b) 1053 の後", sdkViewport);
+		if (marker != nil)
+		{
+			gSDK->ResetObject(marker);
+			probe.log("      (b) その後 ResetObject した Elev = " + ProbeReadElev(marker));
+		}
+
+		// (c) **「汚れている」旗を降ろしてから更新する**（ovViewportDirty = 1004）。
+		//     更新が中身を作り直さないなら、1050 も引き直されないのではないか。
+		probe.log("  (c) 1004（汚れている旗）を false にしてから更新したら 1050 は残るか");
+		probe.log("      1055 を 1050 へ写す: " +
+				  std::string(ProbeCopy1055To1050(sdkViewport) ? "成功" : "失敗"));
+		TVariableBlock falseBlock;
+		falseBlock = static_cast<Boolean>(false);
+		const Boolean wroteDirty = gSDK->SetObjectVariable(sdkViewport, 1004, falseBlock);
+		probe.log(std::string("      1004 へ false を書いた: ") + (wroteDirty ? "true" : "false") +
+				  " 読み戻し=" + ProbeReadVariable(sdkViewport, 1004));
+		gSDK->UpdateViewport(sdkViewport);
+		ProbeLogMatrices(probe, "      (c) 更新後", sdkViewport);
+		if (marker != nil)
+		{
+			gSDK->ResetObject(marker);
+			probe.log("      (c) その後 ResetObject した Elev = " + ProbeReadElev(marker));
+		}
+	}
+
+	probe.log("");
+	probe.log("== 6. UI 製の断面線（645）は何を持っているか");
 	probe.log("  ※ UI と同じ経路に見えた GS_CreateSectionLineInstance /");
 	probe.log("     GS_IsSectionLineLinkedToViewport は**呼べない**——ヘッダ（APIBase.Legacy.h の");
 	probe.log("     APP_API_FUNCTION）にはあるが、CB_ シンボルが libVWSDK.a に入っていないので");
