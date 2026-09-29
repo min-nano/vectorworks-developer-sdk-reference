@@ -354,14 +354,19 @@ namespace
 	}
 
 	// 文字スタイルを 1 つ作り、大きさ（pt）を書いて ref を返す。0 なら作れなかった。
-	InternalIndex StdCreateTextStyle(vwprobe::Report& probe, const char* name, double pt)
+	// **手（ハンドル）も返す**——`InternalIndex` から手を引く口が `ISDK` に無いので、
+	// 後で大きさを書き換えるときのために掴んでおく。
+	InternalIndex StdCreateTextStyle(vwprobe::Report& probe, const char* name, double pt,
+									 MCObjectHandle& outHandle)
 	{
+		outHandle = nil;
 		MCObjectHandle style = gSDK->CreateTextStyleResource(TXString(name));
 		if (style == nil)
 		{
 			probe.fail(std::string("CreateTextStyleResource が nil を返した: ") + name);
 			return 0;
 		}
+		outHandle = style;
 		// **ovTextStyleSize の単位はインチ**（#157 で確定）。pt なら ÷ 72。
 		const bool wrote = StdSetReal(style, ovTextStyleSize, pt / 72.0);
 		double readBack = 0.0;
@@ -475,8 +480,15 @@ VW_PROBE("dim-standard-text-size", "寸法規格の紙の大きさで連続寸�
 	// =====================================================================
 	probe.log("");
 	probe.log("== 1. 文字スタイルを 2 つ作る（6pt と " + StdNum(kStdBigPt) + "pt）");
-	const InternalIndex smallStyle = StdCreateTextStyle(probe, kStdSmallStyleName, kStdSmallPt);
-	const InternalIndex bigStyle = StdCreateTextStyle(probe, kStdBigStyleName, kStdBigPt);
+	MCObjectHandle smallStyleHandle = nil;
+	MCObjectHandle bigStyleHandle = nil;
+	const InternalIndex smallStyle =
+		StdCreateTextStyle(probe, kStdSmallStyleName, kStdSmallPt, smallStyleHandle);
+	const InternalIndex bigStyle =
+		StdCreateTextStyle(probe, kStdBigStyleName, kStdBigPt, bigStyleHandle);
+	probe.log("  （文字スタイルの手: 6pt=" +
+			  std::string(smallStyleHandle != nil ? "取れた" : "nil") + " / " + StdNum(kStdBigPt) +
+			  "pt=" + std::string(bigStyleHandle != nil ? "取れた" : "nil") + "）");
 	if (smallStyle == 0 || bigStyle == 0)
 		return;
 
@@ -573,9 +585,10 @@ VW_PROBE("dim-standard-text-size", "寸法規格の紙の大きさで連続寸�
 	probe.log("  7a. 規格が指している文字スタイルの**大きさ**を " + StdNum(kStdSmallPt) + "pt → " +
 			  StdNum(kStdBigPt) + "pt に変える");
 	{
-		MCObjectHandle style = StdStyleHandle(smallStyle);
+		MCObjectHandle style =
+			smallStyleHandle != nil ? smallStyleHandle : StdStyleHandle(smallStyle);
 		if (style == nil)
-			probe.log("    文字スタイルの手が引けない（名前から GetNamedObject が nil）");
+			probe.log("    文字スタイルの手が引けない（作った手も名前からの引きも nil）");
 		else
 		{
 			const bool wrote = StdSetReal(style, ovTextStyleSize, kStdBigPt / 72.0);
