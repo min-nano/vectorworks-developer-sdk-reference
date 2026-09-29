@@ -2,38 +2,41 @@
 //	probes/runtime/chain-dim-font-size/probe.cpp
 //
 //	[issue #155] **連続寸法（`CreateChainDimension`）の中の直線寸法の文字の大きさ
-//	（`ovDimFontSize`）は、いつ・何から解き直されるのか。**
+//	（`ovDimFontSize`）は、何が決めているのか。** 3 回目。
 //
-//	1 回目の実測（PR #156 / ビルド 7a9f576e446a）で分かったこと:
+//	ここまでの実測（1 回目 7a9f576e446a / 2 回目 889ded857aab）:
 //
-//	  * 繋ぐと中の直線寸法は**作り直される**（手が両方変わる）。繋ぐ前に書いた
-//	    `ovDimFontSize`（105.833）は消え、**1:1 の値（2.1167）に戻った**。
-//	    繋ぐ前と繋いだ後で変わった欄は `ov17`（＝`ovDimFontSize`）と、それから
-//	    計算される `ov40` の 2 つだけ。
-//	  * 繋いだ後に中へ書ける（読み戻せる）が、**連続寸法へ `ResetObject` を呼ぶと
-//	    中が作り直されて消える**。
-//	  * **注釈へ移す・`UpdateViewport` では書いた値は消えないが、絵（描かれている文字
-//	    図形）が 2.1167mm のまま**だった——値と絵が食い違う。
-//	  * **ビューポートの縮尺を変えると中が作り直され、`ovDimFontSize` は
-//	    「容れ物（ビューポート）の縮尺」で解き直された**（1/100 で 211.667、
-//	    1/50 へ戻して 105.833）。そのとき絵もその大きさになった。**アクティブレイヤは
-//	    ずっと 1:1 のシートレイヤだったので、効いているのは容れ物の縮尺である。**
+//	  * 繋ぐと中の直線寸法は**作り直され**（手が変わる）、繋ぐ前に書いた値は消えて
+//	    1:1 の値（2.1167）になった。変わる欄は `ov17`（＝`ovDimFontSize`）と、
+//	    そこから計算される `ov40` の 2 つだけ。
+//	  * 繋いだ後に中へ書ける（読み戻せる）が、**絵は変わらない**。注釈へ移しても
+//	    `UpdateViewport` でも絵は 2.1167 のままで、**`ResetObject` を呼ぶと中が
+//	    作り直されて書いた値も消えた**（注釈（1/50 のビューポート）の中で呼んでも
+//	    2.1167 のまま——**容れ物の縮尺では解き直されない**）。
+//	  * **対照（2 回目）: 単独の直線寸法は書けば効く。** `ovDimFontSize` を書いて
+//	    `ResetObject` を呼ぶと、絵（描かれている文字図形）もその大きさになった。
+//	    つまり `ResetObject` は絵を描き直す引き金ではあり、**連続寸法だけが中の値を
+//	    捨てている**。
+//	  * **決め手の手掛かり（1 回目）: 中の 63 が 105.833 のときに、連続寸法そのもの
+//	    （型 86）の `ovDimFontSize` を読むと 2.11667 だった。** 書くと `true` が返り、
+//	    読み戻しは 105.833 になった。**つまり連続寸法は自分の値を持っていて、中の
+//	    直線寸法はそこから作り直される写しではないか。**
 //
-//	**残っているのは「正しい手順」の詰め**（issue の問い 3）。1 回目は、注釈へ移した
-//	直後に `ResetObject` を呼ぶ道を測っていない（代わりに縮尺を往復させてしまった）。
-//	そこで 2 回目はそこだけを測る。
+//	3 回目はその 1 点を決める。
 //
-//	  1. **1:1 で作って繋ぎ、何も書かずに注釈へ移し、連続寸法へ `ResetObject`。**
-//	     中の `ovDimFontSize` はビューポートの縮尺で解き直されるか。絵もそうなるか。
-//	  2. 繋いだ後に書いてから注釈へ移し、`ResetObject`（書いた値が消えることの裏取り）。
-//	  3. **2D 表現のグループ（型 11）の中の写し**が作り直しで入れ替わるか
-//	     （1 回目は型 11 の中の文字が古い大きさのまま残っていた）。
-//	  4. **対照: 単独の直線寸法**（連続寸法ではないもの）を同じ注釈へ入れて
-//	     `ResetObject`。こちらは作り直されないので焼き付いたまま——「連続寸法だけが
-//	     違う」を同じ 1 回の実行で言えるようにする。
+//	  1. 【本命】1:1 で作って繋ぎ、**連続寸法そのものへ** `ovDimFontSize` を書いて
+//	     `ResetObject`。中の直線寸法と絵はその大きさになるか。注釈へ移して
+//	     `UpdateViewport`・もう一度 `ResetObject` でも残るか。
+//	  2. **中へ書くのと連続寸法へ書くのはどちらが勝つか**（中へ別の値を書いてから
+//	     連続寸法へ書いて `ResetObject`）。
+//	  3. **作り直しは「そのときのアクティブレイヤの縮尺」で解き直しているのか。**
+//	     1/50 のデザインレイヤをアクティブにしてから、注釈の中の連続寸法へ
+//	     `ResetObject` を呼ぶ。1:1 生まれで何も書いていないものが 105.833 になるなら
+//	     アクティブレイヤが効いている（＝アクティブ次第で崩れる）。2.1167 のままなら
+//	     連続寸法が持っている値が本当の値である。
 //
-//	**新規の空図面で走らせる。** 試験用のシートレイヤ・ビューポートを足すので、
-//	走らせた後は保存しないこと。
+//	**新規の空図面で走らせる。** 試験用のシートレイヤ・デザインレイヤ・ビューポートを
+//	足すので、走らせた後は保存しないこと。
 //
 
 #include "Probe.h"
@@ -339,10 +342,10 @@ namespace
 	}
 } // namespace
 
-VW_PROBE("chain-dim-font-size", "連続寸法と寸法の文字の大きさ（2 回目）",
-		 "注釈へ移して ResetObject する道を測る・単独の寸法と見比べる")
+VW_PROBE("chain-dim-font-size", "連続寸法と寸法の文字の大きさ（3 回目）",
+		 "連続寸法そのものへ書く道と、アクティブレイヤで解き直すのかを決める")
 {
-	probe.log("【新規の空図面で走らせる】試験用のシートレイヤとビューポートを足すので、");
+	probe.log("【新規の空図面で走らせる】試験用のレイヤとビューポートを足すので、");
 	probe.log("走らせた後は保存しないこと。");
 	probe.log("目標: 紙で " + ProbeFormatNumber(kProbePaperPt) + "pt ＝ 1/" +
 			  ProbeFormatNumber(kProbeVpScale) + " のビューポートでは " +
@@ -354,7 +357,7 @@ VW_PROBE("chain-dim-font-size", "連続寸法と寸法の文字の大きさ（2 
 	probe.log("");
 	probe.log("== 0. 試験用のシートレイヤ（1:1 がアクティブになる）と 1/" +
 			  ProbeFormatNumber(kProbeVpScale) + " のビューポート");
-	MCObjectHandle sheetLayer = gSDK->CreateLayer("VW調査155 試験シート2", kLayerSheet);
+	MCObjectHandle sheetLayer = gSDK->CreateLayer("VW調査155 試験シート3", kLayerSheet);
 	if (sheetLayer == nil)
 	{
 		probe.fail("CreateLayer(kLayerSheet) が nil を返した");
@@ -378,121 +381,163 @@ VW_PROBE("chain-dim-font-size", "連続寸法と寸法の文字の大きさ（2 
 
 	// =====================================================================
 	probe.log("");
-	probe.log("== 1. 【本命】1:1 で作って繋ぎ、**何も書かずに**注釈へ移して ResetObject");
+	probe.log("== 1. 【本命】連続寸法そのものへ ovDimFontSize を書いて ResetObject");
 	MCObjectHandle dimA = nil;
 	MCObjectHandle dimB = nil;
 	if (!ProbeCreateTwoDims(probe, 0.0, dimA, dimB))
 		return;
-	probe.log("  1:1 生まれ（何も書いていない）:");
-	ProbeLogDim(probe, "  ", "1 本目", dimA);
-	MCObjectHandle chain = gSDK->CreateChainDimension(dimA, dimB);
-	if (chain == nil)
+	MCObjectHandle chainA = gSDK->CreateChainDimension(dimA, dimB);
+	if (chainA == nil)
 	{
 		probe.fail("CreateChainDimension が nil を返した");
 		return;
 	}
-	ProbeLogChain(probe, "繋いだ直後（まだシートレイヤの上）", chain);
+	probe.log("  繋いだ直後の**連続寸法そのもの**の ovDimFontSize=" + ProbeFontSizeText(chainA));
+	ProbeLogChain(probe, "繋いだ直後（まだシートレイヤの上）", chainA);
+
+	probe.log("  連続寸法そのものへ " + ProbeFormatNumber(kProbeTargetFontSize) + "mm を書けた=" +
+			  std::string(ProbeSetFontSize(chainA, kProbeTargetFontSize) ? "true" : "false") +
+			  " 読み戻し=" + ProbeFontSizeText(chainA));
+	ProbeLogChain(probe, "連続寸法へ書いた直後（ResetObject はまだ）", chainA);
+
+	probe.log("  連続寸法へ ResetObject を呼ぶ ← ここが今回の主役");
+	gSDK->ResetObject(chainA);
+	probe.log("  ResetObject 後の連続寸法そのものの ovDimFontSize=" + ProbeFontSizeText(chainA));
+	ProbeLogChain(probe, "連続寸法へ書いて ResetObject した後", chainA);
+	{
+		const std::vector<MCObjectHandle> dims = ProbeMembersOfType(chainA, dimHeaderNode);
+		if (!dims.empty())
+			probe.log("  【答え 1】連続寸法へ書いて ResetObject した後の中の 63[0] は " +
+					  ProbeVerdict(dims[0]) + " ／ " + ProbeDrawnTextText(dims[0]) +
+					  " ← 両方が 105.833 なら**連続寸法そのものへ書くのが正しい手順**");
+	}
 
 	probe.log(
 		"  AddViewportAnnotationObject(連続寸法)=" +
-		std::string(gSDK->AddViewportAnnotationObject(viewport, chain) != 0 ? "true" : "false"));
-	ProbeLogChain(probe, "注釈へ移した直後（ResetObject はまだ呼んでいない）", chain);
-
-	probe.log("  連続寸法へ ResetObject を呼ぶ ← ここが今回の主役");
-	gSDK->ResetObject(chain);
-	ProbeLogChain(probe, "注釈の中で ResetObject した後", chain);
-	{
-		const std::vector<MCObjectHandle> dims = ProbeMembersOfType(chain, dimHeaderNode);
-		if (!dims.empty())
-		{
-			probe.log("  【答え 1】注釈で ResetObject した後の直下の 63[0] は " +
-					  ProbeVerdict(dims[0]));
-			probe.log("  　　　　　 絵は: " + ProbeDrawnTextText(dims[0]));
-			probe.log("  ↑ 両方が「ビューポートの縮尺で解いた値」なら、**1:1 で作って繋いでも、"
-					  "注釈へ移して ResetObject するだけで紙の上で正しい大きさになる**");
-		}
-	}
+		std::string(gSDK->AddViewportAnnotationObject(viewport, chainA) != 0 ? "true" : "false"));
 	gSDK->UpdateViewport(viewport);
-	probe.log("  UpdateViewport も呼んだ（絵の作り直しが更新に依るのかを見る）");
-	ProbeLogChain(probe, "ResetObject → UpdateViewport の後", chain);
+	probe.log("  注釈へ移して UpdateViewport した");
+	ProbeLogChain(probe, "注釈へ移して更新した後", chainA);
+	gSDK->ResetObject(chainA);
+	probe.log("  注釈の中でもう一度 ResetObject した");
+	ProbeLogChain(probe, "注釈の中で ResetObject した後", chainA);
 
 	// =====================================================================
 	probe.log("");
-	probe.log("== 2. 繋いだ後に 105.833 を書いてから注釈へ移し、ResetObject（裏取り）");
-	MCObjectHandle dimC = nil;
-	MCObjectHandle dimD = nil;
-	if (ProbeCreateTwoDims(probe, 4000.0, dimC, dimD))
+	probe.log("== 2. 中へ書くのと連続寸法へ書くのはどちらが勝つか");
+	MCObjectHandle chainB = nil;
 	{
-		MCObjectHandle chain2 = gSDK->CreateChainDimension(dimC, dimD);
-		if (chain2 == nil)
+		MCObjectHandle dimC = nil;
+		MCObjectHandle dimD = nil;
+		if (ProbeCreateTwoDims(probe, 4000.0, dimC, dimD))
 		{
-			probe.log("  CreateChainDimension が nil");
-		}
-		else
-		{
-			const std::vector<MCObjectHandle> dims = ProbeMembersOfType(chain2, dimHeaderNode);
-			for (size_t index = 0; index < dims.size(); ++index)
-				probe.log("  直下の 63[" + ProbeFormatInt(static_cast<long long>(index)) + "] へ " +
-						  ProbeFormatNumber(kProbeTargetFontSize) + "mm を書けた=" +
-						  (ProbeSetFontSize(dims[index], kProbeTargetFontSize) ? "true" : "false") +
-						  " 読み戻し=" + ProbeFontSizeText(dims[index]));
-			ProbeLogChain(probe, "書いた直後（まだシートレイヤの上）", chain2);
-			probe.log("  AddViewportAnnotationObject=" +
-					  std::string(gSDK->AddViewportAnnotationObject(viewport, chain2) != 0
-									  ? "true"
-									  : "false"));
-			ProbeLogChain(probe, "注釈へ移した直後", chain2);
-			gSDK->ResetObject(chain2);
-			ProbeLogChain(probe, "注釈の中で ResetObject した後", chain2);
-			const std::vector<MCObjectHandle> after = ProbeMembersOfType(chain2, dimHeaderNode);
-			if (!after.empty())
-				probe.log("  【答え 2】書いてから注釈で ResetObject した後の 63[0] は " +
-						  ProbeVerdict(after[0]) + " ／ " + ProbeDrawnTextText(after[0]) +
-						  " ← 書いた値が残るのではなく容れ物の縮尺で解き直されるなら、"
-						  "**中へ書くのは無駄**（1 回目の結果と合わせて確定する）");
+			chainB = gSDK->CreateChainDimension(dimC, dimD);
+			if (chainB == nil)
+			{
+				probe.log("  CreateChainDimension が nil");
+			}
+			else
+			{
+				const std::vector<MCObjectHandle> dims = ProbeMembersOfType(chainB, dimHeaderNode);
+				for (size_t index = 0; index < dims.size(); ++index)
+					probe.log("  中の 63[" + ProbeFormatInt(static_cast<long long>(index)) +
+							  "] へ 999mm を書けた=" +
+							  (ProbeSetFontSize(dims[index], 999.0) ? "true" : "false") +
+							  " 読み戻し=" + ProbeFontSizeText(dims[index]));
+				probe.log(
+					"  連続寸法そのものへ " + ProbeFormatNumber(kProbeTargetFontSize) +
+					"mm を書けた=" +
+					std::string(ProbeSetFontSize(chainB, kProbeTargetFontSize) ? "true" : "false") +
+					" 読み戻し=" + ProbeFontSizeText(chainB));
+				gSDK->ResetObject(chainB);
+				ProbeLogChain(probe, "999 と 105.833 を書いて ResetObject した後", chainB);
+				const std::vector<MCObjectHandle> after = ProbeMembersOfType(chainB, dimHeaderNode);
+				if (!after.empty())
+					probe.log("  【答え 2】中の 63[0] は " + ProbeFontSizeText(after[0]) +
+							  " ← 105.833 なら連続寸法の値が勝つ（中へ書くのは無駄）、"
+							  "999 なら中の値が残る");
+				probe.log("  AddViewportAnnotationObject=" +
+						  std::string(gSDK->AddViewportAnnotationObject(viewport, chainB) != 0
+										  ? "true"
+										  : "false"));
+				gSDK->UpdateViewport(viewport);
+			}
 		}
 	}
 
 	// =====================================================================
 	probe.log("");
-	probe.log("== 3. 対照: 単独の直線寸法（連続寸法ではない）を同じ注釈へ入れて ResetObject");
+	probe.log("== 3. 何も書いていない連続寸法を、1:1 のまま注釈へ入れておく（対照の下ごしらえ）");
+	MCObjectHandle chainC = nil;
 	{
-		const WorldCoord offset = static_cast<WorldCoord>(500.0);
-		MCObjectHandle plain = gSDK->CreateLinearDimension(
-			WorldPt(0.0, 8000.0), WorldPt(1000.0, 8000.0), offset, 0, Vector2(0, 0), 0);
-		MCObjectHandle written = gSDK->CreateLinearDimension(
-			WorldPt(0.0, 9000.0), WorldPt(1000.0, 9000.0), offset, 0, Vector2(0, 0), 0);
-		if (plain == nil || written == nil)
+		MCObjectHandle dimE = nil;
+		MCObjectHandle dimF = nil;
+		if (ProbeCreateTwoDims(probe, 8000.0, dimE, dimF))
 		{
-			probe.log("  CreateLinearDimension が nil。この対照は測れない");
+			chainC = gSDK->CreateChainDimension(dimE, dimF);
+			if (chainC == nil)
+			{
+				probe.log("  CreateChainDimension が nil");
+			}
+			else
+			{
+				probe.log("  何も書かずに注釈へ移す: AddViewportAnnotationObject=" +
+						  std::string(gSDK->AddViewportAnnotationObject(viewport, chainC) != 0
+										  ? "true"
+										  : "false"));
+				gSDK->UpdateViewport(viewport);
+				probe.log("  連続寸法そのものの ovDimFontSize=" + ProbeFontSizeText(chainC));
+				ProbeLogChain(probe, "1:1 生まれ・何も書かず・注釈の中", chainC);
+			}
+		}
+	}
+
+	// =====================================================================
+	probe.log("");
+	probe.log("== 4. 【切り分け】1/" + ProbeFormatNumber(kProbeVpScale) +
+			  " のデザインレイヤをアクティブにしてから ResetObject");
+	{
+		MCObjectHandle designLayer = gSDK->CreateLayer("VW調査155 試験デザイン3", kLayerDesign);
+		if (designLayer == nil)
+		{
+			probe.log("  CreateLayer(kLayerDesign) が nil。この切り分けは測れない");
 		}
 		else
 		{
-			ProbeSetBoolean(plain, ovDimShowValue, true);
-			ProbeSetBoolean(written, ovDimShowValue, true);
-			probe.log("  ①何も書かない 1 本 / ②105.833 を書く 1 本（どちらも 1:1 生まれ）");
-			probe.log("  ②へ書けた=" + std::string(ProbeSetFontSize(written, kProbeTargetFontSize)
-													   ? "true"
-													   : "false"));
-			gSDK->AddViewportAnnotationObject(viewport, plain);
-			gSDK->AddViewportAnnotationObject(viewport, written);
-			ProbeLogDim(probe, "  ", "①注釈へ移した直後", plain);
-			ProbeLogDim(probe, "  ", "②注釈へ移した直後", written);
-			gSDK->ResetObject(plain);
-			gSDK->ResetObject(written);
-			ProbeLogDim(probe, "  ", "①ResetObject した後", plain);
-			ProbeLogDim(probe, "  ", "②ResetObject した後", written);
+			gSDK->SetLayerScaleN(designLayer, kProbeVpScale);
+			probe.log("  アクティブ: " + ProbeActiveLayerText() +
+					  " ← これで「作り直しがアクティブレイヤの縮尺で解き直すのか」が分かる");
+			if (chainC != nil)
+			{
+				gSDK->ResetObject(chainC);
+				ProbeLogChain(probe,
+							  "1:1 生まれ・何も書いていないものを 1/50 アクティブで ResetObject",
+							  chainC);
+				const std::vector<MCObjectHandle> dims = ProbeMembersOfType(chainC, dimHeaderNode);
+				if (!dims.empty())
+					probe.log("  【答え 4】" + ProbeVerdict(dims[0]) + " ／ " +
+							  ProbeDrawnTextText(dims[0]) +
+							  " ← 105.833 になったならアクティブレイヤの縮尺で毎回解き直している"
+							  "（＝アクティブ次第で崩れる）。2.1167 のままなら連続寸法が持って"
+							  "いる値が本当の値である");
+				probe.log("  連続寸法そのものの ovDimFontSize=" + ProbeFontSizeText(chainC));
+			}
+			if (chainA != nil)
+			{
+				gSDK->ResetObject(chainA);
+				ProbeLogChain(probe,
+							  "連続寸法へ 105.833 を書いたものを 1/50 アクティブで ResetObject",
+							  chainA);
+			}
 			gSDK->UpdateViewport(viewport);
-			ProbeLogDim(probe, "  ", "①UpdateViewport の後", plain);
-			ProbeLogDim(probe, "  ", "②UpdateViewport の後", written);
-			probe.log("  【答え 3】単独の寸法は " + ProbeVerdict(plain) + "（①）／" +
-					  ProbeVerdict(written) +
-					  "（②）——①が 1:1 の値のままなら「単独の寸法は作るときの縮尺に焼き付いた"
-					  "まま容れ物に従わない」、②が書いた値のままなら「単独なら書けば効く」で、"
-					  "**連続寸法だけが違う**ことになる");
+			probe.log("  UpdateViewport も呼んだ");
+			if (chainA != nil)
+				ProbeLogChain(probe, "最後（連続寸法へ書いたもの）", chainA);
+			if (chainC != nil)
+				ProbeLogChain(probe, "最後（何も書いていないもの）", chainC);
 		}
 	}
 
 	probe.log("");
-	probe.log("おわり。**この図面は保存しないこと**（試験用のシートレイヤとビューポートが残る）。");
+	probe.log("おわり。**この図面は保存しないこと**（試験用のレイヤ 2 枚とビューポートが残る）。");
 }
