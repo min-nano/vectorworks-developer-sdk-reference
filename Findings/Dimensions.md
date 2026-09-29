@@ -697,7 +697,9 @@ gSDK->AddViewportAnnotationObject(viewport, chain);
   逆に言えば、**連続寸法にしない**（単独の直線寸法を並べる）なら書く道が使える。
 - 【推定】**寸法規格の紙の pt を変える道**もありうる（作り直しは「規格の紙の pt ×
   アクティブレイヤの縮尺」で解かれるので、規格側を変えれば中も変わるはず）。
-  **実機では確かめていない。**
+  **実機では確かめていない**——#155 の範囲外として
+  [#163](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/163)
+  に切り出した。
 
 #### 中身を読むときの注意（測り方）
 
