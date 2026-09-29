@@ -167,7 +167,23 @@ check_slug() {
 
 	# **slug はディレクトリ名と一致させる。** プラグイン側は VW_PROBE の第 1 引数を
 	# 鍵に出所表と突き合わせるので、ここがずれると「出所不明」で表示される。
-	if ! grep -qE "VW_PROBE\(\"$slug\"" "$dir"/*.cpp 2>/dev/null; then
+	#
+	# **改行を挟んでいても見つける。** clang-format は表示名と概要が長いと
+	# `VW_PROBE(` だけを 1 行目に残して引数を次の行へ折る——整形の唯一の真実は
+	# .clang-format なので（lint.yml）、折られた形も正しい形である。カタログを書く側
+	# （plugin/cmake/ProbeCatalog.cmake の vw_probe_meta）は元から改行を許して読んで
+	# いるので、**ここだけが行単位で見ていて食い違っていた**（プローブの表示名を
+	# 長く書いただけで CI が赤くなった）。tr で 1 行へ畳んでから見る。
+	local file found=0
+	for file in "$dir"/*.cpp; do
+		[ -f "$file" ] || continue
+		if tr '\n\t' '  ' <"$file" |
+			grep -qE "VW_PROBE[[:space:]]*\([[:space:]]*\"$slug\"[[:space:]]*,"; then
+			found=1
+			break
+		fi
+	done
+	if [ "$found" -eq 0 ]; then
 		echo "::error::プローブ '$slug'（${from}）の VW_PROBE(\"$slug\", …) が見つかりません。" \
 			"ディレクトリ名と VW_PROBE の第 1 引数を一致させてください。" >&2
 		exit 1
