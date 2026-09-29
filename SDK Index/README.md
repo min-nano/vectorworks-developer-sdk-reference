@@ -16,6 +16,15 @@ Vectorworks SDK（`SDKLib/`）に含まれる **C++ の宣言の一覧**と、`v
   ci-debug の `sdk-ls` / `sdk-grep` で原本を引く**（CLAUDE.md「CI デバッグ」）。
 - **宣言があることは「動く」ことを意味しない。** ここは【ヘッダ根拠】の水準の情報しか
   持たない。実挙動は [`Findings/`](../Findings/README.md) を先に読む。
+- **マクロが組み立てる宣言は載らない。** 旧 API の一部は `APIBase.Legacy.h` の中で
+  `APP_API_FUNCTION(...)` / `APP_API_PROCEDURE(...)` の**引数として**書かれており、
+  索引はそれを宣言として読み取れない（実例: `GS_CreateSectionLineInstance` /
+  `GS_IsSectionLineLinkedToViewport` は索引に 1 行も無いが、SDK には**ある**）。
+  **「索引に無い」は「SDK に無い」ではない。** 目当ての機能が見つからなかったときは、
+  `ci-debug` の `sdk-grep` で原本を引き直す。
+  ——ただし**この 12 本（`APP_API_*` の「未公開の API」）は宣言があっても呼べない**
+  （`CB_` シンボルが `libVWSDK.a` に無く、リンクで落ちる。理由と一覧は
+  [調査の作法](../Findings/Investigation%20Techniques.md)）。
 
 ## 置き場所
 
