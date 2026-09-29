@@ -612,8 +612,9 @@ for (short index = 9; index >= -8; --index)
   書いていない）。pt で指定したいなら **`pt / 72`** を書く。
 - **作った直後の寸法は〈クラスの文字スタイル〉**（`GetTextStyleByClass` = `true`、
   `ovDimTextStyle` = **`-2`**）。**`-2` は「クラス由来」を表す番兵で、ref number ではない。**
-- **その状態でも `GetTextStyleRef` は番号を返す。ただし返るのはクラスに置いた文字
-  スタイルではなく、当たっている寸法規格の文字スタイルだった。**
+- **その状態でも `GetTextStyleRef` は番号を返す。ただしその番号はクラスにも、いま
+  当たっている寸法規格にも追随しない**（一致したのは**作った時点**の規格の文字スタイル）。
+  **文字スタイルの出どころを知る用途に使ってはいけない。**
 - **注釈で値を出したいなら `ISDK::SetTextStyleRef(dim, ref)` を呼ぶ。これだけが効く。**
   〈クラスの文字スタイル〉のままでは `ovDimFontSize` を正しく書いても**値が出ない**し、
   **`ovDimTextStyle`(1248) へ番号を書く道も絵には効かない**——しかも
@@ -692,7 +693,7 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 
 > **pt で指定したいなら `ovTextStyleSize` へ `pt / 72` を書く。** 6pt なら `0.08333`。
 
-### 作った直後は〈クラスの文字スタイル〉——解決先は「寸法規格の文字スタイル」だった
+### 作った直後は〈クラスの文字スタイル〉——`GetTextStyleRef` はクラスを見ていない
 
 作った直後の寸法（型 63）は:
 
@@ -702,8 +703,8 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 | `ovDimTextStyle`(1248) | **`-2`**（＝「クラス由来」の番兵。ref number ではない） |
 | `GetTextStyleRef(dim)` | **`30` ＝ `寸法(6pt)`** |
 
-**`30` は、当たっている寸法規格（`min-nano`）の `dimStdTextStyle` そのものである。**
-クラス側ではない——次の 3 つを同じ実行の中で測って確かめた:
+**`30` は、寸法を作った時点で当たっていた寸法規格（`min-nano`）の `dimStdTextStyle`
+そのものである。** ただし**「いまの規格を引いている」のではない**——次の 4 つを測った:
 
 1. 寸法を作った時点で、アクティブクラス（`一般`）は文字スタイルを**持っていなかった**
    （`GetClUseTextStyle` = `false` / `GetClTextStyleRef` = `0`）。それでも
@@ -712,10 +713,15 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
    `SetClTextStyleRef(113)`。読み戻しで `use=true ref=113` を確認）、**同じ寸法は
    `30` のまま**。`ResetObject` を挟んでも変わらない。
 3. **その後に新しく作った寸法**も `30` のままだった。
+4. **`ovDimStandardName` を `JIS`（`dimStdTextStyle` = `0` ＝文字スタイルを持たない）へ
+   替えても、`GetTextStyleRef` は `30` のまま**、`ovDimTextStyle` も `-2` のままだった
+   （読み戻しで規格が `JIS` になったことは確認済み）。
 
-> **つまり「〈クラスの文字スタイル〉のまま」の寸法から SDK が返す文字スタイルは、
-> クラスに置いたものではなく寸法規格のものである。** 文字スタイルの出どころを
-> 調べるときに、`GetClTextStyleRef` を見に行っても答えは出ない。
+> **つまり by-class の寸法について `GetTextStyleRef` が返す番号は、クラスにも、
+> いま当たっている規格にも追随しない。** 一致したのは**作った時点の規格の文字
+> スタイル**だけである。**文字スタイルの出どころを知るためにこの口を読んではいけない**
+> ——クラスを見に行っても（`GetClTextStyleRef`）、規格を見に行っても
+> （`dimStdTextStyle`）、この値とは合わないことがある。
 
 ### 文字スタイルを当てる 2 つの口は、`ovDimFontSize` の扱いが違う
 
