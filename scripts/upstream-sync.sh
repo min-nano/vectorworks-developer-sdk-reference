@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# upstream-sync.sh — フォーク元（公式リファレンス）の更新を取り込む PR を作る。
+# upstream-sync.sh — フォーク元（公式リファレンス）の更新を取り込む。
+#                    既定は GitHub の UI の "Sync fork" と同じ直接同期で、
+#                    それができないとき（競合など）だけ取り込み PR を作る。
 #
 # なぜこれがあるか
 # ----------------
@@ -9,14 +11,24 @@
 # （CLAUDE.md「このリポジトリについて」）。約束を守るには上流の更新をこちらへ流し
 # 込み続ける必要があるが、上流の更新は年に数回（Vectorworks の版が上がるとき）で、
 # 気付いた頃には何十コミットも離れている、という壊れ方をする。だから週次で見張り、
-# **差分があったら PR にして人の目に掛ける**。
+# **差分があったら取り込む**。
 #
 # 何をするか
 # ----------
 #   1. 上流のデフォルトブランチを取ってきて、こちらの main に入っていない
 #      コミットがあるか調べる。無ければ何もしない（PR も作らない）。
-#   2. あれば main から作業ブランチ（既定 `upstream-sync`）を作り、上流を merge する。
-#   3. そのブランチを push し、PR を作る（既に開いていれば中身を更新する）。
+#   2. SYNC_MODE=direct（既定）なら、GitHub の "Sync fork" ボタンと同じ API
+#      （POST /repos/{owner}/{repo}/merge-upstream）で main を直接更新する。
+#      fast-forward できればそうし、分岐していれば merge コミット
+#      （"Merge branch 'Vectorworks:main' into main"）を作る——UI と同じ結果になる。
+#      成功したら、前回までに立てた取り込み PR（bot のものだけ）は用済みなので閉じる。
+#   3. 直接同期が断られたとき（競合＝409、main の保護規則など）と SYNC_MODE=pr の
+#      ときは、従来どおり PR にする: main から作業ブランチ（既定 `upstream-sync`）を
+#      作って上流を merge し、push して PR を作る（既に開いていれば中身を更新する）。
+#
+# 直接同期の注意: GITHUB_TOKEN による更新なので、**main への push を契機にする
+# 他のワークフロー（lint など）は走らない**（GitHub の仕様）。上流の更新は
+# ドキュメント（Info/ Versions/ README.md）だけなので実害は無い。
 #
 # 作業ブランチは**毎回作り直して force push する**。PR を 1 本に保ち、上流が更に
 # 進んだときも同じ PR が最新の差分を示すようにするため。ただし**ブランチに bot 以外の
@@ -28,8 +40,9 @@
 #
 # 使い方
 # ------
-#   scripts/upstream-sync.sh              取り込み PR を作る／更新する
-#   DRY_RUN=yes scripts/upstream-sync.sh  push も PR 作成もせず、何をするかだけ出す
+#   scripts/upstream-sync.sh                  main を直接同期する（だめなら PR）
+#   SYNC_MODE=pr scripts/upstream-sync.sh     直接同期せず、取り込み PR を作る／更新する
+#   DRY_RUN=yes scripts/upstream-sync.sh      同期も push も PR 作成もせず、何をするかだけ出す
 #
 # 環境変数:
 #   GH_TOKEN         gh 用のトークン（contents: write / pull-requests: write）
@@ -37,8 +50,10 @@
 #   UPSTREAM_BRANCH  上流のブランチ（既定: 上流の HEAD が指すブランチを自動判定）
 #   BASE_BRANCH      取り込み先（既定 main）
 #   SYNC_BRANCH      作業ブランチ名（既定 upstream-sync）
+#   SYNC_MODE        direct（既定。Sync fork と同じ直接同期、だめなら PR）/ pr（常に PR）
 #   DRY_RUN          yes なら push / PR 作成をしない（既定 no）
 #   GITHUB_REPOSITORY  自分の owner/repo（Actions が自動で入れる）
+#   UPSTREAM_URL     上流の取得元（既定 https://github.com/$UPSTREAM_REPO.git。試験用）
 #
 set -euo pipefail
 
@@ -46,6 +61,7 @@ UPSTREAM_REPO="${UPSTREAM_REPO:-Vectorworks/developer-sdk}"
 UPSTREAM_BRANCH="${UPSTREAM_BRANCH:-}"
 BASE_BRANCH="${BASE_BRANCH:-main}"
 SYNC_BRANCH="${SYNC_BRANCH:-upstream-sync}"
+SYNC_MODE="${SYNC_MODE:-direct}"
 DRY_RUN="${DRY_RUN:-no}"
 REPO="${GITHUB_REPOSITORY:-min-nano/vectorworks-developer-sdk-reference}"
 
@@ -53,7 +69,7 @@ REPO="${GITHUB_REPOSITORY:-min-nano/vectorworks-developer-sdk-reference}"
 BOT_NAME="github-actions[bot]"
 BOT_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
 
-UPSTREAM_URL="https://github.com/${UPSTREAM_REPO}.git"
+UPSTREAM_URL="${UPSTREAM_URL:-https://github.com/${UPSTREAM_REPO}.git}"
 
 die() {
 	printf '::error::upstream-sync: %s\n' "$*" >&2
@@ -84,10 +100,22 @@ push_with_retry() {
 	done
 }
 
+case "$SYNC_MODE" in
+direct | pr) ;;
+*) die "SYNC_MODE は direct か pr です（与えられた値: $SYNC_MODE）" ;;
+esac
+
+# 一時ファイルはここにまとめ、終了時に消す。
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+
 command -v git >/dev/null 2>&1 || die "git がありません"
 if [ "$DRY_RUN" != "yes" ]; then
 	command -v gh >/dev/null 2>&1 || die "gh がありません"
 	[ -n "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ] || die "GH_TOKEN が設定されていません"
+	if [ "$SYNC_MODE" = "direct" ]; then
+		command -v jq >/dev/null 2>&1 || die "jq がありません"
+	fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -127,25 +155,93 @@ merge_base="$(git merge-base "$base_head" "$upstream_head")"
 new_count="$(git rev-list --count "${merge_base}..${upstream_head}")"
 echo "上流に $new_count 件の新しいコミットがあります（共通祖先 ${merge_base:0:12}）。"
 
-# ---------------------------------------------------------------------------
-# 既にある作業ブランチを尊重する（人が競合を解消した内容を force push で消さない）
-# ---------------------------------------------------------------------------
-
+# 作業ブランチの現在地（無ければ空）。直接同期の後片付けと PR 経路の両方で使う。
 sync_head=""
+direct_failed_reason=""
 if [ -n "$(git ls-remote --heads origin "$SYNC_BRANCH")" ]; then
 	git fetch --no-tags origin "+refs/heads/${SYNC_BRANCH}:refs/remotes/origin/${SYNC_BRANCH}" ||
 		die "origin/$SYNC_BRANCH を取得できません"
 	sync_head="$(git rev-parse "refs/remotes/origin/${SYNC_BRANCH}")"
+fi
 
-	# ブランチ独自のコミット（main にも上流にも無いもの＝このスクリプトが作った merge か、
-	# 人が足した解消コミット）に bot 以外の作者がいるか。上流由来のコミットを数えて
-	# しまうと、上流の作者名で必ず引っかかってしまうので --not で除く。
+# 作業ブランチに bot 以外のコミットがあるか（あれば 0 を返す）。
+# ブランチ独自のコミット（main にも上流にも無いもの＝このスクリプトが作った merge か、
+# 人が足した解消コミット）だけを見る。上流由来のコミットを数えてしまうと、上流の
+# 作者名で必ず引っかかってしまうので --not で除く。
+sync_branch_has_foreign_commits() {
+	[ -n "$sync_head" ] || return 1
+	local foreign
 	foreign="$(git log --format='%ae' "$sync_head" --not "$base_head" "$upstream_head" |
 		grep -v -F -x "$BOT_EMAIL" || true)"
-	if [ -n "$foreign" ]; then
-		summary "$SYNC_BRANCH に $BOT_NAME 以外のコミットがあるため、このブランチには触りません（競合の解消などを消さないため）。取り込みを進めるにはそちらの PR を片付けてください。"
+	[ -n "$foreign" ]
+}
+
+# ---------------------------------------------------------------------------
+# 直接同期（GitHub の UI の "Sync fork" と同じ）
+# ---------------------------------------------------------------------------
+
+if [ "$SYNC_MODE" = "direct" ]; then
+	if [ "$DRY_RUN" = "yes" ]; then
+		# API は試し打ちできないので、結果を手元で予想して見せるだけにする。
+		if git merge-base --is-ancestor "$base_head" "$upstream_head"; then
+			predicted="fast-forward"
+		elif git merge-tree --write-tree "$base_head" "$upstream_head" >/dev/null 2>&1; then
+			predicted="merge（merge コミットを作る）"
+		else
+			predicted="競合（API は 409 を返す見込み。そのときは PR 経路へ回る）"
+		fi
+		summary "DRY_RUN=yes のため同期しません。POST repos/${REPO}/merge-upstream (branch=${BASE_BRANCH}) の見込み: ${predicted}"
+		if [ "$predicted" != "${predicted#競合}" ]; then
+			die "上流の取り込みは競合する見込みです"
+		fi
 		exit 0
 	fi
+
+	api_out="$tmp_dir/merge-upstream.json"
+	api_err="$tmp_dir/merge-upstream.err"
+	if gh api --method POST "repos/${REPO}/merge-upstream" -f "branch=${BASE_BRANCH}" \
+		>"$api_out" 2>"$api_err"; then
+		merge_type="$(jq -r '.merge_type // "?"' "$api_out" 2>/dev/null || echo '?')"
+		api_message="$(jq -r '.message // ""' "$api_out" 2>/dev/null || true)"
+		new_base="$(git ls-remote origin "refs/heads/${BASE_BRANCH}" | cut -f1)"
+		summary "上流の $new_count 件を $BASE_BRANCH へ直接取り込みました（merge_type=${merge_type}、$BASE_BRANCH = ${new_base:0:12}）。${api_message}"
+
+		# 用済みになった取り込み PR を片付ける。人が手を入れたブランチには触らない。
+		stale_pr="$(gh pr list --repo "$REPO" --head "$SYNC_BRANCH" --base "$BASE_BRANCH" --state open \
+			--json number --jq '.[0].number // empty' 2>/dev/null || true)"
+		if [ -n "$stale_pr" ]; then
+			if sync_branch_has_foreign_commits; then
+				summary "PR #${stale_pr}（$SYNC_BRANCH）には $BOT_NAME 以外のコミットがあるため、閉じずに残します。中身を確かめて手で片付けてください。"
+			else
+				gh pr close "$stale_pr" --repo "$REPO" --delete-branch \
+					--comment "上流の更新は \`${BASE_BRANCH}\` へ直接取り込みました（\`scripts/upstream-sync.sh\` の直接同期。GitHub の \"Sync fork\" と同じ）。この PR は用済みなので閉じます。" ||
+					echo "::warning::PR #${stale_pr} を閉じられませんでした" >&2
+				summary "用済みになった取り込み PR #${stale_pr} を閉じました。"
+			fi
+		fi
+		exit 0
+	fi
+
+	api_status="$(grep -o 'HTTP [0-9][0-9][0-9]' "$api_err" | tail -n 1 || true)"
+	echo "merge-upstream の応答:" >&2
+	cat "$api_err" "$api_out" >&2 || true
+	case "$api_status" in
+	"HTTP 409") reason="競合したため" ;;
+	*) reason="直接同期が断られたため（${api_status:-応答不明}。main の保護規則やトークンの権限を確かめること）" ;;
+	esac
+	direct_failed_reason="$reason"
+	echo "::warning::upstream-sync: ${reason}、取り込み PR を作る経路に切り替えます。" >&2
+	summary "$BASE_BRANCH への直接同期ができませんでした: ${reason}。取り込み PR を作ります。"
+fi
+
+# ---------------------------------------------------------------------------
+# ここから PR 経路。既にある作業ブランチを尊重する（人が競合を解消した内容を
+# force push で消さない）
+# ---------------------------------------------------------------------------
+
+if sync_branch_has_foreign_commits; then
+	summary "$SYNC_BRANCH に $BOT_NAME 以外のコミットがあるため、このブランチには触りません（競合の解消などを消さないため）。取り込みを進めるにはそちらの PR を片付けてください。"
+	exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -187,12 +283,16 @@ fi
 # PR 本文
 # ---------------------------------------------------------------------------
 
-body="$(mktemp)"
-trap 'rm -f "$body"' EXIT
+body="$tmp_dir/pr-body.md"
 
 {
 	echo "上流 [\`${UPSTREAM_REPO}\`](https://github.com/${UPSTREAM_REPO}) の \`${UPSTREAM_BRANCH}\` が更新されたので取り込みます（\`scripts/upstream-sync.sh\` による自動生成）。"
 	echo
+	if [ -n "$direct_failed_reason" ]; then
+		echo "> [!IMPORTANT]"
+		echo "> 普段は GitHub の \"Sync fork\" と同じ直接同期で \`${BASE_BRANCH}\` を更新しますが、今回は${direct_failed_reason}、PR にしています。"
+		echo
+	fi
 	echo "| | |"
 	echo "| --- | --- |"
 	echo "| 上流 | \`${UPSTREAM_REPO}@${UPSTREAM_BRANCH}\` |"
