@@ -2,29 +2,26 @@
 //	probes/runtime/drawing-label-layout/probe.cpp
 //
 //	[issue #149] 図面ラベル（`Drawing Label2`）を SDK から組み、ビューポートの図面
-//	タイトルを出す手順を実測する。**第 1 回の結果**（PR #150）で分かったこと:
+//	タイトルを出す手順を実測する。**第 2 回まで**（PR #150）で確定したこと:
 //
-//	  * ラベルレイアウトは**ラベル自身のプロファイルグループ**にある
-//	    （`GetCustomObjectProfileGroup`。`…InAux` は nil）。中身は
-//	    〈テキスト'タイトル'／線／テキスト'縮尺'／円弧／テキスト'#'〉。
-//	  * **その中のテキストは `IDataTagTextLinkSupport` に対応していない**
-//	    （`IsSupported`=no・式は空）。データタグとは別の仕組みで値が入っている。
-//	  * シートレイヤ直下へ置いただけのラベルでも、パラメータ `Title` に
-//	    ビューポートへ書いた図面タイトルが入っていた。
-//	  * 注釈群は `GetViewportGroup` では nil だった（`AddViewportAnnotationObject`
-//	    を使う。[Findings「レベルオブジェクト」]）。
+//	  * レイアウトはラベル自身のプロファイルグループ。中身は
+//	    〈テキスト'タイトル' / 線 / テキスト'縮尺' / 円弧 / テキスト'#'〉。
+//	  * **そのテキストは `IDataTagTextLinkSupport` に対応していない**（式は空）。
+//	  * **欄を決めているのは文字列ではなくテキストが持つ隠れた状態**——元のテキストを
+//	    **複製**した 1 つだけの群を渡すと図面タイトルが出たが、同じ文字列から
+//	    `CreateTextBlock` で作った版は文字どおり 'タイトル' としか出なかった。
+//	    テキストには型 76（`kUserDataNode`）の補助オブジェクトが 2 つぶら下がっている。
+//	  * 注釈へ入れたラベルは `Link State`=1 になり、ビューポートのタイトルの変更に
+//	    追随した。シートレイヤ直下（`Link State`=0）は追随しなかった。
 //
-//	そこでこの回は次を確かめる。
+//	**残った問いはただ 1 つ「どのビューポートのタイトルが出るか」**——第 2 回では
+//	VP-B の注釈へ入れたラベルまで VP-A のタイトルを出した。順番（直前の既定の
+//	引き継ぎ）なのか、ホストのビューポートなのかが割れていない。そこでこの回は
+//	**いちばん最初のラベルを VP-B の注釈へ置く**（＝引き継ぐ既定がまだ無い状態で
+//	ホストが VP-B のラベルを作る）ことで、1 本で決める。
 //
-//	  ① **どのビューポートのタイトルが入るか。** 図面タイトルの違う 2 枚を同じ
-//	     シートレイヤに並べ、それぞれの真下（シートレイヤ直下）と、それぞれの注釈に
-//	     ラベルを置いて `Title` を見比べる
-//	  ② **タイトルを書き換えたら追随するか**（ビューポートの 1032 を書き換えて再作成）
-//	  ③ **レイアウトのテキストは何で「タイトル」だと決まっているか。**
-//	     名前・補助オブジェクト（レコード）まで降りて全部出す
-//	  ④ **レイアウトを組み直して図番を外せるか。** 「元のテキストを複製した 1 つだけ」
-//	     の群と「同じ文字列から新しく作った 1 つだけ」の群を並べ、
-//	     **中身が同じでも出るものが違うか**を見る（＝隠れた状態を持っているか）
+//	あわせて、実用上いちばん簡単な道
+//	——**`SetParamValue("Title", …)` で直接書けるか**——も確かめる。
 //
 //	図面は壊す前提（新規の空図面で走らせる）。undo イベントは開かない。
 //
@@ -35,10 +32,10 @@
 
 namespace
 {
-	// ビューポートへ書き込む図面タイトル。どちらが入ったか目で分かる綴りにする。
 	const char* const kDlTitleA = "アルファ図";
 	const char* const kDlTitleB = "ベータ図";
-	const char* const kDlTitleARenamed = "アルファ図-書き換え後";
+	const char* const kDlTitleBRenamed = "ベータ図-書き換え後";
+	const char* const kDlTitleWritten = "手で書いた図面名";
 
 	std::string DlToUtf8(const TXString& value)
 	{
@@ -54,111 +51,36 @@ namespace
 			return "終端";
 		case kLineNode:
 			return "線";
-		case kBoxNode:
-			return "矩形";
 		case kArcNode:
 			return "円弧";
 		case kTextNode:
 			return "テキスト";
 		case kGroupNode:
 			return "グループ";
-		case kLocusNode:
-			return "ロクス";
-		case kFormatNode:
-			return "レコード形式";
-		case kRecordNode:
-			return "レコード";
+		case kUserDataNode:
+			return "ユーザーデータ";
+		case kAuxMarkerNode:
+			return "補助マーカー";
 		case kParametricNode:
 			return "PIO";
-		case kViewportNode:
-			return "ビューポート";
 		default:
 			return "その他";
 		}
 	}
 
-	std::string DlObjectName(MCObjectHandle h)
+	void DlDumpLinkFields(vwprobe::Report& probe, const std::string& tag, MCObjectHandle hLabel)
 	{
-		TXString name;
-		gSDK->GetObjectName(h, name);
-		return DlToUtf8(name);
-	}
-
-	// 付いているレコードを全部（名前＋全欄）出す。レイアウトのテキストが
-	// 「どの欄を出すか」をレコードで持っているなら、ここに現れる。
-	void DlDumpRecords(vwprobe::Report& probe, const std::string& indent, MCObjectHandle h)
-	{
-		int count = 0;
-		for (MCObjectHandle rec = gSDK->FindAuxObject(h, kRecordNode); rec != nil && count < 8;
-			 rec = gSDK->NextAuxObject(rec, kRecordNode))
+		if (hLabel == nil || gSDK->GetObjectTypeN(hLabel) != kParametricNode)
 		{
-			++count;
-			VWRecordObj record(rec);
-			std::string line = indent + "レコード '" + DlToUtf8(record.GetRecordName()) + "'";
-			const size_t fields = record.GetParamsCount();
-			for (size_t i = 0; i < fields; ++i)
-			{
-				const TXString fieldName = record.GetParamName(i);
-				line +=
-					" | " + DlToUtf8(fieldName) + "=" + DlToUtf8(record.GetParamValue(fieldName));
-			}
-			probe.log(line);
-		}
-		if (count == 0)
-			probe.log(indent + "レコード: 無し");
-	}
-
-	// 補助オブジェクトの並び（型だけ）。レコード以外に何がぶら下がっているかを見る。
-	void DlDumpAuxTypes(vwprobe::Report& probe, const std::string& indent, MCObjectHandle h)
-	{
-		std::string line = indent + "補助オブジェクト:";
-		int count = 0;
-		for (MCObjectHandle aux = gSDK->FirstAuxObject(h); aux != nil && count < 12;
-			 aux = gSDK->NextObject(aux))
-		{
-			const short type = gSDK->GetObjectTypeN(aux);
-			line += " " + std::to_string(type) + "(" + DlNodeTypeName(type) + ")";
-			++count;
-		}
-		if (count == 0)
-			line += " 無し";
-		probe.log(line);
-	}
-
-	// ラベルレイアウト（＝プロファイルグループ）の中身を、名前・レコードまで降りて出す。
-	void DlDumpLayout(vwprobe::Report& probe, MCObjectHandle hGroup, bool deep)
-	{
-		if (hGroup == nil)
-		{
-			probe.log("  レイアウト: nil");
+			probe.log("  " + tag + ": PIO ではない");
 			return;
 		}
-		int index = 0;
-		for (MCObjectHandle member = gSDK->FirstMemberObj(hGroup); member != nil;
-			 member = gSDK->NextObject(member))
-		{
-			const short type = gSDK->GetObjectTypeN(member);
-			std::string line = "  レイアウト[" + std::to_string(index++) +
-							   "] 型=" + std::to_string(type) + "(" + DlNodeTypeName(type) +
-							   ") 名前='" + DlObjectName(member) + "'";
-			if (type == kTextNode)
-			{
-				VWTextBlockObj text(member);
-				line += " 文字='" + DlToUtf8(text.GetText()) + "'";
-			}
-			probe.log(line);
-			if (deep)
-			{
-				DlDumpAuxTypes(probe, "    ", member);
-				DlDumpRecords(probe, "    ", member);
-			}
-		}
-		if (index == 0)
-			probe.log("  レイアウト: 空");
+		VWParametricObj pio(hLabel);
+		probe.log("  " + tag + " Title='" + DlToUtf8(pio.GetParamValue("Title")) + "' Drawing='" +
+				  DlToUtf8(pio.GetParamValue("Drawing")) + "' Link State='" +
+				  DlToUtf8(pio.GetParamValue("Link State")) + "'");
 	}
 
-	// ラベルが実際に描いた文字。**プロファイルグループは数えない**（第 1 回では
-	// レイアウトのテキストが混ざって読みにくかった）。
 	void DlDumpDrawnText(vwprobe::Report& probe, MCObjectHandle hContainer, MCObjectHandle hSkip,
 						 int depth, int& count)
 	{
@@ -185,58 +107,21 @@ namespace
 
 	void DlDumpDrawnText(vwprobe::Report& probe, MCObjectHandle hLabel)
 	{
+		if (hLabel == nil)
+			return;
 		int count = 0;
 		DlDumpDrawnText(probe, hLabel, gSDK->GetCustomObjectProfileGroup(hLabel), 0, count);
 		if (count == 0)
 			probe.log("  描画テキスト: 1 つも無い");
 	}
 
-	// ラベルの「どのビューポートに結びついたか」が読める欄だけを 1 行で出す。
-	void DlDumpLinkFields(vwprobe::Report& probe, MCObjectHandle hLabel)
-	{
-		if (gSDK->GetObjectTypeN(hLabel) != kParametricNode)
-		{
-			probe.log("  欄: PIO ではない");
-			return;
-		}
-		VWParametricObj pio(hLabel);
-		probe.log("  Title='" + DlToUtf8(pio.GetParamValue("Title")) + "' Drawing='" +
-				  DlToUtf8(pio.GetParamValue("Drawing")) + "' Sheet='" +
-				  DlToUtf8(pio.GetParamValue("Sheet")) + "' BackRefSheetNo='" +
-				  DlToUtf8(pio.GetParamValue("BackRefSheetNo")) + "' Link State='" +
-				  DlToUtf8(pio.GetParamValue("Link State")) + "'");
-	}
-
-	void DlDumpAllParams(vwprobe::Report& probe, MCObjectHandle hLabel)
-	{
-		if (gSDK->GetObjectTypeN(hLabel) != kParametricNode)
-			return;
-		VWParametricObj pio(hLabel);
-		const size_t count = pio.GetParamsCount();
-		probe.log("  パラメータ " + std::to_string(count) +
-				  " 件（universal 名 | 欄型 | 値 | 表示名）");
-		for (size_t i = 0; i < count; ++i)
-		{
-			const TXString univName = pio.GetParamName(i);
-			probe.log("    " + DlToUtf8(univName) + " | " +
-					  std::to_string(static_cast<int>(pio.GetParamStyle(i))) + " | " +
-					  DlToUtf8(pio.GetParamValue(univName)) + " | " +
-					  DlToUtf8(pio.GetParamLocalizedName(i)));
-		}
-	}
-
 	MCObjectHandle DlCreateLabelOnLayer(vwprobe::Report& probe, MCObjectHandle hLayer,
 										const WorldPt& location, const std::string& what)
 	{
 		MCObjectHandle hLabel = gSDK->CreateCustomObject("Drawing Label2", location, 0.0, false);
-		if (hLabel == nil)
+		if (hLabel == nil || !gSDK->AddObjectToContainer(hLabel, hLayer))
 		{
-			probe.fail(what + ": CreateCustomObject が nil を返した");
-			return nil;
-		}
-		if (!gSDK->AddObjectToContainer(hLabel, hLayer))
-		{
-			probe.fail(what + ": AddObjectToContainer が false を返した");
+			probe.fail(what + ": シートレイヤへ置けなかった");
 			return nil;
 		}
 		gSDK->ResetObject(hLabel);
@@ -247,25 +132,18 @@ namespace
 											 const WorldPt& location, const std::string& what)
 	{
 		MCObjectHandle hLabel = gSDK->CreateCustomObject("Drawing Label2", location, 0.0, false);
-		if (hLabel == nil)
+		if (hLabel == nil || !gSDK->AddViewportAnnotationObject(hViewport, hLabel))
 		{
-			probe.fail(what + ": CreateCustomObject が nil を返した");
-			return nil;
-		}
-		// 注釈へ入れる正しい口（GetViewportGroup は作りたてのビューポートでは nil）。
-		if (!gSDK->AddViewportAnnotationObject(hViewport, hLabel))
-		{
-			probe.fail(what + ": AddViewportAnnotationObject が false を返した");
+			probe.fail(what + ": 注釈へ置けなかった");
 			return nil;
 		}
 		gSDK->ResetObject(hLabel);
 		return hLabel;
 	}
 
-	// ビューポートを 1 枚作り、図面タイトルと位置を書いて更新する。
 	MCObjectHandle DlCreateViewport(vwprobe::Report& probe, MCObjectHandle hSheet,
-									MCObjectHandle hDesign, const char* title, const char* locator,
-									WorldCoord dx, const std::string& what)
+									MCObjectHandle hDesign, const char* title, WorldCoord dx,
+									const std::string& what)
 	{
 		MCObjectHandle hViewport = gSDK->CreateViewport(hSheet);
 		if (hViewport == nil)
@@ -273,9 +151,8 @@ namespace
 			probe.fail(what + ": CreateViewport が nil を返した");
 			return nil;
 		}
-		gSDK->SetViewportLayerVisibility(hViewport, hDesign, 0); // 0 = 表示
+		gSDK->SetViewportLayerVisibility(hViewport, hDesign, 0);
 		gSDK->SetObjectVariable(hViewport, 1032, TVariableBlock(TXString(title)));
-		gSDK->SetObjectVariable(hViewport, 1033, TVariableBlock(TXString(locator)));
 		gSDK->MoveObject(hViewport, dx, 0);
 		gSDK->UpdateViewport(hViewport);
 
@@ -283,96 +160,105 @@ namespace
 		TXString readBack;
 		if (gSDK->GetObjectVariable(hViewport, 1032, block) && block.GetTXString(readBack))
 			probe.log("  " + what + ": 1032 読み戻し='" + DlToUtf8(readBack) + "'");
-		else
-			probe.log("  " + what + ": 1032 を読み戻せなかった");
-
-		WorldRect bounds;
-		if (gSDK->GetObjectBounds(hViewport, bounds))
-			probe.log("  " + what + ": 外接 x=" + std::to_string(bounds.left) + "〜" +
-					  std::to_string(bounds.right) + " y=" + std::to_string(bounds.bottom) + "〜" +
-					  std::to_string(bounds.top));
 		return hViewport;
 	}
 
-	// レイアウトを「テキスト 1 つだけ」の新しい群へ組み直す。
-	// duplicate=true なら元のテキストを複製して使い、false なら同じ文字列から新しく作る。
-	// 中身を入れてから渡す（Findings「データタグ」「レベルオブジェクト」）。
-	void DlRebuildLayoutWithTitleOnly(vwprobe::Report& probe, MCObjectHandle hLabel, bool duplicate)
+	// レイアウトの最初のテキスト（＝タイトル）を返す。
+	MCObjectHandle DlFirstLayoutText(MCObjectHandle hLabel)
 	{
-		MCObjectHandle hOldGroup = gSDK->GetCustomObjectProfileGroup(hLabel);
-		if (hOldGroup == nil)
-		{
-			probe.fail("組み直し: 元のレイアウトが nil");
-			return;
-		}
-		// 元のレイアウトの最初のテキスト（＝タイトル）を探す。
-		MCObjectHandle hOldText = nil;
-		for (MCObjectHandle member = gSDK->FirstMemberObj(hOldGroup); member != nil;
+		MCObjectHandle hGroup = gSDK->GetCustomObjectProfileGroup(hLabel);
+		if (hGroup == nil)
+			return nil;
+		for (MCObjectHandle member = gSDK->FirstMemberObj(hGroup); member != nil;
 			 member = gSDK->NextObject(member))
 		{
 			if (gSDK->GetObjectTypeN(member) == kTextNode)
-			{
-				hOldText = member;
-				break;
-			}
+				return member;
 		}
-		if (hOldText == nil)
-		{
-			probe.fail("組み直し: 元のレイアウトにテキストが無い");
-			return;
-		}
-		VWTextBlockObj oldText(hOldText);
-		const TXString oldString = oldText.GetText();
-		const std::string oldName = DlObjectName(hOldText);
-		probe.log("  組み直し: 元のテキスト 文字='" + DlToUtf8(oldString) + "' 名前='" + oldName +
-				  "'");
+		return nil;
+	}
 
-		MCObjectHandle hGroup = gSDK->CreateGroup(false);
+	// n 番目のテキスト（0 始まり）。0=タイトル / 1=縮尺 / 2=図番。
+	MCObjectHandle DlLayoutTextAt(MCObjectHandle hLabel, int wanted)
+	{
+		MCObjectHandle hGroup = gSDK->GetCustomObjectProfileGroup(hLabel);
 		if (hGroup == nil)
+			return nil;
+		int seen = 0;
+		for (MCObjectHandle member = gSDK->FirstMemberObj(hGroup); member != nil;
+			 member = gSDK->NextObject(member))
 		{
-			probe.fail("組み直し: CreateGroup が nil を返した");
+			if (gSDK->GetObjectTypeN(member) != kTextNode)
+				continue;
+			if (seen++ == wanted)
+				return member;
+		}
+		return nil;
+	}
+
+	// ハンドルの生バイトを 16 進で出す（[Findings「タグ付きデータ」]の作法）。
+	void DlDumpHandleBytes(vwprobe::Report& probe, const std::string& tag, MCObjectHandle h,
+						   size_t from, size_t howMany)
+	{
+		if (h == nil)
+		{
+			probe.log("  " + tag + ": nil");
 			return;
 		}
-		MCObjectHandle hText = nil;
-		if (duplicate)
+		size_t size = 0;
+		gSDK->GSGetHandleSize(h, size);
+		const char* base = *reinterpret_cast<char* const*>(h);
+		probe.log("  " + tag + " 大きさ=" + std::to_string(size));
+		if (base == nullptr)
+			return;
+		static const char* const kHexDigits = "0123456789abcdef";
+		for (size_t offset = from; offset < from + howMany && offset < size; offset += 16)
 		{
-			hText = gSDK->DuplicateObject(hOldText);
-			if (hText == nil)
+			std::string hex;
+			std::string ascii;
+			for (size_t i = offset; i < offset + 16 && i < size; ++i)
 			{
-				probe.fail("組み直し: DuplicateObject が nil を返した");
-				return;
+				const unsigned char byte = static_cast<unsigned char>(base[i]);
+				hex += kHexDigits[byte >> 4];
+				hex += kHexDigits[byte & 0x0F];
+				hex += ' ';
+				ascii += (byte >= 32 && byte < 127) ? static_cast<char>(byte) : '.';
 			}
+			probe.log("    +" + std::to_string(offset) + " " + hex + "|" + ascii + "|");
 		}
-		else
-		{
-			hText = gSDK->CreateTextBlock(oldString, WorldPt(0, 0), false, 0);
-			if (hText == nil)
-			{
-				probe.fail("組み直し: CreateTextBlock が nil を返した");
-				return;
-			}
-			if (!oldName.empty())
-				gSDK->SetObjectName(hText, TXString(oldName.c_str()));
-		}
-		if (!gSDK->AddObjectToContainer(hText, hGroup))
-			probe.log("  組み直し: AddObjectToContainer(text→group) が false");
+	}
 
-		const Boolean setOk = gSDK->SetCustomObjectProfileGroup(hLabel, hGroup);
-		probe.log(std::string("  組み直し: SetCustomObjectProfileGroup=") +
-				  (setOk ? "true" : "false"));
-		gSDK->ResetObject(hLabel);
+	// テキストがぶら下げている補助オブジェクトを、生バイトごと出す。
+	void DlDumpTextAux(vwprobe::Report& probe, const std::string& tag, MCObjectHandle hText)
+	{
+		if (hText == nil)
+		{
+			probe.log("  " + tag + ": nil");
+			return;
+		}
+		VWTextBlockObj text(hText);
+		probe.log("  " + tag + " 文字='" + DlToUtf8(text.GetText()) + "'");
+		int index = 0;
+		for (MCObjectHandle aux = gSDK->FirstAuxObject(hText); aux != nil && index < 4;
+			 aux = gSDK->NextObject(aux))
+		{
+			const short type = gSDK->GetObjectTypeN(aux);
+			DlDumpHandleBytes(probe,
+							  tag + " 補助[" + std::to_string(index++) +
+								  "] 型=" + std::to_string(type) + "(" + DlNodeTypeName(type) + ")",
+							  aux, 64, 64);
+		}
+		if (index == 0)
+			probe.log("  " + tag + ": 補助オブジェクト無し");
 	}
 } // namespace
 
-VW_PROBE("drawing-label-layout", "図面ラベルのラベルレイアウトと図面タイトル",
-		 "図面タイトルの違うビューポート 2 枚で、ラベルがどちらのタイトルを出すかを決め、"
-		 "レイアウトのテキストが何で「タイトル」だと決まっているかを名前・レコードまで降りて出し、"
-		 "レイアウトを組み直して図番を外せるかを見る")
+VW_PROBE("drawing-label-layout", "図面ラベル: どのビューポートのタイトルが出るか",
+		 "いちばん最初のラベルを 2 枚目のビューポートの注釈へ置いて紐づきの決まりを 1 本で決め、"
+		 "Title を直接書けるか・レイアウトの隠れた状態が文字より強いかを確かめる")
 {
-	// 「オブジェクトの設定」ダイアログで止まらないようにする（probes/runtime/README.md）。
 	gSDK->DefineCustomObject("Drawing Label2", kCustomObjectPrefNever);
 
-	// --- 図面を組む --------------------------------------------------------
 	probe.log("■ 図面を組む");
 	MCObjectHandle hDesign = gSDK->CreateLayer(TXString("調査-デザイン"), kLayerDesign);
 	if (hDesign == nil)
@@ -388,111 +274,109 @@ VW_PROBE("drawing-label-layout", "図面ラベルのラベルレイアウトと�
 		probe.fail("CreateLayer(シート) が nil を返した");
 		return;
 	}
-
-	MCObjectHandle hVpA = DlCreateViewport(probe, hSheet, hDesign, kDlTitleA, "A-1", 0, "VP-A");
-	MCObjectHandle hVpB =
-		DlCreateViewport(probe, hSheet, hDesign, kDlTitleB, "B-2", 200000, "VP-B");
+	MCObjectHandle hVpA = DlCreateViewport(probe, hSheet, hDesign, kDlTitleA, 0, "VP-A");
+	MCObjectHandle hVpB = DlCreateViewport(probe, hSheet, hDesign, kDlTitleB, 200000, "VP-B");
 	if (hVpA == nil || hVpB == nil)
 		return;
 
-	// --- ① どのビューポートのタイトルが入るか ------------------------------
+	// --- 決定打: いちばん最初のラベルを **2 枚目** の注釈へ ------------------
 	probe.log("");
-	probe.log("■ 実験 1: シートレイヤ直下・VP-A の真下");
-	MCObjectHandle hLabel1 = DlCreateLabelOnLayer(probe, hSheet, WorldPt(0, -50000), "実験 1");
-	if (hLabel1 != nil)
+	probe.log("■ 実験 1: この図面でいちばん最初のラベルを VP-B の注釈へ置く");
+	probe.log("  （'ベータ図' ならホストのビューポートから来る。'アルファ図' なら別の決まり）");
+	MCObjectHandle hLabelB = DlCreateLabelInAnnotation(probe, hVpB, WorldPt(0, -2000), "実験 1");
+	DlDumpLinkFields(probe, "実験 1", hLabelB);
+	DlDumpDrawnText(probe, hLabelB);
+
+	probe.log("");
+	probe.log("■ 実験 2: VP-B のタイトルを書き換えて、実験 1 のラベルが追随するか");
+	gSDK->SetObjectVariable(hVpB, 1032, TVariableBlock(TXString(kDlTitleBRenamed)));
+	gSDK->UpdateViewport(hVpB);
+	if (hLabelB != nil)
 	{
-		DlDumpLinkFields(probe, hLabel1);
-		DlDumpDrawnText(probe, hLabel1);
+		gSDK->ResetObject(hLabelB);
+		DlDumpLinkFields(probe, "実験 2", hLabelB);
+		DlDumpDrawnText(probe, hLabelB);
 	}
 
 	probe.log("");
-	probe.log("■ 実験 2: シートレイヤ直下・VP-B の真下");
-	MCObjectHandle hLabel2 = DlCreateLabelOnLayer(probe, hSheet, WorldPt(200000, -50000), "実験 2");
-	if (hLabel2 != nil)
+	probe.log("■ 実験 3: 次のラベルを VP-A の注釈へ置く");
+	probe.log("  （直前の既定は 'ベータ図…'。'アルファ図' が出ればホスト由来で確定）");
+	MCObjectHandle hLabelA = DlCreateLabelInAnnotation(probe, hVpA, WorldPt(0, -2000), "実験 3");
+	DlDumpLinkFields(probe, "実験 3", hLabelA);
+	DlDumpDrawnText(probe, hLabelA);
+
+	probe.log("");
+	probe.log("■ 実験 4: シートレイヤ直下へ置く（どのビューポートにも属さない）");
+	MCObjectHandle hLabelSheet = DlCreateLabelOnLayer(probe, hSheet, WorldPt(0, -50000), "実験 4");
+	DlDumpLinkFields(probe, "実験 4", hLabelSheet);
+	DlDumpDrawnText(probe, hLabelSheet);
+
+	// --- 実用上いちばん簡単な道: Title を直接書く --------------------------
+	probe.log("");
+	probe.log("■ 実験 5: シートレイヤ直下のラベルへ Title を直接書く");
+	if (hLabelSheet != nil)
 	{
-		DlDumpLinkFields(probe, hLabel2);
-		DlDumpDrawnText(probe, hLabel2);
+		VWParametricObj pio(hLabelSheet);
+		pio.SetParamValue("Title", TXString(kDlTitleWritten));
+		gSDK->ResetObject(hLabelSheet);
+		DlDumpLinkFields(probe, "実験 5", hLabelSheet);
+		DlDumpDrawnText(probe, hLabelSheet);
 	}
 
 	probe.log("");
-	probe.log("■ 実験 3: VP-A の注釈");
-	MCObjectHandle hLabel3 = DlCreateLabelInAnnotation(probe, hVpA, WorldPt(0, -2000), "実験 3");
-	if (hLabel3 != nil)
+	probe.log("■ 実験 6: 注釈のラベル（Link State=1）へ Title を直接書く");
+	if (hLabelA != nil)
 	{
+		VWParametricObj pio(hLabelA);
+		pio.SetParamValue("Title", TXString(kDlTitleWritten));
+		gSDK->ResetObject(hLabelA);
 		gSDK->UpdateViewport(hVpA);
-		gSDK->ResetObject(hLabel3);
-		probe.log(std::string("  注釈の中にいるか=") +
-				  (VWViewportObj::IsViewportGroupContainedObject(hLabel3, kViewportGroupAnnotation)
-					   ? "yes"
-					   : "no"));
-		probe.log(
-			std::string("  入れた後に GetViewportGroup=") +
-			(gSDK->GetViewportGroup(hVpA, kViewportGroupAnnotation) != nil ? "取れた" : "nil"));
-		DlDumpLinkFields(probe, hLabel3);
-		DlDumpDrawnText(probe, hLabel3);
+		gSDK->ResetObject(hLabelA);
+		DlDumpLinkFields(probe, "実験 6", hLabelA);
+		DlDumpDrawnText(probe, hLabelA);
 	}
 
+	// --- 隠れた状態は文字より強いか ----------------------------------------
 	probe.log("");
-	probe.log("■ 実験 4: VP-B の注釈");
-	MCObjectHandle hLabel4 = DlCreateLabelInAnnotation(probe, hVpB, WorldPt(0, -2000), "実験 4");
-	if (hLabel4 != nil)
-	{
-		gSDK->UpdateViewport(hVpB);
-		gSDK->ResetObject(hLabel4);
-		DlDumpLinkFields(probe, hLabel4);
-		DlDumpDrawnText(probe, hLabel4);
-	}
-
-	// --- ③ レイアウトのテキストは何で決まっているか ------------------------
-	probe.log("");
-	probe.log("■ 実験 5: レイアウトの中身を名前・レコードまで降りて出す（実験 3 のラベル）");
-	if (hLabel3 != nil)
-	{
-		DlDumpAllParams(probe, hLabel3);
-		DlDumpLayout(probe, gSDK->GetCustomObjectProfileGroup(hLabel3), true);
-	}
-
-	// --- ② タイトルを書き換えたら追随するか --------------------------------
-	probe.log("");
-	probe.log("■ 実験 6: VP-A の 1032 を書き換えて、ラベルが追随するか");
-	gSDK->SetObjectVariable(hVpA, 1032, TVariableBlock(TXString(kDlTitleARenamed)));
-	gSDK->UpdateViewport(hVpA);
-	if (hLabel3 != nil)
-	{
-		gSDK->ResetObject(hLabel3);
-		probe.log("  注釈のラベル（ResetObject 後）");
-		DlDumpLinkFields(probe, hLabel3);
-		DlDumpDrawnText(probe, hLabel3);
-	}
-	if (hLabel1 != nil)
-	{
-		gSDK->ResetObject(hLabel1);
-		probe.log("  シートレイヤ直下のラベル（ResetObject 後）");
-		DlDumpLinkFields(probe, hLabel1);
-		DlDumpDrawnText(probe, hLabel1);
-	}
-
-	// --- ④ レイアウトを組み直して図番を外せるか ----------------------------
-	probe.log("");
-	probe.log("■ 実験 7: レイアウトを「元のテキストを複製した 1 つだけ」に組み直す");
+	probe.log("■ 実験 7: 複製したタイトルのテキストの文字を潰してから渡す");
 	MCObjectHandle hLabel7 = DlCreateLabelInAnnotation(probe, hVpA, WorldPt(0, -6000), "実験 7");
 	if (hLabel7 != nil)
 	{
-		DlRebuildLayoutWithTitleOnly(probe, hLabel7, true);
-		gSDK->UpdateViewport(hVpA);
-		DlDumpLayout(probe, gSDK->GetCustomObjectProfileGroup(hLabel7), false);
-		DlDumpDrawnText(probe, hLabel7);
+		MCObjectHandle hOldText = DlFirstLayoutText(hLabel7);
+		MCObjectHandle hGroup = gSDK->CreateGroup(false);
+		MCObjectHandle hCopy = (hOldText != nil) ? gSDK->DuplicateObject(hOldText) : nil;
+		if (hOldText == nil || hGroup == nil || hCopy == nil)
+		{
+			probe.fail("実験 7: 複製の用意ができなかった");
+		}
+		else
+		{
+			VWTextBlockObj copy(hCopy);
+			copy.SetText(TXString("ここは無視されるはず"));
+			gSDK->AddObjectToContainer(hCopy, hGroup);
+			probe.log(std::string("  SetCustomObjectProfileGroup=") +
+					  (gSDK->SetCustomObjectProfileGroup(hLabel7, hGroup) ? "true" : "false"));
+			gSDK->ResetObject(hLabel7);
+			gSDK->UpdateViewport(hVpA);
+			MCObjectHandle hNowText = DlFirstLayoutText(hLabel7);
+			if (hNowText != nil)
+			{
+				VWTextBlockObj now(hNowText);
+				probe.log("  渡した後のレイアウトの文字='" + DlToUtf8(now.GetText()) + "'");
+			}
+			DlDumpDrawnText(probe, hLabel7);
+		}
 	}
 
+	// --- 欄を決めている隠れた状態の中身 ------------------------------------
 	probe.log("");
-	probe.log("■ 実験 8: レイアウトを「同じ文字列から新しく作ったテキスト 1 つだけ」に組み直す");
-	MCObjectHandle hLabel8 = DlCreateLabelInAnnotation(probe, hVpA, WorldPt(0, -10000), "実験 8");
-	if (hLabel8 != nil)
+	probe.log("■ 実験 8: レイアウトのテキストが持つ補助オブジェクトの生バイト");
+	MCObjectHandle hProbeLabel =
+		DlCreateLabelInAnnotation(probe, hVpA, WorldPt(0, -10000), "実験 8");
+	if (hProbeLabel != nil)
 	{
-		DlRebuildLayoutWithTitleOnly(probe, hLabel8, false);
-		gSDK->UpdateViewport(hVpA);
-		DlDumpLayout(probe, gSDK->GetCustomObjectProfileGroup(hLabel8), false);
-		DlDumpDrawnText(probe, hLabel8);
+		DlDumpTextAux(probe, "タイトル", DlLayoutTextAt(hProbeLabel, 0));
+		DlDumpTextAux(probe, "図番", DlLayoutTextAt(hProbeLabel, 2));
 	}
 
 	probe.log("");
