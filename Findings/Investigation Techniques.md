@@ -8,10 +8,28 @@
 
 - **書いたパラメータは読み戻す。** 名前が違えば setter は黙って無視する
   （[Parametric Objects](Parametric%20Objects.md)）。
+- **組み込み PIO の universal 名は、当てる前に `GetPluginType` で確かめる。**
+  `gSDK->GetPluginType(名前, 種別)` は図形を 1 つも作らずに「その綴りのプラグインが在るか」と
+  「オブジェクト（`kVSPluginObject` ＝ 2）か」を返すので、**綴りの候補を並べて総当たりする
+  のが安い**（[#181](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/181)
+  では 18 候補のうち 10 件が当たり、8 件が `false`）。綴りは英語の UI 名そのままで、
+  **空白を詰めると当たらない**（`Break Line` は在るが `BreakLine` は無い）。候補の起こし方は
+  `SDKLib/Include/Kernel/API/MiniCadHookIntf.h` の `kInternalID_*`（定数名がほぼ綴りになって
+  いる）。
+  - **プラグインフォルダを舐めても組み込みは出てこない。**
+    `ForEachFilePathInPluginFolderN` は 2450 ファイルを返したが、`.vso` / `.vst` の該当は
+    **0 件**だった（組み込み PIO はフォルダ内の単体ファイルとして置かれていない）。
+    **名前探しにこの口を当てにしない。**
 - **setter の戻り値を信用しない。** 書けなくても true を返す族がある
   （`SetViewportLayerStackingOverride`・`SetUseDocumentClassVis`）。**読み戻しで確かめる**
   しかない。同じ形の setter に当たったら、まず GUI で作った実物を読んで「読める形式」と
   「書けるか」を切り分ける（[Layers and Stories](Layers%20and%20Stories.md)）。
+- **`SetObjectName` は `0`（成功）を返しながら 63 文字で黙って切る。** 図形の名前を
+  「小さな記憶」に使う（走行をまたいで値を残す）ときは、**書いた後に読み戻して長さまで
+  確かめる**。実測では 64 文字目以降が落ち、`GetObjectName` はちょうど 63 文字を返した
+  （[#181](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/181) で
+  実際に踏み、プローブが 1 巡まるごと無駄になった）。**載せるのは短い指紋
+  （ハッシュ）にして、値そのものはログへ出す**のが確実である。
 - **「書けたのに絵が変わらない」＝「その欄は効かない」ではない。** PIO の欄は作り直しの
   ときに読まれるので、まず `ResetObject` を挟んだかを疑う。
 - **`ResetObject` を挟んでも変わらないなら、次は「どこから値を採るか」を切り替える欄を
@@ -39,6 +57,13 @@
 
 - **数えるより測る。** 「指定した値」と「図面の実測値」を突き合わせれば、ずれが平行移動
   なのかスケールなのか回転なのかが 1 本のサンプルで分かる。
+- **何も描いていない PIO の `GetObjectBounds` は `true` を返して「反転した空矩形」を返す。**
+  `left` = `bottom` = `+DBL_MAX`（1.7976931348623157e308）、`right` = `top` = `-DBL_MAX` が
+  入るので、**幅・高さを計算すると `-inf` になる**。**戻り値では空を判別できない**ので、
+  外接を測る前に `right > left` を確かめる。実測はパスを与えずに作った
+  `StructuralMember` と `Linear Material`（[#181](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/181)）。
+  「大きさ 0」と「外接が無い」を取り違えると、**存在しない巨大な図形を追いかけることに
+  なる**。
 - **症状が同じまま対処を重ねない。** 同じ症状に対処を 3 回続けて外したら、対処の方向では
   なく**前提**（＝入力と図面のどちらがずれているか）を実測で確かめる。1 本の両端の座標と
   長さを測るだけで、長さが一致して位置だけ違えば描画側、長さも違えば入力側、と確定する。
