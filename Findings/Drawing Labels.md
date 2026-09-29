@@ -31,6 +31,17 @@ gSDK->ResetObject(h);
 **図番と縮尺を出したくないなら、レイアウトから落とす**——パラメータに表示を切る欄は無い。
 落とし方は「**要るものだけを複製**して新しい群へ入れ、渡し直す」（下記「SDK から組む手順」）。
 
+**スタイルは勝手に当たる。** `CreateCustomObject` した直後には、もう**ツールに設定されて
+いるスタイル**が当たっている。スタイル無しで置きたいなら**組み直した後に**
+`gSDK->SetPluginObjectStyle(h, 0)` を呼ぶ（下記
+「[スタイルは勝手に当たる](#スタイルは勝手に当たる外し方は-setpluginobjectstyleh-0-だけ)」）。
+
+**レイアウトのテキストに与える大きさは「紙の上の mm」である。** 容れ物（シートレイヤ・
+デザインレイヤ・ビューポートの注釈）の縮尺は VW が自分で掛けるので、**自分で掛けては
+いけない**。紙で 10pt なら `10 * 25.4 / 72 = 3.5278` を渡す（下記
+「[レイアウトの文字の大きさ](#レイアウトの文字の大きさ与えるのは紙の上の-mm)」）。
+**寸法（`ovDimFontSize`）とは逆**なので取り違えないこと。
+
 ## どのオブジェクトか
 
 | | |
@@ -151,9 +162,15 @@ for (MCObjectHandle m = gSDK->FirstMemberObj(hOld); m != nil; m = gSDK->NextObje
 	const short type = gSDK->GetObjectTypeN(m);
 	if (!((type == kTextNode && !tookText) || (type == kLineNode && !tookLine)))
 		continue;
-	gSDK->AddObjectToContainer(gSDK->DuplicateObject(m), hGroup);   // ★ 複製して入れる
+	MCObjectHandle dup = gSDK->DuplicateObject(m);                  // ★ 複製して入れる
+	gSDK->AddObjectToContainer(dup, hGroup);
 	if (type == kTextNode)
+	{
+		// **文字の大きさを当てるのはここ。渡すのは「紙の上の mm」**
+		// （容れ物の縮尺は VW が掛ける。下記「レイアウトの文字の大きさ」）。
+		gSDK->SetTextSize(dup, 0, gSDK->GetTextLength(dup), 10.0 * 25.4 / 72.0);  // 紙で 10pt
 		tookText = true;
+	}
 	else
 		tookLine = true;
 }
@@ -173,6 +190,136 @@ gSDK->ResetObject(h);
   （[Data Tags](Data%20Tags.md)・[Level Objects](Level%20Objects.md) と同じ筋）。
 - **中身を入れ替えるだけでは絵に出ない**——[Level Objects](Level%20Objects.md) と同じで、
   新しい群を作って**渡し直す**。
+
+## スタイルは勝手に当たる——外し方は `SetPluginObjectStyle(h, 0)` だけ
+
+**実機確認済み**（VW 2026 / mac・新規の空図面。`probes/runtime/drawing-label-style-textsize/`
+を 7 回走らせた。[issue #175](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/175)）。
+
+| 問い | 実測 |
+| --- | --- |
+| 新規の空図面のツールのスタイル | `GetPluginStyleForTool("Drawing Label2")` が **`ref=179`「図面ラベル - 図番」**を返した。**文書に既定として入っている**ので、プラグインが何もしなくても当たる |
+| **自動適用** | **する。** `CreateCustomObject` の**直後**に `GetPluginObjectStyle` が既にそれを返す |
+| 別のスタイルでも同じ | 自分で作ったスタイル（`ref=119`）を `SetPluginStyleForTool` で設定してから作ると `ref=119` が当たる。**当たるのは「ツールにいま設定されているスタイル」**である |
+| 注釈へ入れて `ResetObject` | 当たったまま（変わらない） |
+| **外し方①** | **`gSDK->SetPluginObjectStyle(h, 0)` は効く。** 戻り値 `true`・`ref=0` になり、**`ResetObject` も `UpdateViewport` も越えて残る** |
+| **外し方②** | **`SetPluginStyleForTool(tool, 0)` にしてから作れば、最初からスタイル無しで生まれる。** 作った後にツールの値を元へ戻して `ResetObject` しても**当たり直さない** |
+
+- **`VWParametricObj::SetStyle(0)` でスタイルは外せない**（実機で `ref` が 1 も動かない）。
+  【ソース根拠】実装が `InternalIndexToHandle(styleRefNumber)` の戻りが `nullptr` でない
+  ことを門にしているので、`0` を渡すと **`SetPluginObjectStyle` が 1 度も呼ばれない**
+  （`SDKLib/Source/VWSDK/VWFC/VWObjects/VWParametricObj.cpp:1703`）:
+
+  ```cpp
+  void VWParametricObj::SetStyle(RefNumber styleRefNumber) const
+  {
+      if(fhObject != nullptr)
+      {	MCObjectHandle hStyle =  gSDK->InternalIndexToHandle( styleRefNumber );
+          if(hStyle != nullptr && gSDK->IsPluginStyle( hStyle ))
+          {	gSDK->SetPluginObjectStyle( fhObject, styleRefNumber );
+          }
+      }
+  }
+  ```
+
+  **外すなら `gSDK->SetPluginObjectStyle(h, 0)` を直に呼ぶ。**
+- **PIO 一般向けの「スタイル無しにする」口は SDK に無い**（`ConvertToUnstyledWall` /
+  `ConvertToUnstyledSlab` / `ConvertToUnstyledRoof` の 3 つだけ。`SDK Index` を総当り。
+  【ヘッダ根拠】）。
+- スタイルのサブタイプ（内部 ID）は **642**。スタイルを自分で用意する手順は
+  [Parametric Objects](Parametric%20Objects.md)「スタイルは SDK だけで作れる」。
+
+## **既定のレイアウトはスタイルが持っている**——だから外す順序が決まる
+
+**スタイル無しで作ったラベルは、レイアウトが空で何も描かない。** 実測:
+
+| | レイアウト（プロファイルグループ） | 絵 |
+| --- | --- | --- |
+| スタイル**有り**で作った直後 | `型 10 2 10 6 10 0` / テキスト 3 件（`6.0` `4.23333` `4.93889`） | 描く |
+| スタイル**無し**で作った直後 | **`型 17 0`** / **テキスト 0 件** | **外接 0×0 ＝ 何も描かない** |
+| 有りで作って、**組み直さずに**外した | `型 10 2 10 6 10 0`（**そのまま残る**） | 描く（外接 2834.9×846.9） |
+
+**したがって「スタイル無しのラベルを SDK で置く」には順序がある:**
+
+```cpp
+// 1. **スタイルが当たった状態で作る**（既定のレイアウトはスタイルが持っているので、
+//    ツールのスタイルを 0 にしてから作ると複製する元が無くなる）。
+MCObjectHandle h = gSDK->CreateCustomObject("Drawing Label2", WorldPt(x, y), 0.0, false);
+
+// 2. レイアウトを組み直す（下記「SDK から組む手順」。複製でしか組めない）。
+//    ここで文字の大きさも当てる（下記「レイアウトの文字の大きさ」）。
+
+// 3. **組み直した後に外す。** レイアウトはインスタンスに残る。
+gSDK->SetPluginObjectStyle(h, 0);
+gSDK->ResetObject(h);
+```
+
+- **外し方②（ツールのスタイルを 0 にしてから作る）だけで済ませてはいけない**——
+  レイアウトが空のまま、何も描かないラベルになる。
+- **外してもレイアウトは消えない。** 組み直したものも、既定のままのものも残った。
+  スタイルは「作るときに既定のレイアウトを配る」役で、当たり続けている必要は無い。
+
+## レイアウトの文字の大きさ——**与えるのは「紙の上の mm」**
+
+**実機確認済み。** 同じビューポートの注釈に「紙で 6pt になると分かっている寸法」
+（`ovDimFontSize` ＝ `6 × 25.4/72 × 50` ＝ `105.83333`。[Dimensions](Dimensions.md)）を
+物差しとして置き、**注釈の中では紙の 1pt ＝ 世界座標 `17.63889`** と実測してから比べた。
+
+**レイアウトのテキストへ `SetTextSize` で与えた値は、そのまま「紙の上の mm」として効く。**
+描かれる世界座標は「**与えた値 × 容れ物の縮尺**」になり、紙の上では与えた値そのものになる。
+
+| 置き場（容れ物） | 与えた値 | 描かれた文字（世界座標） | **紙の上** |
+| --- | --- | --- | --- |
+| ビューポートの注釈（1/50） | `3.52778` | `176.38889`（＝×50） | **10.00000pt** |
+| ビューポートの注釈（1/50） | `176.38889`（縮尺を掛けてしまった） | `8819.44444` | **500pt** |
+| ビューポートの注釈（**1/100** へ変更） | `3.52778` | `352.77778`（＝×100） | **10.00000pt** |
+| デザインレイヤ（1/50） | `3.52778` | `176.38889`（＝×50） | **10.00000pt** |
+| シートレイヤ直下（1:1） | `3.52778` | `3.52778`（＝×1） | **10.00000pt** |
+
+```cpp
+// 紙で 10pt にしたいなら、ラベルの置き場がどこであってもこれ 1 つ。
+const WorldCoord paperMm = 10.0 * 25.4 / 72.0;      // 3.5278
+gSDK->SetTextSize(hDupText, 0, gSDK->GetTextLength(hDupText), paperMm);
+```
+
+- **容れ物の縮尺は VW が自分で掛ける。自分で掛けてはいけない**——掛けると紙で 500pt に
+  なる。**寸法とは逆である**（寸法の `ovDimFontSize` は「紙の pt × 25.4/72 × 縮尺」を
+  自分で書く。[Dimensions](Dimensions.md)「注釈へ寸法を置くときの作り方」）。
+  **同じ図面の中で、寸法とラベルで作法が違う**ことを忘れないこと。
+- **`ISDK::SetTextSize` の第 4 引数は `WorldCoord`＝ mm であって pt ではない。**
+  `10` を渡すと **10mm ＝ 28.3pt** になる。同じ図の 6pt の寸法（2.1167mm）と比べて
+  4.7 倍で、[#175](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/175)
+  の発端（「10pt を与えたのに 4 倍前後大きい」）はこれだった。
+- **アクティブレイヤは効かない。** 容れ物とアクティブレイヤを**交差させて**確かめた
+  ——デザインレイヤ(1/50) に置いてアクティブ 1:1 でも紙で 10pt、シートレイヤ(1:1) に
+  置いてアクティブ 1/50 でも紙で 10pt。注釈でも、アクティブ 1/50 で掛からなかった回と
+  アクティブ 1:1 で掛かった回の両方がある。**掛けているのは容れ物である。**
+  （**`SetTextStyleRef` で文字スタイルを当てるときだけはアクティブレイヤが効く**。すぐ下。）
+- **注釈へ入れる前に当てても後に当てても同じ**（組み直しの時機を入れ替えて実測）。
+- **ビューポートの縮尺を後から変えても紙の見え方は保たれる**（1/50 → 1/100 で描かれた
+  文字が `176.389` → `352.778`）。寸法と同じで、**一度正しく作れば崩れない**。
+- **`ScaleFactor`（記号の倍率）は更に掛かる**（2 にすると紙で 20pt）。
+- **`World-based`=True は文字の大きさを変えなかった**（同じ容れ物で `False` と完全に同値）。
+- 既定のタイトルの大きさは **`6.0`**（紙で 6mm ＝ 約 17pt）。
+
+### 文字スタイル（`SetTextStyleRef`）を使うなら、当てるときのアクティブレイヤを 1:1 にする
+
+レイアウトのテキストへ文字スタイルを当てると、**その場で「文字スタイルの紙の大きさ ×
+当てたときのアクティブレイヤの縮尺」が焼き付く**（実測）:
+
+| 当てたときのアクティブレイヤ | 10pt（`ovTextStyleSize` ＝ `0.13889` インチ）を当てた直後の `GetTextSize` |
+| --- | --- |
+| デザインレイヤ 1/50 | **`176.38889`**（＝ 3.52778 × 50） |
+| シートレイヤ 1:1 | **`3.52778`** |
+
+ラベルはそこへ**もう一度**容れ物の縮尺を掛けるので、**1/50 のレイヤをアクティブにした
+まま当てると紙で 500pt になる**。1:1 のレイヤをアクティブにしてから当てれば
+`SetTextSize` と同じ結果になる。
+
+- **`SetTextSize` で直に書くほうを勧める**——アクティブレイヤという「外の状態」に
+  依らないので、いつ呼んでも結果が同じになる。
+- これは [Dimensions](Dimensions.md) の〈クラスの文字スタイル〉が「繋ぐときのアクティブ
+  レイヤ」で焼き付くのと同じ筋である。
 
 ## ビューポートとの紐づき
 
@@ -223,6 +370,17 @@ const short ovViewportLocator     = 1033;  // … corresponds to the Item field 
 | 本文の出どころ | 関連付けた図形のレコード | ビューポートの `ovViewportDescription`(1032)。`Title` へ直接書いてもよい |
 
 ## 未確認のまま残っているもの
+
+- **作りたてのビューポートの注釈では、最初の 1〜2 本が容れ物の縮尺を拾わないことがある**
+  （[issue #177](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/177)
+  に切り出した）。`CreateViewport` した直後の注釈へ続けてラベルを入れると、**先頭の
+  1〜2 本だけ**が「与えた値のまま」（紙で 0.2pt ＝ 見えない）で描かれ、**3 本目以降は
+  正しく ×縮尺になる**（走行ごとに 1 本目までか 2 本目までかが違う）。実測で潰した道:
+  `ResetObject` を増やす・`UpdateViewport` を挟む・レイアウトを入れた後に組み直す・
+  アクティブレイヤを変える——**どれも効かない**。**すでに在るビューポートへ置く
+  使い方（プラグインの本番）では踏んでいない**ので、原因は別の issue で追う。
+  **紙の pt の規則そのものは上記のとおり確定している**（3 本目以降・デザインレイヤ・
+  シートレイヤのすべてで紙で 10.00000pt）。
 
 - **ユーザーデータに式を書き込んで、新しいテキストに欄を持たせられるか。** 容れ物 ID
   （`'oidl'`）と、中に UTF-16 の式が入っていることまでは割れているが、書き込みは試して

@@ -216,3 +216,39 @@ UI で手作りすると〈無限〉が既定なので、公開ヘッダに載�
 **結果は断面ビューポート 66 枚・値の組み合わせ 1 通り＝差のある変数は 1 つも無し。**
 範囲はオブジェクト変数の外に保持されており、SDK からは触れない。対象の大きさから決めた
 有限範囲で確定（実用上は無限と同じ見え方になる）。
+
+## `CreateViewport(parentHandle)` の `parentHandle` は「**どの容れ物に置くか**」
+
+**デザインレイヤを渡すと、デザインレイヤの上にビューポートができ、注釈を持てない。**
+実測（VW 2026 / mac。[#175](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/175)
+で 3 回踏んだ）:
+
+| 渡したもの | `ParentObject(vp)` | `AddViewportAnnotationObject` | `GetViewportGroup(vp, kViewportGroupAnnotation)` |
+| --- | --- | --- | --- |
+| **デザインレイヤ** | そのデザインレイヤ | **`false`**（矩形でも PIO でも） | **`nil`**（呼んだ後も） |
+| **シートレイヤ** | そのシートレイヤ | `true` | 取れる（`IsViewportGroupContainedObject` も `true`） |
+
+**シートレイヤを渡し、表示するデザインレイヤは作成後に決める:**
+
+```cpp
+MCObjectHandle vp = gSDK->CreateViewport(sheetLayer);        // ★ 置く容れ物を渡す
+gSDK->SetViewportLayerVisibility(vp, designLayer,
+                                 VWFC::VWObjects::kLayerVisibilityNormal);  // 何を映すか
+TVariableBlock scale;
+scale = static_cast<Real64>(50.0);
+gSDK->SetObjectVariable(vp, ovViewportScale, scale);          // 既定は 1:1 なので自分で書く
+gSDK->UpdateViewport(vp);
+```
+
+- **【ヘッダ根拠】はもともと [Undo](Undo.md) に書いてあった**（`GS_CreateViewport` の説明:
+  "The specified parent handle may only be a layer or a group contained within a layer,
+  nested or otherwise"）。**「どのデザインレイヤを表示するか」と読み違えると、注釈を
+  持てないビューポートが黙って出来上がる**——`CreateViewport` も
+  `SetObjectVariable(ovViewportScale)` も `UpdateViewport` も成功するので、
+  `AddViewportAnnotationObject` が `false` を返すまで気付けない。
+- **`CreateLayer(..., kLayerSheet)` はアクティブレイヤを切り替える**（実測で確認）。
+  ただし `CreateViewport` は**アクティブレイヤではなく渡した `parentHandle`** に置くので、
+  アクティブレイヤを合わせても直らない。
+- 注釈は**ビューポートの縮尺の容れ物**である——縮尺を 1/50 → 1/100 に変えると、注釈の
+  中身の世界座標が比例して書き換わり、**紙の見え方は保たれる**（図面ラベルで実測。
+  寸法でも同じ。[Dimensions](Dimensions.md)）。
