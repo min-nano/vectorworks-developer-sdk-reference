@@ -3,18 +3,23 @@
 //
 //	[issue #175] 図面ラベル（Drawing Label2）について 3 つを実測する。
 //
-//	1. CreateCustomObject はツールに設定されたスタイルを自動で当てるか
-//	   （作った直後／注釈へ入れて ResetObject した後）。
-//	2. 当たったスタイルをインスタンスから外す道はあるか
-//	   （SetPluginObjectStyle(h, 0) ／ ツールのスタイルを 0 にしてから作る）。
-//	   外した後に組み直したレイアウトが保たれるか。
-//	3. ラベルレイアウトの中のテキストの大きさは、どの単位・どの縮尺で解かれるか
-//	   （SetTextSize ／ 文字スタイル × 注釈へ入れる前／後 × ScaleFactor / World-based）。
+//	1. CreateCustomObject はツールに設定されたスタイルを自動で当てるか。
+//	2. 当たったスタイルをインスタンスから外す道はあるか。
+//	3. ラベルレイアウトの中のテキストの大きさは、どの単位・どの縮尺で解かれるか。
 //
-//	文書にスタイルが在るかに結果を左右されないよう、**このプローブは自分で
-//	図面ラベルのスタイルを 1 本作って**ツールへ設定してから測る
-//	（Findings「Parametric Objects」の「スタイルは SDK だけで作れる」の手順）。
-//	ツールのスタイルは走り終わりに元の値へ戻す。
+//	1 と 2 は 1 回目の走行（build b990edcef722）で割れた。**2 回目のここは 3 を測り直す。**
+//	1 回目が測れなかった理由は 2 つで、どちらもこの版で直してある:
+//
+//	  * **既定のレイアウトはスタイルが持っている。** ツールのスタイルを 0 にしてから
+//	    作ったラベルのプロファイルグループは**空**で、複製する元が無かった。だから
+//	    ここでは**スタイルが当たった状態で作り、レイアウトを組み直してから
+//	    SetPluginObjectStyle(h, 0) で外す**（1 回目でこの順なら保たれると確かめてある）。
+//	  * **ラベルが描いた図形は入れ子**（型 11 の群の中）なので、1 階層だけ舐めても
+//	    テキストに当たらなかった。ここでは**再帰**で数える。
+//
+//	絶対の物差しとして、**紙で 6pt になると分かっている寸法**（Findings「Dimensions」
+//	#143/#161: ovDimFontSize ＝ 紙の pt × 25.4/72 × ビューポートの縮尺）を同じ注釈へ
+//	1 本置いて測る。ラベルの文字はこれとの比で紙の pt に直せる——目視は要らない。
 //
 
 #include "Probe.h"
@@ -22,6 +27,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -29,11 +35,11 @@ namespace
 	const short kProbeTextNodeType = 10;
 	const short kProbeLineNodeType = 2;
 
-	// 1/50 のビューポートで測る。紙で 10pt を狙う値を 2 通り用意して見比べる。
-	const double kProbeVpScale = 50.0;
-	const double kProbePtToMm = 25.4 / 72.0;		  // 1pt = 0.352778mm
-	const double kProbeTenPtMm = 10.0 * kProbePtToMm; // 3.52778mm（＝紙で 10pt を素直に mm へ）
-	const double kProbeTenPtInch = 10.0 / 72.0; // 0.138889 インチ（文字スタイルの単位）
+	const double kProbeVpScale = 50.0;		 // ビューポート／デザインレイヤの縮尺
+	const double kProbePtToMm = 25.4 / 72.0; // 1pt = 0.352778mm
+	const double kProbeTenPtMm = 10.0 * kProbePtToMm; // 3.52778
+	const double kProbeTenPtInch = 10.0 / 72.0; // 文字スタイルの ovTextStyleSize はインチ
+	const double kProbeRulerPt = 6.0;			// 物差しの寸法の紙の大きさ
 
 	std::string ProbeNum(double v)
 	{
@@ -54,13 +60,17 @@ namespace
 		return std::string(static_cast<const char*>(s));
 	}
 
+	std::string ProbeBoolStr(bool b)
+	{
+		return b ? "true" : "false";
+	}
+
 	// スタイルの当たり具合。**戻り値ではなく ref を見る**（Findings「Parametric Objects」）。
 	std::string ProbeStyleInfo(MCObjectHandle h)
 	{
 		RefNumber ref = 0;
 		const Boolean ret = gSDK->GetPluginObjectStyle(h, ref);
-		std::string s = std::string("GetPluginObjectStyle=") + (ret ? "true" : "false") +
-						" ref=" + ProbeInt(ref);
+		std::string s = "GetPluginObjectStyle=" + ProbeBoolStr(ret != 0) + " ref=" + ProbeInt(ref);
 		if (ref != 0)
 		{
 			TXString nm;
@@ -74,66 +84,74 @@ namespace
 		return s;
 	}
 
-	std::string ProbeTextInfo(MCObjectHandle t)
-	{
-		WorldCoord size = 0;
-		gSDK->GetTextSize(t, 0, size);
-		return std::string("GetTextSize(0)=") + ProbeNum(size) +
-			   " 文字数=" + ProbeInt(gSDK->GetTextLength(t)) +
-			   " GetTextStyleRef=" + ProbeInt(gSDK->GetTextStyleRef(t));
-	}
-
 	std::string ProbeBounds(MCObjectHandle h)
 	{
 		WorldRect r;
 		if (!gSDK->GetObjectBounds(h, r))
 			return "GetObjectBounds=false";
-		return std::string("外接 幅=") + ProbeNum(std::fabs(r.right - r.left)) +
+		return "外接 幅=" + ProbeNum(std::fabs(r.right - r.left)) +
 			   " 高さ=" + ProbeNum(std::fabs(r.top - r.bottom));
 	}
 
-	// 容れ物の中のテキストを全部測って並べる。
-	void ProbeDumpTexts(vwprobe::Report& probe, const std::string& tag, MCObjectHandle container)
+	// **再帰で**テキストを集める。ラベルが描いた図形は群（型 11）の入れ子になっていて、
+	// 1 階層だけ舐めてもテキストに当たらない（1 回目の走行で踏んだ）。
+	void ProbeCollectTextSizes(MCObjectHandle container, int depth, std::vector<double>& out)
 	{
-		if (container == nil)
-		{
-			probe.log(tag + ": 容れ物が nil");
+		if (container == nil || depth > 6 || out.size() >= 24)
 			return;
-		}
-		int i = 0;
-		int texts = 0;
-		for (MCObjectHandle m = gSDK->FirstMemberObj(container); m != nil;
-			 m = gSDK->NextObject(m), ++i)
+		for (MCObjectHandle m = gSDK->FirstMemberObj(container); m != nil; m = gSDK->NextObject(m))
 		{
-			const short type = gSDK->GetObjectTypeN(m);
-			std::string line = tag + "[" + ProbeInt(i) + "] 型=" + ProbeInt(type);
-			if (type == kProbeTextNodeType)
+			if (gSDK->GetObjectTypeN(m) == kProbeTextNodeType)
 			{
-				line += " " + ProbeTextInfo(m);
-				++texts;
+				WorldCoord size = 0;
+				gSDK->GetTextSize(m, 0, size);
+				out.push_back(static_cast<double>(size));
+				if (out.size() >= 24)
+					return;
 			}
-			probe.log(line);
+			ProbeCollectTextSizes(m, depth + 1, out);
 		}
-		if (texts == 0)
-			probe.log(tag + ": テキストは 1 つも無かった");
 	}
 
-	// ラベル 1 本の素性をまとめて測る。
-	void ProbeMeasure(vwprobe::Report& probe, const std::string& tag, MCObjectHandle h)
+	std::string ProbeTextSummary(MCObjectHandle container)
 	{
+		std::vector<double> sizes;
+		ProbeCollectTextSizes(container, 0, sizes);
+		if (sizes.empty())
+			return "テキスト 0 件";
+		std::string s = "テキスト " + ProbeInt(static_cast<Sint32>(sizes.size())) + " 件:";
+		for (size_t i = 0; i < sizes.size(); ++i)
+			s += " " + ProbeNum(sizes[i]);
+		return s;
+	}
+
+	// 1 階層の顔ぶれ（型の並び）。構造を見たいときだけ使う。
+	std::string ProbeShapeSummary(MCObjectHandle container)
+	{
+		if (container == nil)
+			return "容れ物が nil";
+		std::string s;
+		int n = 0;
+		for (MCObjectHandle m = gSDK->FirstMemberObj(container); m != nil && n < 16;
+			 m = gSDK->NextObject(m), ++n)
+			s += " " + ProbeInt(gSDK->GetObjectTypeN(m));
+		return "型の並び:" + (s.empty() ? std::string(" （空）") : s);
+	}
+
+	// 作ったラベルを縦にずらして置く（図を見たときに見分けが付くように）。
+	int gProbeLabelCount = 0;
+
+	WorldPt ProbeNextSpot()
+	{
+		return WorldPt(0, -2000.0 * (gProbeLabelCount++));
+	}
+
+	MCObjectHandle ProbeNewLabel(vwprobe::Report& probe, const std::string& tag)
+	{
+		MCObjectHandle h = gSDK->CreateCustomObject("Drawing Label2", ProbeNextSpot(), 0.0, false);
 		if (h == nil)
-		{
-			probe.log(tag + ": ハンドルが nil");
-			return;
-		}
-		VWFC::VWObjects::VWParametricObj pio(h);
-		probe.log(tag + ": " + ProbeStyleInfo(h));
-		probe.log(tag + ": " + ProbeBounds(h) +
-				  " ScaleFactor=" + ProbeStr(pio.GetParamValue("ScaleFactor")) +
-				  " World-based=" + ProbeStr(pio.GetParamValue("World-based")) +
-				  " Link State=" + ProbeStr(pio.GetParamValue("Link State")));
-		ProbeDumpTexts(probe, tag + " レイアウト", gSDK->GetCustomObjectProfileGroup(h));
-		ProbeDumpTexts(probe, tag + " 描いた図形", h);
+			probe.log(tag + ": CreateCustomObject(\"Drawing Label2\") が nil を返した");
+		return h;
 	}
 
 	// レイアウトを「タイトルのテキスト＋下線」だけに組み直す（Findings「Drawing Labels」の手順）。
@@ -144,7 +162,7 @@ namespace
 		MCObjectHandle hOld = gSDK->GetCustomObjectProfileGroup(h);
 		if (hOld == nil)
 		{
-			probe.log(tag + ": レイアウト（プロファイルグループ）が nil で組み直せない");
+			probe.log(tag + ": レイアウトが nil で組み直せない");
 			return false;
 		}
 		MCObjectHandle hGroup = gSDK->CreateGroup(false);
@@ -177,45 +195,68 @@ namespace
 					gSDK->SetTextSize(dup, 0, len > 0 ? len : 1, sizeWorld);
 				if (tsRef != 0)
 					gSDK->SetTextStyleRef(dup, tsRef);
-				probe.log(tag + ": 当てた直後のレイアウトのテキスト " + ProbeTextInfo(dup));
+				WorldCoord back = 0;
+				gSDK->GetTextSize(dup, 0, back);
+				probe.log(tag + ": 複製したテキストへ当てた直後 GetTextSize=" + ProbeNum(back) +
+						  " GetTextStyleRef=" + ProbeInt(gSDK->GetTextStyleRef(dup)) +
+						  " 文字数=" + ProbeInt(len));
 			}
 			else
 			{
 				tookLine = true;
 			}
 		}
+		if (!tookText)
+			probe.log(tag + ": **元のレイアウトにテキストが無かった**（複製する元が無い）");
 		const Boolean ok = gSDK->SetCustomObjectProfileGroup(h, hGroup);
-		probe.log(tag + ": SetCustomObjectProfileGroup=" + std::string(ok ? "true" : "false"));
 		gSDK->ResetObject(h);
 		return ok != 0;
 	}
 
-	// 作ったラベルを縦にずらして置く。**測るのは数値だけ**だが、重ねて置くと図面を
-	// 見たときに何が何だか分からなくなるので、1 本ごとに下へずらす。
-	int gProbeLabelCount = 0;
-
-	WorldPt ProbeNextSpot()
+	// 1 本ぶんの測り。紙の pt は「描いた文字の大きさ ÷ 1pt あたりの世界座標」で出す。
+	void ProbeMeasure(vwprobe::Report& probe, const std::string& tag, MCObjectHandle h,
+					  double worldPerPt)
 	{
-		return WorldPt(0, -1000.0 * (gProbeLabelCount++));
-	}
-
-	MCObjectHandle ProbeNewLabel(vwprobe::Report& probe, const std::string& tag)
-	{
-		MCObjectHandle h = gSDK->CreateCustomObject("Drawing Label2", ProbeNextSpot(), 0.0, false);
 		if (h == nil)
-			probe.log(tag + ": CreateCustomObject(\"Drawing Label2\") が nil を返した");
-		return h;
+		{
+			probe.log(tag + ": ハンドルが nil");
+			return;
+		}
+		VWFC::VWObjects::VWParametricObj pio(h);
+		probe.log(tag + ": " + ProbeStyleInfo(h) + " / " + ProbeBounds(h));
+		probe.log(tag + ": ScaleFactor=" + ProbeStr(pio.GetParamValue("ScaleFactor")) +
+				  " World-based=" + ProbeStr(pio.GetParamValue("World-based")) +
+				  " Link State=" + ProbeStr(pio.GetParamValue("Link State")));
+		probe.log(tag + " レイアウト: " + ProbeTextSummary(gSDK->GetCustomObjectProfileGroup(h)));
+
+		std::vector<double> drawn;
+		ProbeCollectTextSizes(h, 0, drawn);
+		if (drawn.empty())
+		{
+			probe.log(tag + " 描いた図形: テキスト 0 件 / " + ProbeShapeSummary(h));
+		}
+		else
+		{
+			std::string line = tag + " 描いた図形: テキスト " +
+							   ProbeInt(static_cast<Sint32>(drawn.size())) + " 件:";
+			for (size_t i = 0; i < drawn.size(); ++i)
+			{
+				line += " " + ProbeNum(drawn[i]);
+				if (worldPerPt > 0.0)
+					line += "（紙で " + ProbeNum(drawn[i] / worldPerPt) + "pt）";
+			}
+			probe.log(line);
+		}
 	}
 } // namespace
 
 VW_PROBE("drawing-label-style-textsize", "図面ラベルのスタイルと文字の大きさ",
-		 "スタイルの自動適用と外し方、レイアウトの文字の大きさを実測する")
+		 "既定レイアウトの出どころと、レイアウトの文字の大きさを実測する")
 {
 	// 作る前に 1 度。これが無いと最初の 1 個で「オブジェクトの設定」ダイアログが出る。
 	gSDK->DefineCustomObject("Drawing Label2", kCustomObjectPrefNever);
 
 	// -----------------------------------------------------------------------
-	// 段取り: 1/50 のデザインレイヤ → シートレイヤ（ここでアクティブになる）→ 1/50 のビューポート
 	probe.log("=== 段取り ===");
 	MCObjectHandle design = gSDK->CreateLayer("調査用デザイン", kLayerDesign);
 	if (design == nil)
@@ -224,6 +265,11 @@ VW_PROBE("drawing-label-style-textsize", "図面ラベルのスタイルと文�
 		return;
 	}
 	gSDK->SetLayerScaleN(design, kProbeVpScale);
+	// **ビューポートの元になる図形を置く。** 1 回目は空のデザインレイヤから
+	// ビューポートを作っており、注釈へ入れられなかった原因の候補だった。
+	MCObjectHandle seedRect =
+		gSDK->CreateRectangleN(WorldPt(0, 0), Vector2(1, 0), 10000.0, 10000.0);
+	probe.log(std::string("デザインレイヤの目印の矩形: ") + (seedRect != nil ? "作れた" : "nil"));
 
 	MCObjectHandle sheet = gSDK->CreateLayer("調査用シート", kLayerSheet);
 	if (sheet == nil)
@@ -246,167 +292,183 @@ VW_PROBE("drawing-label-style-textsize", "図面ラベルのスタイルと文�
 		TVariableBlock readBack;
 		Real64 s = 0.0;
 		if (gSDK->GetObjectVariable(vp, ovViewportScale, readBack) && readBack.GetReal64(s))
-			probe.log(std::string("ビューポートの縮尺 ovViewportScale=") + ProbeNum(s));
-		else
-			probe.log("ビューポートの縮尺を読み戻せなかった");
+			probe.log("ビューポートの縮尺 ovViewportScale=" + ProbeNum(s));
+		probe.log(std::string("注釈群 GetViewportGroup(kViewportGroupAnnotation)=") +
+				  (gSDK->GetViewportGroup(vp, kViewportGroupAnnotation) != nil ? "取れる" : "nil"));
 	}
 
 	// -----------------------------------------------------------------------
-	// 段 1: ツールにいま設定されているスタイル（元の値。最後に戻す）
-	probe.log("=== 段 1: ツールのスタイル（元の値）===");
-	RefNumber toolRefOriginal = 0;
-	const bool gotTool = gSDK->GetPluginStyleForTool("Drawing Label2", toolRefOriginal);
+	// 段 A: 注釈へ入れる道の切り分け。1 回目は AddViewportAnnotationObject が false を返した。
+	probe.log("=== 段 A: 注釈へ入れられるか（3 通り）===");
 	{
-		std::string line = std::string("GetPluginStyleForTool 戻り値=") +
-						   (gotTool ? "true" : "false") + " ref=" + ProbeInt(toolRefOriginal);
-		if (toolRefOriginal != 0)
+		MCObjectHandle r1 = gSDK->CreateRectangleN(WorldPt(0, 0), Vector2(1, 0), 100.0, 100.0);
+		probe.log(std::string("A1 矩形（作れば文書に入る）→ AddViewportAnnotationObject=") +
+				  ProbeBoolStr(r1 != nil && gSDK->AddViewportAnnotationObject(vp, r1) != 0));
+
+		MCObjectHandle l2 = gSDK->CreateCustomObject("Drawing Label2", WorldPt(0, 0), 0.0, false);
+		probe.log(std::string("A2 ラベル bInsert=false → AddViewportAnnotationObject=") +
+				  ProbeBoolStr(l2 != nil && gSDK->AddViewportAnnotationObject(vp, l2) != 0) +
+				  " Link State=" +
+				  (l2 != nil
+					   ? ProbeStr(VWFC::VWObjects::VWParametricObj(l2).GetParamValue("Link State"))
+					   : "—"));
+
+		MCObjectHandle l3 = gSDK->CreateCustomObject("Drawing Label2", WorldPt(0, 0), 0.0, true);
+		probe.log(std::string("A3 ラベル bInsert=true → AddViewportAnnotationObject=") +
+				  ProbeBoolStr(l3 != nil && gSDK->AddViewportAnnotationObject(vp, l3) != 0) +
+				  " Link State=" +
+				  (l3 != nil
+					   ? ProbeStr(VWFC::VWObjects::VWParametricObj(l3).GetParamValue("Link State"))
+					   : "—"));
+		probe.log(std::string("A 後の注釈群=") +
+				  (gSDK->GetViewportGroup(vp, kViewportGroupAnnotation) != nil ? "取れる" : "nil"));
+	}
+
+	// 以降「注釈へ入れる」はこの 1 本にまとめる（戻り値も Link State も毎回出す）。
+	auto putInAnnotation = [&probe, vp](const std::string& tag, MCObjectHandle h)
+	{
+		const Boolean ok = gSDK->AddViewportAnnotationObject(vp, h);
+		gSDK->ResetObject(h);
+		probe.log(tag + ": 注釈へ AddViewportAnnotationObject=" + ProbeBoolStr(ok != 0) +
+				  " Link State=" +
+				  ProbeStr(VWFC::VWObjects::VWParametricObj(h).GetParamValue("Link State")));
+		return ok != 0;
+	};
+
+	// -----------------------------------------------------------------------
+	// 段 B: 物差し——紙で 6pt になると分かっている寸法を同じ注釈へ 1 本置く。
+	probe.log("=== 段 B: 物差しの寸法（紙で 6pt）===");
+	double worldPerPt = 0.0;
+	{
+		MCObjectHandle dim = gSDK->CreateLinearDimension(WorldPt(0, 3000), WorldPt(5000, 3000), 0,
+														 0, Vector2(0, 0), 0);
+		if (dim == nil)
 		{
-			TXString nm;
-			gSDK->InternalIndexToNameN(static_cast<InternalIndex>(toolRefOriginal), nm);
-			line += " 名前=" + ProbeStr(nm);
+			probe.log("段 B: CreateLinearDimension が nil を返した（物差しは無し）");
 		}
-		probe.log(line);
+		else
+		{
+			TVariableBlock showVar;
+			showVar = true;
+			gSDK->SetObjectVariable(dim, ovDimShowValue, showVar);
+			TVariableBlock fontVar;
+			fontVar = static_cast<Real64>(kProbeRulerPt * kProbePtToMm * kProbeVpScale);
+			gSDK->SetObjectVariable(dim, ovDimFontSize, fontVar);
+			gSDK->ResetObject(dim);
+			putInAnnotation("段 B 寸法", dim);
+			gSDK->ResetObject(dim);
+			std::vector<double> sizes;
+			ProbeCollectTextSizes(dim, 0, sizes);
+			probe.log("段 B 書いた ovDimFontSize=" +
+					  ProbeNum(kProbeRulerPt * kProbePtToMm * kProbeVpScale) +
+					  " / 寸法の中のテキスト " + ProbeTextSummary(dim));
+			if (!sizes.empty() && sizes[0] > 0.0)
+			{
+				worldPerPt = sizes[0] / kProbeRulerPt;
+				probe.log("段 B ★ 物差し: 紙の 1pt ＝ 世界座標 " + ProbeNum(worldPerPt));
+			}
+			else
+			{
+				probe.log("段 B: 寸法の中にテキストが見つからず、物差しを作れなかった");
+			}
+		}
+		if (worldPerPt <= 0.0)
+		{
+			// 計算値で代用する（Findings「Dimensions」: 紙の pt × 25.4/72 × 縮尺）。
+			worldPerPt = kProbePtToMm * kProbeVpScale;
+			probe.log("段 B: 計算値で代用する 紙の 1pt ＝ 世界座標 " + ProbeNum(worldPerPt));
+		}
 	}
 
 	// -----------------------------------------------------------------------
-	// 段 2: そのまま作ったラベル（文書のツール設定のまま）
-	probe.log("=== 段 2: ツール設定に触らず作る ===");
-	MCObjectHandle labelA = ProbeNewLabel(probe, "段 2");
-	if (labelA == nil)
-	{
-		probe.fail("段 2: 図面ラベルを作れなかった");
-		return;
-	}
-	probe.log(std::string("段 2 作った直後: ") + ProbeStyleInfo(labelA));
-	probe.log(std::string("段 2 AddViewportAnnotationObject=") +
-			  (gSDK->AddViewportAnnotationObject(vp, labelA) ? "true" : "false"));
-	gSDK->ResetObject(labelA);
-	probe.log(std::string("段 2 注釈へ入れて ResetObject した後: ") + ProbeStyleInfo(labelA));
+	// 段 C: スタイルを 1 本作る（Findings「Parametric Objects」の手順）。
+	probe.log("=== 段 C: 調査用のスタイルを作る ===");
+	RefNumber toolRefOriginal = 0;
+	gSDK->GetPluginStyleForTool("Drawing Label2", toolRefOriginal);
+	probe.log("ツールの元のスタイル ref=" + ProbeInt(toolRefOriginal));
 
-	// -----------------------------------------------------------------------
-	// 段 3: 図面ラベルのスタイルを自分で 1 本作り、ツールへ設定して作り直す
-	probe.log("=== 段 3: スタイルを作ってツールへ設定し、作った直後を見る ===");
 	TXString styleName("調査用_図面ラベルスタイル");
 	MCObjectHandle hSymDef = gSDK->CreateSymbolDefinition(styleName);
+	RefNumber styleRef = 0;
 	if (hSymDef == nil)
 	{
-		probe.fail("段 3: CreateSymbolDefinition が nil を返した（同名が既に在る？）");
+		probe.log(
+			"段 C: CreateSymbolDefinition が nil（同名が既に在る？）→ 元のツールのスタイルで進む");
+		styleRef = toolRefOriginal;
+	}
+	else
+	{
+		MCObjectHandle seed = ProbeNewLabel(probe, "段 C 種");
+		if (seed == nil)
+		{
+			probe.fail("段 C: 種の図面ラベルを作れなかった");
+			return;
+		}
+		gSDK->AddObjectToContainer(seed, hSymDef);
+		gSDK->ResetObject(hSymDef); // ★ サブタイプを書く**前に**通す
+		gSDK->SetSymbolDefSubType(
+			hSymDef, static_cast<Sint32>(VWFC::VWObjects::VWParametricObj::GetInternalID(seed)));
+		gSDK->SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByStyle);
+		styleRef = gSDK->GetObjectInternalIndex(hSymDef);
+		probe.log("段 C subType の読み戻し=" + ProbeInt(gSDK->GetSymbolDefSubType(hSymDef)) +
+				  " IsPluginStyle=" + ProbeBoolStr(gSDK->IsPluginStyle(hSymDef)) +
+				  " ref=" + ProbeInt(styleRef));
+	}
+	if (styleRef == 0)
+	{
+		probe.fail("段 C: 当てられるスタイルが用意できなかった");
 		return;
-	}
-	MCObjectHandle seed = ProbeNewLabel(probe, "段 3 種");
-	if (seed == nil)
-	{
-		probe.fail("段 3: 種の図面ラベルを作れなかった");
-		return;
-	}
-	probe.log(std::string("段 3 AddObjectToContainer=") +
-			  (gSDK->AddObjectToContainer(seed, hSymDef) ? "true" : "false"));
-	gSDK->ResetObject(hSymDef); // ★ サブタイプを書く**前に**通す
-	const TInternalID seedID = VWFC::VWObjects::VWParametricObj::GetInternalID(seed);
-	gSDK->SetSymbolDefSubType(hSymDef, static_cast<Sint32>(seedID));
-	gSDK->SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByStyle);
-	const RefNumber styleRef = gSDK->GetObjectInternalIndex(hSymDef);
-	probe.log(std::string("段 3 種の内部 ID=") + ProbeInt(static_cast<Sint32>(seedID)) +
-			  " SetSymbolDefSubType の読み戻し=" + ProbeInt(gSDK->GetSymbolDefSubType(hSymDef)) +
-			  " IsPluginStyle=" + (gSDK->IsPluginStyle(hSymDef) ? "true" : "false") +
-			  " ref=" + ProbeInt(styleRef));
-	if (styleRef == 0 || !gSDK->IsPluginStyle(hSymDef))
-	{
-		probe.fail("段 3: 図面ラベルのスタイルを用意できなかった（以降の段は当てにならない）");
-	}
-
-	probe.log(std::string("段 3 SetPluginStyleForTool(styleRef)=") +
-			  (gSDK->SetPluginStyleForTool("Drawing Label2", styleRef) ? "true" : "false"));
-	{
-		RefNumber back = 0;
-		const bool ret = gSDK->GetPluginStyleForTool("Drawing Label2", back);
-		probe.log(std::string("段 3 読み戻し 戻り値=") + (ret ? "true" : "false") +
-				  " ref=" + ProbeInt(back));
-	}
-
-	MCObjectHandle labelB = ProbeNewLabel(probe, "段 3");
-	if (labelB == nil)
-	{
-		probe.fail("段 3: 図面ラベルを作れなかった");
-		return;
-	}
-	probe.log(std::string("段 3 ★ ツールにスタイルを設定して作った直後: ") +
-			  ProbeStyleInfo(labelB));
-	gSDK->AddViewportAnnotationObject(vp, labelB);
-	gSDK->ResetObject(labelB);
-	probe.log(std::string("段 3 ★ 注釈へ入れて ResetObject した後: ") + ProbeStyleInfo(labelB));
-
-	// -----------------------------------------------------------------------
-	// 段 4: 外し方① SetPluginObjectStyle(h, 0)。レイアウトが保たれるかも見る。
-	probe.log("=== 段 4: 外し方① SetPluginObjectStyle(h, 0) ===");
-	ProbeRebuildLayout(probe, "段 4 組み直し", labelB, 0, 0);
-	probe.log(std::string("段 4 組み直した直後: ") + ProbeStyleInfo(labelB));
-	ProbeDumpTexts(probe, "段 4 組み直した直後 レイアウト",
-				   gSDK->GetCustomObjectProfileGroup(labelB));
-	probe.log(std::string("段 4 SetPluginObjectStyle(h, 0) の戻り値=") +
-			  (gSDK->SetPluginObjectStyle(labelB, 0) ? "true" : "false"));
-	probe.log(std::string("段 4 呼んだ直後: ") + ProbeStyleInfo(labelB));
-	gSDK->ResetObject(labelB);
-	probe.log(std::string("段 4 ResetObject の後: ") + ProbeStyleInfo(labelB));
-	ProbeDumpTexts(probe, "段 4 外した後 レイアウト", gSDK->GetCustomObjectProfileGroup(labelB));
-	ProbeDumpTexts(probe, "段 4 外した後 描いた図形", labelB);
-	gSDK->UpdateViewport(vp);
-	probe.log(std::string("段 4 UpdateViewport の後: ") + ProbeStyleInfo(labelB));
-
-	// 対照: VWFC の VWParametricObj::SetStyle(0) は何もしない（ソース根拠の裏取り）。
-	probe.log("=== 段 4b: 対照 VWParametricObj::SetStyle(0) ===");
-	MCObjectHandle labelC = ProbeNewLabel(probe, "段 4b");
-	if (labelC != nil)
-	{
-		gSDK->AddViewportAnnotationObject(vp, labelC);
-		gSDK->ResetObject(labelC);
-		probe.log(std::string("段 4b 呼ぶ前: ") + ProbeStyleInfo(labelC));
-		const RefNumber zero = 0;
-		VWFC::VWObjects::VWParametricObj(labelC).SetStyle(zero);
-		probe.log(std::string("段 4b SetStyle(0) の後: ") + ProbeStyleInfo(labelC));
-		gSDK->ResetObject(labelC);
-		probe.log(std::string("段 4b ResetObject の後: ") + ProbeStyleInfo(labelC));
 	}
 
 	// -----------------------------------------------------------------------
-	// 段 5: 外し方② ツールのスタイルを 0 にしてから作り、元へ戻す
-	probe.log("=== 段 5: 外し方② ツールのスタイルを 0 にしてから作る ===");
-	probe.log(std::string("段 5 SetPluginStyleForTool(0)=") +
-			  (gSDK->SetPluginStyleForTool("Drawing Label2", 0) ? "true" : "false"));
-	{
-		RefNumber back = 0;
-		gSDK->GetPluginStyleForTool("Drawing Label2", back);
-		probe.log(std::string("段 5 読み戻し ref=") + ProbeInt(back));
-	}
-	MCObjectHandle labelD = ProbeNewLabel(probe, "段 5");
-	if (labelD != nil)
-	{
-		probe.log(std::string("段 5 ★ ツールのスタイルが 0 のときに作った直後: ") +
-				  ProbeStyleInfo(labelD));
-		gSDK->AddViewportAnnotationObject(vp, labelD);
-		gSDK->ResetObject(labelD);
-		probe.log(std::string("段 5 注釈へ入れて ResetObject した後: ") + ProbeStyleInfo(labelD));
-		gSDK->SetPluginStyleForTool("Drawing Label2", styleRef); // ツールのスタイルを戻す
-		gSDK->ResetObject(labelD);
-		probe.log(std::string("段 5 ★ ツールのスタイルを戻して ResetObject した後: ") +
-				  ProbeStyleInfo(labelD));
-	}
+	// 段 D: **既定のレイアウトはどこから来るか。** スタイル有り／無しで作った直後を見比べる。
+	probe.log("=== 段 D: 既定のレイアウトの出どころ ===");
+	gSDK->SetPluginStyleForTool("Drawing Label2", styleRef);
+	MCObjectHandle dStyled = ProbeNewLabel(probe, "D1");
+	if (dStyled != nil)
+		probe.log("D1 スタイル有りで作った直後: " + ProbeStyleInfo(dStyled) + " / レイアウト " +
+				  ProbeShapeSummary(gSDK->GetCustomObjectProfileGroup(dStyled)) + " / " +
+				  ProbeTextSummary(gSDK->GetCustomObjectProfileGroup(dStyled)));
 
-	// -----------------------------------------------------------------------
-	// 段 6: レイアウトの中の文字の大きさ
-	//
-	//	ここから先は**スタイルの影響を切るため、ツールのスタイルを 0 にしたまま**測る。
-	probe.log("=== 段 6: レイアウトの中の文字の大きさ ===");
 	gSDK->SetPluginStyleForTool("Drawing Label2", 0);
+	MCObjectHandle dPlain = ProbeNewLabel(probe, "D2");
+	if (dPlain != nil)
+	{
+		probe.log("D2 スタイル無しで作った直後: " + ProbeStyleInfo(dPlain) + " / レイアウト " +
+				  ProbeShapeSummary(gSDK->GetCustomObjectProfileGroup(dPlain)) + " / " +
+				  ProbeTextSummary(gSDK->GetCustomObjectProfileGroup(dPlain)));
+		gSDK->ResetObject(dPlain);
+		probe.log("D2 ResetObject の後: レイアウト " +
+				  ProbeShapeSummary(gSDK->GetCustomObjectProfileGroup(dPlain)) + " / 描いた図形 " +
+				  ProbeShapeSummary(dPlain) + " / " + ProbeBounds(dPlain));
+	}
 
-	// 文字スタイル「調査用(10pt)」を 1 本作る。ovTextStyleSize の単位は**インチ**。
+	// D3: スタイル有りで作った個体を、レイアウトに触らずに外したらレイアウトはどうなるか。
+	gSDK->SetPluginStyleForTool("Drawing Label2", styleRef);
+	MCObjectHandle dStrip = ProbeNewLabel(probe, "D3");
+	if (dStrip != nil)
+	{
+		probe.log("D3 外す前: レイアウト " +
+				  ProbeShapeSummary(gSDK->GetCustomObjectProfileGroup(dStrip)));
+		gSDK->SetPluginObjectStyle(dStrip, 0);
+		gSDK->ResetObject(dStrip);
+		probe.log("D3 ★ 組み直さずに外した後: " + ProbeStyleInfo(dStrip) + " / レイアウト " +
+				  ProbeShapeSummary(gSDK->GetCustomObjectProfileGroup(dStrip)) + " / " +
+				  ProbeTextSummary(gSDK->GetCustomObjectProfileGroup(dStrip)) + " / " +
+				  ProbeBounds(dStrip));
+	}
+
+	// -----------------------------------------------------------------------
+	// 段 E: レイアウトの中の文字の大きさ。
+	//
+	//	**作るときはスタイル有り**（既定レイアウトが要る）→ 組み直す → 外す、の順で揃える。
+	probe.log("=== 段 E: レイアウトの中の文字の大きさ ===");
 	InternalIndex tsRef = 0;
 	{
 		MCObjectHandle hTS = gSDK->CreateTextStyleResource("調査用(10pt)");
 		if (hTS == nil)
 		{
-			probe.log(
-				"段 6: CreateTextStyleResource が nil を返した（文字スタイルの枝は測れない）");
+			probe.log("段 E: CreateTextStyleResource が nil（文字スタイルの枝は測れない）");
 		}
 		else
 		{
@@ -418,132 +480,93 @@ VW_PROBE("drawing-label-style-textsize", "図面ラベルのスタイルと文�
 			Real64 inches = 0.0;
 			gSDK->GetObjectVariable(hTS, ovTextStyleSize, back);
 			back.GetReal64(inches);
-			probe.log(std::string("段 6 文字スタイル ref=") + ProbeInt(tsRef) +
+			probe.log("段 E 文字スタイル ref=" + ProbeInt(tsRef) +
 					  " ovTextStyleSize（インチ）=" + ProbeNum(inches));
 		}
 	}
-
-	probe.log(std::string("段 6 与える値: 10pt をそのまま mm へ=") + ProbeNum(kProbeTenPtMm) +
+	probe.log("段 E 与える値: 10pt を素直に mm へ=" + ProbeNum(kProbeTenPtMm) +
 			  " / 縮尺を掛けた値=" + ProbeNum(kProbeTenPtMm * kProbeVpScale));
 
-	// F0: 対照。文字の大きさに何も触らず、レイアウトだけ組み直す（注釈の中）。
-	probe.log("--- F0 対照: 大きさに触らない（注釈の中・1/50） ---");
-	MCObjectHandle f0 = ProbeNewLabel(probe, "F0");
-	if (f0 != nil)
+	// 置き場: 0=ビューポートの注釈（1/50） 1=シートレイヤ直下（1:1） 2=デザインレイヤ（1/50）
+	struct ProbeCase
 	{
-		gSDK->AddViewportAnnotationObject(vp, f0);
-		gSDK->ResetObject(f0);
-		ProbeRebuildLayout(probe, "F0", f0, 0, 0);
-		ProbeMeasure(probe, "F0", f0);
-	}
+		const char* tag;
+		WorldCoord size;
+		bool useTextStyle;
+		bool afterPlacing; // 組み直しを置いた後にやるか
+		int place;
+		const char* scaleFactor; // nullptr なら触らない
+		const char* worldBased;	 // nullptr なら触らない
+	};
+	const ProbeCase cases[] = {
+		{"E1 SetTextSize(10pt mm)・注釈・入れる前", kProbeTenPtMm, false, false, 0, nullptr,
+		 nullptr},
+		{"E2 SetTextSize(10pt mm)・注釈・入れた後", kProbeTenPtMm, false, true, 0, nullptr,
+		 nullptr},
+		{"E3 SetTextSize(10pt mm × 縮尺)・注釈・入れる前", kProbeTenPtMm * kProbeVpScale, false,
+		 false, 0, nullptr, nullptr},
+		{"E4 文字スタイル(10pt)・注釈・入れる前", 0, true, false, 0, nullptr, nullptr},
+		{"E5 文字スタイル(10pt)・注釈・入れた後", 0, true, true, 0, nullptr, nullptr},
+		{"E6 対照 大きさに触らない・注釈", 0, false, false, 0, nullptr, nullptr},
+		{"E7 SetTextSize(10pt mm)・シートレイヤ直下(1:1)", kProbeTenPtMm, false, false, 1, nullptr,
+		 nullptr},
+		{"E8 SetTextSize(10pt mm)・デザインレイヤ(1/50)", kProbeTenPtMm, false, false, 2, nullptr,
+		 nullptr},
+		{"E9 SetTextSize(10pt mm) ＋ ScaleFactor=2・注釈", kProbeTenPtMm, false, false, 0, "2",
+		 nullptr},
+		{"E10 SetTextSize(10pt mm) ＋ World-based=True・注釈", kProbeTenPtMm, false, false, 0,
+		 nullptr, "True"},
+	};
 
-	// F1: SetTextSize(3.52778mm) を**注釈へ入れる前**に当てる。
-	probe.log("--- F1 SetTextSize(10pt 相当 mm)・注釈へ入れる前 ---");
-	MCObjectHandle f1 = ProbeNewLabel(probe, "F1");
-	if (f1 != nil)
+	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
 	{
-		ProbeRebuildLayout(probe, "F1", f1, kProbeTenPtMm, 0);
-		probe.log("F1 組み直し済み・注釈へ入れる前の測り:");
-		ProbeMeasure(probe, "F1 入れる前", f1);
-		gSDK->AddViewportAnnotationObject(vp, f1);
-		gSDK->ResetObject(f1);
-		ProbeMeasure(probe, "F1 入れた後", f1);
-	}
+		const ProbeCase& c = cases[i];
+		if (c.useTextStyle && tsRef == 0)
+			continue;
+		probe.log(std::string("--- ") + c.tag + " ---");
+		gSDK->SetPluginStyleForTool("Drawing Label2",
+									styleRef); // 既定レイアウトが要るので有りで作る
+		MCObjectHandle h = ProbeNewLabel(probe, c.tag);
+		if (h == nil)
+			continue;
+		VWFC::VWObjects::VWParametricObj pio(h);
+		if (c.scaleFactor != nullptr)
+			pio.SetParamValue("ScaleFactor", c.scaleFactor);
+		if (c.worldBased != nullptr)
+			pio.SetParamValue("World-based", c.worldBased);
 
-	// F2: 同じ値を**注釈へ入れた後**に当てる。
-	probe.log("--- F2 SetTextSize(10pt 相当 mm)・注釈へ入れた後 ---");
-	MCObjectHandle f2 = ProbeNewLabel(probe, "F2");
-	if (f2 != nil)
-	{
-		gSDK->AddViewportAnnotationObject(vp, f2);
-		gSDK->ResetObject(f2);
-		ProbeRebuildLayout(probe, "F2", f2, kProbeTenPtMm, 0);
-		ProbeMeasure(probe, "F2", f2);
-	}
+		const InternalIndex useTS = c.useTextStyle ? tsRef : 0;
+		if (!c.afterPlacing)
+			ProbeRebuildLayout(probe, c.tag, h, c.size, useTS);
 
-	// F3: 縮尺を掛けた値（10pt × 50）を**注釈へ入れる前**に当てる。
-	probe.log("--- F3 SetTextSize(10pt × 縮尺)・注釈へ入れる前 ---");
-	MCObjectHandle f3 = ProbeNewLabel(probe, "F3");
-	if (f3 != nil)
-	{
-		ProbeRebuildLayout(probe, "F3", f3, kProbeTenPtMm * kProbeVpScale, 0);
-		gSDK->AddViewportAnnotationObject(vp, f3);
-		gSDK->ResetObject(f3);
-		ProbeMeasure(probe, "F3", f3);
-	}
+		if (c.place == 0)
+			putInAnnotation(c.tag, h);
+		else if (c.place == 1)
+			gSDK->AddObjectToContainer(h, sheet);
+		else
+			gSDK->AddObjectToContainer(h, design);
+		gSDK->ResetObject(h);
 
-	// F4 / F5: 文字スタイル（10pt）を注釈へ入れる前／後に当てる。
-	if (tsRef != 0)
-	{
-		probe.log("--- F4 文字スタイル(10pt)・注釈へ入れる前 ---");
-		MCObjectHandle f4 = ProbeNewLabel(probe, "F4");
-		if (f4 != nil)
-		{
-			ProbeRebuildLayout(probe, "F4", f4, 0, tsRef);
-			gSDK->AddViewportAnnotationObject(vp, f4);
-			gSDK->ResetObject(f4);
-			ProbeMeasure(probe, "F4", f4);
-		}
+		if (c.afterPlacing)
+			ProbeRebuildLayout(probe, c.tag, h, c.size, useTS);
 
-		probe.log("--- F5 文字スタイル(10pt)・注釈へ入れた後 ---");
-		MCObjectHandle f5 = ProbeNewLabel(probe, "F5");
-		if (f5 != nil)
-		{
-			gSDK->AddViewportAnnotationObject(vp, f5);
-			gSDK->ResetObject(f5);
-			ProbeRebuildLayout(probe, "F5", f5, 0, tsRef);
-			ProbeMeasure(probe, "F5", f5);
-		}
-	}
-
-	// F6: 同じ値を**シートレイヤ直下**（1:1）へ置いて測る。縮尺の効き目を切り分ける対照。
-	probe.log("--- F6 SetTextSize(10pt 相当 mm)・シートレイヤ直下（1:1） ---");
-	MCObjectHandle f6 = gSDK->CreateCustomObject("Drawing Label2", ProbeNextSpot(), 0.0, true);
-	if (f6 != nil)
-	{
-		ProbeRebuildLayout(probe, "F6", f6, kProbeTenPtMm, 0);
-		ProbeMeasure(probe, "F6", f6);
-	}
-	else
-	{
-		probe.log("F6: CreateCustomObject が nil を返した");
-	}
-
-	// F7: ScaleFactor（記号の倍率）を 2 にしたとき、レイアウトの文字も倍になるか。
-	probe.log("--- F7 SetTextSize(10pt 相当 mm) ＋ ScaleFactor=2（注釈の中） ---");
-	MCObjectHandle f7 = ProbeNewLabel(probe, "F7");
-	if (f7 != nil)
-	{
-		VWFC::VWObjects::VWParametricObj(f7).SetParamValue("ScaleFactor", "2");
-		ProbeRebuildLayout(probe, "F7", f7, kProbeTenPtMm, 0);
-		gSDK->AddViewportAnnotationObject(vp, f7);
-		gSDK->ResetObject(f7);
-		ProbeMeasure(probe, "F7", f7);
-	}
-
-	// F8: World-based を True にしたとき。
-	probe.log("--- F8 SetTextSize(10pt 相当 mm) ＋ World-based=True（注釈の中） ---");
-	MCObjectHandle f8 = ProbeNewLabel(probe, "F8");
-	if (f8 != nil)
-	{
-		VWFC::VWObjects::VWParametricObj(f8).SetParamValue("World-based", "True");
-		ProbeRebuildLayout(probe, "F8", f8, kProbeTenPtMm, 0);
-		gSDK->AddViewportAnnotationObject(vp, f8);
-		gSDK->ResetObject(f8);
-		ProbeMeasure(probe, "F8", f8);
+		// **ここで外す。** 組み直したレイアウトは外しても保たれる（1 回目の走行で確定）。
+		gSDK->SetPluginObjectStyle(h, 0);
+		gSDK->ResetObject(h);
+		// 置き場が 1:1 のときは、紙の pt は世界座標そのもの（÷1）で読む。
+		ProbeMeasure(probe, c.tag, h, c.place == 1 ? kProbePtToMm : worldPerPt);
 	}
 
 	gSDK->UpdateViewport(vp);
 
 	// -----------------------------------------------------------------------
-	// 後片付け: ツールのスタイルを元の値へ戻す。
 	probe.log("=== 後片付け ===");
-	probe.log(std::string("SetPluginStyleForTool(元の値 ") + ProbeInt(toolRefOriginal) + ")=" +
-			  (gSDK->SetPluginStyleForTool("Drawing Label2", toolRefOriginal) ? "true" : "false"));
+	probe.log("SetPluginStyleForTool(元の値 " + ProbeInt(toolRefOriginal) +
+			  ")=" + ProbeBoolStr(gSDK->SetPluginStyleForTool("Drawing Label2", toolRefOriginal)));
 	{
 		RefNumber back = 0;
 		gSDK->GetPluginStyleForTool("Drawing Label2", back);
-		probe.log(std::string("読み戻し ref=") + ProbeInt(back));
+		probe.log("読み戻し ref=" + ProbeInt(back));
 	}
 	probe.log("おわり");
 }
