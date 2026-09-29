@@ -21,7 +21,10 @@ Vectorworks SDK（`SDKLib/`）に含まれる **C++ の宣言の一覧**と、`v
   索引はそれを宣言として読み取れない（実例: `GS_CreateSectionLineInstance` /
   `GS_IsSectionLineLinkedToViewport` は索引に 1 行も無いが、SDK には**ある**）。
   **「索引に無い」は「SDK に無い」ではない。** 目当ての機能が見つからなかったときは、
-  `ci-debug` の `sdk-grep` で原本を引き直す（[調査の作法](../Findings/Investigation%20Techniques.md)）。
+  `ci-debug` の `sdk-grep` で原本を引き直す。
+  ——ただし**この 12 本（`APP_API_*` の「未公開の API」）は宣言があっても呼べない**
+  （`CB_` シンボルが `libVWSDK.a` に無く、リンクで落ちる。理由と一覧は
+  [調査の作法](../Findings/Investigation%20Techniques.md)）。
 
 ## 置き場所
 

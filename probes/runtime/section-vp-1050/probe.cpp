@@ -10,7 +10,9 @@
 //	  3. SDK 製の断面はそもそも描かれているのか（キャッシュ群の中身を種類ごとに数える）
 //	  4. レベル基準線の高さは、属性・クラス・パラメータの変更で落ちるのか
 //	     （＝人が後から触る図面で壊れるのか）
-//	  5. UI と同じ経路——`GS_CreateSectionLineInstance` で断面線を作って結べないか
+//	  5. UI 製の断面線（645）が持っている欄（UI と同じ経路の候補だった
+//	     `GS_CreateSectionLineInstance` は**リンクできない**ことが分かったので、
+//	     代わりに断面線そのものを読む）
 //
 //	**実物件の図面（UI が断面ツールで作った断面ビューポートがあるもの）で走らせる。**
 //	図面へ試験用のシートレイヤと断面ビューポートを足すので、**走らせた後は保存しない**。
@@ -700,34 +702,16 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 
 	// =====================================================================
 	probe.log("");
-	probe.log("== 5. UI と同じ経路——断面線インスタンスを作って結べるか");
-	probe.log("  GS_CreateSectionLineInstance は「断面線の個体を作る（図面へは入れない）」");
-	if (uiViewport != nil)
-	{
-		MCObjectHandle instance = GS_CreateSectionLineInstance(gCBP, uiViewport);
-		probe.log("  UI 製から作った断面線インスタンス = " + ProbeDescribeObject(instance));
-	}
-	if (sdkViewport != nil)
-	{
-		MCObjectHandle instance = GS_CreateSectionLineInstance(gCBP, sdkViewport);
-		probe.log("  SDK 製から作った断面線インスタンス = " + ProbeDescribeObject(instance));
-		if (instance != nil && !designLayers.empty())
-		{
-			const bool added = gSDK->AddObjectToContainer(instance, designLayers[0]);
-			probe.log("  デザインレイヤへ入れた: " + std::string(added ? "成功" : "失敗"));
-			probe.log(std::string("  GS_IsSectionLineLinkedToViewport(その断面線) = ") +
-					  (GS_IsSectionLineLinkedToViewport(gCBP, instance) ? "true" : "false"));
-			gSDK->ResetObject(instance);
-			probe.log("  断面線を ResetObject した");
-			gSDK->UpdateViewport(sdkViewport);
-			ProbeLogMatrices(probe, "断面線を結んだ後の更新後", sdkViewport);
-			probe.log("  ↑ ここで 1050 が単位行列でなくなれば「作り方の欠けは断面線だった」");
-		}
-	}
-
-	// デザインレイヤにある断面線を数える（UI 製がどれと結び付いているかを見る）。
+	probe.log("== 5. UI 製の断面線（645）は何を持っているか");
+	probe.log("  ※ UI と同じ経路に見えた GS_CreateSectionLineInstance /");
+	probe.log("     GS_IsSectionLineLinkedToViewport は**呼べない**——ヘッダ（APIBase.Legacy.h の");
+	probe.log("     APP_API_FUNCTION）にはあるが、CB_ シンボルが libVWSDK.a に入っていないので");
+	probe.log("     リンクで「Undefined symbols」になる。だから代わりに、UI 製の断面線が");
+	probe.log(
+		"     "
+		"どんな欄を持っているかを読み出す（ビューポートとの結び付きがここに出るなら見える）。");
 	size_t sectionLines = 0;
-	size_t linkedSectionLines = 0;
+	MCObjectHandle firstSectionLine = nil;
 	for (size_t index = 0; index < designLayers.size(); ++index)
 	{
 		for (MCObjectHandle member = gSDK->FirstMemberObj(designLayers[index]); member != nil;
@@ -739,14 +723,25 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 			if (parametric.GetInternalID() != kInternalID_SectionLine2)
 				continue;
 			++sectionLines;
-			if (GS_IsSectionLineLinkedToViewport(gCBP, member))
-				++linkedSectionLines;
+			if (firstSectionLine == nil)
+				firstSectionLine = member;
 		}
 	}
 	probe.log("  デザインレイヤにある断面線（645）= " +
-			  ProbeFormatInt(static_cast<long long>(sectionLines)) +
-			  " 件、うちビューポートへ結ばれているもの = " +
-			  ProbeFormatInt(static_cast<long long>(linkedSectionLines)) + " 件");
+			  ProbeFormatInt(static_cast<long long>(sectionLines)) + " 件");
+	if (firstSectionLine != nil)
+	{
+		VWParametricObj sectionLine(firstSectionLine);
+		const size_t count = sectionLine.GetParamsCount();
+		probe.log("  最初の断面線の欄 " + ProbeFormatInt(static_cast<long long>(count)) + " 件:");
+		for (size_t index = 0; index < count && index < 80; ++index)
+		{
+			const TXString name = sectionLine.GetParamName(index);
+			const TXString value = sectionLine.GetParamValue(index);
+			probe.log("    " + std::string(static_cast<const char*>(name)) + " = " +
+					  std::string(static_cast<const char*>(value)));
+		}
+	}
 
 	probe.log("");
 	probe.log("おわり。**この図面は保存しないこと**（試験用のシートレイヤ「VW調査151 断面試験」と");
