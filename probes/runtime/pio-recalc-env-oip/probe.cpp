@@ -212,6 +212,24 @@ VW_PROBE("pio-recalc-env-oip",
 	for (const std::string& line : lines)
 		probe.log(line);
 
+	// --- 1.5) ① がそもそも PIO を作れていない場合を先に切り分ける -----------
+	// **塊が 0 個のときの原因は 2 つあり、言うべきことが正反対**である:
+	//   (a) ① が「殻に PIO が入っていない」で中止した → 要るのは PR の成果物の手入れ
+	//   (b) PIO はできたが `Recalculate` の記録が 1 つも無い → `kObjXPropAcceptStates` か
+	//       書き溜め先の疑い
+	// ① が (a) のとき書き溜め先へ `!!! ① 中止:` を残すので、ここで拾って**見当違いの
+	// お願い（「OIP を編集してください」）をしない**（実測で 1 回踏んだ）。
+	for (const std::string& line : lines)
+		if (line.find("!!! ① 中止:") != std::string::npos)
+		{
+			probe.fail("① が「この殻に調査用 PIO が入っていない」で中止している。"
+					   "**OIP の編集ではなく、PR の Actions の成果物"
+					   "（VwSdkProbes-mac / -windows）を手で入れて Vectorworks を再起動する**"
+					   "のが先です（ピッカー先頭の入れ替えで取れるのは main の殻なので、"
+					   "この PIO は入っていません）。入れ替えたら ① → OIP の編集 → ② の順で。");
+			return;
+		}
+
 	// --- 2) Recalculate ごとに割る ------------------------------------------
 	const std::vector<Block> blocks = SplitBlocks(lines);
 	probe.log("");
@@ -230,6 +248,14 @@ VW_PROBE("pio-recalc-env-oip",
 		probe.log("kObjectExternalReset（外からの ResetObject）の塊が無い"
 				  "——`kObjXPropAcceptStates` が効いていないか、理由が別の綴りで来ている。"
 				  "上の全文の『理由=』を読むこと。");
+	if (blocks.empty())
+	{
+		// ① は PIO を作れたのに `Recalculate` の記録が 1 つも無い——上の (b)。
+		probe.fail("`Recalculate` の記録が 1 つも無い（塊 0 個）。① は PIO を作れているので、"
+				   "疑うのは殻の書き溜め（`pioTrace::Append`）か、① と ② で書き溜め先が"
+				   "食い違っていること。上の「書き溜め先」のパスを ① の結果と見比べること。");
+		return;
+	}
 	if (paramIndex < 0)
 	{
 		probe.fail("kParameterChangedReset（OIP でパラメータを編集）の塊が無い。"

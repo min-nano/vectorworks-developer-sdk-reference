@@ -199,10 +199,16 @@ VW_PROBE("pio-recalc-env-reset",
 		gSDK->DefineCustomObject(kPioUniversalName, kCustomObjectPrefNever);
 	if (definition == nullptr)
 	{
+		// **② がここで止まったことを読めるように、書き溜め先へも残す。** さもないと
+		// ② は「塊が 0 個」しか分からず、`OnAddState` が効いていない疑いと区別が付かない
+		// ——「OIP を編集してください」と**見当違いのお願い**をしてしまう（実測で踏んだ）。
+		TraceAppend("!!! ① 中止: この殻に調査用 PIO が入っていない"
+					"（DefineCustomObject が nil）。PR の成果物を手で入れて再起動が要る。");
 		probe.fail(std::string("DefineCustomObject(\"") + kPioUniversalName +
 				   "\") が nil。**この殻には調査用 PIO が入っていない**"
-				   "——PR の Actions の成果物（VwSdkProbes-mac / -windows）を手で入れてから"
-				   "走らせてください（公開ビルドの殻は main のものなので入っていません）。");
+				   "——PR の Actions の成果物（VwSdkProbes-mac / -windows）を手で入れて"
+				   "**Vectorworks を再起動**してから走らせてください"
+				   "（ピッカー先頭の入れ替えで取れるのは main の殻なので入っていません）。");
 		return;
 	}
 	probe.log(std::string("DefineCustomObject(\"") + kPioUniversalName +
