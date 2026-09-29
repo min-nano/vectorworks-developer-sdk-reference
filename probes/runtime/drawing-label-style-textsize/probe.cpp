@@ -190,9 +190,18 @@ namespace
 		return ok != 0;
 	}
 
+	// 作ったラベルを縦にずらして置く。**測るのは数値だけ**だが、重ねて置くと図面を
+	// 見たときに何が何だか分からなくなるので、1 本ごとに下へずらす。
+	int gProbeLabelCount = 0;
+
+	WorldPt ProbeNextSpot()
+	{
+		return WorldPt(0, -1000.0 * (gProbeLabelCount++));
+	}
+
 	MCObjectHandle ProbeNewLabel(vwprobe::Report& probe, const std::string& tag)
 	{
-		MCObjectHandle h = gSDK->CreateCustomObject("Drawing Label2", WorldPt(0, 0), 0.0, false);
+		MCObjectHandle h = gSDK->CreateCustomObject("Drawing Label2", ProbeNextSpot(), 0.0, false);
 		if (h == nil)
 			probe.log(tag + ": CreateCustomObject(\"Drawing Label2\") が nil を返した");
 		return h;
@@ -489,7 +498,7 @@ VW_PROBE("drawing-label-style-textsize", "図面ラベルのスタイルと文�
 
 	// F6: 同じ値を**シートレイヤ直下**（1:1）へ置いて測る。縮尺の効き目を切り分ける対照。
 	probe.log("--- F6 SetTextSize(10pt 相当 mm)・シートレイヤ直下（1:1） ---");
-	MCObjectHandle f6 = gSDK->CreateCustomObject("Drawing Label2", WorldPt(0, 0), 0.0, true);
+	MCObjectHandle f6 = gSDK->CreateCustomObject("Drawing Label2", ProbeNextSpot(), 0.0, true);
 	if (f6 != nil)
 	{
 		ProbeRebuildLayout(probe, "F6", f6, kProbeTenPtMm, 0);
