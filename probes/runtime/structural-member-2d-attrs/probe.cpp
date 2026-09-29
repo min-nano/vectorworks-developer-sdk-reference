@@ -213,6 +213,40 @@ namespace
 	}
 
 	// ポップアップの値を 0〜3 で振って、描かれた子の実際の属性を読む。
+	// パーツ 1 つの「表示」だけを 3 面とも落として、どの子が消えるかを見る。
+	// 1 版目は被覆と中心線を同時に落としたので、消えた子がどちらのものか切り分けられ
+	// なかった。ここで 1 パーツずつに分ける。
+	void ProbeDropOnePart(vwprobe::Report& probe, const std::string& tag, double originY,
+						  const char* const* names, size_t nameCount)
+	{
+		MCObjectHandle member = ProbeMakeMember(probe, tag, originY);
+		if (member == nil)
+			return;
+		VWParametricObj pio(member);
+		ProbeDumpChildren(probe, tag + " 既定", member);
+		for (size_t at = 0; at < nameCount; ++at)
+		{
+			const size_t index = ProbeIndexOf(probe, pio, names[at]);
+			if (index == size_t(-1))
+				continue;
+			pio.SetParamBool(index, false);
+		}
+		const bool ok = gSDK->ResetObject(member) != 0;
+		std::string wrote;
+		for (size_t at = 0; at < nameCount; ++at)
+		{
+			const size_t index = ProbeIndexOf(probe, pio, names[at]);
+			if (index != size_t(-1))
+			{
+				wrote += std::string(at == 0 ? "" : " ") + names[at] + "=" +
+						 (pio.GetParamBool(index) ? "true" : "false");
+			}
+		}
+		probe.log(tag + std::string(" ResetObject=") + (ok ? "true" : "false") +
+				  " 読み戻し: " + wrote);
+		ProbeDumpChildren(probe, tag + " 落とした後", member);
+	}
+
 	void ProbeSweepValues(vwprobe::Report& probe, MCObjectHandle member, VWParametricObj& pio,
 						  const char* tag, const char* universalName)
 	{
@@ -348,6 +382,19 @@ VW_PROBE("structural-member-2d-attrs", "構造材の 2D / 3D 属性パラメー�
 					  std::string(pioB.GetParamBool(startCapIndex) ? "true" : "false"));
 			ProbeDumpChildren(probe, "[G2] B（StartCap も落とした後）", memberB);
 		}
+	}
+
+	// ---- G2b: 被覆と中心線を 1 つずつ落として切り分ける -------------------
+	{
+		const char* const kCoverDisplay[] = {"CoverDisplay_Above", "CoverDisplay_At",
+											 "CoverDisplay_Below"};
+		const char* const kCenterDisplay[] = {"CenterlineDisplay_Above", "CenterlineDisplay_At",
+											  "CenterlineDisplay_Below"};
+		const char* const kMemberDisplay[] = {"MemberDisplay_Above", "MemberDisplay_At",
+											  "MemberDisplay_Below"};
+		ProbeDropOnePart(probe, "[G2b] 被覆だけ", 20000.0, kCoverDisplay, 3);
+		ProbeDropOnePart(probe, "[G2b] 中心線だけ", 25000.0, kCenterDisplay, 3);
+		ProbeDropOnePart(probe, "[G2b] 構造材だけ", 30000.0, kMemberDisplay, 3);
 	}
 
 	// ---- G3 / G4 / G5: 値の意味を色で当てる ------------------------------
