@@ -834,6 +834,8 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 	// 4-0 で「断面VP としては成立している」と分かったので、残るのは**作り方の引数**か、
 	// UI が作るときに一緒に用意する何か。ここでは引数を振って当たりを探す。
 	probe.log("--- 4-5: 作り方（depth / 高さの範囲 / 断面線の位置）を振ってみる ---");
+	if (variants[0].fStory == nil)
+		probe.log("  変種 A のストーリが無いので、この段は行えない");
 	struct SlhVpRecipe
 	{
 		const char* fTag;
@@ -852,10 +854,11 @@ VW_PROBE("sdk-made-story-level-height", "SDK で作ったストーリのレベ�
 		{"断面線を壁の上に載せる", WorldPt(-1000, 0), WorldPt(7000, 0), WorldPt(0, 3000), 3000,
 		 -1000, 13000},
 	};
-	for (size_t r = 0; r < sizeof(recipes) / sizeof(recipes[0]); ++r)
+	for (size_t r = 0; variants[0].fStory != nil && r < sizeof(recipes) / sizeof(recipes[0]); ++r)
 	{
-		MCObjectHandle sheetR = gSDK->CreateLayer(
-			TXString("断面 4-5-") + TXString(static_cast<Sint32>(r + 1)), kLayerSheet);
+		// TXString に数値のコンストラクタを当てにしない（std::string で組んでから渡す）。
+		const std::string sheetName = "断面 4-5-" + std::to_string(r + 1);
+		MCObjectHandle sheetR = gSDK->CreateLayer(TXString(sheetName.c_str()), kLayerSheet);
 		if (sheetR == nil)
 		{
 			probe.log(std::string("  ") + recipes[r].fTag + ": シートレイヤを作れなかった");
