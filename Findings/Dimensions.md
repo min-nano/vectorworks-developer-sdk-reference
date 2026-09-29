@@ -54,11 +54,11 @@
 - **`ovDimTextSizeInPoints` は寸法が持っている値ではない。** 読むたびに
   「`ovDimFontSize` ÷ **読む時点のアクティブレイヤ**の縮尺」を pt に直したものが返る
   （入れ物の縮尺ですらない）。**紙の上で何 pt かの判断に使ってはいけない。**
-- **寸法は文字の大きさとは別に「文字スタイル」への参照を 1 つ持つ**（OIP の
-  「文字 → スタイル」。既定は〈クラスの文字スタイル〉＝ `ovDimTextStyle` が **`-2`**）。
-  **`ovDimFontSize` に焼き付く「素」はこの文字スタイルの大きさ**で、
-  **`SetTextStyleRef` は `ovDimFontSize` を書き換える**（`ovDimTextStyle` へ番号を書く道は
-  書き換えない）。**寸法規格も文字スタイルを持ち**、`GetDimensionStandardVariable(index,
+- **注釈へ置く寸法には `gSDK->SetTextStyleRef(dim, ref)` を呼ぶ**——**これを呼ばないと、
+  `ovDimFontSize` を正しく書いても値（数字）が描かれない**（実機の絵で確定）。既定の
+  〈クラスの文字スタイル〉（`ovDimTextStyle` が **`-2`**）のままでも、
+  `ovDimTextStyle` へ番号を書いただけでも出ない。**しかも 3 つは読み戻しで見分けが
+  付かない**。寸法規格も文字スタイルを持ち、`GetDimensionStandardVariable(index,
   `dimStdTextStyle`(51), …)` で ref number として読める（組み込み規格 1〜9 は `0`
   ＝持たない）。下記「[寸法の文字スタイル](#寸法の文字スタイル)」。
 - **ビューポートの注釈は、そのビューポートの縮尺で描かれる**（用紙 1:1 ではない）。
@@ -614,7 +614,12 @@ for (short index = 9; index >= -8; --index)
   `ovDimTextStyle` = **`-2`**）。**`-2` は「クラス由来」を表す番兵で、ref number ではない。**
 - **その状態でも `GetTextStyleRef` は番号を返す。ただし返るのはクラスに置いた文字
   スタイルではなく、当たっている寸法規格の文字スタイルだった。**
-- **文字スタイルを当てる口は 2 つあり、`ovDimFontSize` の扱いが違う**——
+- **注釈で値を出したいなら `ISDK::SetTextStyleRef(dim, ref)` を呼ぶ。これだけが効く。**
+  〈クラスの文字スタイル〉のままでは `ovDimFontSize` を正しく書いても**値が出ない**し、
+  **`ovDimTextStyle`(1248) へ番号を書く道も絵には効かない**——しかも
+  **`SetTextStyleRef` を呼んだときと読み戻しが完全に同じになる**ので、**読んで確かめる
+  ことができない**（下記「[注釈で値が出るのは `SetTextStyleRef` で明示したときだけ](#注釈で値が出るのは-settextstyleref-で明示したときだけ実機の絵で確定)」）。
+- **文字スタイルを当てる 2 つの口は `ovDimFontSize` の扱いも違う**——
   **`SetTextStyleRef` は `ovDimFontSize` を書き換える**が、
   **`ovDimTextStyle` へ番号を書く道は動かさない。**
 - **連続寸法へ繋いでも残る。** 繋ぐ前に直線寸法へ当てておけば、中の型 63 は
@@ -738,6 +743,43 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 - **どちらの道でも、後から `ovDimFontSize` を書けばその値が残る**（`264.5833` を書いて
   そのまま読み戻せた）。**順番は「文字スタイル → `ovDimFontSize`」にする**
   ——逆にすると `SetTextStyleRef` が書いた値を潰す。
+
+### 注釈で値が出るのは `SetTextStyleRef` で明示したときだけ（実機の絵で確定）
+
+**読み戻した値では「値が出るか」を判定できない。** 1/125 の平面ビューポートの注釈へ、
+作り方だけを変えた寸法を 6 行ならべて絵を見た（VW 2026 / macOS）。**測る長さを行ごとに
+変えてあるので、出た数字がそのままどの行かを表す。**
+
+| 行 | やったこと | `GetTextStyleByClass` | `ovDimTextStyle` | `ovDimFontSize` | **絵に値が出たか** |
+| --- | --- | --- | --- | --- | --- |
+| D1 | 〈クラスの文字スタイル〉のまま `ovDimFontSize` を書く | `true` | `-2` | `264.5833` | **出ない** |
+| D2 | **`SetTextStyleRef`** → `ovDimFontSize` を書く | `false` | `113` | `264.5833` | **出る** |
+| D3 | **`SetTextStyleRef`** だけ | `false` | `113` | `152.4000` | **出る** |
+| D4 | **`ovDimTextStyle` へ番号を書く** → `ovDimFontSize` を書く | `false` | `113` | `264.5833` | **出ない** |
+| D5 | 何もしない（対照） | `true` | `-2` | `2.1167` | 出ない |
+| D6 | 繋ぐ前に両方へ `SetTextStyleRef` ＋ `ovDimFontSize` → `CreateChainDimension` | `false` | `113` | `264.5833` | **出る** |
+
+> **`D2` と `D4` は読み戻しが 4 つとも完全に同じなのに、絵は片方しか出ない。**
+> つまり **`SetTextStyleRef` は、`ovDimTextStyle` へ番号を書くのとは違うことをしている**
+> ——そしてその違いは **`ISDK` から読めない**。
+
+- **【利用側への答え】注釈へ置く寸法には `gSDK->SetTextStyleRef(dim, ref)` を呼ぶ。**
+  `ovDimTextStyle`(1248) へ番号を書く道は**使ってはいけない**（D4）。
+  〈クラスの文字スタイル〉のままでは、`ovDimFontSize` を正しく書いても出ない（D1）。
+- **`ovDimFontSize` を正しく書いたかどうかは関係なかった。** D1 は `264.5833`
+  （紙 6pt ぴったり）を持っているのに出ない。**「大きさが小さすぎて見えない」のでは
+  ない**——[#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143)
+  の「1:1 生まれだから小さい」とは別の原因である。
+- **当てる文字スタイルは何でもよい。** D2・D3・D4 が使ったのはプローブが作った
+  無名の文字スタイルで、寸法規格の `寸法(6pt)` ではない。**「明示されている」こと自体が
+  効いている。**
+- **連続寸法でも同じ**（D6）。繋ぐ前に中身の直線寸法へ `SetTextStyleRef` を呼んでおけば、
+  繋いだ後も注釈へ移した後も値が出る。
+
+**〈クラスの文字スタイル〉そのものが壊れているわけではない。** 同じビューポートには
+**デザインレイヤ（1/50）に置いた by-class の寸法**も写っており、そちらは**値が出ていた**
+（`ovDimFontSize = 105.8333` → 1/125 の紙で 0.85mm ≒ 2.4pt の小さな数字として読めた）。
+**出なくなるのは、注釈へ置いた by-class の寸法だけ**である。
 
 ### 連続寸法へ繋いでも残る
 
