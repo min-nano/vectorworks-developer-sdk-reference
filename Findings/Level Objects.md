@@ -305,11 +305,23 @@ Y=0 / 2800 / 5600 へ置いても描かれる高さは **3 本とも `0`** で�
 | そのレベルのデザインレイヤ / シートレイヤへ直に | **絶対Z** |
 | **UI が作った断面ビューポートの注釈** | **絶対Z** |
 | 伏図（平面）ビューポートの注釈 | **`0`**（`ovIsSectionViewport` が `false`） |
-| SDK の `CreateSectionViewport` で作った断面ビューポートの注釈 | **`0`**（[#147](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/147)） |
+| SDK の `CreateSectionViewport` で作った断面ビューポートの注釈 | **素のままなら `0`。1 行足せば絶対Z**（下記） |
 
 **使うときは `Elev` 欄（または `Elevation`）を読み戻して `0` でないことを確かめる。**
 `0` なら疑うのは**ストーリではなくビューポート**——同じ 3 つ組をデザインレイヤか
 シートレイヤへ置けば数値は出る。
+
+#### SDK で作った断面ビューポートでも出せる——1055 を 1050 へ写す（#147）
+
+**`CreateSectionViewport` が作るビューポートは、断面の向き（`ovSheetLayerSectionViewportViewMatrix`
+＝ 1055）は持つのに、ビュー行列（`ovViewportViewMatrix` ＝ 1050）が単位行列のまま**残る
+——縦方向の基準が無いのはこれが理由だった。**注釈を置き終えてから 1055 を 1050 へ写し、
+個体を `ResetObject` すれば絶対Z が入る**（実測。3 本まとめて `540`）。
+
+**`UpdateViewport` は 1050 を単位行列へ戻す**ので、写すのは下ごしらえより後。戻っても
+**置いてある個体の `Elev` は消えない**（消えるのは、その個体を作り直したとき。そのときは
+写し直して `ResetObject` すれば戻る）。手順・実測値・潰した筋は
+[Viewports](Viewports.md)「SDK で作った断面ビューポートの注釈でレベル基準線に高さを出す」。
 
 #### ストーリバウンド（`SetObjectStoryBound` の一群）は使っていない
 

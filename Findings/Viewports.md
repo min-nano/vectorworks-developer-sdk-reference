@@ -48,6 +48,64 @@
   [Level Objects](Level%20Objects.md) にある（**既定では注釈の Y を読まない**ので、
   欄を 1 つ切り替える必要がある）。
 
+### SDK で作った断面ビューポートの注釈でレベル基準線に高さを出す（#147）
+
+**`CreateSectionViewport` が作るビューポートは、断面の向き（`ovSheetLayerSectionViewportViewMatrix`
+＝ 1055）は持つのに、ビューポート自身のビュー行列（`ovViewportViewMatrix` ＝ 1050）が
+単位行列のまま残る。** だから注釈に縦方向の基準が無く、レベル基準線が `0` を描く。
+UI が断面ツールで作ったビューポートでは **1050 と 1055 が完全に同じ値**で、ビューの向き
+（`ovViewportViewType` ＝ 1007）も **`standardViewRight`（6）**——SDK 製はそこが
+**`standardViewTop`（7）**、つまり〈上から見た〉ままである。
+
+**手順——1055 を 1050 へ写してから、注釈の個体を作り直す。**
+
+```cpp
+// 1) 作る → 2) 表示レイヤ・1064・レンダ・UpdateViewport の下ごしらえを済ませる
+// 3) 注釈へレベル基準線を置き、3 つ組を書く（Level Objects.md）
+// 4) **最後に** 断面の向きをビュー行列へ写す
+TVariableBlock sectionMatrix;
+if (gSDK->GetObjectVariable(vp, 1055, sectionMatrix))   // ovSheetLayerSectionViewportViewMatrix
+	gSDK->SetObjectVariable(vp, 1050, sectionMatrix);   // ovViewportViewMatrix
+// 5) 置いてある個体を作り直すと、そこで初めて絶対Z が入る
+gSDK->ResetObject(marker);
+```
+
+実測（実物件の図面。1階 / `耐力壁`、絶対Z `540`。3 回の実行）:
+
+| 何をしたか | 描かれた数値 |
+| --- | --- |
+| SDK 製の断面ビューポートの注釈へ、3 つ組だけ書いて置く | `0` |
+| **1055 を 1050 へ写してから置く** | **`540`** |
+| 先に 3 本置いて（3 本とも `0`）、**後から写して 3 本を `ResetObject`** | **3 本とも `540`** |
+| UI 製を `DuplicateObject` した複製の注釈へ置く | **`540`**（表示レイヤを書き換えて更新しても保たれる） |
+
+**`UpdateViewport` は 1050 を単位行列へ戻す。** だから**写すのは下ごしらえより後**に置く。
+戻ったあとの挙動も実測してある:
+
+| 更新の後 | 描かれた数値 |
+| --- | --- |
+| 置いてある個体を**触らずに読む** | **`540`**（＝**更新だけでは壊れない**。書かれた `Elev` は残る） |
+| 置いてある個体を `ResetObject` してから読む | `0`（**作り直すと消える**） |
+| **1055 を 1050 へ写し直してから** `ResetObject` | **`540`**（＝回復できる） |
+
+- **効くのは 1050 ただ 1 つ。** オブジェクト変数 1000〜1150 を UI 製と SDK 製で総当りに
+  突き合わせると**差は 14 件**。そのうち 12 件を 1 つずつ書き分けて、**数値が出たのは
+  1050 だけ**だった（他の 11 件はすべて `0` のまま）。残る 2 件は、1055 が書けず
+  （`SetObjectVariable` が `false`）、1064 は 1050 と併せて書いても打ち消さなかった。
+  **差を 14 件まとめて書き写すと `0` のまま**だが、これは途中に挟んだ `UpdateViewport` が
+  1050 を戻していたためで、打ち消していた変数は無い（1050 へ他の 7 件を 1 つずつ足しても
+  `540` のまま）。
+- **ビューの向きそのものは変えられない。** `VWViewportObj::SetViewType(standardViewRight)`
+  を呼んでも `GetViewType` は `7` のまま・1050 も単位行列のまま・注釈も `0`。
+  `ovViewportViewType`（1007）は `SetObjectVariable` も `false` を返す。
+  **だから「向きを直す」道は無く、1050 を写す（＝上の手順）しかない。**
+- **1050 を写しても断面は壊れない**（`ovIsSectionViewport`・`ovSectionViewportSectionViewMatrix`・
+  断面群（`kViewportGroupSection`）の中身の個数が、写していない対照と一致）。
+- **作り方の引数では出せない**——`depth` を 0 以外に / 高さの範囲を建物に合わせる /
+  断面線を短く引く / `pt3` を反対側にする、の 4 通りとも `0` のままだった。
+- **断面線オブジェクトとの結び付きでもない**——総当りで**ハンドル型の差は 0 件**。
+  UI 製の断面ビューポートが何かを指していて SDK 製が指していない、という欄は無かった。
+
 ## 注釈の中の図形は、検索条件（criteria）では見つからない
 
 **`ISDK::ForEachObjectInCriteria` は、ビューポートの注釈の中の図形を 1 件も返さない**
