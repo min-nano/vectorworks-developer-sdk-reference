@@ -447,6 +447,20 @@ VW_PROBE("dim-text-style", "寸法の文字スタイル（規格・クラス・�
 				}
 				if (memberIndex == 0)
 					probe.log("      型 63 の要素が見つからなかった");
+
+				// 連続寸法は型 86 の PIO。PIO 用の口があるので、そちらも試す。
+				probe.log("    連続寸法そのものへ SetPIOTextStyle を当ててみる（PIO 用の口）:");
+				gSDK->SetPIOTextStyle(chain, static_cast<RefNumber>(textStyleRef), true);
+				ProbeDimDump(probe, "SetPIOTextStyle の後（連続寸法そのもの）", chain);
+				for (MCObjectHandle member = gSDK->FirstMemberObj(chain); member != nil;
+					 member = gSDK->NextObject(member))
+				{
+					const short memberType = gSDK->GetObjectTypeN(member);
+					if (memberType == 0)
+						break;
+					if (memberType == 63)
+						ProbeDimDump(probe, "SetPIOTextStyle の後（中の直線寸法）", member);
+				}
 			}
 		}
 	}
