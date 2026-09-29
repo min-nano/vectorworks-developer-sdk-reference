@@ -4,22 +4,25 @@
 //	[issue #151] 「SDK 製の断面ビューポートは `UpdateViewport` のたびにビュー行列
 //	（`ovViewportViewMatrix` ＝ 1050）が単位行列へ戻る」——その理由を突き止める調査。
 //
-//	**1 回目の実測（実物件の図面）で、見立てが変わった。** 表示レイヤとクラスを表示へ倒して
-//	から更新すると、**SDK 製でも 1050 は更新のときに 1055 と同じ値へ自分で入り、以後の更新でも
-//	保たれた**（空図面では単位行列のままだった）。つまり 1050 は**断面の描画結果から引き直される
-//	派生値**で、「戻る」のは**描くものが無かったとき**ではないか。このプローブはそれを
-//	A/B で確定させる。
+//	**実測で見立てが変わった。** 表示レイヤとクラスを表示へ倒してから更新すると、**SDK 製でも
+//	1050 は更新のときに 1055 と同じ値へ自分で入り、以後の更新でも保たれた**。断面線を建物から
+//	1,000,000mm 離して**何も描けない**状態にしても 1050 は入ったので、**「描けた断面から
+//	引き直す」のではない**。全レイヤを非表示にして再更新すると単位行列へ戻ったので、
+//	**効いているのはビューポートの表示設定**である。**どれが要るのか（レイヤだけか、クラスも
+//	要るのか）を 2 × 2 で割る**のがこのプローブの主目的。#141 では「全レイヤ（38 枚）を
+//	表示にしても 0 のまま」だったので、レイヤだけでは足りない見込みが高い。
 //
 //	  1. 図面にある断面ビューポートを並べ、1050・1007・注釈のレベル基準線（と `Elev`）を読む。
 //	     **高さが 0 でない**レベル基準線を 1 本選び、それを基準（＝答え合わせの正解）にする。
 //	  2. 既存の断面ビューポートを更新したら 1050 と `Elev` はどうなるか。あわせて
 //	     「ラベルを動かす・書き換える・線の太さを変える・作り直す」で高さが落ちるかを測る。
-//	  3. **A/B/C**: 同じ座標で SDK 製の断面ビューポートを 3 枚作って更新し、1050 を比べる。
-//	       A … 表示レイヤ・クラスをいじらない（既定のまま）
-//	       B … 表示レイヤ・クラスを表示へ倒す
-//	       C … B と同じに倒すが、断面線を建物から遠くへ引く（切るものが無い）
-//	     さらに B を「全レイヤ非表示にして再更新」する（D）。**A と C と D が単位行列で
-//	     B だけが 1055 と一致するなら、引き直しの素は「描けた断面」だと確定する。**
+//	  3. **2 × 2 で割る**: 同じ座標で SDK 製を 5 枚作って更新し、1050 を比べる。
+//	       A … 表示レイヤ ×・クラス ×      E … 表示レイヤ ○・クラス ×（#141 が測った形）
+//	       F … 表示レイヤ ×・クラス ○      B … 表示レイヤ ○・クラス ○
+//	       C … B と同じだが、断面線を建物から 1,000,000mm 離す（切るものが無い）
+//	     さらに B を「全レイヤ非表示にして再更新」する（D）。レンダ（隠線消去）と 1064 は
+//	     5 枚とも同じに与えるので、**差は表示設定だけ**。どの枚で 1055 と一致するかが、
+//	     引き直しの条件をそのまま示す。
 //	  4. B の注釈へレベル基準線を置き、**1050 へ何も写さずに** `ResetObject` して `Elev` を読む。
 //	     正解（1 で選んだ高さ）と一致すれば、**「1055 を 1050 へ写す」手順は要らない**。
 //	     そのあと移動・欄の書き換え・クラス・線の太さ・作り直しで落ちないかを測る。
@@ -456,15 +459,23 @@ namespace
 
 	// 断面ビューポートの下ごしらえ（Findings「ビューポート」の作法）。
 	// `showAll` が false のときは表示レイヤ・クラスに触らない（A の対照）。
+	// 断面ビューポートの下ごしらえ（Findings「ビューポート」の作法）。
+	// **表示レイヤとクラスは別々に倒せるようにしてある**——どちらが 1050 を決めているかを
+	// 2 × 2 で割るため。レンダ（隠線消去）と 1064 はどの枚にも同じに与える（そこを
+	// 変数にしないことで、差を表示設定だけに絞る）。
 	void ProbeSetUpSectionViewport(vwprobe::Report& probe, const std::string& what,
 								   MCObjectHandle viewport,
-								   const std::vector<MCObjectHandle>& designLayers, bool showAll)
+								   const std::vector<MCObjectHandle>& designLayers, bool showLayers,
+								   bool showClasses)
 	{
-		if (showAll)
+		if (showLayers)
 		{
 			for (size_t index = 0; index < designLayers.size(); ++index)
 				gSDK->SetViewportLayerVisibility(viewport, designLayers[index], 0 /* 表示 */);
-			size_t classCount = 0;
+		}
+		size_t classCount = 0;
+		if (showClasses)
+		{
 			size_t* classCounter = &classCount;
 			MCObjectHandle target = viewport;
 			gSDK->ForEachClass(true,
@@ -475,14 +486,15 @@ namespace
 									   0 /* 表示 */);
 								   ++(*classCounter);
 							   });
-			probe.log("  " + what + " レイヤ " +
-					  ProbeFormatInt(static_cast<long long>(designLayers.size())) + " 枚・クラス " +
-					  ProbeFormatInt(static_cast<long long>(classCount)) + " 件を表示へ倒した");
 		}
-		else
-		{
-			probe.log("  " + what + " 表示レイヤ・クラスには触らない（既定のまま）");
-		}
+		probe.log("  " + what + " 表示レイヤ=" +
+				  (showLayers
+					   ? ProbeFormatInt(static_cast<long long>(designLayers.size())) + " 枚を表示"
+					   : std::string("触らない")) +
+				  " / クラス=" +
+				  (showClasses ? ProbeFormatInt(static_cast<long long>(classCount)) + " 件を表示"
+							   : std::string("触らない")) +
+				  " / レンダ=隠線消去・1064=true（どの枚も同じ）");
 		{
 			VWViewportObj viewportObj(viewport);
 			viewportObj.SetRenderType(renderFinalHiddenLine);
@@ -648,7 +660,7 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 
 	// =====================================================================
 	probe.log("");
-	probe.log("== 3. SDK 製を 3 枚作って比べる（A: 表示を倒さない / B: 倒す / C: 切るものが無い）");
+	probe.log("== 3. SDK 製を 5 枚作って比べる（表示レイヤ × クラスの 2×2 ＋ 遠い断面 ＋ 再更新）");
 	WorldRect bounds;
 	bounds.left = 0;
 	bounds.right = 0;
@@ -707,61 +719,81 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 	if (sheetLayer == nil)
 		probe.log("  CreateLayer が nil（既に同名のレイヤがあるかもしれない）");
 
+	// **2 × 2 で割る**: A(どちらも触らない) / E(レイヤだけ) / F(クラスだけ) / B(両方)。
+	// さらに C(両方＋断面線を遠くへ) と D(B のあと全レイヤ非表示にして再更新)。
 	MCObjectHandle viewportA = nil;
+	MCObjectHandle viewportE = nil;
+	MCObjectHandle viewportF = nil;
 	MCObjectHandle viewportB = nil;
 	MCObjectHandle viewportC = nil;
 	if (sheetLayer != nil)
 	{
 		viewportA = gSDK->CreateSectionViewport(sectionPt1, sectionPt2, sectionPt3, 0.0, -10000.0,
 												100000.0, sheetLayer);
+		viewportE = gSDK->CreateSectionViewport(sectionPt1, sectionPt2, sectionPt3, 0.0, -10000.0,
+												100000.0, sheetLayer);
+		viewportF = gSDK->CreateSectionViewport(sectionPt1, sectionPt2, sectionPt3, 0.0, -10000.0,
+												100000.0, sheetLayer);
 		viewportB = gSDK->CreateSectionViewport(sectionPt1, sectionPt2, sectionPt3, 0.0, -10000.0,
 												100000.0, sheetLayer);
 		viewportC = gSDK->CreateSectionViewport(farPt1, farPt2, farPt3, 0.0, -10000.0, 100000.0,
 												sheetLayer);
 	}
-	if (viewportA == nil || viewportB == nil || viewportC == nil)
+	if (viewportA == nil || viewportE == nil || viewportF == nil || viewportB == nil ||
+		viewportC == nil)
 	{
 		probe.fail("CreateSectionViewport が nil を返した（A=" +
 				   std::string(viewportA != nil ? "有" : "nil") +
+				   " E=" + std::string(viewportE != nil ? "有" : "nil") +
+				   " F=" + std::string(viewportF != nil ? "有" : "nil") +
 				   " B=" + std::string(viewportB != nil ? "有" : "nil") +
 				   " C=" + std::string(viewportC != nil ? "有" : "nil") + "）");
 	}
 	else
 	{
-		probe.log("  3 枚できた。どれも作成直後は 1050 = 単位行列・1007 = 7（上）:");
+		probe.log("  5 枚できた。どれも作成直後は 1050 = 単位行列・1007 = 7（上）:");
 		ProbeLogMatrices(probe, "A 作成直後", viewportA);
 		ProbeLogMatrices(probe, "B 作成直後", viewportB);
-		ProbeLogMatrices(probe, "C 作成直後", viewportC);
 
-		ProbeSetUpSectionViewport(probe, "A", viewportA, designLayers, false);
-		ProbeSetUpSectionViewport(probe, "B", viewportB, designLayers, true);
-		ProbeSetUpSectionViewport(probe, "C", viewportC, designLayers, true);
+		ProbeSetUpSectionViewport(probe, "A", viewportA, designLayers, false, false);
+		ProbeSetUpSectionViewport(probe, "E", viewportE, designLayers, true, false);
+		ProbeSetUpSectionViewport(probe, "F", viewportF, designLayers, false, true);
+		ProbeSetUpSectionViewport(probe, "B", viewportB, designLayers, true, true);
+		ProbeSetUpSectionViewport(probe, "C", viewportC, designLayers, true, true);
 
-		probe.log("  3 枚とも UpdateViewport を呼ぶ");
+		probe.log("  5 枚とも UpdateViewport を呼ぶ");
 		gSDK->UpdateViewport(viewportA);
+		gSDK->UpdateViewport(viewportE);
+		gSDK->UpdateViewport(viewportF);
 		gSDK->UpdateViewport(viewportB);
 		gSDK->UpdateViewport(viewportC);
 
-		probe.log("  --- A（表示を倒していない）");
+		probe.log("  --- A（レイヤ×・クラス×）");
 		ProbeLogMatrices(probe, "A 更新後", viewportA);
 		ProbeLogGroups(probe, "A 更新後", viewportA);
-		probe.log("  --- B（表示を倒した）");
+		probe.log("  --- E（レイヤ○・クラス×）← #141 が測ったのはこの形");
+		ProbeLogMatrices(probe, "E 更新後", viewportE);
+		ProbeLogGroups(probe, "E 更新後", viewportE);
+		probe.log("  --- F（レイヤ×・クラス○）");
+		ProbeLogMatrices(probe, "F 更新後", viewportF);
+		ProbeLogGroups(probe, "F 更新後", viewportF);
+		probe.log("  --- B（レイヤ○・クラス○）");
 		ProbeLogMatrices(probe, "B 更新後", viewportB);
 		ProbeLogGroups(probe, "B 更新後", viewportB);
-		probe.log("  --- C（倒したが、断面線を建物から 1,000,000mm 離した）");
+		probe.log("  --- C（レイヤ○・クラス○。断面線を建物から 1,000,000mm 離した）");
 		ProbeLogMatrices(probe, "C 更新後", viewportC);
 		ProbeLogGroups(probe, "C 更新後", viewportC);
-		probe.log("  ↑ **B だけが 1055 と一致し、A と C が単位行列なら、1050 は「描けた断面」から");
-		probe.log("     引き直される派生値**だと確定する（＝写す手順ではなく、表示の作法の話）");
+		probe.log("  ↑ **どの枚で 1055 と一致するかが、引き直しの条件をそのまま示す。**");
+		probe.log("     レンダ（隠線消去）と 1064 は 5 枚とも同じなので、差は表示設定だけ。");
 
-		// D: B を全レイヤ非表示にして再更新する（引き直しが可逆なら単位行列へ戻るはず）。
-		probe.log("  --- D（B を全レイヤ非表示にして再更新）");
+		// D: B を全レイヤ非表示にして再更新する（引き直しが可逆かを見る）。
+		probe.log("  --- D（B を全レイヤ非表示にして再更新。クラスは表示のまま）");
 		for (size_t index = 0; index < designLayers.size(); ++index)
 			gSDK->SetViewportLayerVisibility(viewportB, designLayers[index], -1 /* 非表示 */);
 		gSDK->UpdateViewport(viewportB);
 		ProbeLogMatrices(probe, "D 更新後", viewportB);
 		ProbeLogGroups(probe, "D 更新後", viewportB);
-		probe.log("  ↑ ここで単位行列へ戻るなら、「戻る」の正体は**描くものが無いこと**である");
+		probe.log("  ↑ 単位行列へ戻るなら、引き直しは**可逆**（表示を落とすと消える）");
 		// 4 の測定のために B を元へ戻す。
 		for (size_t index = 0; index < designLayers.size(); ++index)
 			gSDK->SetViewportLayerVisibility(viewportB, designLayers[index], 0 /* 表示 */);
