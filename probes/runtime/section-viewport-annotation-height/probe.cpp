@@ -342,11 +342,16 @@ namespace
 	}
 
 	// 作った個体を消す（undo イベントは開いていないので `useUndo = false`。Findings「Undo」）。
+	//
+	// **消す順は「中の figure → ビューポート → シートレイヤ」でなければならない。**
+	// シートレイヤを先に消すと、その中のビューポートと注釈も道連れに消え、**残った
+	// ハンドルは宙に浮く**（それを `DeleteObject` へ渡すのは踏んではいけない道）。
+	// だから積む先を 3 本に分け、この関数はそれぞれを 1 本ずつ消す。
 	void SvahDeleteAll(std::vector<MCObjectHandle>& made)
 	{
-		for (size_t i = made.size(); i > 0; --i)
-			if (made[i - 1] != nil)
-				gSDK->DeleteObject(made[i - 1], false);
+		for (size_t i = 0; i < made.size(); ++i)
+			if (made[i] != nil)
+				gSDK->DeleteObject(made[i], false);
 		made.clear();
 	}
 
@@ -442,7 +447,10 @@ VW_PROBE("section-viewport-annotation-height",
 			  "〉 表示レイヤ=" + SvahShownLayers(uiViewport));
 
 	gSDK->DefineCustomObject(kSvahBenchmark2, kCustomObjectPrefNever);
-	std::vector<MCObjectHandle> made;
+	// 片付け用。**消す順を守るために 3 本に分ける**（上の `SvahDeleteAll` の但し書き）。
+	std::vector<MCObjectHandle> madeMarkers;
+	std::vector<MCObjectHandle> madeViewports;
+	std::vector<MCObjectHandle> madeLayers;
 
 	// SDK 製を 1 本作る。断面線は建物を挟むように長く引き、高さの範囲も広く取る
 	// （空の断面にしないため。Findings「ビューポート」）。
@@ -455,11 +463,13 @@ VW_PROBE("section-viewport-annotation-height",
 	if (sdkViewport == nil)
 	{
 		if (sheet != nil)
-			made.push_back(sheet);
-		SvahDeleteAll(made);
+			madeLayers.push_back(sheet);
+		SvahDeleteAll(madeLayers);
 		probe.fail("CreateSectionViewport が nil を返した（この調査は行えない）");
 		return;
 	}
+	madeLayers.push_back(sheet);
+	madeViewports.push_back(sdkViewport);
 	probe.log("SDK 製の比較対象を作った: シートレイヤ〈" + SvahName(sheet) +
 			  "〉の上 / 表示レイヤ=" + SvahShownLayers(sdkViewport));
 
@@ -467,11 +477,11 @@ VW_PROBE("section-viewport-annotation-height",
 	probe.log("");
 	probe.log("=== 段 1: 同じ 1 回の実行で差が出ることを確かめる ===");
 	probe.log("**ここで差が出なければ、段 2 以降の突き合わせには意味が無い。**");
-	made.push_back(SvahPlaceMarker(probe, uiViewport, targetStoryName, targetType,
-								   "UI 製〈" + SvahName(uiViewport) + "〉の注釈（絶対Z=" + targetZ +
-									   " が出るはず）"));
-	made.push_back(SvahPlaceMarker(probe, sdkViewport, targetStoryName, targetType,
-								   "SDK 製の注釈（いまは 0 になるはず）"));
+	madeMarkers.push_back(SvahPlaceMarker(probe, uiViewport, targetStoryName, targetType,
+										  "UI 製〈" + SvahName(uiViewport) +
+											  "〉の注釈（絶対Z=" + targetZ + " が出るはず）"));
+	madeMarkers.push_back(SvahPlaceMarker(probe, sdkViewport, targetStoryName, targetType,
+										  "SDK 製の注釈（いまは 0 になるはず）"));
 
 	// ---------------------------------------------------------------- 段 2
 	probe.log("");
@@ -573,8 +583,8 @@ VW_PROBE("section-viewport-annotation-height",
 		probe.log("  書けた=" + std::to_string(wroteOk) + " / 入った=" +
 				  std::to_string(tookEffect) + " / 試した=" + std::to_string(writable.size()));
 		gSDK->UpdateViewport(sdkViewport);
-		made.push_back(SvahPlaceMarker(probe, sdkViewport, targetStoryName, targetType,
-									   "差を全部書き写した後の SDK 製の注釈"));
+		madeMarkers.push_back(SvahPlaceMarker(probe, sdkViewport, targetStoryName, targetType,
+											  "差を全部書き写した後の SDK 製の注釈"));
 	}
 
 	// ---------------------------------------------------------------- 段 5
@@ -601,14 +611,14 @@ VW_PROBE("section-viewport-annotation-height",
 		{
 			probe.log("  対照のビューポートを作れなかった");
 			if (controlSheet != nil)
-				made.push_back(controlSheet);
+				madeLayers.push_back(controlSheet);
 		}
 		else
 		{
-			made.push_back(SvahPlaceMarker(probe, controlVp, targetStoryName, targetType,
-										   "対照（何も書かない）"));
-			made.push_back(controlVp);
-			made.push_back(controlSheet);
+			madeLayers.push_back(controlSheet);
+			madeViewports.push_back(controlVp);
+			madeMarkers.push_back(SvahPlaceMarker(probe, controlVp, targetStoryName, targetType,
+												  "対照（何も書かない）"));
 		}
 
 		const size_t limit =
@@ -634,18 +644,18 @@ VW_PROBE("section-viewport-annotation-height",
 			{
 				probe.log("  " + std::to_string(static_cast<int>(writable[i].fIndex)) +
 						  ": 断面ビューポートを作れなかった");
-				made.push_back(sheetOne);
+				madeLayers.push_back(sheetOne);
 				continue;
 			}
+			madeLayers.push_back(sheetOne);
+			madeViewports.push_back(vpOne);
 			const bool wrote =
 				gSDK->SetObjectVariable(vpOne, writable[i].fIndex, writable[i].fUiValue) ? true
 																						 : false;
-			made.push_back(SvahPlaceMarker(probe, vpOne, targetStoryName, targetType,
-										   std::to_string(static_cast<int>(writable[i].fIndex)) +
-											   " だけ書いた（Set=" + SvahBool(wrote) +
-											   " 値=" + writable[i].fUiText + "）"));
-			made.push_back(vpOne);
-			made.push_back(sheetOne);
+			madeMarkers.push_back(SvahPlaceMarker(
+				probe, vpOne, targetStoryName, targetType,
+				std::to_string(static_cast<int>(writable[i].fIndex)) +
+					" だけ書いた（Set=" + SvahBool(wrote) + " 値=" + writable[i].fUiText + "）"));
 		}
 	}
 
@@ -683,17 +693,17 @@ VW_PROBE("section-viewport-annotation-height",
 			{
 				probe.log("  " + std::to_string(static_cast<int>(handles[i].fIndex)) +
 						  ": 断面ビューポートを作れなかった");
-				made.push_back(sheetH);
+				madeLayers.push_back(sheetH);
 				continue;
 			}
+			madeLayers.push_back(sheetH);
+			madeViewports.push_back(vpH);
 			const bool wrote =
 				gSDK->SetObjectVariable(vpH, handles[i].fIndex, handles[i].fUiValue) ? true : false;
-			made.push_back(SvahPlaceMarker(probe, vpH, targetStoryName, targetType,
-										   std::to_string(static_cast<int>(handles[i].fIndex)) +
-											   " のハンドルを書いた（Set=" + SvahBool(wrote) +
-											   " 指し先=" + handles[i].fUiText + "）"));
-			made.push_back(vpH);
-			made.push_back(sheetH);
+			madeMarkers.push_back(SvahPlaceMarker(
+				probe, vpH, targetStoryName, targetType,
+				std::to_string(static_cast<int>(handles[i].fIndex)) + " のハンドルを書いた（Set=" +
+					SvahBool(wrote) + " 指し先=" + handles[i].fUiText + "）"));
 		}
 	}
 
@@ -738,15 +748,15 @@ VW_PROBE("section-viewport-annotation-height",
 		if (vpR == nil)
 		{
 			probe.log(std::string("  ") + recipes[r].fTag + ": 断面ビューポートを作れなかった");
-			made.push_back(sheetR);
+			madeLayers.push_back(sheetR);
 			continue;
 		}
+		madeLayers.push_back(sheetR);
+		madeViewports.push_back(vpR);
 		probe.log(std::string("  ") + recipes[r].fTag + ": 断面VP=" +
 				  SvahBool(SvahReadBool(vpR, 1054, false)) + " 表示レイヤ=" + SvahShownLayers(vpR));
-		made.push_back(SvahPlaceMarker(probe, vpR, targetStoryName, targetType,
-									   std::string("  → 注釈〈") + recipes[r].fTag + "〉"));
-		made.push_back(vpR);
-		made.push_back(sheetR);
+		madeMarkers.push_back(SvahPlaceMarker(probe, vpR, targetStoryName, targetType,
+											  std::string("  → 注釈〈") + recipes[r].fTag + "〉"));
 	}
 
 	// ---------------------------------------------------------------- 段 8
@@ -762,9 +772,12 @@ VW_PROBE("section-viewport-annotation-height",
 	else
 	{
 		gSDK->SetObjectName(copy, "#147 の複製");
+		// **複製は UI 製と同じシートレイヤの上にできる**（こちらの作ったシートではない）
+		// ので、ビューポートの側へ積んで、注釈の個体より後に消す。
+		madeViewports.push_back(copy);
 		probe.log("  複製の素性: 断面VP=" + SvahBool(SvahReadBool(copy, 1054, false)) +
 				  " 表示レイヤ=" + SvahShownLayers(copy));
-		made.push_back(
+		madeMarkers.push_back(
 			SvahPlaceMarker(probe, copy, targetStoryName, targetType, "8a 複製そのままの注釈"));
 
 		// 8b: **表示レイヤを書き換えても素性が残るか。** プラグインは複製をそのまま
@@ -774,18 +787,18 @@ VW_PROBE("section-viewport-annotation-height",
 		gSDK->UpdateViewport(copy);
 		probe.log("  8b の下ごしらえ: 全レイヤを表示にして更新した（表示レイヤ=" +
 				  SvahShownLayers(copy) + "）");
-		made.push_back(SvahPlaceMarker(probe, copy, targetStoryName, targetType,
-									   "8b 表示レイヤを書き換えた後の注釈"));
-		made.push_back(copy);
+		madeMarkers.push_back(SvahPlaceMarker(probe, copy, targetStoryName, targetType,
+											  "8b 表示レイヤを書き換えた後の注釈"));
 	}
 
 	// ---------------------------------------------------------------- 片付け
 	probe.log("");
 	probe.log("=== 片付け ===");
-	made.push_back(sdkViewport);
-	made.push_back(sheet);
-	const size_t madeCount = made.size();
-	SvahDeleteAll(made);
+	const size_t madeCount = madeMarkers.size() + madeViewports.size() + madeLayers.size();
+	// **この順でなければならない**（注釈の個体 → ビューポート → シートレイヤ）。
+	SvahDeleteAll(madeMarkers);
+	SvahDeleteAll(madeViewports);
+	SvahDeleteAll(madeLayers);
 	probe.log("  作った " + std::to_string(madeCount) + " 個を消した（UI 製の元は触っていない）");
 
 	probe.log("");
