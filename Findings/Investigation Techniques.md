@@ -44,6 +44,15 @@
   のスタブ**だと分かり、実機での条件出しが丸ごと不要になった。
   [Layout Dialogs](Layout%20Dialogs.md)）。**宣言だけを読んで推測を重ねる前に、実装を
   探す。**
+- **`SDK Index/` で見つからなくても「無い」と決めない——マクロの中の宣言は索引に載らない。**
+  旧 API の一部は `Include/Kernel/API/APIBase.Legacy.h` の中で `APP_API_FUNCTION(...)` /
+  `APP_API_PROCEDURE(...)` の**引数として**書かれており、索引を作るパーサはそれを宣言として
+  読み取れない。**実例**: 断面ビューポートの作り方を調べていて、索引には 1 行も無い
+  `GS_CreateSectionLineInstance(CallBackPtr, MCObjectHandle inSectionView)` と
+  `GS_IsSectionLineLinkedToViewport(CallBackPtr, MCObjectHandle inSectionLine)` が
+  `sdk-grep` で出た（[issue #151](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/151)）。
+  **索引で当たりが無かったら、諦める前に `sdk-grep` で同じ語を引き直す**——
+  索引は「速い入口」であって「SDK の全部」ではない。
 - **信用できるのはハンドルの生バイト。** タグ付きデータの読み出し API は当てにならない
   ので、探索は 16 進ダンプでやる（[Tagged Data](Tagged%20Data.md)）。
 - **1 ULP を追う調査では、プローブの中で予測式を計算しない。** 浮動小数の式は
