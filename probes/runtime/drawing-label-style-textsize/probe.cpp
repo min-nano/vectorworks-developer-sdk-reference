@@ -148,8 +148,8 @@ namespace
 		Sint32 type = -1;
 		if (gSDK->GetObjectVariable(layer, ovLayerType, typeVar))
 		{
-			short s16 = 0;
-			if (typeVar.GetShort(s16))
+			Sint16 s16 = 0;
+			if (typeVar.GetSint16(s16))
 				type = s16;
 		}
 		return "名前=" + ProbeStr(nm) + " 縮尺=" + ProbeNum(scale) +
