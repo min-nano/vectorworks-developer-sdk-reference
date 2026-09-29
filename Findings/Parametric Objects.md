@@ -1155,14 +1155,290 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
 省いた索引の中身:
 
 - **0**（`__version`）と **48〜152**、**154〜158**、**161〜168**、**171〜176** は
-  ローカライズ名が `__NNA_DO_NOT_CHANGE`。48〜152 は 2D 表現の属性
-  （`MemberPenStyle_Above` … `CapsLineWeight_Below` のように
-  `_Above` / `_At` / `_Below` の 3 面ぶん）、161〜168 は 3D の属性。
-- **171〜176 に `traversalDone` / `traversalRoot` / `B` / `B1` / `D` / `D1` がある。**
-  `B`（173）と `D`（175）は、作った直後の値が `MajorBreadth`（300）/ `MajorDepth`（600）と
-  同じだった。**`B` / `D` / `StartOffset` はいずれも universal 名として実在する**ので、
-  これらが universal 名で引けずローカライズ名の経路へ落ちているなら、**落ちる理由は
-  「名前が無いこと」ではない**。
+  ローカライズ名が `__NNA_DO_NOT_CHANGE`。48〜152 は 2D 表現の属性、161〜168 は 3D の属性で、
+  **中身は下記「[構造材の 2D / 3D 属性パラメータ（索引 48〜168）](#構造材の-2d--3d-属性パラメータ索引-48168面--パーツ--欄)」に全件ある**
+  （154〜158 はセンターマーク、171〜176 は `traversalDone` / `traversalRoot` / `B` / `B1` /
+  `D` / `D1`）。
+- **`B` / `D` / `StartOffset` はいずれも universal 名として実在する**ので、これらが
+  universal 名で引けずローカライズ名の経路へ落ちているなら、**落ちる理由は「名前が
+  無いこと」ではない**。
+
+## 構造材の 2D / 3D 属性パラメータ（索引 48〜168）——「面 × パーツ × 欄」
+
+**実機確認済み**（VW 2026 / mac・日本語 UI・新規の空図面。
+`probes/runtime/structural-member-2d-attrs/` を 4 版・計 5 回走らせた。1 版目は 2 回走らせ、
+ビルド ID 以外は 1 文字も違わなかった。以下の値は実行ログそのまま。
+[issue #158](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/158)）。
+上の表が `__NNA_DO_NOT_CHANGE` でまとめて省いていた帯の中身である。
+
+**呼び出しの前置き 2 つ**:
+
+- **パラメータの型を返すのは `GetParamStyle`（→ `EFieldStyle`）だけ**で、`GetParamType`
+  という呼び出しは SDK に無い（`SDK Index/` 全体で該当なし）。以下の「欄型」はすべて
+  `EFieldStyle`（`Kernel/API/MiniCadCallBacks.h:1063`）の値である。
+- **ポップアップの選択肢は `PopupGetChoicesCount` では採れない**（下記「選択肢を採る経路」）。
+
+### 構造
+
+2D 属性は **48〜152 の 105 件**で、**3 面ぶん 35 件ずつ**に割れる。面は universal 名の
+接尾辞で分かれ、索引も面ごとに連続する。
+
+| 接尾辞 | 何の面か | 索引 |
+| --- | --- | --- |
+| `_Above` | 切断面より上 | 48〜82 |
+| `_At` | 切断面 | 83〜117 |
+| `_Below` | 切断面より下 | 118〜152 |
+
+1 面 35 件の内訳。**「構造材設定」ダイアログ「属性」タブの行がパーツ、列が欄**で、
+universal 名は `<パーツ><欄>_<面>` という組み立てになっている。
+
+| パーツ（ダイアログの行） | 名前の頭 | 欄（＝ダイアログの列。括弧は欄型） | 件数 |
+| --- | --- | --- | --- |
+| 構造材 | `Member` | `Display`(2 真偽) `Class`(18 クラス) `PenStyle`(8 ポップアップ) `PenColor`(28 色) `LineStyle`(1 整数) `LineWeight`(1 整数) `FillStyle`(8) `FillColor`(28) `FillHatch`(1) `FillTile`(1) `FillGradient`(1) | 11 |
+| 被覆 | `Cover` | 構造材と同じ 11 欄 | 11 |
+| 中心線 | `Centerline` | `Display` `Class` `PenStyle` `PenColor` `LineStyle` `LineWeight` | 6 |
+| 端部 | `Caps` | **`StartCapDisplay` `EndCapDisplay`**（表示だけ始端・終端に割れ、名前も `Caps` で始まらない）・`CapsClass` `CapsPenStyle` `CapsPenColor` `CapsLineStyle` `CapsLineWeight` | 7 |
+
+ダイアログの欄との対応は名前がそのまま言っている——**表示** `Display` / **クラス** `Class` /
+**線の属性** `PenStyle` / **線の色** `PenColor` / **ラインタイプ** `LineStyle` /
+**線の太さ** `LineWeight` / **面の属性** `FillStyle` / **面** `FillColor`。
+`FillHatch` / `FillTile` / `FillGradient` は、面の属性をハッチング・タイル・
+グラデーションにしたときの資源の索引【推定】。
+
+- **センターマークだけは面を持たない。** ダイアログでは「属性」タブの 5 行目に並ぶが、
+  パラメータは **153〜160 に 1 組だけ**で 3 面で共有される: `CenterPointMarker`（真偽。
+  **ここだけローカライズ名がある**——「センターマークを使用」。既定 False）/
+  `CenterPointMarkerClass` / `CenterPointMarkerPenStyle` / `CenterPointMarkerPenColor` /
+  `CenterPointMarkerStyle` / `CenterPointMarkerWeight` / `CenterPointLength`（長さ。100）/
+  `CenterPointGap`（間隔。10）。**面ごとに変えることはできない。**
+- **3D 属性（161〜168）も面を持たない。** 構造材と被覆に 4 欄ずつ:
+  `MemberClass_3D`(18) / `MemberAttributes_3D`(8) / `MemberTextureByClass_3D`(2) /
+  `MemberTexture_3D`(29 テクスチャ)、および `CoverClass_3D` / `CoverAttributes_3D` /
+  `CoverTextureByClass_3D` / `CoverTexture_3D`。**中心線・端部・センターマークに 3D は無い。**
+- **171〜176 の `B` / `B1` / `D` / `D1` は欄型 14（`kFieldStaticText`）**で、`B`=300 /
+  `D`=600 は `MajorBreadth` / `MajorDepth` と同じ値だった。読み取り専用の表示欄であって、
+  書いて効くものではない【推定】。`traversalDone` / `traversalRoot`（171/172）は真偽。
+
+### 新規に作った 1 本の既定値
+
+`CreateCustomObjectPath` ＋ `ResetObject` で作った直後の値。**面によって違うのは
+`PenStyle` / `LineStyle` / `LineWeight` / `FillStyle` の 4 欄だけ**で、色は 3 面とも
+黒（線）・白（面）、クラスは 3 面とも空である。
+
+| 欄 | `_Above` | `_At` | `_Below` |
+| --- | --- | --- | --- |
+| `MemberDisplay` / `CoverDisplay` / `CenterlineDisplay` / `StartCapDisplay` / `EndCapDisplay` | True | True | True |
+| `MemberPenStyle` | 2 | 1 | 1 |
+| `MemberLineStyle` | **-18** | 0 | 0 |
+| `MemberLineWeight` | 7 | 14 | 7 |
+| `MemberFillStyle` | **0** | 1 | 1 |
+| `CoverPenStyle` | 2 | 1 | 1 |
+| `CoverLineStyle` | **-16** | 0 | 0 |
+| `CoverLineWeight` | 7 | 10 | 7 |
+| `CoverFillStyle` | **0** | 1 | 1 |
+| `CenterlinePenStyle` | 2 | 2 | 2 |
+| `CenterlineLineStyle` | **-17** | **-17** | **-17** |
+| `CenterlineLineWeight` | 14 | 14 | 14 |
+| `CapsPenStyle` | 1 | 1 | 1 |
+| `CapsLineStyle` | 0 | 0 | 0 |
+| `CapsLineWeight` | 14 | 14 | 14 |
+| `…Class`（4 パーツとも） | 空 | 空 | 空 |
+| `…PenColor`（4 パーツとも） | 0,0,0 | 0,0,0 | 0,0,0 |
+| `Member/CoverFillColor` | 65535,65535,65535 | 同 | 同 |
+| `Member/CoverFillHatch` / `…Tile` / `…Gradient` | 0 | 0 | 0 |
+
+3D 側（面を持たないので 1 組）: `Member/CoverAttributes_3D` = 0 /
+`Member/CoverTextureByClass_3D` = False / `Member/CoverTexture_3D` = 空 /
+`Member/CoverClass_3D` = 空。`AttributesMode` / `AttributesMode3D`（179/180）も 0。
+
+**`LineStyle` の負の値はラインタイプ（線種）の資源索引**である。切断面より上の面だけに
+構造材 `-18`・被覆 `-16` が入り、中心線は 3 面とも `-17`。`_At` / `_Below` の 0 は実線。
+
+- **色は 16 bit で返る。** `GetParamValue` は `65535,65535,65535`（白）のように出す。
+  書くときは `SetParamColor(索引, ColorRef)` で、`ColorRef` は
+  `CRGBColor(255, 0, 0).GetColorIndex()` のように作る。
+
+### 選択肢を採る経路——`PopupGetChoicesCount` は 0 を返す
+
+**ポップアップの選択肢（キーと表示）を採れる呼び出しは限られている。** 同じ索引を
+5 経路で引き比べた実測:
+
+| 経路 | 結果 |
+| --- | --- |
+| `VWParametricObj::GetParamChoices(索引, TXStringSTLArray&)` | **採れる**（キー） |
+| `VWParametricObj::GetParamLocalizedChoices(索引, TXStringSTLArray&)` | **採れる**（表示） |
+| `VWParametricObj::PopupGetChoicesCount(索引)` | **0**（どのポップアップでも） |
+| `VWRecordFormatObj::PopupGetChoicesCount(索引, useParametric=true)` ＋ `PopupGetChoice` | **採れる**（キーと表示） |
+| `VWRecordFormatObj::PopupGetChoicesCount(索引, useParametric=false)` | **0** |
+
+**選択肢を持つと分かっている索引を対照に置いて確かめてある**——`MemberType` 4 択・
+`StructuralUse` 18 択・`EndCondition` 4 択が、「採れる」経路では全部出て、「0」の経路では
+すべて 0 だった。**つまりこの 0 は「選択肢が無い」ではなく「その経路では見えない」の
+意味である。** 選択肢はインスタンスのポップアップ表には入っておらず、PIO の
+パラメータプロバイダから来る（上記「表は種別ごとに不変」の `IParametricParamsProvider`）。
+
+### 「線の属性」「面の属性」「使用する属性設定」の選択肢
+
+| パラメータ | 選択肢（キー＝表示） |
+| --- | --- |
+| `…PenStyle_<面>`（線の属性。4 パーツとも） | 0＝なし / 1＝実線 / 2＝ラインタイプ / 3＝オブジェクト別 / **4＝クラス属性** |
+| `…FillStyle_<面>`（面の属性。構造材・被覆のみ） | 0＝面なし / 1＝カラー / 2＝ハッチング / 3＝タイル / 4＝グラデーション / 5＝オブジェクト別 / **6＝クラス属性** / 7＝マテリアル属性 |
+| `AttributesMode`（179）/ `AttributesMode3D`（180） | 0＝オブジェクト / 1＝線種 / 2＝クラス / 3＝マテリアル |
+| `Member/CoverAttributes_3D`（162 / 166） | 0＝オブジェクト別 / **1＝クラス属性** |
+
+**「クラススタイルにする値」は、線が 4・面が 6。** どちらの欄も「**塗り方（線の引き方）の
+種類**」が先に並び、そのあとに「**どこから取るか**」が続く組み立てになっている。
+
+### クラス属性は効く——`FillStyle`=6 / `PenStyle`=4 で描画がクラスのものになる
+
+**実機確認済み。** 見分けが付くように、**クラス側を黄（塗り solid・線とも `(255,255,0)`・
+太さ 99）**、**per-part の色欄をマゼンタ `(255,0,255)`** にして食い違わせ、1 値 1 個体で
+描いて**描かれた子の実際の属性**を読んだ。
+
+| 書いた値 | 断面の面（型 21・全面） | 稜線（型 21・上下） |
+| --- | --- | --- |
+| 既定（`FillStyle`=1 カラー / `PenStyle`=1 実線） | **マゼンタ**（per-part の `FillColor`） | **マゼンタ**（per-part の `PenColor`） |
+| `MemberFillStyle`=**6**（クラス属性） | **黄**・`GetFillColorByClass`=true・**子のクラスが指定したクラスになる** | マゼンタ（線は触っていない） |
+| `MemberPenStyle`=**4**（クラス属性） | マゼンタ（面は触っていない） | **黄・太さ 99**（クラスの太さ）・`GetPenColorByClass`=true・**子のクラスが指定したクラスになる** |
+| 両方（6 と 4） | **黄** | **黄・太さ 99** |
+| `FillStyle`=5 / `PenStyle`=3（オブジェクト別） | **黒**（クラスの黄でも per-part のマゼンタでもない） | **黒・太さ 2** |
+
+- **「クラス属性」にすると、その子は指定したクラスに入り、by-class の旗も立つ。**
+  だから絵を見なくても `GetFillColorByClass` / `GetPenColorByClass` と
+  `GetObjectClass` で判定できる。
+- **「オブジェクト別」（Fill=5 / Pen=3）は per-part の色欄を見ない。** PIO 自身の
+  オブジェクト属性を使う【推定】——上の実測では PIO の属性が既定（黒）だったので黒になった。
+- **効くのは書いた面の欄だけ**で、パーツをまたがない。中心線と端部はそれぞれの
+  `CenterlinePenStyle` / `CapsPenStyle` を持っているので、構造材をクラス属性にしても
+  そのまま残る。
+
+### `AttributesMode` は 4 択だが、`ResetObject` 後の描画には効かなかった
+
+`AttributesMode`（179）と `AttributesMode3D`（180）の選択肢は
+**0＝オブジェクト / 1＝線種 / 2＝クラス / 3＝マテリアル**（上の表）。ローカライズ名は
+どちらも「使用する属性設定:」である。
+
+**ただし 0〜3 を振っても描画は 1 か所も変わらなかった**（1 値 1 個体・4 通り。
+PIO 自身を目立つクラスへ入れ、per-part の色をマゼンタにして振った——どの値でも
+per-part のマゼンタが出続けた）。**値は書けていて読み戻せる**（`GetParamValue` が
+書いた値を返す）のに、絵に出ない。
+
+- **属性の出どころを決めているのは per-part の `PenStyle` / `FillStyle` であって、
+  この欄ではない**（上記のとおり 4 / 6 は確かに効く）。`AttributesMode` は設定
+  ダイアログでどの欄を出すかを握る値と見られる【推定】。
+- **したがって「クラススタイルにしたい」ときに `AttributesMode` を触る必要は無い。**
+
+### 平面図で使われるのは `_Below`——3 面のどれが描かれるかは切断面との関係で決まる
+
+**実機確認済み**（1 本の構造材に 3 面ぶん別々の目印を入れて 1 回だけ描いた。
+`MemberLineWeight` = 55/56/57、`CenterlineLineWeight` = 58/59/60、
+`CapsLineWeight` = 61/62/63、`MemberFillColor` = 赤/緑/青 を Above/At/Below の順で）:
+
+| 描かれた子 | 出てきた値 | どの面から来たか |
+| --- | --- | --- |
+| 型 21・全面・塗り solid | 塗り色 **(0,0,255) 青** | **`_Below`** |
+| 型 21・`(0,0,3000,0)`・線種 -17 | 太さ **60** | **`_Below`**（`CenterlineLineWeight_Below`） |
+| 型 21・`y=±82.8` | 太さ **57** | **`_Below`**（`MemberLineWeight_Below`） |
+| 型 5・`x=0` と `x=3000` | 太さ **63** | **`_Below`**（`CapsLineWeight_Below`） |
+
+材を Z=0 に置いて平面図で描いたので、材は**切断面より下**にある——だから 3 面のうち
+`_Below` が使われた。**`_At` を振っても何も変わらないのはこのためで、「効かない」と
+読み違えないこと。** 取り込みで面を選ばずに効かせたいなら**3 面とも同じ値を書く**
+（そのほうが切断面の高さにも材の高さにも依らない）。
+
+**この実測が「書いた値は `ResetObject` を通って描画にそのまま効く」の証拠にもなっている**
+——入れた目印（55〜63 の太さ・赤緑青の塗り）が、そのまま描かれた子の属性に出た。
+
+### 子（描かれた実体）の素性
+
+型は `Objs.TDType.h` の定数。**どの子がどのパーツのものかは属性の値で突き合わせられる。**
+
+| 型 | 定数 | 構造材では何か（既定の 1 本で） |
+| --- | --- | --- |
+| 11 | `kGroupNode` | パスのグループと断面のグループ（2 つ） |
+| 84 | `kCSGTreeNode` | 3D 実体 |
+| 21 | `kPolylineNode` | 断面の面（塗りあり・全面）／中心線（線種 -17・太さ 14）／稜線（`y=±奥行/2`・太さ 7） |
+| 5 | `kPolygonNode` | 端部（始端 `x=0`・終端 `x=長さ` の 2 つ・太さ 14） |
+| 90 | `kUndoPlaceholderNode` | **undo の置き石**（下記） |
+| 0 | `kTermNode` | 終端 |
+
+### クラス欄（欄型 18 = `kFieldClassesPopup`）は**名前**で書く
+
+| 書き方 | `GetParamValue` の読み戻し | `ResetObject` 後 | `GetParamClass` |
+| --- | --- | --- | --- |
+| `SetParamValue(索引, クラス名)` | **クラス名** | **残る** | 空 |
+| `SetParamString(索引, クラス名)` | **クラス名** | **残る** | 空 |
+| `SetParamClass(索引, クラス索引)` | **空**（書けていない） | 空 | 空 |
+
+- **`SetParamClass` は効かない。** あれは `kFieldClass`（欄型 23）用の口で、構造材の
+  `…Class_<面>` は `kFieldClassesPopup`（欄型 18）である。
+- **`GetParamClass` は、正しく書けているときでも空を返す。** 読み戻しは `GetParamValue`
+  で行う。**「`GetParamClass` が空だから書けていない」と読まない。**
+- クラスは**先に文書へ在ること**（`AddClass`）。無い名前を書いたときの挙動は見ていない【未確認】。
+
+### 真偽欄は `GetParamBool` で読み戻す（文字列は `True` / `False`）
+
+`SetParamBool(索引, false)` の後、`GetParamValue(索引)` は **`False`** を返す（`0` では
+ない）。書いた `"0"` と読み戻した `"False"` を突き合わせて「戻された」と読み違えないこと
+（この調査の 1 版目で実際に踏んだ）。
+
+### `ResetObject` 1 回ごとに undo の置き石（型 90）が 1 つ積もる
+
+**実機確認済み**: 構造材 1 本へ `ResetObject` を繰り返すと、PIO の子に
+`kUndoPlaceholderNode`（型 90）が**1 回につきちょうど 1 つ**増える（30 回で 29 個。
+5 回刻みで実測）。**プローブは undo イベントを開かない**
+（[Undo](Undo.md)：半端な記録を取り消すと図面が壊れる）ので、置き石が PIO の中に残る。
+
+- **描かれた子の数は 30 回まで 7 つのまま保たれた**ので、**置き石そのものは描画を壊さない**。
+- ただし**同じ個体で `AttributesMode` を 0→1→2→3 と振った回**では、型 84（3D 実体）と
+  断面のポリラインが消え、**値を既定へ戻しても戻らなかった**。`ResetObject` を 30 回
+  繰り返すだけでは壊れないので、**壊したのは回数ではない**。何が壊したかは切り分けて
+  いない（[issue #166](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/166) へ切り出した）。
+- **調査のうえでの実務**: **1 つの個体の値を振って比べない。値ごとに新しい個体を作る。**
+  この節の実測はすべて 1 値 1 個体で採り直したものである。
+
+### 取り込みで使う形（構造材＝クラススタイル・被覆と中心線は非表示・端部は両端）
+
+**実機確認済み**（この形をそのまま 1 本作り、読み戻しと描かれた子を確かめた）。
+**面は 3 面とも書く**（どの面が描かれるかは切断面との関係で決まるため）。
+
+```cpp
+VWParametricObj pio(member);                 // CreateCustomObjectPath で作った構造材
+const char* const kFaces[] = { "_Above", "_At", "_Below" };
+for (const char* face : kFaces) {
+    // 構造材＝クラススタイル（面 6 / 線 4）。クラス欄は**名前**で書く。
+    pio.SetParamValue(TXString("MemberClass")     + face, TXString("木構造_柱"));
+    pio.SetParamValue(TXString("MemberFillStyle") + face, TXString("6"));  // 面の属性＝クラス属性
+    pio.SetParamValue(TXString("MemberPenStyle")  + face, TXString("4"));  // 線の属性＝クラス属性
+    pio.SetParamBool (TXString("MemberDisplay")   + face, true);
+    // 被覆と中心線は非表示。
+    pio.SetParamBool(TXString("CoverDisplay")      + face, false);
+    pio.SetParamBool(TXString("CenterlineDisplay") + face, false);
+    // 端部は両端（＝始端と終端の両方を表示。これは既定でもある）。
+    pio.SetParamBool(TXString("StartCapDisplay") + face, true);
+    pio.SetParamBool(TXString("EndCapDisplay")   + face, true);
+}
+gSDK->ResetObject(member);                   // 1 回で足りる
+```
+
+結果（実行ログ）:
+
+- 書いた値は**全部残った**——`MemberDisplay` / `StartCapDisplay` / `EndCapDisplay` が
+  3 面とも true、`CoverDisplay` / `CenterlineDisplay` が 3 面とも false、
+  `MemberFillStyle`=6・`MemberPenStyle`=4・`MemberClass`＝クラス名。
+- 描かれた子は 7 → **6 に減り、中心線の子（型 21・`(0,0,3000,0)`）が消えた**。
+- 断面の面は**クラスの塗り色**・`GetFillColorByClass`=true・クラスは指定したもの。
+  稜線は**クラスの線色と太さ**・`GetPenColorByClass`=true・同じクラス。
+- **端部は 2 つとも残った**（型 5 が `x=0` と `x=3000`）。
+- **被覆では子が 1 つも減らなかった。** 既定の 1 本では被覆が最初から描かれていない
+  ためと見られる【推定】——**被覆の厚み（`CoverTopThickness` など・索引 34〜45）の既定は
+  測っていない**（この調査は 48 以降を採ったもの）。いずれにせよ
+  **「被覆を非表示にしても絵が変わらない」を「書けていない」と読まない**
+  ——読み戻しは 3 面とも false で残っている。
+
+**「端部は両端」はポップアップではない。** 端部の表示は
+`StartCapDisplay_<面>` と `EndCapDisplay_<面>` の**真偽 2 つ**で、両方 true が「両端」、
+片方だけが「始端のみ」「終端のみ」、両方 false が「なし」に当たる。
 
 ## パラメータの既定値は「文書」に記録される
 
