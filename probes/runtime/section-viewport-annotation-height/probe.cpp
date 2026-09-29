@@ -4,44 +4,43 @@
 //	[issue #147] **UI が作った断面ビューポートの注釈ではレベル基準線が高さを出すのに、
 //	`ISDK::CreateSectionViewport` で作った断面ビューポートの注釈では `0` になる。その差は何か。**
 //
-//	#141 で「`0` になるかを決めているのはストーリではなくビューポート」まで確定している
-//	（Findings「レイヤとストーリ」「レベル（標高）オブジェクト」）。**潰れている筋はもう
-//	一度やらない**——ストーリの作り方・レイヤの表示（書いて読み戻して確認済み）・
-//	`ovIsSectionViewport`（SDK 製も `true`）・個体の全 33 欄（#135 で残差 0）。
+//	【1 回目（2026-09-29。実物件の図面）で分かったこと——**犯人は見つかった**】
+//	オブジェクト変数 1000〜1150 を総当りで突き合わせ、差を 1 つずつ書き写したところ、
+//	**`ovViewportViewMatrix`（1050）だけを書いたビューポートで `Elev` が `540` になった**
+//	（他の 11 件はすべて `0` のまま）。値はこうだった:
 //
-//	だからこのプローブは**ビューポートの側だけ**を潰す。段は 8 つ。**どれも数値で読める**
-//	（目視を頼まない）。
+//	  - UI 製 `Viewport-7`: 1050 ＝ `[0 0 1 | 1 0 0 | 0 1 0 | -5820 0 3640]`
+//	    **＝その 1055（`ovSheetLayerSectionViewportViewMatrix`）と完全に同じ**
+//	  - SDK 製: 1050 ＝ **単位行列**（＝〈上から見た〉向きのまま）。1055 のほうは
+//	    断面の向き（`[1 0 0 | 0 0 -1 | 0 1 0 | …]`）がちゃんと入っている
 //
-//	  1) **同じ 1 回の実行で差を再現する。** UI 製の断面ビューポートと、その場で作った
-//	     SDK 製の断面ビューポートの注釈へ、同じレベルの 3 つ組を 1 本ずつ置いて読む。
-//	     ここで差が出なければ、以降の比較には意味が無い（先に確かめる）。
-//	  2) **素性を総当りで突き合わせる。** オブジェクト変数を 1000〜1150 まで 1 つずつ
-//	     両方から読み、**値の違う行だけ**を並べる。当たりを付けて数個だけ見るのではなく
-//	     総当りにするのは、**どの変数が効くかを知らないから**である（#135 で個体の側を
-//	     全欄突き合わせたのと同じやり方）。
-//	     候補として名前の付いているものだけでも `ovViewportLayerHeightIgnored`(1040) /
-//	     `ovIsDesignLayerSectionViewport`(1043) / `ovViewportIsHorizontalSection`(1048) /
-//	     `ovSheetLayerSectionViewportViewMatrix`(1055) /
-//	     `ovSectionViewportSectionViewMatrix`(1056) があり、どれも 1000 番台に居る。
-//	  3) **ビューポート群を突き合わせる。** `GetViewportGroup` を 1〜15
-//	     （`EViewportGroupType`）まで引いて、群があるか・中に図形が何個あるかを並べる。
-//	  4) **差を丸ごと書き写す。** 段 2 で違っていた変数を UI 製の値で SDK 製へ書き、
-//	     **書けたか・読み戻せたか**を出してから、新しいレベル基準線を注釈へ置いて読む。
-//	     ここで数値が出れば「差はオブジェクト変数の中にある」と確定する。
-//	  5) **効いた 1 つを突き止める。** 段 4 で数値が出たら、**変数を 1 つだけ書いた
-//	     新しいビューポート**を差の数だけ作って、どれが効いたかを分ける。
-//	  6) **ハンドル型の変数は別に扱う。** 他のオブジェクトを指している変数は、書くと
-//	     図面の側へ影響が出得るので段 4・5 から外し、**新しいビューポートだけ**へ書いて試す。
-//	  7) **作り方を振る。** `CreateSectionViewport` の引数（`depth`・`startHeight`・
-//	     `endHeight`・断面線の位置と向き）を 4 通り振って注釈を読む。
-//	  8) **複製を試す。** UI 製を `DuplicateObject` で複製して注釈を読む。数値が出るなら、
-//	     素性ごと引き継ぐ逃げ道になる（表示レイヤを書き換えても残るかまで見る）。
+//	つまり **`CreateSectionViewport` は断面の向き（1055）を作るが、ビューポートの
+//	ビュー行列（1050）を単位行列のまま残す**——縦方向の基準が無いのはこれが理由、という筋。
+//	ハンドル型の差は 0 件だったので「断面線オブジェクトとの結び付き」の筋は消えた。
+//	作り方の引数（`depth` / 高さの範囲 / 断面線の位置と向き）は 4 通りとも `0` のまま。
+//	**`DuplicateObject` で UI 製を複製すると `540` が出る**（表示レイヤを書き換えて
+//	更新しても保たれた）——逃げ道としては成立する。
+//
+//	【この 2 回目で確かめること——**手順として使えるか**】1 回目で書いたのは
+//	「UI 製の 1050」という**他人の値**で、しかも**差を全部書き写した段では `0` のまま**
+//	だった（そちらは更新を挟んでいる）。だから手順として言い切るには、次の 5 つが要る。
+//
+//	  1) **自分の 1055 を自分の 1050 へ書けば済むのか。** UI 製を参照しない道があるかは、
+//	     プラグインから使えるかどうかを分ける（UI 製の無い文書でも効く手順が要る）。
+//	  2) **`UpdateViewport` は 1050 を消すか。** 実用では必ず更新するので、
+//	     消えるなら「更新の後に書く」が手順になる。
+//	  3) **実用の順番（表示レイヤ・1064・レンダ・更新を済ませてから最後に 1050）**で効くか。
+//	  4) **1 回目の段 4（差を全部書き写した）が `0` だったのはなぜか。** 1050 を書いた
+//	     ビューポートへ他の変数を 1 つずつ足して、**打ち消したものを突き止める。**
+//	  5) **1050 を書いたビューポートは断面として壊れていないか。** 1054 / 1055 / 1056 と
+//	     ビュー種別（1007）を読み、**断面のキャッシュ群（5 / 6 / 7 / 15）に図形が
+//	     入ったか**を数える——「絵が出ているか」を目視に頼らず見るための代わりになる。
 //
 //	【走らせる図面】**UI が作った断面ビューポートのある実物件の図面**（新規の空図面では
-//	比較対象が無いので、段 0 で「行えない」と出して止まる）。**この調査は図面へ書き込む**
+//	段 4・6 の対照が取れない。段 1〜3 だけは空図面でも走る）。**この調査は図面へ書き込む**
 //	——シートレイヤ・断面ビューポート・レベル基準線を作って**最後に全部消す**が、
 //	undo は開いていない（Findings「Undo」）ので、**走らせる前に保存**しておくこと。
-//	UI が置いた図形は読むだけで、書き換えない（複製は作って消す）。
+//	UI が置いた図形は読むだけで、書き換えない。
 //
 //	【ログは PR コメントとして公開される】ビューポート名・レイヤ名・ストーリ名・
 //	レベル種別名がそのまま載る。差し支えのある図面では走らせない。
@@ -56,17 +55,6 @@
 namespace
 {
 	const char* const kSvahBenchmark2 = "Elevation Benchmark2";
-
-	// 総当りで読むオブジェクト変数の範囲。ビューポート関係は 1000 番台に固まっており
-	// （`ObjectVariables.h`）、**宣言の無い欠番も含めて**読む——UI が使っている非公開の
-	// 変数がそこに居る見込みがあるため（Findings「ビューポート」の打ち切った調査で
-	// 1060〜1090 は読み取り専用で触っており、落ちないことは分かっている）。
-	const short kSvahVarFirst = 1000;
-	const short kSvahVarLast = 1150;
-
-	// 段 5（1 つずつ書いて効いたものを突き止める）で作るビューポートの上限。
-	// 断面ビューポートを作るのは安くないので、青天井にはしない。
-	const size_t kSvahIsolateLimit = 12;
 
 	std::string SvahStr(const TXString& s)
 	{
@@ -177,13 +165,6 @@ namespace
 		if (!var.GetBoolean(value))
 			return fallback;
 		return value;
-	}
-
-	// ブロックがオブジェクトを指しているか（段 6 で別扱いにするため）。
-	bool SvahIsHandleBlock(const TVariableBlock& var)
-	{
-		MCObjectHandle h = nil;
-		return var.GetMCObjectHandle(h) ? true : false;
 	}
 
 	// オブジェクト変数の中身を**型と値の文字列**に畳む。型が分からないときも
@@ -355,29 +336,86 @@ namespace
 		made.clear();
 	}
 
-	// 段 2 で見つけた「値の違う変数」1 件。
-	struct SvahDiff
+	// 行列のオブジェクト変数を 1 つ読む（読めなければ空を返す）。
+	std::string SvahMatrixText(MCObjectHandle h, short index)
 	{
-		short fIndex = 0;
-		TVariableBlock fUiValue; // UI 製が持っていた値（段 4・5・6 で書き写す）
-		std::string fUiText;
-		std::string fSdkText;
-		bool fIsHandle = false;
-	};
+		TVariableBlock var;
+		if (!gSDK->GetObjectVariable(h, index, var))
+			return "(読めず)";
+		return SvahBlockText(var);
+	}
+
+	// **1050 と 1055 を 1 行で並べる。** UI 製ではこの 2 つが完全に同じで、SDK 製では
+	// 1050 だけが単位行列のまま——1 回目の実測で分かった、いちばん効く 1 行。
+	std::string SvahMatrixLine(MCObjectHandle vp)
+	{
+		return "1050=" + SvahMatrixText(vp, 1050) + " / 1055=" + SvahMatrixText(vp, 1055);
+	}
+
+	// その行列が単位行列（＝〈上から見た〉向きのまま）か。
+	bool SvahIsIdentity(MCObjectHandle vp, short index)
+	{
+		TVariableBlock var;
+		if (!gSDK->GetObjectVariable(vp, index, var))
+			return false;
+		TransformMatrix matrix;
+		if (!var.GetTransformMatrix(matrix))
+			return false;
+		for (int row = 0; row < 3; ++row)
+			for (int col = 0; col < 3; ++col)
+			{
+				const double expected = (row == col) ? 1.0 : 0.0;
+				const double diff = matrix.mat[row][col] - expected;
+				if (diff > 1e-9 || diff < -1e-9)
+					return false;
+			}
+		return true;
+	}
+
+	// **本命の手順そのもの**——そのビューポートの 1055（断面の向き）を、同じ
+	// ビューポートの 1050（ビュー行列）へ写す。UI 製を 1 つも参照しない。
+	std::string SvahCopy1055To1050(MCObjectHandle vp)
+	{
+		TVariableBlock sectionMatrix;
+		if (!gSDK->GetObjectVariable(vp, 1055, sectionMatrix))
+			return "1055 が読めず（写せない）";
+		const bool wrote = gSDK->SetObjectVariable(vp, 1050, sectionMatrix) ? true : false;
+		return "Set(1050)=" + SvahBool(wrote) + " → " + SvahMatrixLine(vp);
+	}
+
+	// 断面として壊れていないかを**数えられるものだけ**で見る。群 4 は断面、
+	// 5 / 6 / 7 / 15 はキャッシュ——描き終えていれば図形が入る。
+	std::string SvahSectionHealth(MCObjectHandle vp)
+	{
+		std::string line = "1054=" + SvahBool(SvahReadBool(vp, 1054, false)) +
+						   " ビュー種別(1007)=" + SvahMatrixText(vp, 1007) +
+						   " 1056=" + SvahMatrixText(vp, 1056) +
+						   " 表示レイヤ=" + SvahShownLayers(vp) + " 群";
+		const short groups[] = {4, 5, 6, 7, 15};
+		for (size_t i = 0; i < sizeof(groups) / sizeof(groups[0]); ++i)
+		{
+			MCObjectHandle group = gSDK->GetViewportGroup(vp, groups[i]);
+			line += " " + std::to_string(static_cast<int>(groups[i])) + "=" +
+					(group == nil ? std::string("無") : std::to_string(SvahCountMembers(group)));
+		}
+		return line;
+	}
 } // namespace
 
 VW_PROBE("section-viewport-annotation-height",
-		 "SDK 製の断面ビューポートの注釈で高さが 0 になる理由（#147）",
-		 "UI 製と SDK 製の断面ビューポートを総当りで突き合わせ、差を書き写し、作り方を振る")
+		 "SDK 製の断面ビューポートでも注釈に高さを出す手順（#147）",
+		 "1050（ovViewportViewMatrix）を書けば出る、を手順として使えるところまで詰める")
 {
 	probe.log("**この調査は図面へ書き込む**（作ったものは最後に全部消すが、undo は開いて");
 	probe.log("いない）。走らせる前に保存しておくこと。UI が置いた図形は読むだけ。");
 	probe.log("");
+	probe.log("1 回目で分かったこと: **1050（ovViewportViewMatrix）だけを書いたビューポートで");
+	probe.log("Elev が 540 になった**。UI 製ではその 1050 が 1055 と完全に同じ値で、SDK 製では");
+	probe.log("1050 が単位行列のまま残っている。ここではそれを**手順**にできるかを見る。");
+	probe.log("");
 
 	// ---------------------------------------------------------------- 段 0
-	probe.log("=== 段 0: 比較する 2 本と、基準にするレベルを選ぶ ===");
-
-	// レイヤ経由でストーリを集め、**レイヤの生えているレベル種別**を 1 つ選ぶ。
+	probe.log("=== 段 0: 基準にするレベルと、対照にする UI 製の断面ビューポート ===");
 	std::vector<MCObjectHandle> stories;
 	const std::vector<MCObjectHandle> allLayers = SvahAllLayers();
 	for (size_t i = 0; i < allLayers.size(); ++i)
@@ -392,9 +430,6 @@ VW_PROBE("section-viewport-annotation-height",
 		if (!seen)
 			stories.push_back(story);
 	}
-	probe.log("レイヤ=" + std::to_string(allLayers.size()) +
-			  " 枚 / ストーリ=" + std::to_string(stories.size()) +
-			  " 件 / レベル種別=" + std::to_string(gSDK->GetNumLayerLevelTypes()) + " 個");
 
 	MCObjectHandle targetStory = nil;
 	TXString targetType;
@@ -421,374 +456,190 @@ VW_PROBE("section-viewport-annotation-height",
 	gSDK->GetObjectName(targetStory, targetStoryName);
 	const std::string targetZ = SvahResolvedLevelZ(targetLayer, targetType);
 	probe.log("基準にするレベル: ストーリ〈" + SvahStr(targetStoryName) + "〉 / レベル種別〈" +
-			  SvahStr(targetType) + "〉 **絶対Z=" + targetZ + "** レイヤ〈" +
-			  SvahName(targetLayer) + "〉");
+			  SvahStr(targetType) + "〉 **絶対Z=" + targetZ + "**");
 
-	// UI 製の断面ビューポートを 1 本選ぶ（`ovIsSectionViewport`＝1054 が true のもの）。
 	const std::vector<MCObjectHandle> viewports = SvahCollectViewports();
 	MCObjectHandle uiViewport = nil;
-	int sectionCount = 0;
-	for (size_t i = 0; i < viewports.size(); ++i)
+	for (size_t i = 0; uiViewport == nil && i < viewports.size(); ++i)
 		if (SvahReadBool(viewports[i], 1054, false))
-		{
-			++sectionCount;
-			if (uiViewport == nil)
-				uiViewport = viewports[i];
-		}
-	probe.log("この文書のビューポート=" + std::to_string(viewports.size()) +
-			  " 件 / そのうち断面（1054=true）=" + std::to_string(sectionCount) + " 件");
+			uiViewport = viewports[i];
 	if (uiViewport == nil)
-	{
-		probe.fail("UI が作った断面ビューポートが 1 本も無い"
-				   "（比較対象が無いので、この調査は行えない）");
-		return;
-	}
-	probe.log("UI 製の比較対象: ビューポート〈" + SvahName(uiViewport) +
-			  "〉 表示レイヤ=" + SvahShownLayers(uiViewport));
+		probe.log("UI 製の断面ビューポートは無い（段 4 の対照と段 6 は行えない）");
+	else
+		probe.log("UI 製の対照: ビューポート〈" + SvahName(uiViewport) + "〉");
 
 	gSDK->DefineCustomObject(kSvahBenchmark2, kCustomObjectPrefNever);
-	// 片付け用。**消す順を守るために 3 本に分ける**（上の `SvahDeleteAll` の但し書き）。
 	std::vector<MCObjectHandle> madeMarkers;
 	std::vector<MCObjectHandle> madeViewports;
 	std::vector<MCObjectHandle> madeLayers;
 
-	// SDK 製を 1 本作る。断面線は建物を挟むように長く引き、高さの範囲も広く取る
-	// （空の断面にしないため。Findings「ビューポート」）。
-	MCObjectHandle sheet = gSDK->CreateLayer("#147 の調査用シート", kLayerSheet);
-	MCObjectHandle sdkViewport = nil;
-	if (sheet != nil)
-		sdkViewport =
-			SvahMakeSectionViewport(sheet, WorldPt(-100000, -100000), WorldPt(100000, -100000),
-									WorldPt(0, 100000), 0, -100000, 100000, true);
-	if (sdkViewport == nil)
+	// ---------------------------------------------------------------- 段 1
+	probe.log("");
+	probe.log("=== 段 1: 本命の手順——**自分の 1055 を自分の 1050 へ書く** ===");
+	probe.log("  UI 製を 1 つも参照しない道。これが効けば、UI 製の無い文書でも使える。");
+	MCObjectHandle sheet1 = gSDK->CreateLayer("#147-2 本命", kLayerSheet);
+	MCObjectHandle vp1 = nil;
+	if (sheet1 != nil)
+		vp1 = SvahMakeSectionViewport(sheet1, WorldPt(-100000, -100000), WorldPt(100000, -100000),
+									  WorldPt(0, 100000), 0, -100000, 100000, false);
+	if (vp1 == nil)
 	{
-		if (sheet != nil)
-			madeLayers.push_back(sheet);
+		if (sheet1 != nil)
+			madeLayers.push_back(sheet1);
 		SvahDeleteAll(madeLayers);
 		probe.fail("CreateSectionViewport が nil を返した（この調査は行えない）");
 		return;
 	}
-	madeLayers.push_back(sheet);
-	madeViewports.push_back(sdkViewport);
-	probe.log("SDK 製の比較対象を作った: シートレイヤ〈" + SvahName(sheet) +
-			  "〉の上 / 表示レイヤ=" + SvahShownLayers(sdkViewport));
-
-	// ---------------------------------------------------------------- 段 1
-	probe.log("");
-	probe.log("=== 段 1: 同じ 1 回の実行で差が出ることを確かめる ===");
-	probe.log("**ここで差が出なければ、段 2 以降の突き合わせには意味が無い。**");
-	madeMarkers.push_back(SvahPlaceMarker(probe, uiViewport, targetStoryName, targetType,
-										  "UI 製〈" + SvahName(uiViewport) +
-											  "〉の注釈（絶対Z=" + targetZ + " が出るはず）"));
-	madeMarkers.push_back(SvahPlaceMarker(probe, sdkViewport, targetStoryName, targetType,
-										  "SDK 製の注釈（いまは 0 になるはず）"));
+	madeLayers.push_back(sheet1);
+	madeViewports.push_back(vp1);
+	probe.log("  1-a 作った直後: " + SvahMatrixLine(vp1));
+	probe.log("  1-b 1055 を 1050 へ写す: " + SvahCopy1055To1050(vp1));
+	madeMarkers.push_back(SvahPlaceMarker(probe, vp1, targetStoryName, targetType,
+										  "1-c 写した直後の注釈（ここが本命）"));
 
 	// ---------------------------------------------------------------- 段 2
 	probe.log("");
-	probe.log("=== 段 2: オブジェクト変数 " + std::to_string(kSvahVarFirst) + "〜" +
-			  std::to_string(kSvahVarLast) + " を総当りで突き合わせる ===");
-	probe.log("**違う行だけ**を出す。落ちたときに何番まで進んだか分かるよう、20 件ごとに");
-	probe.log("印を残す。");
-	int bothReadable = 0;
-	std::vector<SvahDiff> diffs;
-	for (short index = kSvahVarFirst; index <= kSvahVarLast; ++index)
-	{
-		TVariableBlock uiVar;
-		TVariableBlock sdkVar;
-		const bool uiReadable = gSDK->GetObjectVariable(uiViewport, index, uiVar) ? true : false;
-		const bool sdkReadable = gSDK->GetObjectVariable(sdkViewport, index, sdkVar) ? true : false;
-		if (uiReadable && sdkReadable)
-			++bothReadable;
-		if (uiReadable || sdkReadable)
-		{
-			const std::string uiText = uiReadable ? SvahBlockText(uiVar) : "(読めず)";
-			const std::string sdkText = sdkReadable ? SvahBlockText(sdkVar) : "(読めず)";
-			if (uiText != sdkText)
-			{
-				SvahDiff diff;
-				diff.fIndex = index;
-				diff.fUiValue = uiVar;
-				diff.fUiText = uiText;
-				diff.fSdkText = sdkText;
-				diff.fIsHandle = uiReadable && SvahIsHandleBlock(uiVar);
-				diffs.push_back(diff);
-			}
-		}
-		if ((index - kSvahVarFirst) % 20 == 19)
-			probe.log("  …" + std::to_string(static_cast<int>(index)) + " まで読んだ");
-	}
-	probe.log("両方で読めた番号=" + std::to_string(bothReadable) +
-			  " / 値の違った番号=" + std::to_string(diffs.size()));
-	for (size_t i = 0; i < diffs.size(); ++i)
-		probe.log("  " + std::to_string(static_cast<int>(diffs[i].fIndex)) +
-				  (diffs[i].fIsHandle ? "（ハンドル）" : "") + ": UI=" + diffs[i].fUiText +
-				  " / SDK=" + diffs[i].fSdkText);
-	if (diffs.empty())
-		probe.log("  （違う行は 1 つも無かった——素性はオブジェクト変数の外にある）");
+	probe.log("=== 段 2: `UpdateViewport` は 1050 を消すか ===");
+	probe.log("  実用では必ず更新するので、ここが消えるなら「更新の後に書く」が手順になる。");
+	gSDK->UpdateViewport(vp1);
+	probe.log("  2-a 更新の後: " + SvahMatrixLine(vp1));
+	madeMarkers.push_back(SvahPlaceMarker(probe, vp1, targetStoryName, targetType,
+										  "2-b 更新の後に置いた新しい 1 本"));
 
 	// ---------------------------------------------------------------- 段 3
 	probe.log("");
-	probe.log("=== 段 3: ビューポート群（EViewportGroupType 1〜15）を突き合わせる ===");
-	probe.log("  群: 1=クロップ 2=注釈 3=キャッシュ 4=**断面** 5〜9=各種キャッシュ");
-	probe.log("      10=カメラ 11=詳細 12=内部立面 13=切断面の上書き 14/15=キャッシュ");
-	for (short groupType = 1; groupType <= 15; ++groupType)
+	probe.log("=== 段 3: 実用の順番（下ごしらえを全部済ませてから最後に 1050 を書く）===");
+	MCObjectHandle sheet3 = gSDK->CreateLayer("#147-2 実用の順番", kLayerSheet);
+	MCObjectHandle vp3 = nil;
+	if (sheet3 != nil)
+		vp3 = SvahMakeSectionViewport(sheet3, WorldPt(-100000, -100000), WorldPt(100000, -100000),
+									  WorldPt(0, 100000), 0, -100000, 100000, true);
+	if (vp3 == nil)
 	{
-		MCObjectHandle uiGroup = gSDK->GetViewportGroup(uiViewport, groupType);
-		MCObjectHandle sdkGroup = gSDK->GetViewportGroup(sdkViewport, groupType);
-		if (uiGroup == nil && sdkGroup == nil)
-			continue;
-		probe.log("  群 " + std::to_string(static_cast<int>(groupType)) + ": UI=" +
-				  (uiGroup == nil ? std::string("無し")
-								  : "有り(" + std::to_string(SvahCountMembers(uiGroup)) + " 個)") +
-				  " / SDK=" +
-				  (sdkGroup == nil
-					   ? std::string("無し")
-					   : "有り(" + std::to_string(SvahCountMembers(sdkGroup)) + " 個)"));
+		probe.log("  ビューポートを作れなかった（この段は行えない）");
+		if (sheet3 != nil)
+			madeLayers.push_back(sheet3);
+	}
+	else
+	{
+		madeLayers.push_back(sheet3);
+		madeViewports.push_back(vp3);
+		probe.log("  3-a 表示レイヤ・1064・レンダ・更新まで済ませた後: " + SvahMatrixLine(vp3));
+		probe.log("  3-b 1055 を 1050 へ写す: " + SvahCopy1055To1050(vp3));
+		madeMarkers.push_back(
+			SvahPlaceMarker(probe, vp3, targetStoryName, targetType, "3-c 写した直後の注釈"));
+		gSDK->UpdateViewport(vp3);
+		probe.log("  3-d もう一度更新した後: " + SvahMatrixLine(vp3));
+		madeMarkers.push_back(SvahPlaceMarker(probe, vp3, targetStoryName, targetType,
+											  "3-e もう一度更新した後の注釈"));
 	}
 
 	// ---------------------------------------------------------------- 段 4
 	probe.log("");
-	probe.log("=== 段 4: 差を丸ごと書き写して、注釈を読み直す ===");
-	probe.log("  **ハンドル型は外す**（他のオブジェクトを指している変数は段 6 で別に試す）。");
-	std::vector<SvahDiff> writable;
-	for (size_t i = 0; i < diffs.size(); ++i)
-		if (!diffs[i].fIsHandle)
-			writable.push_back(diffs[i]);
-	if (writable.empty())
+	probe.log("=== 段 4: 1 回目に「差を全部書き写したら 0 のまま」だったのはなぜか ===");
+	probe.log("  1050 を写したビューポートへ、**他の変数を 1 つだけ足して**読む。");
+	probe.log("  `0` に戻る行があれば、それが打ち消していたもの。");
+	const short kSvahOthers[] = {1003, 1004, 1032, 1033, 1035, 1049, 1064};
+	const size_t otherCount = sizeof(kSvahOthers) / sizeof(kSvahOthers[0]);
+	if (uiViewport == nil)
 	{
-		probe.log("  書き写せる差が無いので、この段は行えない");
+		probe.log("  UI 製が無いので、足す値が取れない（この段は行えない）");
 	}
 	else
 	{
-		int wroteOk = 0;
-		int tookEffect = 0;
-		for (size_t i = 0; i < writable.size(); ++i)
+		for (size_t i = 0; i < otherCount; ++i)
 		{
+			const std::string sheetName =
+				"#147-2 打ち消し " + std::to_string(static_cast<int>(kSvahOthers[i]));
+			MCObjectHandle sheetN = gSDK->CreateLayer(TXString(sheetName.c_str()), kLayerSheet);
+			if (sheetN == nil)
+				continue;
+			madeLayers.push_back(sheetN);
+			MCObjectHandle vpN =
+				SvahMakeSectionViewport(sheetN, WorldPt(-100000, -100000), WorldPt(100000, -100000),
+										WorldPt(0, 100000), 0, -100000, 100000, false);
+			if (vpN == nil)
+			{
+				probe.log("  " + std::to_string(static_cast<int>(kSvahOthers[i])) +
+						  ": 断面ビューポートを作れなかった");
+				continue;
+			}
+			madeViewports.push_back(vpN);
+			SvahCopy1055To1050(vpN);
+			TVariableBlock other;
+			const bool got =
+				gSDK->GetObjectVariable(uiViewport, kSvahOthers[i], other) ? true : false;
 			const bool wrote =
-				gSDK->SetObjectVariable(sdkViewport, writable[i].fIndex, writable[i].fUiValue)
-					? true
-					: false;
-			TVariableBlock after;
-			const bool readBack =
-				gSDK->GetObjectVariable(sdkViewport, writable[i].fIndex, after) ? true : false;
-			const std::string afterText = readBack ? SvahBlockText(after) : "(読めず)";
-			if (wrote)
-				++wroteOk;
-			if (afterText == writable[i].fUiText)
-				++tookEffect;
-			probe.log("  " + std::to_string(static_cast<int>(writable[i].fIndex)) +
-					  ": Set=" + SvahBool(wrote) + " 読み戻し=" + afterText +
-					  (afterText == writable[i].fUiText ? "（入った）" : "（**入らなかった**）"));
+				got && gSDK->SetObjectVariable(vpN, kSvahOthers[i], other) ? true : false;
+			madeMarkers.push_back(SvahPlaceMarker(
+				probe, vpN, targetStoryName, targetType,
+				"1050 ＋ " + std::to_string(static_cast<int>(kSvahOthers[i])) +
+					" を足した（Set=" + SvahBool(wrote) + "）1050 は" +
+					(SvahIsIdentity(vpN, 1050) ? "**単位行列に戻った**" : "保たれている")));
 		}
-		probe.log("  書けた=" + std::to_string(wroteOk) + " / 入った=" +
-				  std::to_string(tookEffect) + " / 試した=" + std::to_string(writable.size()));
-		gSDK->UpdateViewport(sdkViewport);
-		madeMarkers.push_back(SvahPlaceMarker(probe, sdkViewport, targetStoryName, targetType,
-											  "差を全部書き写した後の SDK 製の注釈"));
 	}
 
 	// ---------------------------------------------------------------- 段 5
 	probe.log("");
-	probe.log("=== 段 5: 変数を 1 つだけ書いたビューポートを作って、効いたものを分ける ===");
-	probe.log("  段 4 で数値が出ていなければ、ここも全部 0 になるはず（それも情報になる）。");
-	probe.log("  **ここで作るビューポートは表示レイヤを触らず更新もしない**——レイヤの表示は");
-	probe.log("  条件でないと #141 で確定しており、実物件の断面を何枚も描き直さないため。");
-	if (writable.empty())
+	probe.log("=== 段 5: 1050 を書いたビューポートは断面として壊れていないか（機械で見る）===");
+	probe.log(
+		"  「絵が出ているか」は目視だが、**断面のキャッシュ群に図形が入ったか**は数えられる。");
+	probe.log("  群 4=断面 / 5・6・7・15=キャッシュ。UI 製と並べて読む。");
+	if (uiViewport != nil)
+		probe.log("  UI 製〈" + SvahName(uiViewport) + "〉: " + SvahSectionHealth(uiViewport));
+	probe.log("  段 1 の 1 本（1050 を写した。更新済み）: " + SvahSectionHealth(vp1));
+	if (vp3 != nil)
+		probe.log("  段 3 の 1 本（下ごしらえ → 1050 → 更新）: " + SvahSectionHealth(vp3));
+	MCObjectHandle sheet5 = gSDK->CreateLayer("#147-2 素のまま", kLayerSheet);
+	MCObjectHandle vp5 = nil;
+	if (sheet5 != nil)
+		vp5 = SvahMakeSectionViewport(sheet5, WorldPt(-100000, -100000), WorldPt(100000, -100000),
+									  WorldPt(0, 100000), 0, -100000, 100000, true);
+	if (vp5 != nil)
 	{
-		probe.log("  書き写せる差が無いので、この段は行えない");
+		madeLayers.push_back(sheet5);
+		madeViewports.push_back(vp5);
+		probe.log("  対照（1050 を書かない。更新済み）: " + SvahSectionHealth(vp5));
+		madeMarkers.push_back(
+			SvahPlaceMarker(probe, vp5, targetStoryName, targetType, "対照の注釈"));
 	}
-	else
+	else if (sheet5 != nil)
 	{
-		// 対照（何も書かないビューポート）。**これが 0 であることを先に見せる**
-		// ——更新しない作りでも 0 になることを確かめないと、段 5 の 0 が読めない。
-		MCObjectHandle controlSheet = gSDK->CreateLayer("#147 の対照シート", kLayerSheet);
-		MCObjectHandle controlVp = nil;
-		if (controlSheet != nil)
-			controlVp = SvahMakeSectionViewport(controlSheet, WorldPt(-100000, -100000),
-												WorldPt(100000, -100000), WorldPt(0, 100000), 0,
-												-100000, 100000, false);
-		if (controlVp == nil)
-		{
-			probe.log("  対照のビューポートを作れなかった");
-			if (controlSheet != nil)
-				madeLayers.push_back(controlSheet);
-		}
-		else
-		{
-			madeLayers.push_back(controlSheet);
-			madeViewports.push_back(controlVp);
-			madeMarkers.push_back(SvahPlaceMarker(probe, controlVp, targetStoryName, targetType,
-												  "対照（何も書かない）"));
-		}
-
-		const size_t limit =
-			writable.size() < kSvahIsolateLimit ? writable.size() : kSvahIsolateLimit;
-		if (limit < writable.size())
-			probe.log("  差が " + std::to_string(writable.size()) + " 件あるので、先頭 " +
-					  std::to_string(limit) + " 件だけ試す");
-		for (size_t i = 0; i < limit; ++i)
-		{
-			const std::string sheetName =
-				"#147 の単独シート " + std::to_string(static_cast<int>(writable[i].fIndex));
-			MCObjectHandle sheetOne = gSDK->CreateLayer(TXString(sheetName.c_str()), kLayerSheet);
-			if (sheetOne == nil)
-			{
-				probe.log("  " + std::to_string(static_cast<int>(writable[i].fIndex)) +
-						  ": シートレイヤを作れなかった");
-				continue;
-			}
-			MCObjectHandle vpOne = SvahMakeSectionViewport(
-				sheetOne, WorldPt(-100000, -100000), WorldPt(100000, -100000), WorldPt(0, 100000),
-				0, -100000, 100000, false);
-			if (vpOne == nil)
-			{
-				probe.log("  " + std::to_string(static_cast<int>(writable[i].fIndex)) +
-						  ": 断面ビューポートを作れなかった");
-				madeLayers.push_back(sheetOne);
-				continue;
-			}
-			madeLayers.push_back(sheetOne);
-			madeViewports.push_back(vpOne);
-			const bool wrote =
-				gSDK->SetObjectVariable(vpOne, writable[i].fIndex, writable[i].fUiValue) ? true
-																						 : false;
-			madeMarkers.push_back(SvahPlaceMarker(
-				probe, vpOne, targetStoryName, targetType,
-				std::to_string(static_cast<int>(writable[i].fIndex)) +
-					" だけ書いた（Set=" + SvahBool(wrote) + " 値=" + writable[i].fUiText + "）"));
-		}
+		madeLayers.push_back(sheet5);
 	}
 
 	// ---------------------------------------------------------------- 段 6
 	probe.log("");
-	probe.log("=== 段 6: ハンドル型の差を、新しいビューポートへ書いて試す ===");
-	probe.log("  UI 製が何かを指していて SDK 製が指していないなら、**それが断面線");
-	probe.log("  オブジェクトとの結び付き**である見込みが高い（UI の断面ビューポートは");
-	probe.log("  設計レイヤ上の断面線から作られる）。指し先は読むだけで書き換えない。");
-	std::vector<SvahDiff> handles;
-	for (size_t i = 0; i < diffs.size(); ++i)
-		if (diffs[i].fIsHandle)
-			handles.push_back(diffs[i]);
-	if (handles.empty())
+	probe.log("=== 段 6: 1 回目の再現（UI 製の 1050 を書く）===");
+	if (uiViewport == nil)
 	{
-		probe.log("  ハンドル型の差は 1 つも無かった（この筋は消える）");
+		probe.log("  UI 製が無いので行えない");
 	}
 	else
 	{
-		for (size_t i = 0; i < handles.size(); ++i)
-		{
-			const std::string sheetName =
-				"#147 のハンドルシート " + std::to_string(static_cast<int>(handles[i].fIndex));
-			MCObjectHandle sheetH = gSDK->CreateLayer(TXString(sheetName.c_str()), kLayerSheet);
-			if (sheetH == nil)
-			{
-				probe.log("  " + std::to_string(static_cast<int>(handles[i].fIndex)) +
-						  ": シートレイヤを作れなかった");
-				continue;
-			}
-			MCObjectHandle vpH =
-				SvahMakeSectionViewport(sheetH, WorldPt(-100000, -100000), WorldPt(100000, -100000),
+		MCObjectHandle sheet6 = gSDK->CreateLayer("#147-2 UI の 1050", kLayerSheet);
+		MCObjectHandle vp6 = nil;
+		if (sheet6 != nil)
+			vp6 =
+				SvahMakeSectionViewport(sheet6, WorldPt(-100000, -100000), WorldPt(100000, -100000),
 										WorldPt(0, 100000), 0, -100000, 100000, false);
-			if (vpH == nil)
-			{
-				probe.log("  " + std::to_string(static_cast<int>(handles[i].fIndex)) +
-						  ": 断面ビューポートを作れなかった");
-				madeLayers.push_back(sheetH);
-				continue;
-			}
-			madeLayers.push_back(sheetH);
-			madeViewports.push_back(vpH);
-			const bool wrote =
-				gSDK->SetObjectVariable(vpH, handles[i].fIndex, handles[i].fUiValue) ? true : false;
-			madeMarkers.push_back(SvahPlaceMarker(
-				probe, vpH, targetStoryName, targetType,
-				std::to_string(static_cast<int>(handles[i].fIndex)) + " のハンドルを書いた（Set=" +
-					SvahBool(wrote) + " 指し先=" + handles[i].fUiText + "）"));
-		}
-	}
-
-	// ---------------------------------------------------------------- 段 7
-	probe.log("");
-	probe.log("=== 段 7: 作り方を振る ===");
-	probe.log("  `depth` は 0 が〈切断面より奥: 無限〉（Findings「ビューポート」）。0 以外に");
-	probe.log("  したとき・高さの範囲を建物に合わせたとき・断面線の位置と向きを変えたときで");
-	probe.log("  違いが出るかを見る。");
-	struct SvahRecipe
-	{
-		const char* fTag;
-		WorldPt fP1;
-		WorldPt fP2;
-		WorldPt fP3;
-		double fDepth;
-		double fStart;
-		double fEnd;
-	};
-	const SvahRecipe recipes[] = {
-		{"depth=3000（0 以外）", WorldPt(-100000, -100000), WorldPt(100000, -100000),
-		 WorldPt(0, 100000), 3000, -100000, 100000},
-		{"高さの範囲を建物に合わせる", WorldPt(-100000, -100000), WorldPt(100000, -100000),
-		 WorldPt(0, 100000), 0, -1000, 12000},
-		{"断面線を原点の近くに短く引く", WorldPt(-10000, 0), WorldPt(10000, 0), WorldPt(0, 10000),
-		 0, -1000, 12000},
-		{"断面線の向きを逆にする（pt3 を反対側へ）", WorldPt(-100000, -100000),
-		 WorldPt(100000, -100000), WorldPt(0, -200000), 0, -100000, 100000},
-	};
-	for (size_t r = 0; r < sizeof(recipes) / sizeof(recipes[0]); ++r)
-	{
-		const std::string sheetName = "#147 の作り方シート " + std::to_string(r + 1);
-		MCObjectHandle sheetR = gSDK->CreateLayer(TXString(sheetName.c_str()), kLayerSheet);
-		if (sheetR == nil)
+		if (vp6 == nil)
 		{
-			probe.log(std::string("  ") + recipes[r].fTag + ": シートレイヤを作れなかった");
-			continue;
+			probe.log("  ビューポートを作れなかった");
+			if (sheet6 != nil)
+				madeLayers.push_back(sheet6);
 		}
-		MCObjectHandle vpR =
-			SvahMakeSectionViewport(sheetR, recipes[r].fP1, recipes[r].fP2, recipes[r].fP3,
-									recipes[r].fDepth, recipes[r].fStart, recipes[r].fEnd, true);
-		if (vpR == nil)
+		else
 		{
-			probe.log(std::string("  ") + recipes[r].fTag + ": 断面ビューポートを作れなかった");
-			madeLayers.push_back(sheetR);
-			continue;
+			madeLayers.push_back(sheet6);
+			madeViewports.push_back(vp6);
+			TVariableBlock uiMatrix;
+			const bool got = gSDK->GetObjectVariable(uiViewport, 1050, uiMatrix) ? true : false;
+			const bool wrote = got && gSDK->SetObjectVariable(vp6, 1050, uiMatrix) ? true : false;
+			madeMarkers.push_back(
+				SvahPlaceMarker(probe, vp6, targetStoryName, targetType,
+								"UI 製の 1050 を書いた（Set=" + SvahBool(wrote) + "）"));
 		}
-		madeLayers.push_back(sheetR);
-		madeViewports.push_back(vpR);
-		probe.log(std::string("  ") + recipes[r].fTag + ": 断面VP=" +
-				  SvahBool(SvahReadBool(vpR, 1054, false)) + " 表示レイヤ=" + SvahShownLayers(vpR));
-		madeMarkers.push_back(SvahPlaceMarker(probe, vpR, targetStoryName, targetType,
-											  std::string("  → 注釈〈") + recipes[r].fTag + "〉"));
-	}
-
-	// ---------------------------------------------------------------- 段 8
-	probe.log("");
-	probe.log("=== 段 8: UI 製を複製して使い回せるか（逃げ道）===");
-	probe.log("  **元には触らない**（複製を作って読み、最後に消す）。複製で数値が出るなら、");
-	probe.log("  「UI で 1 本作っておいて複製する」がプラグインから使える道になる。");
-	MCObjectHandle copy = gSDK->DuplicateObject(uiViewport);
-	if (copy == nil)
-	{
-		probe.log("  DuplicateObject が nil を返した（この段は行えない）");
-	}
-	else
-	{
-		gSDK->SetObjectName(copy, "#147 の複製");
-		// **複製は UI 製と同じシートレイヤの上にできる**（こちらの作ったシートではない）
-		// ので、ビューポートの側へ積んで、注釈の個体より後に消す。
-		madeViewports.push_back(copy);
-		probe.log("  複製の素性: 断面VP=" + SvahBool(SvahReadBool(copy, 1054, false)) +
-				  " 表示レイヤ=" + SvahShownLayers(copy));
-		madeMarkers.push_back(
-			SvahPlaceMarker(probe, copy, targetStoryName, targetType, "8a 複製そのままの注釈"));
-
-		// 8b: **表示レイヤを書き換えても素性が残るか。** プラグインは複製をそのまま
-		// 使うのではなく、見せたいレイヤへ絞りたい——そこで壊れないかを見る。
-		for (size_t i = 0; i < allLayers.size(); ++i)
-			gSDK->SetViewportLayerVisibility(copy, allLayers[i], 0);
-		gSDK->UpdateViewport(copy);
-		probe.log("  8b の下ごしらえ: 全レイヤを表示にして更新した（表示レイヤ=" +
-				  SvahShownLayers(copy) + "）");
-		madeMarkers.push_back(SvahPlaceMarker(probe, copy, targetStoryName, targetType,
-											  "8b 表示レイヤを書き換えた後の注釈"));
 	}
 
 	// ---------------------------------------------------------------- 片付け
@@ -803,11 +654,9 @@ VW_PROBE("section-viewport-annotation-height",
 
 	probe.log("");
 	probe.log("読み方:");
-	probe.log("  段 1 で UI 製＝" + targetZ + " / SDK 製＝0 が再現していることを先に確かめる。");
-	probe.log("  段 2 の差の一覧が突き合わせの全部（1000〜1150 に差が無ければ、素性は");
-	probe.log("  オブジェクト変数の外にある）。");
-	probe.log("  段 4 で数値が出れば「差は書き写せる」——段 5 がどの 1 つかを言う。");
-	probe.log("  段 6 で数値が出れば、断面線オブジェクトとの結び付きが素性だったことになる。");
-	probe.log("  段 7 のどれかで数値が出れば、それが探していた作り方。");
-	probe.log("  段 8 で数値が出れば、複製が逃げ道になる。");
+	probe.log("  段 1-c が " + targetZ + " なら、**手順は『1055 を 1050 へ写す』で済む**");
+	probe.log("  （UI 製を参照しなくてよい）。`0` なら、効いていたのは UI 製の値そのもの。");
+	probe.log("  段 2-a で 1050 が単位行列に戻っていれば「更新が消す」——段 3 の順番が手順。");
+	probe.log("  段 4 で `0` に戻った行が、1 回目に打ち消していたもの。");
+	probe.log("  段 5 でキャッシュ群の個数が対照と同じなら、1050 を書いても断面は壊れていない。");
 }
