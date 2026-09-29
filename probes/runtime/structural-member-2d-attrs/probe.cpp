@@ -252,7 +252,8 @@ VW_PROBE("structural-member-2d-attrs", "構造材の 2D / 3D 属性パラメー�
 	{
 		VWClass classObj(probeClass);
 		classObj.SetUseGraphics(true);
-		VWClassAttr classAttr(probeClass);
+		// VWClassAttr のコンストラクタは protected。クラス側の口から取る。
+		VWClassAttr classAttr = classObj.GetClassAttribs();
 		VWPattern solidFill(true);
 		solidFill.SetSolidPattern();
 		classAttr.SetFillPattern(solidFill);
