@@ -421,6 +421,39 @@ namespace
 		return firstFound;
 	}
 
+	// 注釈にあるレベル基準線を**全部**並べる（正解が 0 のものばかりなのかを見るため）。
+	void ProbeLogAllBenchmarks(vwprobe::Report& probe, const std::string& what,
+							   MCObjectHandle viewport)
+	{
+		MCObjectHandle annotations =
+			gSDK->GetViewportGroup(viewport, 2 /* kViewportGroupAnnotation */);
+		if (annotations == nil)
+			return;
+		size_t found = 0;
+		for (MCObjectHandle member = gSDK->FirstMemberObj(annotations); member != nil;
+			 member = gSDK->NextObject(member))
+		{
+			if (gSDK->GetObjectTypeN(member) != kParametricNode)
+				continue;
+			VWParametricObj parametric(member);
+			if (parametric.GetParametricName() != TXString(kProbeBenchmarkName))
+				continue;
+			if (++found > 12)
+				break;
+			probe.log(
+				"  " + what + " レベル基準線[" + ProbeFormatInt(static_cast<long long>(found - 1)) +
+				"] __StoryName=\"" +
+				std::string(static_cast<const char*>(parametric.GetParamValue("__StoryName"))) +
+				"\" __LevelTypeName=\"" +
+				std::string(static_cast<const char*>(parametric.GetParamValue("__LevelTypeName"))) +
+				"\" Datum=\"" +
+				std::string(static_cast<const char*>(parametric.GetParamValue("Datum"))) +
+				"\" Elev=" + ProbeReadElev(member));
+		}
+		if (found == 0)
+			probe.log("  " + what + " 注釈にレベル基準線は無い");
+	}
+
 	// 断面ビューポートの下ごしらえ（Findings「ビューポート」の作法）。
 	// `showAll` が false のときは表示レイヤ・クラスに触らない（A の対照）。
 	void ProbeSetUpSectionViewport(vwprobe::Report& probe, const std::string& what,
@@ -553,6 +586,14 @@ VW_PROBE("section-vp-1050", "断面の 1050 が更新で戻る理由を測る",
 	}
 	probe.log("  断面ビューポートは " + ProbeFormatInt(static_cast<long long>(sectionCount)) +
 			  " 件");
+	// **正解が 0 のものばかりなのかを見る**ため、1 枚ぶんは注釈を全部並べる。
+	for (size_t index = 0; index < viewports.size(); ++index)
+	{
+		if (!ProbeIsSectionViewport(viewports[index]))
+			continue;
+		ProbeLogAllBenchmarks(probe, "最初の断面 VP", viewports[index]);
+		break;
+	}
 	if (referenceBenchmark != nil)
 	{
 		VWParametricObj parametric(referenceBenchmark);
