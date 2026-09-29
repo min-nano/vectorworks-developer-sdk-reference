@@ -1,53 +1,63 @@
 //
 //	probes/runtime/dim-chain-annot-text-size/probe.cpp
 //
-//	[issue #164] **注釈の連続寸法で「紙の pt」を出す道はどれか——3 つの因子を行ごとに
-//	1 つだけ変えて測り分ける。**
+//	[issue #164] **注釈の連続寸法で「紙の pt」を出す道はどれか——因子を行ごとに 1 つだけ
+//	変えて測り分ける。**
 //
-//	利用側は #157 の手順に従い、寸法規格 `min-nano` が持つ文字スタイル `寸法(6pt)`
-//	（`ovTextStyleSize` = 6/72 インチ）を `SetTextStyleRef` で当て、1:1 のシートレイヤが
-//	アクティブなまま連続寸法へ繋いで 1/125 の断面ビューポートの注釈へ移した。
-//	**OIP の「文字 → スタイル」には `寸法(6pt)` と出るのに値が読めず、OIP で同じ
-//	スタイルを選び直すと紙 6pt で読める。**
+//	利用側は寸法規格 `min-nano` が持つ文字スタイル `寸法(6pt)`（`ovTextStyleSize` =
+//	6/72 インチ）を `SetTextStyleRef` で当て、1:1 のシートレイヤがアクティブなまま連続
+//	寸法へ繋いで 1/125 の断面ビューポートの注釈へ移した。**OIP の「文字 → スタイル」には
+//	`寸法(6pt)` と出るのに値が読めず、OIP で同じスタイルを選び直すと紙 6pt で読める。**
 //
-//	Findings に既にある材料（どれも実測）:
+//	Findings に既にある材料（#161 が #157 の 3 つの記述を訂正した後の状態）:
 //
-//	  * `SetTextStyleRef` は `ovDimFontSize` を **`ovTextStyleSize`（インチ）× 25.4 ×
-//	    そのときのアクティブレイヤの縮尺** で焼き直す（#157）。1:1 なので 2.1167mm。
-//	  * **直線寸法（型 63）は文字スタイルの大きさで描かれ、連続寸法（型 86）は中の
-//	    直線寸法の `ovDimFontSize` で描かれる**（#157 の E 表・2〜3 巡目）。
+//	  * **絵の文字の大きさは `ovDimFontSize` へ書いた瞬間には変わらない——引き直しで
+//	    反映される**（#161。`ResetObject` / `CreateChainDimension` / ビューポートの縮尺
+//	    変更が引き直し。`AddViewportAnnotationObject` と `UpdateViewport` は違う）。
+//	    **`SetTextStyleRef` だけは例外で、呼んだその場で絵の側も書き換える。**
+//	  * `SetTextStyleRef` が書く値は **`ovTextStyleSize`（インチ）× 25.4 × そのときの
+//	    アクティブレイヤの縮尺**（#157）。1:1 なので `寸法(6pt)` では 2.1167mm。
 //	  * **「6pt の文字スタイル」をそのまま当てても紙で 6pt にはならない**——文字スタイルの
 //	    大きさは図面上の長さとして扱われ、ビューポートの縮尺で割られる（#157 の F 表。
 //	    F1＝`0.0833` インチは 1/125 の紙で 0.048pt で「見えない」）。
 //	  * **描かれている文字図形（型 10）の 1 文字目を `GetTextSize` で測った値は、実機の
-//	    絵と完全に一致する**（#161 の 1 巡目で物差しとして確定）。だから**この調査は
-//	    目視に頼らずログだけで判定できる。**
+//	    絵と完全に一致する**（#161 で物差しとして確定）。だから**この調査は目視に頼らず
+//	    ログだけで判定できる。**
 //
-//	つまり見立ては「**値は描かれているが小さすぎて見えない**」（出ていないのではない）で、
-//	OIP の選び直しは「ビューポートの縮尺の文脈で `SetTextStyleRef` を掛け直す」ことに
-//	当たる、という筋になる。**ここを実測で決める。**
+//	ここまでで症状は「**値は描かれているが紙 0.048pt で見えない**」と説明が付く。
+//	**残っているのは、そこから先の 3 つである。**
 //
-//	**確かめること**（issue の 3 つの問いに対応させる）:
+//	  ① **文字スタイルを明示したまま `ovDimFontSize` を書いて引き直す**組み合わせは
+//	     測られていない。#161 が測ったのは by-class と Un-Styled で、#157 が文字スタイル
+//	     付きで測った E1〜E3 は**引き直しを通していない**。Findings にはまだ
+//	     「直線寸法は文字スタイルの大きさで描かれ、連続寸法は中の `ovDimFontSize` で
+//	     描かれる」という**食い違いの記述が残っている**——引き直しを通せば揃うのか。
+//	  ② OIP の選び直しで直るなら、SDK から同じことができるのか（Q1・Q2）。
+//	  ③ 伏図（1/50）では `寸法(6pt)` を当てた**直線寸法も読める**と利用者は見ている。
+//	     ①の記述どおりなら 1/50 でも紙 0.12pt で読めないはずで、食い違う（Q3）。
+//
+//	**確かめること**（1/125 と 1/50 の注釈に 12 行）:
 //
 //	  A  失敗の再現。`寸法(6pt)` 相当を当てて 1:1 のまま繋ぐ → 描かれる文字は何 mm か。
-//	  B  【Q2 候補 a・連続】A の後に `ovDimFontSize` ＝ 6pt × 25.4/72 × 125 を書く。
-//	  C  【Q2 候補 a・単独】同じ書き込みを**繋がない型 63** に。#157 の E 表では
-//	     `ovDimFontSize` は型 63 の絵に効かなかった（＝効かない見込み）。
-//	  C2 C に `ResetObject` を足す（#161 の 2 巡目の論点を巻き込む）。
+//	  B  【Q2 候補 a・連続】A の前に `ovDimFontSize` ＝ 6pt × 25.4/72 × 125 を書く
+//	     （`CreateChainDimension` そのものが引き直しなので、これで効くはず）。
+//	  C  【Q3・引き直し無し】同じ書き込みを**繋がない型 63** へ。`ResetObject` を呼ばない。
+//	  C2 【Q3・引き直し有り】C に `ResetObject` を足す。**C と C2 の差が①の答え。**
 //	  D  対照。`寸法(6pt)` 相当を当てるだけの単独（#157 の F1 の再現）。
-//	  E  【正解の見込み・連続】大きさを作り直した文字スタイル（6/72 × 125 インチ）で繋ぐ。
-//	  F  【正解の見込み・単独】同じ文字スタイルの単独（#157 の F2 の再現）。
+//	  E  【対案・連続】大きさを作り直した文字スタイル（6/72 × 125 インチ）で繋ぐ。
+//	  F  【対案・単独】同じ文字スタイルの単独（#157 の F2 の再現）。
 //	  G  【Q2 候補 b】**1/125 のデザインレイヤをアクティブにして**から作り・当て・繋ぐ。
-//	  H  【Q1】A と同じものを注釈へ置いてから、**1/125 がアクティブな文脈で
-//	     `SetTextStyleRef` を掛け直す**（OIP の選び直しの機械的な模倣）。型 86 へ掛ける道と
-//	     中の型 63 へ掛ける道を分けて測る。
-//	  I  【Q3 の食い違い】伏図（1/50）の再現・**単独**。`寸法(6pt)` 相当を当て、1/50 の
-//	     デザインレイヤがアクティブなまま作って 1/50 のビューポートの注釈へ。
-//	  J  同じく伏図の再現・**連続**（1/50 がアクティブなまま繋ぐ）。
-//	     **I と J のどちらが読めるかで「伏図では出ている」の正体が決まる。**
+//	  K  【Q1・後から直す道 1】A と同じものを注釈へ置いてから、中の型 63 へ
+//	     `ovDimFontSize` を書いて連続寸法を `ResetObject`（#155 は by-class で「捨てられる」
+//	     と実測した。文字スタイルを明示してあるとどうか）。
+//	  H  【Q1・後から直す道 2】A と同じものを注釈へ置いてから、**1/125 がアクティブな
+//	     文脈で `SetTextStyleRef` を掛け直す**（OIP の選び直しの機械的な模倣）。
+//	     型 86 へ掛ける道と中の型 63 へ掛ける道を分けて測る。
+//	  I  【Q3】伏図（1/50）の再現・**単独**。1/50 がアクティブなまま作って 1/50 の注釈へ。
+//	  J  同じく伏図の再現・**連続**。**I と J のどちらが読めるかで③の答えが決まる。**
 //
 //	**新規の空図面で走らせる。** シートレイヤ 1 枚・デザインレイヤ 2 枚・ビューポート
-//	2 つ・文字スタイル 2 つ・寸法 16 本を足す。走らせた後は保存しないこと。
+//	2 つ・文字スタイル 2 つ・寸法 18 本を足す。走らせた後は保存しないこと。
 //
 
 #include "Probe.h"
@@ -432,10 +442,10 @@ VW_PROBE("dim-chain-annot-text-size", "注釈の連続寸法で紙の pt を出�
 	probe.log("");
 
 	// --- B: 候補 a・連続 ------------------------------------------------
-	probe.log("  B（3001+3002 の連続寸法）:【Q2 候補 a】A の後に ovDimFontSize ＝ " +
+	probe.log("  B（3001+3002 の連続寸法）:【Q2 候補 a・連続】A の前に ovDimFontSize ＝ " +
 			  P164Num(kP164FontSize125));
-	probe.log("     ＝繋ぐ前の型 63 へ書いてから繋ぐ（#157「順番は文字スタイル → "
-			  "ovDimFontSize」）");
+	probe.log("     ＝文字スタイル → ovDimFontSize の順で書いてから繋ぐ。");
+	probe.log("     **CreateChainDimension そのものが引き直し**なので、#161 の法則では効く");
 	MCObjectHandle chainB = nil;
 	{
 		MCObjectHandle left = P164MakeDim(3000.0, 0.0, 3001.0);
@@ -452,14 +462,15 @@ VW_PROBE("dim-chain-annot-text-size", "注釈の連続寸法で紙の pt を出�
 	probe.log("");
 
 	// --- C / C2: 候補 a・単独（Q3） -------------------------------------
-	probe.log("  C（4001 の単独・型 63）:【Q3】候補 a を**繋がない寸法**に");
-	probe.log("     ＝#157 の E 表では ovDimFontSize は型 63 の絵に効かなかった");
+	probe.log("  C（4001 の単独・型 63）:【Q3】同じ書き込みを**繋がない寸法**へ。");
+	probe.log("     **ResetObject を呼ばない**（#157 の E1〜E3 と同じ状態の再現）");
 	MCObjectHandle dimC = P164MakeDim(6000.0, 0.0, 4001.0);
 	gSDK->SetTextStyleRef(dimC, smallStyle);
 	P164SetReal(dimC, ovDimFontSize, kP164FontSize125);
 	P164Dump(probe, "C", dimC, kP164VpScale);
 
-	probe.log("  C2（4501 の単独・型 63）: C に ResetObject を足す（#161 の 2 巡目の論点）");
+	probe.log("  C2（4501 の単独・型 63）: C に **ResetObject** を足す。");
+	probe.log("     **C と C2 の差が「文字スタイルを明示したままでも引き直せば効くか」の答え**");
 	MCObjectHandle dimC2 = P164MakeDim(9000.0, 0.0, 4501.0);
 	gSDK->SetTextStyleRef(dimC2, smallStyle);
 	P164SetReal(dimC2, ovDimFontSize, kP164FontSize125);
@@ -475,7 +486,7 @@ VW_PROBE("dim-chain-annot-text-size", "注釈の連続寸法で紙の pt を出�
 	P164Dump(probe, "D", dimD, kP164VpScale);
 	probe.log("");
 
-	// --- E / F: 正解の見込み --------------------------------------------
+	// --- E / F: 対案（文字スタイル版） ----------------------------------
 	probe.log("  E（6001+6002 の連続寸法）: 大きさを作り直した文字スタイル（" +
 			  P164Num(kP164RightInch) + "インチ）で繋ぐ");
 	probe.log("     ＝#157 の F2（読めた行）の連続寸法版。**ovDimFontSize は触らない**");
@@ -497,8 +508,23 @@ VW_PROBE("dim-chain-annot-text-size", "注釈の連続寸法で紙の pt を出�
 	P164Dump(probe, "F", dimF, kP164VpScale);
 	probe.log("");
 
-	// --- H: Q1 の材料（掛け直しは【6】で） ------------------------------
-	probe.log("  H（9001+9002 の連続寸法）: A と同じ作り。**注釈へ移してから掛け直す**用");
+	// --- K / H: Q1 の材料（後から直す道。直しは【4】【6】で） ------------
+	probe.log("  K（10001+10002 の連続寸法）: A と同じ作り。**注釈へ移してから、中の");
+	probe.log("     型 63 へ ovDimFontSize を書いて ResetObject する**用（後から直す道 1）");
+	MCObjectHandle chainK = nil;
+	{
+		MCObjectHandle left = P164MakeDim(24000.0, 0.0, 10001.0);
+		MCObjectHandle right = P164MakeDim(24000.0, 10001.0, 20003.0);
+		gSDK->SetTextStyleRef(left, smallStyle);
+		gSDK->SetTextStyleRef(right, smallStyle);
+		chainK = gSDK->CreateChainDimension(left, right);
+		P164Dump(probe, "K 連続寸法そのもの（型 86）", chainK, kP164VpScale);
+		P164DumpMembers(probe, "K", chainK, kP164VpScale);
+	}
+	probe.log("");
+
+	probe.log("  H（9001+9002 の連続寸法）: A と同じ作り。**注釈へ移してから");
+	probe.log("     SetTextStyleRef を掛け直す**用（後から直す道 2）");
 	MCObjectHandle chainH = nil;
 	{
 		MCObjectHandle left = P164MakeDim(21000.0, 0.0, 9001.0);
@@ -514,9 +540,9 @@ VW_PROBE("dim-chain-annot-text-size", "注釈の連続寸法で紙の pt を出�
 	// =====================================================================
 	probe.log("【4】A〜F・H を 1/125 の注釈へ移す（#157: 移しても値は 1 つも動かない）");
 	{
-		MCObjectHandle moved[8] = {chainA, chainB, dimC, dimC2, dimD, chainE, dimF, chainH};
-		const char* names[8] = {"A", "B", "C", "C2", "D", "E", "F", "H"};
-		for (int index = 0; index < 8; ++index)
+		MCObjectHandle moved[9] = {chainA, chainB, dimC, dimC2, dimD, chainE, dimF, chainH, chainK};
+		const char* names[9] = {"A", "B", "C", "C2", "D", "E", "F", "H", "K"};
+		for (int index = 0; index < 9; ++index)
 		{
 			if (moved[index] == nil)
 			{
@@ -527,7 +553,7 @@ VW_PROBE("dim-chain-annot-text-size", "注釈の連続寸法で紙の pt を出�
 		}
 		gSDK->UpdateViewport(vp125);
 		probe.log("    移した後（1/125 の注釈の中）:");
-		for (int index = 0; index < 8; ++index)
+		for (int index = 0; index < 9; ++index)
 		{
 			if (moved[index] == nil)
 				continue;
@@ -535,6 +561,27 @@ VW_PROBE("dim-chain-annot-text-size", "注釈の連続寸法で紙の pt を出�
 			P164DumpMembers(probe, std::string(names[index]) + " 注釈の中", moved[index],
 							kP164VpScale);
 		}
+	}
+	probe.log("");
+
+	// =====================================================================
+	probe.log("【4b】K を後から直す道 1: 注釈の中で、中の型 63 へ ovDimFontSize を");
+	probe.log("   書いて連続寸法を ResetObject する（#155 は by-class で「捨てられる」と");
+	probe.log("   実測した。**文字スタイルを明示してあるとどうか**）");
+	if (chainK == nil)
+		probe.log("    K が nil なので測れない");
+	else
+	{
+		const std::vector<MCObjectHandle> members = P164Members(chainK);
+		for (size_t index = 0; index < members.size(); ++index)
+			probe.log("    K 中の型 63 #" + P164Int(static_cast<Sint32>(index + 1)) +
+					  " へ ovDimFontSize ← " + P164Num(kP164FontSize125) + " → " +
+					  P164Bool(P164SetReal(members[index], ovDimFontSize, kP164FontSize125)));
+		P164Dump(probe, "K 書いた直後（ResetObject の前）", chainK, kP164VpScale);
+		P164DumpMembers(probe, "K 書いた直後", chainK, kP164VpScale);
+		gSDK->ResetObject(chainK);
+		P164Dump(probe, "K 連続寸法を ResetObject した後", chainK, kP164VpScale);
+		P164DumpMembers(probe, "K ResetObject の後", chainK, kP164VpScale);
 	}
 	probe.log("");
 
@@ -646,15 +693,22 @@ VW_PROBE("dim-chain-annot-text-size", "注釈の連続寸法で紙の pt を出�
 
 	// =====================================================================
 	probe.log("【7】読み方");
-	probe.log("  * 1/125 の注釈（A〜H）で **★読める** と出た行が、SDK から作れる道である。");
-	probe.log("  * A と D が **×小さすぎて読めない** なら、利用側の症状は「値が描かれない」");
-	probe.log("    ではなく「**描かれているが紙 0.048pt で見えない**」ことになる。");
-	probe.log("  * B が読めて C が読めないなら、候補 a は**連続寸法にしか効かない**。");
-	probe.log("  * G が読めるなら候補 b は通る（ただしアクティブレイヤを作る副作用が要る）。");
-	probe.log("  * E と F が両方読めるなら、**縮尺ごとに文字スタイルを作り直す道だけが");
-	probe.log("    連続寸法と単独寸法の両方で通る**ことになる（#157 の結論の裏取り）。");
+	probe.log("  * **★読める** と出た行が、SDK から作れる道である。");
+	probe.log("  * A と D が **×小さすぎて読めない** なら、症状は「値が描かれない」ではなく");
+	probe.log("    「**描かれているが紙 0.048pt で見えない**」ことの裏取りになる。");
+	probe.log("  * **C と C2 の差**が本題——文字スタイルを明示したままでも、ovDimFontSize を");
+	probe.log("    書いて引き直せば（C2）単独の型 63 の絵が変わるのか。変われば #161 の法則が");
+	probe.log("    そのまま当てはまり、Findings に残る「直線寸法は文字スタイルの大きさで");
+	probe.log("    描かれる」という食い違いの記述は訂正できる。");
+	probe.log("  * B が読めれば、候補 a は連続寸法で通る（繋ぐ行為が引き直しになるので、");
+	probe.log("    ResetObject を別に呼ぶ必要が無い）。");
+	probe.log("  * K が読めれば、**既に注釈へ置いた連続寸法を後から直せる**。読めなければ、");
+	probe.log("    #155 の「後から直す道は無い」が文字スタイル付きでも成り立つ。");
+	probe.log("  * H が読めれば、それが OIP の選び直しの正体である（Q1）。型 86 と中の");
+	probe.log("    型 63 のどちらへ掛けたときに効いたかを、掛け直しの前後の値で見る。");
+	probe.log("  * G が読めれば候補 b も通る（ただしアクティブレイヤを作る副作用が要る）。");
 	probe.log("  * I が読めず J が読めるなら、「伏図では出ている」のは**連続寸法だけ**で、");
-	probe.log("    E 表との食い違いは消える。");
+	probe.log("    利用者の見立ての食い違いは消える。両方読めるなら③は別の筋になる。");
 	probe.log("");
 	probe.log("おわり。**この図面は保存しないこと。**");
 }
