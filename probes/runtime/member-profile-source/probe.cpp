@@ -1,43 +1,53 @@
 //
 //	probes/runtime/member-profile-source/probe.cpp
 //
-//	[issue #169] **構造材の断面（太さ）は何が決めているのか。**
+//	[issue #169] **構造材の断面（太さ）は何が決めているのか。第 2 版。**
 //
-//	分かっていること（PR #168 の 1 本目。VW 2026 / mac・新規の空図面）
-//	------------------------------------------------------------------
-//	`MajorDepth` へ 600 → 800 → 1000 → 600 と書き、毎回 `ResetObject` を呼んでも、
-//	**値は毎回そのまま読み戻せるのに外接も立方も 1mm も動かなかった**。子の数と型の
-//	内訳も一度も動かない。`ResetObject` の戻り値も `true` のままなので、
-//	**書き手の側からは「効いた」と「効かなかった」の区別が付かない**。
+//	第 1 版で分かったこと（PR #170 の 1 本目。VW 2026 / mac・新規の空図面・16 個体）
+//	------------------------------------------------------------------------------
+//	**断面を決めているのは `ProfileShape` と `ProfileSize` の 2 欄**だった。
+//	  ・4 欄の素性: `ProfileShape`=[H形鋼] / `ProfileSeries`=[AISC (Inch)] /
+//	    `ProfileSize`=[W12 X 30] は**どれも欄型 14（`kFieldStaticText`）**で、
+//	    `ProfileSymbol` は欄型 30（`kFieldSymDef`）だが**既定は空**。
+//	    ＝**既定の断面はシンボルではなくカタログ（AISC の W12 X 30）から来ている。**
+//	  ・**プロファイル（断面）グループは生成物**。既定の群は Polyline 1 つで外接
+//	    (-82.8,0→82.8,313.4)、つまり**描かれた断面 165.6 × 313.4 とぴったり一致**する。
+//	    [E] で矩形へ差し替えると `SetCustomObjectProfileGroup` は true を返すのに、
+//	    `ResetObject` の後に読み直すと**元の Polyline に戻っていた**。[F] で群の子を
+//	    消しても同じ。**`ResetObject` が 2 欄から毎回作り直すので、外から書いても消える。**
+//	  ・`ProfileShape` か `ProfileSize` を**空にすると断面が変わった**
+//	    （165.6×313.4 → **405.1×1118.1**）。`ProfileSeries` を空にしても、
+//	    `ProfileSymbol`（既に空）を空にしても**何も変わらない**。
+//	  ・`ProfileShape` へ 0〜7 を書くと**値は定着するのに、どの値でも 405.1×1118.1**。
+//	    ＝**解決できない綴りを書くと、この 1 つの断面へ落ちる**と読める。
+//	  ・**寸法 4 欄（`MajorBreadth` / `MinorBreadth` / `MajorDepth` / `MinorDepth`）は
+//	    6 条件すべてで 1mm も絵を動かさなかった。**
+//	  ・**手がかりは残らない。** `ResetObject`=true・読み戻し一致・そして
+//	    `B`/`B1`/`D`/`D1` は**書いた値をそのまま写した**（200/60/800/90）。
+//	    あの 4 欄は寸法欄の鏡で、描かれた実寸ではない。
 //
-//	この調査で確かめること（issue の 3 問）
-//	--------------------------------------
-//	1. **何が断面を決めているのか。** 見立ては 2 つある:
-//	   (a) `ProfileShape` / `ProfileSeries` / `ProfileSize` / `ProfileSymbol` のどれか
-//	       （＝既定がカタログのシンボル断面なので `MajorDepth` は使われない）
-//	   (b) **プロファイル（断面）グループ**——`ISDK::GetCustomObjectProfileGroup` /
-//	       `SetCustomObjectProfileGroup` が指す、PIO が持つ 2D 図形。
-//	   既定の 1 本の外接は Y 幅 165.6・立方 Z が ±156.7（＝断面 165.6 × 313.4）で、
-//	   **`MajorBreadth`=300 / `MajorDepth`=600 のどちらとも合わない**。だから断面は
-//	   この 4 欄かグループのどちらかから来ている。**両方を機械で測って決める。**
-//	2. **`MajorDepth` が効く条件はあるか。** 断面を指す欄を空にする・`ProfileShape` を
-//	   振る・グループを空にする——のどれかで効くようになるなら、その組み合わせが答え。
-//	3. **効かない欄を書いたときに手がかりは残るか。** `ResetObject` の戻り値・読み戻し・
-//	   静的表示欄（`B` / `B1` / `D` / `D1`）・断面を指す 4 欄・グループの外接——
-//	   **書き手が見られるものを全部並べて、1 つでも動くかを見る。**
+//	この版で確かめること——**「決めている」の裏を取る**
+//	--------------------------------------------------
+//	第 1 版は「空にすると変わる」しか示していない。**意図した断面にできるのか**が
+//	残った宿題で、これは issue の問 1 の範囲内（＝取りに行けば取れる答え）である。
 //
-//	試験（すべて **1 値 1 個体**。同じ個体で振って比べない——Findings「調査の作法」）
-//	--------------------------------------------------------------------------------
-//	  A  既定の 1 本の素性（4 欄の欄型・値・選択肢／子の内訳／グループの中身）
-//	  B  寸法 4 欄（`MajorBreadth` / `MinorBreadth` / `MajorDepth` / `MinorDepth`）を
-//	     書く → 何が動き、何が動かないか（＝問 3 の答え）
-//	  C  断面を指す 4 欄を **1 欄ずつ空にする** → そのあと寸法 4 欄を書く
-//	  D  `ProfileShape` に 0〜7 を書く → そのあと寸法 4 欄を書く
-//	  E  **プロファイルグループを矩形（Y 120 × Z 240）へ差し替える**
-//	  F  **プロファイルグループの子を消す**（空にする）→ そのあと寸法 4 欄を書く
+//	  G  `ProfileSize` を**同じ系列の別項目**へ書く（`W12 X 26` / `W14 X 30` /
+//	     `W44 X 335` / 空白なし `W12X30` / 小文字 `w12 x 30`）
+//	     → 断面がその項目の寸法になるか・綴りはどこまで厳しいか。
+//	     **`W44 X 335` は 1117.6 × 403.9mm（AISC で最大の W）で、第 1 版の
+//	     フォールバック 405.1 × 1118.1 とほぼ一致する**——これが「解決失敗の落ち先は
+//	     表の最後（最大）」なのかを見る。
+//	  H  `ProfileShape` を別の綴りへ（`角形鋼管` / `溝形鋼` / `W Shape`）
+//	  I  `ProfileSeries` を `AISC (Metric)` へ（`ProfileSize` はそのまま）
+//	  J  `ProfileShape` と `ProfileSize` の**両方**を空 → 落ち先は G の `W44 X 335` と同じか
+//	  K  **`ProfileSymbol` にシンボル定義を与える**（矩形 Y120×Z240 を 1 つ入れた定義。
+//	     `SetParamSymDef`（参照）と `SetParamValue`（名前）の 2 通りを別個体で）
+//	     → **任意の断面を SDK から与える道があるか。取り込みの実装がここで決まる。**
+//	  L  `MemberType`（索引 2・4 択）を 0〜3 へ → 断面の決め方が変わる欄ではないか
 //
-//	読み方: 行末の `幅Y` と `高さZ` が **[A] の 165.6 / 313.4 から動いたか**だけを見る。
-//	動いた行の直前に書いたものが断面を決めている。
+//	**どの試験も末尾で寸法 4 欄を書く**（第 1 版で見つからなかった「効く条件」を、
+//	新しい条件の上でもう一度探すため）。判定は第 1 版と同じ 2 つの数字だけ——
+//	PIO の外接の **Y 幅**と立方の **Z 高さ**。基準は [A] の 165.6 / 313.4。
 //
 //	走らせるのは**新規の空図面**。図面は壊れる前提（undo イベントは開かない）。
 //
@@ -52,20 +62,33 @@ namespace
 {
 	const char* const kProfPioName = "StructuralMember";
 
-	// 断面を指していると疑っている 4 欄（issue の見立て (a)）。
+	// 断面を指す 4 欄。第 1 版で ProfileShape と ProfileSize が効くと分かった。
 	const char* const kProfProfileFields[] = {"ProfileShape", "ProfileSeries", "ProfileSize",
 											  "ProfileSymbol"};
 	const size_t kProfProfileCount = sizeof(kProfProfileFields) / sizeof(kProfProfileFields[0]);
 
-	// 断面の寸法らしい名前の 4 欄。**これが効くかどうかがこの調査の的。**
+	// 断面の寸法らしい名前の 4 欄。第 1 版ではどの条件でも効かなかった。
 	const char* const kProfDimFields[] = {"MajorBreadth", "MinorBreadth", "MajorDepth",
 										  "MinorDepth"};
 	const double kProfDimValues[] = {200.0, 60.0, 800.0, 90.0};
 	const size_t kProfDimCount = sizeof(kProfDimFields) / sizeof(kProfDimFields[0]);
 
-	// OIP の読み取り専用の表示欄。寸法欄を書いたときに追随するかを見る（問 3）。
+	// OIP の読み取り専用の表示欄。第 1 版で「寸法欄の鏡」と分かっている。
 	const char* const kProfStaticFields[] = {"B", "B1", "D", "D1"};
 	const size_t kProfStaticCount = sizeof(kProfStaticFields) / sizeof(kProfStaticFields[0]);
+
+	// [G] ProfileSize へ書く綴り。**W44 X 335 は AISC で最大の W（1117.6×403.9mm）**で、
+	// 第 1 版のフォールバック 405.1×1118.1 とほぼ一致する。
+	const char* const kProfSizeSpellings[] = {"W12 X 26", "W14 X 30", "W44 X 335", "W12X30",
+											  "w12 x 30"};
+	const size_t kProfSizeCount = sizeof(kProfSizeSpellings) / sizeof(kProfSizeSpellings[0]);
+
+	// [H] ProfileShape へ書く綴り。既定が日本語（H形鋼）なので、日本語の別項目と
+	// 英語の綴りを混ぜて投げる。
+	const char* const kProfShapeSpellings[] = {"角形鋼管", "溝形鋼", "W Shape"};
+	const size_t kProfShapeCount = sizeof(kProfShapeSpellings) / sizeof(kProfShapeSpellings[0]);
+
+	const char* const kProfSymbolName = "プローブ_169_断面";
 
 	std::string ProfText(const TXString& src)
 	{
@@ -99,8 +122,6 @@ namespace
 			return "Rect";
 		case 5:
 			return "Polygon";
-		case 10:
-			return "Text";
 		case 11:
 			return "Group";
 		case 15:
@@ -109,54 +130,12 @@ namespace
 			return "Polyline";
 		case 24:
 			return "Extrude";
-		case 40:
-			return "Mesh";
 		case 84:
 			return "CSGTree";
-		case 85:
-			return "BoundaryRep";
 		case 86:
 			return "Parametric";
 		case 90:
 			return "UndoPlaceholder";
-		case 95:
-			return "Solid";
-		default:
-			return "?";
-		}
-	}
-
-	// EFieldStyle（Kernel/API/MiniCadCallBacks.h:1063）の値 → 名前。
-	const char* ProfFieldStyleName(int style)
-	{
-		switch (style)
-		{
-		case 1:
-			return "LongInt";
-		case 2:
-			return "Boolean";
-		case 3:
-			return "Real";
-		case 4:
-			return "Text";
-		case 7:
-			return "CoordDisp";
-		case 8:
-			return "PopUp";
-		case 9:
-			return "Radio";
-		case 14:
-			return "StaticText";
-		case 15:
-			return "ControlPoint";
-		case 18:
-			return "ClassesPopup";
-		case 20:
-			return "Angle";
-		case 23:
-			return "Class";
-		case 30:
-			return "SymDef";
 		default:
 			return "?";
 		}
@@ -168,9 +147,8 @@ namespace
 			   ProfCoord(double(rect.right)) + "," + ProfCoord(double(rect.top)) + ")";
 	}
 
-	// -------------------------------------------------------------------
-	// **判定はここだけ。** 断面の大きさは PIO の外接の **Y 方向の幅**（材は X 方向へ
-	// 伸びる）と、立方の **Z 方向の高さ**に出る。[A] の 165.6 / 313.4 から動いたかを見る。
+	// **判定はここだけ。** 断面の大きさは外接の Y 幅と立方の Z 高さに出る。
+	// 基準は [A] の 165.6 / 313.4、第 1 版のフォールバックは 405.1 / 1118.1。
 	void ProfSnap(vwprobe::Report& probe, const std::string& tag, MCObjectHandle pio)
 	{
 		size_t placeholders = 0;
@@ -206,8 +184,7 @@ namespace
 			}
 		}
 
-		std::string line = tag + " 幾何" + ProfWhole(static_cast<long long>(geometry)) + " 置石" +
-						   ProfWhole(static_cast<long long>(placeholders)) + " 型[";
+		std::string line = tag + " 幾何" + ProfWhole(static_cast<long long>(geometry)) + " 型[";
 		for (size_t at = 0; at < types.size(); ++at)
 		{
 			if (at != 0)
@@ -220,23 +197,14 @@ namespace
 
 		WorldRect bounds;
 		if (gSDK->GetObjectBounds(pio, bounds))
-		{
-			line += " 外接" + ProfRectText(bounds);
 			line += " **幅Y=" + ProfCoord(double(bounds.top) - double(bounds.bottom)) + "**";
-		}
 		else
-		{
-			line += " 外接=（取れず）";
-		}
+			line += " 幅Y=（取れず）";
 
 		WorldCube cube;
 		gSDK->GetObjectCube(pio, cube);
-		line += " 立方Z=(" + ProfCoord(double(cube.MinZ())) + "→" + ProfCoord(double(cube.MaxZ())) +
-				")";
 		line += " **高さZ=" + ProfCoord(double(cube.MaxZ()) - double(cube.MinZ())) + "**";
 
-		// **グループも一緒に測る。** 断面がグループから来ているなら、断面が動くときは
-		// グループも動く（逆も然り）。
 		MCObjectHandle group = gSDK->GetCustomObjectProfileGroup(pio);
 		if (group == nil)
 		{
@@ -249,94 +217,12 @@ namespace
 				line += " 群" + ProfRectText(groupBounds);
 			else
 				line += " 群=（外接取れず）";
-		}
-		probe.log(line);
-	}
-
-	// 子を 1 つずつ並べる（[A] と [E] だけ。どの子が断面なのかを突き合わせるため）。
-	void ProfDumpChildren(vwprobe::Report& probe, MCObjectHandle container)
-	{
-		if (container == nil)
-			return;
-		for (MCObjectHandle child = gSDK->FirstMemberObj(container); child != nil;
-			 child = gSDK->NextObject(child))
-		{
-			const short type = gSDK->GetObjectTypeN(child);
-			if (type == 90 || type == 0)
-				continue;
-			std::string line =
-				std::string("    子 型") + ProfWhole(type) + "(" + ProfTypeName(type) + ")";
-			WorldRect bounds;
-			if (gSDK->GetObjectBounds(child, bounds))
-				line += " 外接" + ProfRectText(bounds);
-			WorldCube cube;
-			gSDK->GetObjectCube(child, cube);
-			line += " 立方Z=(" + ProfCoord(double(cube.MinZ())) + "→" +
-					ProfCoord(double(cube.MaxZ())) + ")";
-			probe.log(line);
-		}
-	}
-
-	// プロファイル（断面）グループを 3 経路で引いて、中身まで出す（[A]）。
-	void ProfDumpGroups(vwprobe::Report& probe, MCObjectHandle member)
-	{
-		struct ProfGroupRoute
-		{
-			const char* name;
-			MCObjectHandle handle;
-		};
-		const ProfGroupRoute routes[] = {
-			{"GetCustomObjectProfileGroup", gSDK->GetCustomObjectProfileGroup(member)},
-			{"GetCustomObjectSecondProfileGroup", gSDK->GetCustomObjectSecondProfileGroup(member)},
-			{"GetCustomObjectProfileGroupInAux", gSDK->GetCustomObjectProfileGroupInAux(member)},
-		};
-		for (size_t at = 0; at < sizeof(routes) / sizeof(routes[0]); ++at)
-		{
-			if (routes[at].handle == nil)
-			{
-				probe.log(std::string("  ") + routes[at].name + " = **nil**");
-				continue;
-			}
-			std::string line = std::string("  ") + routes[at].name + " = 型" +
-							   ProfWhole(gSDK->GetObjectTypeN(routes[at].handle)) + "(" +
-							   ProfTypeName(gSDK->GetObjectTypeN(routes[at].handle)) + ")";
-			WorldRect bounds;
-			if (gSDK->GetObjectBounds(routes[at].handle, bounds))
-				line += " 外接" + ProfRectText(bounds);
-			probe.log(line);
-			ProfDumpChildren(probe, routes[at].handle);
-		}
-	}
-
-	// 1 欄の素性（欄型・値・選択肢）を 1 行で出す（[A]）。
-	void ProfDumpParam(vwprobe::Report& probe, MCObjectHandle member, const char* name)
-	{
-		VWParametricObj pio(member);
-		const size_t index = pio.GetParamIndex(TXString(name));
-		if (index == size_t(-1) || index >= pio.GetParamsCount())
-		{
-			probe.log(std::string("  ") + name + " = **名前で引けない**");
-			return;
-		}
-		std::string line = std::string("  ") + name + " 索引" +
-						   ProfWhole(static_cast<long long>(index)) + " 欄型" +
-						   ProfWhole(static_cast<int>(pio.GetParamStyle(index))) + "(" +
-						   ProfFieldStyleName(static_cast<int>(pio.GetParamStyle(index))) + ")" +
-						   " 値=[" + ProfText(pio.GetParamValue(index)) + "]" +
-						   " 実数=" + ProfCoord(pio.GetParamReal(index)) +
-						   " シンボル索引=" + ProfWhole(pio.GetParamSymDef(index));
-
-		TXStringSTLArray keys;
-		TXStringSTLArray shown;
-		const bool gotKeys = pio.GetParamChoices(index, keys);
-		pio.GetParamLocalizedChoices(index, shown);
-		line += " 選択肢=" + ProfWhole(static_cast<long long>(keys.size())) +
-				(gotKeys ? "" : "（取れず）");
-		for (size_t at = 0; at < keys.size() && at < 8; ++at)
-		{
-			line += " [" + ProfText(keys[at]) + "=";
-			line += (at < shown.size() ? ProfText(shown[at]) : std::string("?"));
-			line += "]";
+			size_t kids = 0;
+			for (MCObjectHandle kid = gSDK->FirstMemberObj(group); kid != nil;
+				 kid = gSDK->NextObject(kid))
+				if (gSDK->GetObjectTypeN(kid) != 0)
+					++kids;
+			line += " 群の子" + ProfWhole(static_cast<long long>(kids));
 		}
 		probe.log(line);
 	}
@@ -361,7 +247,6 @@ namespace
 		return gSDK->ResetObject(member) ? "true" : "**false**";
 	}
 
-	// 文字として書いて読み戻す（「書けている」ことの確認）。
 	void ProfSetValue(vwprobe::Report& probe, MCObjectHandle member, const char* name,
 					  const std::string& value)
 	{
@@ -378,7 +263,6 @@ namespace
 				  (back == value ? "" : "  ← **定着せず**"));
 	}
 
-	// **issue と同じ書き方**（`SetParamReal`）で寸法 4 欄を書く。
 	void ProfSetDims(vwprobe::Report& probe, MCObjectHandle member)
 	{
 		VWParametricObj pio(member);
@@ -398,8 +282,6 @@ namespace
 		probe.log(line);
 	}
 
-	// 読み取り専用の表示欄（`B` / `B1` / `D` / `D1`）と断面を指す 4 欄を並べる。
-	// **寸法欄を書いたときにここが動くなら、それが「手がかり」になる**（問 3）。
 	void ProfDumpWitness(vwprobe::Report& probe, MCObjectHandle member, const std::string& tag)
 	{
 		VWParametricObj pio(member);
@@ -411,6 +293,7 @@ namespace
 		for (size_t at = 0; at < kProfProfileCount; ++at)
 			line += std::string(" ") + kProfProfileFields[at] + "=[" +
 					ProfText(pio.GetParamValue(TXString(kProfProfileFields[at]))) + "]";
+		line += " シンボル索引=" + ProfWhole(pio.GetParamSymDef(TXString("ProfileSymbol")));
 		probe.log(line);
 	}
 
@@ -420,153 +303,178 @@ namespace
 		ProfSetDims(probe, member);
 		const std::string reset = ProfReset(member);
 		ProfSnap(probe, tag + " 寸法 4 欄を書いた reset=" + reset, member);
-		ProfDumpWitness(probe, member, tag + " 寸法を書いた後");
+		ProfDumpWitness(probe, member, tag + " 寸法後");
+	}
+
+	// 「1 欄へ 1 綴りを書いて reset して測り、そのあと寸法 4 欄を試す」を 1 個体で。
+	void ProfTrial(vwprobe::Report& probe, const std::string& tag, double originY,
+				   const char* field, const std::string& value)
+	{
+		MCObjectHandle member = ProfMake(probe, tag, originY);
+		if (member == nil)
+			return;
+		const std::string first = ProfReset(member);
+		ProfSnap(probe, tag + " 既定 reset=" + first, member);
+		ProfSetValue(probe, member, field, value);
+		const std::string second = ProfReset(member);
+		ProfSnap(probe, tag + " " + field + "=[" + value + "] reset=" + second, member);
+		ProfTryDims(probe, member, tag);
 	}
 } // namespace
 
-VW_PROBE("member-profile-source", "何が構造材の断面を決めるのか",
-		 "断面を指す 4 欄とプロファイルグループを測り、寸法 4 欄が効く条件を探す")
+VW_PROBE("member-profile-source", "構造材の断面を決める 2 欄の裏を取る（第 2 版）",
+		 "ProfileShape / ProfileSize に綴りを書いて意図した断面になるかを見る。"
+		 "ProfileSymbol へシンボルを与える道も試す")
 {
 	gSDK->DefineCustomObject(kProfPioName, kCustomObjectPrefNever);
-	probe.log("読み方: 行末の 幅Y / 高さZ が [A] の値から動いたかだけを見る。"
-			  "動いた行の直前に書いたものが断面を決めている。");
+	probe.log("読み方: 行末の 幅Y / 高さZ だけを見る。基準は [A] の 165.6 / 313.4、"
+			  "第 1 版で見た「解決失敗の落ち先」は 405.1 / 1118.1。");
 
 	double originY = 0.0;
 
-	// ---- [A] 既定の 1 本の素性 ------------------------------------------
+	// ---- [A] 基準（既定の 1 本） -----------------------------------------
 	{
 		MCObjectHandle member = ProfMake(probe, "[A]", originY);
 		originY += 2000.0;
 		if (member != nil)
 		{
 			const std::string reset = ProfReset(member);
-			ProfSnap(probe, "[A] 既定のまま reset=" + reset + "（以降はこれとの差で読む）", member);
-			probe.log("[A] 断面を指すと疑っている 4 欄の素性:");
-			for (size_t at = 0; at < kProfProfileCount; ++at)
-				ProfDumpParam(probe, member, kProfProfileFields[at]);
-			probe.log("[A] 寸法 4 欄の素性（既定値がここに出る）:");
-			for (size_t at = 0; at < kProfDimCount; ++at)
-				ProfDumpParam(probe, member, kProfDimFields[at]);
+			ProfSnap(probe, "[A] 既定のまま reset=" + reset, member);
 			ProfDumpWitness(probe, member, "[A] 既定");
-			probe.log("[A] プロファイル（断面）グループ:");
-			ProfDumpGroups(probe, member);
-			probe.log("[A] 描かれた子の内訳（どれが断面か）:");
-			ProfDumpChildren(probe, member);
+
+			// MemberType（索引 2・4 択）の選択肢。**断面の決め方を握る欄ではないか。**
+			VWParametricObj pio(member);
+			const size_t typeIndex = pio.GetParamIndex(TXString("MemberType"));
+			TXStringSTLArray keys;
+			TXStringSTLArray shown;
+			pio.GetParamChoices(typeIndex, keys);
+			pio.GetParamLocalizedChoices(typeIndex, shown);
+			std::string line = "[A] MemberType 値=[" + ProfText(pio.GetParamValue(typeIndex)) +
+							   "] 選択肢" + ProfWhole(static_cast<long long>(keys.size()));
+			for (size_t at = 0; at < keys.size(); ++at)
+			{
+				line += " [" + ProfText(keys[at]) + "=";
+				line += (at < shown.size() ? ProfText(shown[at]) : std::string("?"));
+				line += "]";
+			}
+			probe.log(line);
 		}
 	}
 
-	// ---- [B] 寸法 4 欄を書く（＝issue の再現） ---------------------------
-	// **問 3 の答えがここに出る。** 書いた後に動くものが 1 つでもあるか。
+	// ---- [G] `ProfileSize` を同じ系列の別項目へ（1 綴り 1 個体） ----------
+	// **本命その 1。** 正しい綴りで意図した断面になるなら、取り込みはここを書けばよい。
+	for (size_t at = 0; at < kProfSizeCount; ++at)
 	{
-		MCObjectHandle member = ProfMake(probe, "[B]", originY);
+		ProfTrial(probe, std::string("[G") + ProfWhole(static_cast<long long>(at + 1)) + "]",
+				  originY, "ProfileSize", kProfSizeSpellings[at]);
+		originY += 2000.0;
+	}
+
+	// ---- [H] `ProfileShape` を別の綴りへ（1 綴り 1 個体） ------------------
+	for (size_t at = 0; at < kProfShapeCount; ++at)
+	{
+		ProfTrial(probe, std::string("[H") + ProfWhole(static_cast<long long>(at + 1)) + "]",
+				  originY, "ProfileShape", kProfShapeSpellings[at]);
+		originY += 2000.0;
+	}
+
+	// ---- [I] `ProfileSeries` を別の系列へ ---------------------------------
+	ProfTrial(probe, "[I]", originY, "ProfileSeries", "AISC (Metric)");
+	originY += 2000.0;
+
+	// ---- [J] `ProfileShape` と `ProfileSize` の両方を空 -------------------
+	// 落ち先が [G3]（`W44 X 335`）と同じなら、「解決失敗の落ち先は表の最大」と読める。
+	{
+		MCObjectHandle member = ProfMake(probe, "[J]", originY);
 		originY += 2000.0;
 		if (member != nil)
 		{
 			const std::string first = ProfReset(member);
-			ProfSnap(probe, "[B] 既定 reset=" + first, member);
-			ProfTryDims(probe, member, "[B]");
+			ProfSnap(probe, "[J] 既定 reset=" + first, member);
+			ProfSetValue(probe, member, "ProfileShape", "");
+			ProfSetValue(probe, member, "ProfileSize", "");
+			const std::string second = ProfReset(member);
+			ProfSnap(probe, "[J] Shape と Size の両方を空にした reset=" + second, member);
+			ProfTryDims(probe, member, "[J]");
 		}
 	}
 
-	// ---- [C] 断面を指す 4 欄を 1 欄ずつ空にする（1 欄 1 個体） ------------
-	for (size_t at = 0; at < kProfProfileCount; ++at)
+	// ---- [K] `ProfileSymbol` にシンボル定義を与える -----------------------
+	// **本命その 2。** 任意の断面を SDK から与える道があるかどうか。
+	// 定義には矩形（Y 120 × Z 240・下端を 0 に合わせる。既定の群も下端 0）を 1 つ入れる。
 	{
-		const std::string tag = std::string("[C") + ProfWhole(static_cast<long long>(at + 1)) + "]";
-		MCObjectHandle member = ProfMake(probe, tag, originY);
-		originY += 2000.0;
-		if (member == nil)
-			continue;
-		const std::string first = ProfReset(member);
-		ProfSnap(probe, tag + " 既定 reset=" + first, member);
-		ProfSetValue(probe, member, kProfProfileFields[at], "");
-		const std::string second = ProfReset(member);
-		ProfSnap(probe, tag + " " + kProfProfileFields[at] + " を空にした reset=" + second, member);
-		ProfTryDims(probe, member, tag);
-	}
-
-	// ---- [D] `ProfileShape` に 0〜7 を書く（1 値 1 個体） -----------------
-	// **欄型が分かる前に投げる網。** ポップアップなら整数キーで通るはずで、
-	// 通らなければ「定着せず」と出る（それも答えの一部）。
-	for (int shape = 0; shape <= 7; ++shape)
-	{
-		const std::string tag = std::string("[D") + ProfWhole(shape) + "]";
-		MCObjectHandle member = ProfMake(probe, tag, originY);
-		originY += 2000.0;
-		if (member == nil)
-			continue;
-		ProfSetValue(probe, member, "ProfileShape", ProfWhole(shape));
-		const std::string reset = ProfReset(member);
-		ProfSnap(probe, tag + " ProfileShape=" + ProfWhole(shape) + " reset=" + reset, member);
-		ProfTryDims(probe, member, tag);
-	}
-
-	// ---- [E] プロファイルグループを矩形へ差し替える ----------------------
-	// **見立て (b) の本命。** 断面がグループから来ているなら、Y 120 × Z 240 の矩形へ
-	// 差し替えた 1 本は 幅Y=120・高さZ=240 で描かれる。
-	{
-		MCObjectHandle member = ProfMake(probe, "[E]", originY);
-		originY += 2000.0;
-		if (member != nil)
+		// CreateSymbolDefinition は名前を **参照で受けて書き換える**（重複していれば
+		// 別名になる）。だから一時オブジェクトでは渡せない——実際に使われた名前を
+		// 読み戻して、以降はそれで引く。
+		TXString symName(kProfSymbolName);
+		MCObjectHandle symDef = gSDK->CreateSymbolDefinition(symName);
+		MCObjectHandle rect = gSDK->CreateRectangle(WorldRect(-60.0, 240.0, 60.0, 0.0));
+		probe.log(std::string("[K] CreateSymbolDefinition=") + (symDef != nil ? "ok" : "**nil**") +
+				  " CreateRectangle=" + (rect != nil ? "ok" : "**nil**"));
+		InternalIndex symRef = 0;
+		if (symDef != nil && rect != nil)
 		{
-			const std::string first = ProfReset(member);
-			ProfSnap(probe, "[E] 既定 reset=" + first, member);
+			const bool added = gSDK->AddObjectToContainer(rect, symDef);
+			gSDK->ResetObject(symDef);
+			symRef = gSDK->GetObjectInternalIndex(symDef);
+			WorldRect symBounds;
+			std::string line = std::string("[K] 定義へ矩形を入れた AddObjectToContainer=") +
+							   (added ? "true" : "**false**") + " 参照=" + ProfWhole(symRef) +
+							   " 実際の名前=[" + ProfText(symName) + "]";
+			if (gSDK->GetObjectBounds(symDef, symBounds))
+				line += " 定義の外接" + ProfRectText(symBounds);
+			probe.log(line);
+		}
 
-			MCObjectHandle group = gSDK->CreateGroup(false);
-			MCObjectHandle rect = gSDK->CreateRectangle(WorldRect(-60.0, 120.0, 60.0, -120.0));
-			probe.log(std::string("  CreateGroup=") + (group != nil ? "ok" : "**nil**") +
-					  " CreateRectangle=" + (rect != nil ? "ok" : "**nil**"));
-			if (group != nil && rect != nil)
+		// K1: 参照で書く（`SetParamSymDef`）。
+		{
+			MCObjectHandle member = ProfMake(probe, "[K1]", originY);
+			originY += 2000.0;
+			if (member != nil)
 			{
-				const bool added = gSDK->AddObjectToContainer(rect, group);
-				const bool set = gSDK->SetCustomObjectProfileGroup(member, group) != 0;
-				probe.log(std::string("  AddObjectToContainer=") + (added ? "true" : "**false**") +
-						  " SetCustomObjectProfileGroup=" + (set ? "true" : "**false**"));
-				const std::string reset = ProfReset(member);
-				ProfSnap(probe, "[E] 群を矩形（Y120×Z240）へ差し替えた reset=" + reset, member);
-				probe.log("[E] 差し替えた後のグループ:");
-				ProfDumpGroups(probe, member);
-				probe.log("[E] 差し替えた後の子の内訳:");
-				ProfDumpChildren(probe, member);
-				ProfTryDims(probe, member, "[E]");
+				const std::string first = ProfReset(member);
+				ProfSnap(probe, "[K1] 既定 reset=" + first, member);
+				VWParametricObj pio(member);
+				const size_t index = pio.GetParamIndex(TXString("ProfileSymbol"));
+				pio.SetParamSymDef(index, symRef);
+				probe.log("  ProfileSymbol ← SetParamSymDef(" + ProfWhole(symRef) +
+						  ") 読み戻し索引=" + ProfWhole(pio.GetParamSymDef(index)) + " 値=[" +
+						  ProfText(pio.GetParamValue(index)) + "]");
+				const std::string second = ProfReset(member);
+				ProfSnap(probe, "[K1] SetParamSymDef で書いた reset=" + second, member);
+				ProfTryDims(probe, member, "[K1]");
+			}
+		}
+
+		// K2: 名前で書く（`SetParamValue`）。クラス欄はこちらが正解だった（Findings）。
+		ProfTrial(probe, "[K2]", originY, "ProfileSymbol", ProfText(symName));
+		originY += 2000.0;
+
+		// K3: シンボルを与えたうえで Shape と Size を空にする（どちらが勝つか）。
+		{
+			MCObjectHandle member = ProfMake(probe, "[K3]", originY);
+			originY += 2000.0;
+			if (member != nil)
+			{
+				const std::string first = ProfReset(member);
+				ProfSnap(probe, "[K3] 既定 reset=" + first, member);
+				ProfSetValue(probe, member, "ProfileSymbol", ProfText(symName));
+				ProfSetValue(probe, member, "ProfileShape", "");
+				ProfSetValue(probe, member, "ProfileSize", "");
+				const std::string second = ProfReset(member);
+				ProfSnap(probe, "[K3] シンボルを与えて Shape/Size を空にした reset=" + second,
+						 member);
+				ProfTryDims(probe, member, "[K3]");
 			}
 		}
 	}
 
-	// ---- [F] プロファイルグループの子を消す（空にする） ------------------
-	// 「グループが断面を決めている」なら、空にすれば寸法 4 欄が使われるかもしれない
-	// ——あるいは何も描かれなくなる。どちらでも答えになる。
+	// ---- [L] `MemberType` を 0〜3 へ（1 値 1 個体） ------------------------
+	for (int type = 0; type <= 3; ++type)
 	{
-		MCObjectHandle member = ProfMake(probe, "[F]", originY);
+		ProfTrial(probe, std::string("[L") + ProfWhole(type) + "]", originY, "MemberType",
+				  ProfWhole(type));
 		originY += 2000.0;
-		if (member != nil)
-		{
-			const std::string first = ProfReset(member);
-			ProfSnap(probe, "[F] 既定 reset=" + first, member);
-			MCObjectHandle group = gSDK->GetCustomObjectProfileGroup(member);
-			if (group == nil)
-			{
-				probe.log("[F] 群が nil なので空にできない（[A] の結果と突き合わせる）");
-			}
-			else
-			{
-				size_t removed = 0;
-				MCObjectHandle child = gSDK->FirstMemberObj(group);
-				while (child != nil)
-				{
-					MCObjectHandle next = gSDK->NextObject(child);
-					if (gSDK->GetObjectTypeN(child) != 0)
-					{
-						gSDK->DeleteObject(child, false);
-						++removed;
-					}
-					child = next;
-				}
-				probe.log("  群の子を " + ProfWhole(static_cast<long long>(removed)) + " 個消した");
-				const std::string reset = ProfReset(member);
-				ProfSnap(probe, "[F] 群を空にした reset=" + reset, member);
-				ProfTryDims(probe, member, "[F]");
-			}
-		}
 	}
 
 	probe.log("おわり");
