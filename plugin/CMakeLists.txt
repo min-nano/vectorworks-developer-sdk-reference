@@ -266,8 +266,12 @@ set(VW_BUNDLE_ID "io.github.min-nano.VwSdkProbes")
 # **殻にプローブは入らない。** プローブとレジストリは本体（ペイロード）側にあり、
 # 殻はそれを読み込んで呼ぶだけ（plugin/src/PayloadAbi.h）。ここが 2 つに割れているのが
 # 「Vectorworks を再起動せずに入れ替えられる」の全部である。
+# **ExtPioRecalcEnv.cpp は調査のための一時的な PIO**（issue #183）。`Recalculate` の中から
+# 何が見えるかはメニューコマンドからは測れないので、殻に PIO を 1 つ登録している。
+# **役目を終えたらここから外す**（plugin/src/PioRecalcTrace.h の末尾）。
 set(VW_PLUGIN_SOURCES
 	src/ModuleMain.cpp
+	src/ExtPioRecalcEnv.cpp
 	src/ProbeMenu.cpp
 	src/Update.cpp
 	src/Feedback.cpp
