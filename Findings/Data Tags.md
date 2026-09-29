@@ -38,3 +38,8 @@
   済ませる口も無い。[Attributes and Classes](Attributes%20and%20Classes.md)）。**タグレイアウトの中のテキストにも要る**——レイアウトの中身は
   本体のクラスを継がないので、本体だけに与えると文字が既定クラスのまま残る。文字スタイルを
   当てた**後**にクラスを与える（書体・大きさは文字スタイル、色・線の太さはクラスが受け持つ）。
+- **図面ラベル（`Drawing Label2`）のレイアウトは、置き場も式の綴りも同じだが組み方が違う。**
+  式は `#Drawing Label2#.#Title#` のように同じ `#レコード#.#フィールド#` だが、
+  **`IDataTagTextLinkSupport` が効かない**（`IsSupported` が `false`）ので `SetFormula` で
+  持たせられず、**既定のレイアウトのテキストを複製する**しかない
+  （[Drawing Labels](Drawing%20Labels.md)）。
