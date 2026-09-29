@@ -41,7 +41,7 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
 		 "レイヤを 3 枚作り、並べ替えてから読み戻す")
 {
 	probe.log("レイヤを作る");
-	MCObjectHandle layer = gSDK->CreateLayer("試験 1", kDesignLayerType);
+	MCObjectHandle layer = gSDK->CreateLayer("試験 1", kLayerDesign);
 	if (layer == nil)
 	{
 		probe.fail("CreateLayer が nil を返した");
@@ -59,18 +59,53 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
 - **1 ファイルに 1 つ。** `VW_PROBE` が展開する名前は固定なので、1 つの翻訳単位に
   2 つ書くと衝突する。これは意図した制約で、「1 プローブ 1 ディレクトリ」という
   集約の単位と一致している。
+- **`VW_PROBE("<slug>"` は 1 行に収める。** 集約（`scripts/gather-probes.sh`）は
+  `VW_PROBE("<slug>"` を 1 行の正規表現で探すので、**clang-format が第 1 引数を次の行へ
+  送ると「見つかりません」で止まる**（`unit-tests` が落ちる。実際に踏んだ）。
+  表示名と概要が長いと送られるので、**2 つ合わせて 1 行に収まる長さにする**
+  （`ColumnLimit` は 100）。整形したあとに
+  `grep -E 'VW_PROBE\("<slug>"' probes/runtime/<slug>/probe.cpp` で確かめれば済む。
 - **表示名と概要は `VW_PROBE` の引数に、文字列リテラルで書く。** ビルドのときに
   ソースから読み出してカタログ（ピッカーの一覧）へ載せるので、変数や連結で書くと
   読み取れず、**表示名が slug のまま**になる。
+  **`VW_PROBE("<slug>",` が 1 行目に収まる長さにする。** 表示名と概要が長いと
+  clang-format が `VW_PROBE(` だけを 1 行に残して引数を次の行へ折り、**slug の
+  突き合わせ（`scripts/gather-probes.sh` の `check_slug`）が外れて CI が赤くなる**
+  （実際に踏んだ。[#156](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/156)）。
+  スクリプト側は折られた形も読めるように直したが、**集約が走るのは
+  「ディスパッチ先＝`main` のスクリプト」**なので（`ref=main`。CLAUDE.md
+  「実機確認プラグイン」）、その直しが効くのは main がそれを持ってからである。
+  概要は**1 つの文字列リテラル**にする——隣接する literal の連結はカタログ側
+  （`plugin/cmake/ProbeCatalog.cmake`）が読まないので、**2 つに割ると後半が落ちる**。
 - **他の PR と slug がぶつかっても構わない。** 本体は PR ごとに分かれているので
   衝突しない（ピッカーには出所付きで 2 行並ぶ）。main にあるものと同じ slug で
   中身を変えれば、**main の版と PR の版が並んで出る**——見比べるのが目的なら、それでよい。補助のヘッダ（`.h`）や追加の `.cpp` を同じディレクトリへ
   置くのは自由（**すべてコンパイル対象になる**ので、そちらの名前は衝突しないよう
   無名名前空間か `static` に入れる）。
-- **短い `k` 名を使わない。** SDK のヘッダは `kA = 9` … のような**極端に短い列挙子**を
-  グローバルへ撒いている（`Kernel/API/MiniCadCallBacks.h` のキーコード）。プローブ側で
-  `kA` のような名前を使うと、**無名名前空間へ入れていても「参照が曖昧」でコンパイルが
-  通らない**（実際に踏んだ）。`kStepMarkA` のように、用途が分かる長さにする。
+- **短い名前・ありふれた名前を使わない。** SDK と OS のヘッダは、プローブが使いそうな
+  名前をグローバルへ撒いている。**無名名前空間へ入れていても「参照が曖昧」で
+  コンパイルが通らない**（どちらも実際に踏んだ）。
+  - 短い列挙子: `kA = 9` … のようなキーコード（`Kernel/API/MiniCadCallBacks.h`）。
+    `kStepMarkA` のように、用途が分かる長さにする。
+  - ありふれた型名: macOS の `MacTypes.h` が `typedef unsigned char Style;` を出している
+    ので、`struct Style` は作れない。`ProbeStyle` のように接頭辞を付ける。
+    （`Style` / `Point` / `Rect` / `Handle` など、**mac の古い型名は一通り埋まっている**
+    と思っておく。）
+- **PIO を作るなら、走り出しで `DefineCustomObject` を呼ぶ。**
+  `gSDK->CreateCustomObject*` は、その名前の PIO が文書に未定義なら定義を作り、その
+  `prefWhen` の**既定が `kCustomObjectPrefAlways`**——つまり**最初の 1 個で「オブジェクトの
+  設定」ダイアログが出て止まる**（[Findings「生成時に『オブジェクトの設定』ダイアログが
+  出る」](../../Findings/Parametric%20Objects.md)）。VWFC の `VWParametricObj` は内側で
+  抑止しているが、**`gSDK->CreateCustomObjectPath` を直に叩くプローブには掛からない**。
+
+  ```cpp
+  gSDK->DefineCustomObject("StructuralMember", kCustomObjectPrefNever);  // 何かを作る前に 1 度
+  ```
+
+  **実際に踏んだ**（#118）。**構造材を使ったことのある文書では素通りするので、手元で通っても
+  当てにならない**——利用者は「新規の空図面で」走らせる（上記「図面を壊す前提で書く」）ので、
+  そちらではダイアログが出る。**しかもログには「作れなかった」としか残らない**ので、
+  **nil が返った理由（どの呼び出しか）をメッセージに乗せておく**こと。
 - **PR 番号やコミットをコードへ書かない。** 出所はビルドのときに決まり、
   [`scripts/gather-probes.sh`](../../scripts/gather-probes.sh) が表を生成して
   ピッカーに出す。**issue 番号だけは例外**——調査そのものの id なので、先頭コメントの

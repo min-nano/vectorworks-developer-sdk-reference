@@ -16,11 +16,12 @@ Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https
 | --- | --- | --- |
 | `README.md` | 公式リファレンスの入口＋このフォークの追加分への導線 | 追加分の節だけ触る |
 | `Info/` / `Versions/` | **上流（公式）由来のリファレンス** | **原則書き換えない**（上流の更新を取り込めるように保つ。誤りを見つけたら Findings 側に注記を書く） |
+| `SDK Index/` | **SDK の宣言索引**（生成物）。シグネチャ・enum の値・宣言位置を `Grep` で引く（[説明](SDK%20Index/README.md)） | **手で書き換えない**（週次の `sdk-index` が作り直して PR を立てる） |
 | `Findings/` | **実測知見**。トピック別のファイル＋[索引と規約](Findings/README.md) | ここが本体。知見はここへ足す |
 | `plugin/` | **実機確認プラグイン**（VwSdkProbes）。メニュー 1 つから、複数の PR の調査コードを同居させて実機で走らせる（[説明](plugin/README.md)） | 仕組みを変えるときだけ |
 | `probes/` | 調査用のコンパイルスニペット（[規約](probes/README.md)） | 調査中だけ。役目を終えたら消す |
 | `probes/runtime/` | **実機で走らせる調査（プローブ）**。1 調査 1 ディレクトリ（[規約](probes/runtime/README.md)） | 調査中だけ。役目を終えたら消す |
-| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`）・プローブの自動公開（`probe-auto-update`）・公開済みリリースの点検（`probe-release-guard`）・issue を webhook へ流す（`issue-webhook`） | — |
+| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`。Sync fork 相当）・SDK の宣言索引の作り直し（`sdk-index`）・プローブの自動公開（`probe-auto-update`）・公開済みリリースの点検（`probe-release-guard`）・issue を webhook へ流す（`issue-webhook`） | — |
 | `CLAUDE.md`（本ファイル） | 作業時の規約。調査のフロー・PR とマージ・CI の待ち方 | — |
 
 ## 調査のフロー
@@ -33,7 +34,9 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
    読む。**打ち切った調査に書いてあることは再調査しない**（状況——VW のバージョン・SDK の
    版——が変わらない限り）。
 3. **作業ブランチで調査する。** 問いの水準で道具が決まる:
-   - 「この API は SDK にあるか」「宣言はどうなっているか」「**なぜこの関数は失敗するか**」
+   - 「この API は SDK にあるか」「宣言はどうなっているか」→ **まず `SDK Index/` を
+     `Grep` する**（下記「SDK の宣言索引」）。CI を往復させずにその場で答えが出る。
+   - 「**なぜこの関数は失敗するか**」、コメント（説明文）や実装を読みたい
      → `ci-debug` の `sdk-grep` / `sdk-ls`（下記「CI デバッグ」）。**ヘッダだけでなく
      `SDKLib/Source` の VWFC 実装 `.cpp` も検索範囲に入っている**ので、理由はたいてい
      そこに書いてある。
@@ -112,20 +115,28 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
 `Info/` と `Versions/` を上流由来のまま保つには、上流
 （[Vectorworks/developer-sdk](https://github.com/Vectorworks/developer-sdk)）の更新を
 流し込み続ける必要がある。これは **`.github/workflows/upstream-sync.yml`（週 1 回 +
-手動）が自動でやる**——上流に新しいコミットがあれば `upstream-sync` ブランチへ merge し、
-取り込み PR を作る（既に開いていれば同じ PR を更新する）。実体は
-[`scripts/upstream-sync.sh`](scripts/upstream-sync.sh)。
+手動）が自動でやる**。実体は [`scripts/upstream-sync.sh`](scripts/upstream-sync.sh)。
 
-- **取り込み PR のレビューでは `Info/` `Versions/` を書き換えない。** 上流の内容を
-  そのまま入れる。誤りを見つけたら `Findings/` 側に注記を書く。
+- **既定は GitHub の UI の "Sync fork" と同じ直接同期。** 上流に新しいコミットがあれば
+  同じ API（`POST /repos/{owner}/{repo}/merge-upstream`）で main を更新する——
+  fast-forward できればそうし、分岐していれば merge コミット
+  （`Merge branch 'Vectorworks:main' into main`）を作る。PR は立たない。前回までの
+  取り込み PR（bot のもの）が開いていれば、用済みとして閉じる。
+- **直接同期できないとき（競合＝409、main の保護規則など）だけ、従来どおり PR にする**
+  ——`upstream-sync` ブランチへ merge して取り込み PR を作る（既に開いていれば同じ PR を
+  更新する）。常に PR にしたいときは手動実行の入力 `mode` を `pr` にする。
+- **`Info/` `Versions/` は書き換えない。** 上流の内容をそのまま入れる。誤りを見つけたら
+  `Findings/` 側に注記を書く。直接同期された更新は人の目を通っていないので、SDK の版が
+  上がったときは `Findings/` が古くなっていないかを見る。
 - **競合したときは PR が draft（タイトルに `[競合あり]`）で立ち、run は失敗する。**
   競合マーカーを含んだままコミットしてあるので、**そのままマージしないこと**。
   手で解消して push すると、そのブランチは以後自動更新の対象から外れる（bot 以外の
   コミットがあるブランチには触らない作りなので、解消内容が force push で消えることはない）。
-- この PR は `GITHUB_TOKEN` で作られるので **lint の CI は自動では走らない**（GitHub の
-  仕様）。走らせたいときは close → reopen する。
+- 直接同期も PR も `GITHUB_TOKEN` で行うので **lint の CI は自動では走らない**（GitHub の
+  仕様）。PR で走らせたいときは close → reopen する。
 - 手動で回したいとき・挙動を確かめたいときは Actions の "Upstream sync" を
-  `workflow_dispatch` で叩く（`dry_run` を立てると push も PR 作成もせず、何をするかだけ出す）。
+  `workflow_dispatch` で叩く（`dry_run` を立てると同期も push も PR 作成もせず、
+  何をするか——直接同期なら fast-forward / merge / 競合の見込み——だけ出す）。
 
 ## 開発プロセス: PR とマージ
 
@@ -339,6 +350,30 @@ Windows の実ビルドと同じだけ時間がかかる）。出力に並ぶチ
 締切判定・ウォッチドッグの三重の歯止めを持つ。新しく「何かの完了を待つ」道具が要るときは
 `poll_until` の上に probe を 1 つ書く。**待機ループを増やさない。**
 
+## SDK の宣言索引（`SDK Index/` — まずここを引く）
+
+SDK の**宣言だけ**（名前・種類・宣言文・ファイル:行）を並べた生成物が
+[`SDK Index/`](SDK%20Index/README.md) にある。`ISDK` のシグネチャ（既定引数・`= 0` ごと）、
+enum の列挙子と値、`#define` の値、クラスの基底、VWFC の実装がどの `.cpp` の何行目か、
+`vs.py` の VectorScript 書式——このあたりは **`Grep`（`path: "SDK Index"`）で引けば済み、
+`ci-debug` を往復させなくてよい**。引き方の例は索引の README にある。
+
+- **載っていないもの**: コメント（説明文）と関数本体。SDK をそのまま再配布しないため、
+  索引は宣言に限ってある。**説明や実装が要るときは、索引で場所（`ISDK.h:1376` など）を
+  突き止めてから `ci-debug` の `sdk-ls` / `sdk-grep` で原本を読む**（範囲を絞れるので
+  注釈経路の 4096 文字に収まりやすい）。
+- **確認水準は【ヘッダ根拠】**。宣言があることは動くことを意味しない。
+- **生成物なので手で直さない。** `.github/workflows/sdk-index.yml`（週 1 回 + 手動）が
+  最新の SDK を**キャッシュを使わずに**取り直して作り直し（[`scripts/sdk-index-sync.sh`](scripts/sdk-index-sync.sh) /
+  [`scripts/sdk-index.py`](scripts/sdk-index.py)）、変わっていれば `sdk-index` ブランチから
+  PR を立てる。**この PR が立ったら SDK の版が上がった合図**（`INDEX.md` の版・
+  Last-Modified を見る）なので、`Findings/` が古くなっていないかも見る。PR は実機確認の
+  要らない変更なので CI green でマージしてよい（`GITHUB_TOKEN` 製なので lint は close →
+  reopen で走らせる。`upstream-sync` と同じ）。
+- 形（載せる種類・1 行の書式）を変えたいときは `scripts/sdk-index.py` を直し、同じ PR で
+  索引も作り直す（手元に SDK が要る。リモートセッションからでも
+  `scripts/fetch-vw-sdk.sh` で取得できる——`VW_SDK_DIR` と `VW_SDK_URL` を与える）。
+
 ## CI デバッグ（SDK 調査は `ci-debug` を使う）
 
 リモートセッション（クラウド上のコンテナ）には **Vectorworks SDK が無い**。SDK に関する
@@ -419,7 +454,10 @@ Findings に書くときの確認水準の印もそれに合わせる。
 - **モードの追加・修正は `scripts/ci-debug-job.sh`（ランナー側）で行う。** ワークフロー
   本体は薄く保ってあるので、作業ブランチに push するだけで新しいモードを試せる
   （`ref` がそのブランチのため）。ワークフロー本体を変えると main へのマージが要る。
-- SDK（ヘッダ＋実装ソース）はキャッシュされる（初回だけ〜140MB のダウンロードが走る）。
+- SDK（ヘッダ＋実装ソース）はキャッシュされる（SDK の版ごとに初回だけ〜140MB の
+  ダウンロードが走る）。**キャッシュのキーには配布中の SDK の版（URL の ETag）が入る**
+  （[`scripts/vw-sdk-cache-key.sh`](scripts/vw-sdk-cache-key.sh)。`probe-build` も同じ）。
+  URL は "latest" で中身が黙って差し替わるので、固定キーだと古い SDK を引き続けていた。
 
 ## 関連リポジトリ
 

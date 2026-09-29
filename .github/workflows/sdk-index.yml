@@ -1,0 +1,76 @@
+name: SDK index
+
+# ---------------------------------------------------------------------------
+# Vectorworks SDK の宣言索引（`SDK Index/`）を週次で作り直し、変わっていれば PR を立てる。
+#
+# なぜ必要か: リモートセッションには SDK が無く、シグネチャ 1 つ確かめるにも ci-debug
+# （sdk-grep）を往復させていた。宣言の一覧をリポジトリに置けば `Grep` で引ける
+# （CLAUDE.md「SDK の宣言索引」）。SDK の URL は "latest" で、版が上がると中身が黙って
+# 差し替わるので、週に一度取り直して差分を PR にする（SDK の版上げの見張りも兼ねる）。
+#
+# 実体は scripts/sdk-index-sync.sh と scripts/sdk-index.py（ここは薄く保つ）。
+#
+# **SDK はキャッシュしない。** キャッシュを引くと「latest の中身が変わった」ことに
+# 気付けないため。週 1 回・〜140MB のダウンロードで済む。
+#
+# NOTE: schedule はデフォルトブランチにあるワークフロー定義でしか走らない。また
+# この PR は GITHUB_TOKEN で作られるため lint.yml は自動では走らない（upstream-sync.yml
+# と同じ。走らせたいときは PR を close → reopen する）。
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    # 毎週月曜 00:37 UTC（= 09:37 JST）。upstream-sync（00:00）と時刻をずらす。
+    - cron: "37 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "push も PR 作成もせず、差分と PR 本文だけ出す"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: sdk-index
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  index:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    env:
+      # mac 版を使う（Windows 版と SDKLib/ は改行コードを除いて同一。CLAUDE.md「CI デバッグ」）。
+      VW_SDK_URL: https://release.vectorworks.net/latest/Vectorworks/2026-NNA-eng-mac-SDK.zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # 索引の中身は ctags の版で変わりうるので、ランナーの OS を固定して apt の版に揃える
+      # （runs-on を ubuntu-latest にしないのはこのため。版は INDEX.md に記録される）。
+      - name: Install universal-ctags
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y universal-ctags
+          ctags --version | head -n 1
+
+      - name: Set up Vectorworks SDK
+        env:
+          VW_SDK_DIR: ${{ runner.temp }}/vw-sdk
+        run: scripts/fetch-vw-sdk.sh
+
+      - name: Rebuild the index and open a pull request
+        env:
+          VW_SDK_DIR: ${{ runner.temp }}/vw-sdk
+          GH_TOKEN: ${{ github.token }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          DRY_RUN: ${{ inputs.dry_run && 'yes' || 'no' }}
+        run: scripts/sdk-index-sync.sh

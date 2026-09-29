@@ -1,6 +1,6 @@
 ## General Info
 
-The Vectorworks 2025 SDK requires:
+The Vectorworks 2026 SDK requires:
 - **Win**: Visual Studio 2022 version 17.12 (toolset v143)  
 - **Mac**: Xcode version 16.2
 

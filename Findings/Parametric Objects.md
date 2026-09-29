@@ -93,11 +93,23 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
   ただし `ResetObject` を呼ばない・呼べない経路（バウンドを設定しないまま使う、
   他の PIO で `ResetObject` を省く等）ではパスの絶対Zがそのまま実体になる（上記 1）ので、
   **「バウンドを必ず設定して `ResetObject` する」経路を外れない設計であることが前提**。
+- **さらに `doRegen=false` で作るなら、渡すパスの両端の Z を等しくする**（鉛直材・水平材・
+  斜め材のすべて）。1 回目の `ResetObject` が「span ＋ 渡した Z の差」になるのを避けるため
+  で、平面上の長さはいくら持たせてもよい（下記「`doRegen=false` は速い…」）。
 - **上下端のバウンドが同じ絶対Zへ解決されないことを、書き込み側で保証する**（上記 4）。
   `SetObjectStoryBound` の戻り値が `true` でも、`GetObjectBoundElevation` で両端の
   解決結果を読み比べ、一致していたら手前で弾く・別の基準へ振り替えるなどの対処が要る
   ——**戻り値やレコードの読み戻しだけでは潰れを検知できない**（record は書いたとおりに
   読み戻る。実際に潰れるかは解決結果次第）。
+- **スタイルを当てるなら、その検査は「スタイルを当てた後」に行う。** プラグインスタイルを
+  当てた PIO のバウンドは、次の `ResetObject` / `UpdateStyledObjects` で**スタイルの
+  持つバウンドに置き換わる**（下記
+  「[スタイルを当てると書いたバウンドはスタイルのものへ置き換わる](#スタイルを当てると書いたバウンドはスタイルのものへ置き換わる)」）。
+  **書いた直後に読み比べても、その値は最終形ではない**——順序を入れ替えても避けられない
+  ので、検査するなら**作り直しを通した後**に読む。置き換えを起こしたくないなら、
+  スタイル側で **`DialogStartElevationReference` だけを `kPluginStyleParameter_ByInstance`
+  にする**（下記「[バウンドだけ by-instance のスタイルは作れる](#バウンドだけ-by-instance-のスタイルは作れる握っているのは-dialogstartelevationreference-1-件)」。
+  全パラメータを切り替える必要は無い）。
 - **`SetCustomObjectPath` で差し替えるときは、挿入点を読んでから相対座標を計算する**
   （上記 2）。挿入点は `GetObjectModelPos`（VWFC）で読める。**差し替えたパスは以後
   `ResetObject` で作り直されず、逆にバウンドのほうが書き換わる**ので、差し替えるなら
@@ -1143,14 +1155,290 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
 省いた索引の中身:
 
 - **0**（`__version`）と **48〜152**、**154〜158**、**161〜168**、**171〜176** は
-  ローカライズ名が `__NNA_DO_NOT_CHANGE`。48〜152 は 2D 表現の属性
-  （`MemberPenStyle_Above` … `CapsLineWeight_Below` のように
-  `_Above` / `_At` / `_Below` の 3 面ぶん）、161〜168 は 3D の属性。
-- **171〜176 に `traversalDone` / `traversalRoot` / `B` / `B1` / `D` / `D1` がある。**
-  `B`（173）と `D`（175）は、作った直後の値が `MajorBreadth`（300）/ `MajorDepth`（600）と
-  同じだった。**`B` / `D` / `StartOffset` はいずれも universal 名として実在する**ので、
-  これらが universal 名で引けずローカライズ名の経路へ落ちているなら、**落ちる理由は
-  「名前が無いこと」ではない**。
+  ローカライズ名が `__NNA_DO_NOT_CHANGE`。48〜152 は 2D 表現の属性、161〜168 は 3D の属性で、
+  **中身は下記「[構造材の 2D / 3D 属性パラメータ（索引 48〜168）](#構造材の-2d--3d-属性パラメータ索引-48168面--パーツ--欄)」に全件ある**
+  （154〜158 はセンターマーク、171〜176 は `traversalDone` / `traversalRoot` / `B` / `B1` /
+  `D` / `D1`）。
+- **`B` / `D` / `StartOffset` はいずれも universal 名として実在する**ので、これらが
+  universal 名で引けずローカライズ名の経路へ落ちているなら、**落ちる理由は「名前が
+  無いこと」ではない**。
+
+## 構造材の 2D / 3D 属性パラメータ（索引 48〜168）——「面 × パーツ × 欄」
+
+**実機確認済み**（VW 2026 / mac・日本語 UI・新規の空図面。
+`probes/runtime/structural-member-2d-attrs/` を 4 版・計 5 回走らせた。1 版目は 2 回走らせ、
+ビルド ID 以外は 1 文字も違わなかった。以下の値は実行ログそのまま。
+[issue #158](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/158)）。
+上の表が `__NNA_DO_NOT_CHANGE` でまとめて省いていた帯の中身である。
+
+**呼び出しの前置き 2 つ**:
+
+- **パラメータの型を返すのは `GetParamStyle`（→ `EFieldStyle`）だけ**で、`GetParamType`
+  という呼び出しは SDK に無い（`SDK Index/` 全体で該当なし）。以下の「欄型」はすべて
+  `EFieldStyle`（`Kernel/API/MiniCadCallBacks.h:1063`）の値である。
+- **ポップアップの選択肢は `PopupGetChoicesCount` では採れない**（下記「選択肢を採る経路」）。
+
+### 構造
+
+2D 属性は **48〜152 の 105 件**で、**3 面ぶん 35 件ずつ**に割れる。面は universal 名の
+接尾辞で分かれ、索引も面ごとに連続する。
+
+| 接尾辞 | 何の面か | 索引 |
+| --- | --- | --- |
+| `_Above` | 切断面より上 | 48〜82 |
+| `_At` | 切断面 | 83〜117 |
+| `_Below` | 切断面より下 | 118〜152 |
+
+1 面 35 件の内訳。**「構造材設定」ダイアログ「属性」タブの行がパーツ、列が欄**で、
+universal 名は `<パーツ><欄>_<面>` という組み立てになっている。
+
+| パーツ（ダイアログの行） | 名前の頭 | 欄（＝ダイアログの列。括弧は欄型） | 件数 |
+| --- | --- | --- | --- |
+| 構造材 | `Member` | `Display`(2 真偽) `Class`(18 クラス) `PenStyle`(8 ポップアップ) `PenColor`(28 色) `LineStyle`(1 整数) `LineWeight`(1 整数) `FillStyle`(8) `FillColor`(28) `FillHatch`(1) `FillTile`(1) `FillGradient`(1) | 11 |
+| 被覆 | `Cover` | 構造材と同じ 11 欄 | 11 |
+| 中心線 | `Centerline` | `Display` `Class` `PenStyle` `PenColor` `LineStyle` `LineWeight` | 6 |
+| 端部 | `Caps` | **`StartCapDisplay` `EndCapDisplay`**（表示だけ始端・終端に割れ、名前も `Caps` で始まらない）・`CapsClass` `CapsPenStyle` `CapsPenColor` `CapsLineStyle` `CapsLineWeight` | 7 |
+
+ダイアログの欄との対応は名前がそのまま言っている——**表示** `Display` / **クラス** `Class` /
+**線の属性** `PenStyle` / **線の色** `PenColor` / **ラインタイプ** `LineStyle` /
+**線の太さ** `LineWeight` / **面の属性** `FillStyle` / **面** `FillColor`。
+`FillHatch` / `FillTile` / `FillGradient` は、面の属性をハッチング・タイル・
+グラデーションにしたときの資源の索引【推定】。
+
+- **センターマークだけは面を持たない。** ダイアログでは「属性」タブの 5 行目に並ぶが、
+  パラメータは **153〜160 に 1 組だけ**で 3 面で共有される: `CenterPointMarker`（真偽。
+  **ここだけローカライズ名がある**——「センターマークを使用」。既定 False）/
+  `CenterPointMarkerClass` / `CenterPointMarkerPenStyle` / `CenterPointMarkerPenColor` /
+  `CenterPointMarkerStyle` / `CenterPointMarkerWeight` / `CenterPointLength`（長さ。100）/
+  `CenterPointGap`（間隔。10）。**面ごとに変えることはできない。**
+- **3D 属性（161〜168）も面を持たない。** 構造材と被覆に 4 欄ずつ:
+  `MemberClass_3D`(18) / `MemberAttributes_3D`(8) / `MemberTextureByClass_3D`(2) /
+  `MemberTexture_3D`(29 テクスチャ)、および `CoverClass_3D` / `CoverAttributes_3D` /
+  `CoverTextureByClass_3D` / `CoverTexture_3D`。**中心線・端部・センターマークに 3D は無い。**
+- **171〜176 の `B` / `B1` / `D` / `D1` は欄型 14（`kFieldStaticText`）**で、`B`=300 /
+  `D`=600 は `MajorBreadth` / `MajorDepth` と同じ値だった。読み取り専用の表示欄であって、
+  書いて効くものではない【推定】。`traversalDone` / `traversalRoot`（171/172）は真偽。
+
+### 新規に作った 1 本の既定値
+
+`CreateCustomObjectPath` ＋ `ResetObject` で作った直後の値。**面によって違うのは
+`PenStyle` / `LineStyle` / `LineWeight` / `FillStyle` の 4 欄だけ**で、色は 3 面とも
+黒（線）・白（面）、クラスは 3 面とも空である。
+
+| 欄 | `_Above` | `_At` | `_Below` |
+| --- | --- | --- | --- |
+| `MemberDisplay` / `CoverDisplay` / `CenterlineDisplay` / `StartCapDisplay` / `EndCapDisplay` | True | True | True |
+| `MemberPenStyle` | 2 | 1 | 1 |
+| `MemberLineStyle` | **-18** | 0 | 0 |
+| `MemberLineWeight` | 7 | 14 | 7 |
+| `MemberFillStyle` | **0** | 1 | 1 |
+| `CoverPenStyle` | 2 | 1 | 1 |
+| `CoverLineStyle` | **-16** | 0 | 0 |
+| `CoverLineWeight` | 7 | 10 | 7 |
+| `CoverFillStyle` | **0** | 1 | 1 |
+| `CenterlinePenStyle` | 2 | 2 | 2 |
+| `CenterlineLineStyle` | **-17** | **-17** | **-17** |
+| `CenterlineLineWeight` | 14 | 14 | 14 |
+| `CapsPenStyle` | 1 | 1 | 1 |
+| `CapsLineStyle` | 0 | 0 | 0 |
+| `CapsLineWeight` | 14 | 14 | 14 |
+| `…Class`（4 パーツとも） | 空 | 空 | 空 |
+| `…PenColor`（4 パーツとも） | 0,0,0 | 0,0,0 | 0,0,0 |
+| `Member/CoverFillColor` | 65535,65535,65535 | 同 | 同 |
+| `Member/CoverFillHatch` / `…Tile` / `…Gradient` | 0 | 0 | 0 |
+
+3D 側（面を持たないので 1 組）: `Member/CoverAttributes_3D` = 0 /
+`Member/CoverTextureByClass_3D` = False / `Member/CoverTexture_3D` = 空 /
+`Member/CoverClass_3D` = 空。`AttributesMode` / `AttributesMode3D`（179/180）も 0。
+
+**`LineStyle` の負の値はラインタイプ（線種）の資源索引**である。切断面より上の面だけに
+構造材 `-18`・被覆 `-16` が入り、中心線は 3 面とも `-17`。`_At` / `_Below` の 0 は実線。
+
+- **色は 16 bit で返る。** `GetParamValue` は `65535,65535,65535`（白）のように出す。
+  書くときは `SetParamColor(索引, ColorRef)` で、`ColorRef` は
+  `CRGBColor(255, 0, 0).GetColorIndex()` のように作る。
+
+### 選択肢を採る経路——`PopupGetChoicesCount` は 0 を返す
+
+**ポップアップの選択肢（キーと表示）を採れる呼び出しは限られている。** 同じ索引を
+5 経路で引き比べた実測:
+
+| 経路 | 結果 |
+| --- | --- |
+| `VWParametricObj::GetParamChoices(索引, TXStringSTLArray&)` | **採れる**（キー） |
+| `VWParametricObj::GetParamLocalizedChoices(索引, TXStringSTLArray&)` | **採れる**（表示） |
+| `VWParametricObj::PopupGetChoicesCount(索引)` | **0**（どのポップアップでも） |
+| `VWRecordFormatObj::PopupGetChoicesCount(索引, useParametric=true)` ＋ `PopupGetChoice` | **採れる**（キーと表示） |
+| `VWRecordFormatObj::PopupGetChoicesCount(索引, useParametric=false)` | **0** |
+
+**選択肢を持つと分かっている索引を対照に置いて確かめてある**——`MemberType` 4 択・
+`StructuralUse` 18 択・`EndCondition` 4 択が、「採れる」経路では全部出て、「0」の経路では
+すべて 0 だった。**つまりこの 0 は「選択肢が無い」ではなく「その経路では見えない」の
+意味である。** 選択肢はインスタンスのポップアップ表には入っておらず、PIO の
+パラメータプロバイダから来る（上記「表は種別ごとに不変」の `IParametricParamsProvider`）。
+
+### 「線の属性」「面の属性」「使用する属性設定」の選択肢
+
+| パラメータ | 選択肢（キー＝表示） |
+| --- | --- |
+| `…PenStyle_<面>`（線の属性。4 パーツとも） | 0＝なし / 1＝実線 / 2＝ラインタイプ / 3＝オブジェクト別 / **4＝クラス属性** |
+| `…FillStyle_<面>`（面の属性。構造材・被覆のみ） | 0＝面なし / 1＝カラー / 2＝ハッチング / 3＝タイル / 4＝グラデーション / 5＝オブジェクト別 / **6＝クラス属性** / 7＝マテリアル属性 |
+| `AttributesMode`（179）/ `AttributesMode3D`（180） | 0＝オブジェクト / 1＝線種 / 2＝クラス / 3＝マテリアル |
+| `Member/CoverAttributes_3D`（162 / 166） | 0＝オブジェクト別 / **1＝クラス属性** |
+
+**「クラススタイルにする値」は、線が 4・面が 6。** どちらの欄も「**塗り方（線の引き方）の
+種類**」が先に並び、そのあとに「**どこから取るか**」が続く組み立てになっている。
+
+### クラス属性は効く——`FillStyle`=6 / `PenStyle`=4 で描画がクラスのものになる
+
+**実機確認済み。** 見分けが付くように、**クラス側を黄（塗り solid・線とも `(255,255,0)`・
+太さ 99）**、**per-part の色欄をマゼンタ `(255,0,255)`** にして食い違わせ、1 値 1 個体で
+描いて**描かれた子の実際の属性**を読んだ。
+
+| 書いた値 | 断面の面（型 21・全面） | 稜線（型 21・上下） |
+| --- | --- | --- |
+| 既定（`FillStyle`=1 カラー / `PenStyle`=1 実線） | **マゼンタ**（per-part の `FillColor`） | **マゼンタ**（per-part の `PenColor`） |
+| `MemberFillStyle`=**6**（クラス属性） | **黄**・`GetFillColorByClass`=true・**子のクラスが指定したクラスになる** | マゼンタ（線は触っていない） |
+| `MemberPenStyle`=**4**（クラス属性） | マゼンタ（面は触っていない） | **黄・太さ 99**（クラスの太さ）・`GetPenColorByClass`=true・**子のクラスが指定したクラスになる** |
+| 両方（6 と 4） | **黄** | **黄・太さ 99** |
+| `FillStyle`=5 / `PenStyle`=3（オブジェクト別） | **黒**（クラスの黄でも per-part のマゼンタでもない） | **黒・太さ 2** |
+
+- **「クラス属性」にすると、その子は指定したクラスに入り、by-class の旗も立つ。**
+  だから絵を見なくても `GetFillColorByClass` / `GetPenColorByClass` と
+  `GetObjectClass` で判定できる。
+- **「オブジェクト別」（Fill=5 / Pen=3）は per-part の色欄を見ない。** PIO 自身の
+  オブジェクト属性を使う【推定】——上の実測では PIO の属性が既定（黒）だったので黒になった。
+- **効くのは書いた面の欄だけ**で、パーツをまたがない。中心線と端部はそれぞれの
+  `CenterlinePenStyle` / `CapsPenStyle` を持っているので、構造材をクラス属性にしても
+  そのまま残る。
+
+### `AttributesMode` は 4 択だが、`ResetObject` 後の描画には効かなかった
+
+`AttributesMode`（179）と `AttributesMode3D`（180）の選択肢は
+**0＝オブジェクト / 1＝線種 / 2＝クラス / 3＝マテリアル**（上の表）。ローカライズ名は
+どちらも「使用する属性設定:」である。
+
+**ただし 0〜3 を振っても描画は 1 か所も変わらなかった**（1 値 1 個体・4 通り。
+PIO 自身を目立つクラスへ入れ、per-part の色をマゼンタにして振った——どの値でも
+per-part のマゼンタが出続けた）。**値は書けていて読み戻せる**（`GetParamValue` が
+書いた値を返す）のに、絵に出ない。
+
+- **属性の出どころを決めているのは per-part の `PenStyle` / `FillStyle` であって、
+  この欄ではない**（上記のとおり 4 / 6 は確かに効く）。`AttributesMode` は設定
+  ダイアログでどの欄を出すかを握る値と見られる【推定】。
+- **したがって「クラススタイルにしたい」ときに `AttributesMode` を触る必要は無い。**
+
+### 平面図で使われるのは `_Below`——3 面のどれが描かれるかは切断面との関係で決まる
+
+**実機確認済み**（1 本の構造材に 3 面ぶん別々の目印を入れて 1 回だけ描いた。
+`MemberLineWeight` = 55/56/57、`CenterlineLineWeight` = 58/59/60、
+`CapsLineWeight` = 61/62/63、`MemberFillColor` = 赤/緑/青 を Above/At/Below の順で）:
+
+| 描かれた子 | 出てきた値 | どの面から来たか |
+| --- | --- | --- |
+| 型 21・全面・塗り solid | 塗り色 **(0,0,255) 青** | **`_Below`** |
+| 型 21・`(0,0,3000,0)`・線種 -17 | 太さ **60** | **`_Below`**（`CenterlineLineWeight_Below`） |
+| 型 21・`y=±82.8` | 太さ **57** | **`_Below`**（`MemberLineWeight_Below`） |
+| 型 5・`x=0` と `x=3000` | 太さ **63** | **`_Below`**（`CapsLineWeight_Below`） |
+
+材を Z=0 に置いて平面図で描いたので、材は**切断面より下**にある——だから 3 面のうち
+`_Below` が使われた。**`_At` を振っても何も変わらないのはこのためで、「効かない」と
+読み違えないこと。** 取り込みで面を選ばずに効かせたいなら**3 面とも同じ値を書く**
+（そのほうが切断面の高さにも材の高さにも依らない）。
+
+**この実測が「書いた値は `ResetObject` を通って描画にそのまま効く」の証拠にもなっている**
+——入れた目印（55〜63 の太さ・赤緑青の塗り）が、そのまま描かれた子の属性に出た。
+
+### 子（描かれた実体）の素性
+
+型は `Objs.TDType.h` の定数。**どの子がどのパーツのものかは属性の値で突き合わせられる。**
+
+| 型 | 定数 | 構造材では何か（既定の 1 本で） |
+| --- | --- | --- |
+| 11 | `kGroupNode` | パスのグループと断面のグループ（2 つ） |
+| 84 | `kCSGTreeNode` | 3D 実体 |
+| 21 | `kPolylineNode` | 断面の面（塗りあり・全面）／中心線（線種 -17・太さ 14）／稜線（`y=±奥行/2`・太さ 7） |
+| 5 | `kPolygonNode` | 端部（始端 `x=0`・終端 `x=長さ` の 2 つ・太さ 14） |
+| 90 | `kUndoPlaceholderNode` | **undo の置き石**（下記） |
+| 0 | `kTermNode` | 終端 |
+
+### クラス欄（欄型 18 = `kFieldClassesPopup`）は**名前**で書く
+
+| 書き方 | `GetParamValue` の読み戻し | `ResetObject` 後 | `GetParamClass` |
+| --- | --- | --- | --- |
+| `SetParamValue(索引, クラス名)` | **クラス名** | **残る** | 空 |
+| `SetParamString(索引, クラス名)` | **クラス名** | **残る** | 空 |
+| `SetParamClass(索引, クラス索引)` | **空**（書けていない） | 空 | 空 |
+
+- **`SetParamClass` は効かない。** あれは `kFieldClass`（欄型 23）用の口で、構造材の
+  `…Class_<面>` は `kFieldClassesPopup`（欄型 18）である。
+- **`GetParamClass` は、正しく書けているときでも空を返す。** 読み戻しは `GetParamValue`
+  で行う。**「`GetParamClass` が空だから書けていない」と読まない。**
+- クラスは**先に文書へ在ること**（`AddClass`）。無い名前を書いたときの挙動は見ていない【未確認】。
+
+### 真偽欄は `GetParamBool` で読み戻す（文字列は `True` / `False`）
+
+`SetParamBool(索引, false)` の後、`GetParamValue(索引)` は **`False`** を返す（`0` では
+ない）。書いた `"0"` と読み戻した `"False"` を突き合わせて「戻された」と読み違えないこと
+（この調査の 1 版目で実際に踏んだ）。
+
+### `ResetObject` 1 回ごとに undo の置き石（型 90）が 1 つ積もる
+
+**実機確認済み**: 構造材 1 本へ `ResetObject` を繰り返すと、PIO の子に
+`kUndoPlaceholderNode`（型 90）が**1 回につきちょうど 1 つ**増える（30 回で 29 個。
+5 回刻みで実測）。**プローブは undo イベントを開かない**
+（[Undo](Undo.md)：半端な記録を取り消すと図面が壊れる）ので、置き石が PIO の中に残る。
+
+- **描かれた子の数は 30 回まで 7 つのまま保たれた**ので、**置き石そのものは描画を壊さない**。
+- ただし**同じ個体で `AttributesMode` を 0→1→2→3 と振った回**では、型 84（3D 実体）と
+  断面のポリラインが消え、**値を既定へ戻しても戻らなかった**。`ResetObject` を 30 回
+  繰り返すだけでは壊れないので、**壊したのは回数ではない**。何が壊したかは切り分けて
+  いない（[issue #166](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/166) へ切り出した）。
+- **調査のうえでの実務**: **1 つの個体の値を振って比べない。値ごとに新しい個体を作る。**
+  この節の実測はすべて 1 値 1 個体で採り直したものである。
+
+### 取り込みで使う形（構造材＝クラススタイル・被覆と中心線は非表示・端部は両端）
+
+**実機確認済み**（この形をそのまま 1 本作り、読み戻しと描かれた子を確かめた）。
+**面は 3 面とも書く**（どの面が描かれるかは切断面との関係で決まるため）。
+
+```cpp
+VWParametricObj pio(member);                 // CreateCustomObjectPath で作った構造材
+const char* const kFaces[] = { "_Above", "_At", "_Below" };
+for (const char* face : kFaces) {
+    // 構造材＝クラススタイル（面 6 / 線 4）。クラス欄は**名前**で書く。
+    pio.SetParamValue(TXString("MemberClass")     + face, TXString("木構造_柱"));
+    pio.SetParamValue(TXString("MemberFillStyle") + face, TXString("6"));  // 面の属性＝クラス属性
+    pio.SetParamValue(TXString("MemberPenStyle")  + face, TXString("4"));  // 線の属性＝クラス属性
+    pio.SetParamBool (TXString("MemberDisplay")   + face, true);
+    // 被覆と中心線は非表示。
+    pio.SetParamBool(TXString("CoverDisplay")      + face, false);
+    pio.SetParamBool(TXString("CenterlineDisplay") + face, false);
+    // 端部は両端（＝始端と終端の両方を表示。これは既定でもある）。
+    pio.SetParamBool(TXString("StartCapDisplay") + face, true);
+    pio.SetParamBool(TXString("EndCapDisplay")   + face, true);
+}
+gSDK->ResetObject(member);                   // 1 回で足りる
+```
+
+結果（実行ログ）:
+
+- 書いた値は**全部残った**——`MemberDisplay` / `StartCapDisplay` / `EndCapDisplay` が
+  3 面とも true、`CoverDisplay` / `CenterlineDisplay` が 3 面とも false、
+  `MemberFillStyle`=6・`MemberPenStyle`=4・`MemberClass`＝クラス名。
+- 描かれた子は 7 → **6 に減り、中心線の子（型 21・`(0,0,3000,0)`）が消えた**。
+- 断面の面は**クラスの塗り色**・`GetFillColorByClass`=true・クラスは指定したもの。
+  稜線は**クラスの線色と太さ**・`GetPenColorByClass`=true・同じクラス。
+- **端部は 2 つとも残った**（型 5 が `x=0` と `x=3000`）。
+- **被覆では子が 1 つも減らなかった。** 既定の 1 本では被覆が最初から描かれていない
+  ためと見られる【推定】——**被覆の厚み（`CoverTopThickness` など・索引 34〜45）の既定は
+  測っていない**（この調査は 48 以降を採ったもの）。いずれにせよ
+  **「被覆を非表示にしても絵が変わらない」を「書けていない」と読まない**
+  ——読み戻しは 3 面とも false で残っている。
+
+**「端部は両端」はポップアップではない。** 端部の表示は
+`StartCapDisplay_<面>` と `EndCapDisplay_<面>` の**真偽 2 つ**で、両方 true が「両端」、
+片方だけが「始端のみ」「終端のみ」、両方 false が「なし」に当たる。
 
 ## パラメータの既定値は「文書」に記録される
 
@@ -1176,16 +1464,460 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
 **定義が作られる過程で走るので 1 回目に間に合わない**。描き始める前に
 `DefineCustomObject(name, kCustomObjectPrefNever)` を 1 度呼んで先に定義しておく。
 
+**組み込みのドア・窓でも同じ**で、**入口を選ばない**
+（[issue #122](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/122)。
+VW 2026 / mac・新規の空図面。`probes/runtime/create-pio-with-params/` の実行ログ）。
+
+| 初めて作るときの呼び方 | 所要 | ダイアログ |
+| --- | --- | --- |
+| `CreateCustomObject("Door" / "Window", …)` | 42.6 秒 / 102.7 秒 | 出た（ドア設定・窓設定。利用者の目視） |
+| `CreateCustomObjectPath("Door", nil, nil, doRegen=false)` | 10.6 秒 | **出た**——再生成を止めても止まらない |
+| `DefineCustomObject(name, kCustomObjectPrefNever)`（51〜76ms）→ `CreateCustomObject` | 17〜27ms（窓）/ 305〜694ms（ドア） | 出ない（ドア・窓とも） |
+
+**ただしダイアログを飛ばすと、できる個体の値が変わる**（下記「パラメータを指定して作る
+口は無い」）。ダイアログを OK で通した文書と飛ばした文書では、同じ呼び方でも別物が
+できる。
+
+## パラメータを指定して作る口は無い——点の PIO も作成の時点で 1 回描く
+
+「作る → パラメトリックレコードを書く → `ResetObject`」は**2 回描いている**。これを
+「レコードを指定して作る」＝ 1 回にできるかを
+[issue #122](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/122) で
+調べた（VW 2026 / mac・新規の空図面・組み込みのドア / 窓。
+`probes/runtime/create-pio-with-params/` を 4 版・計 5 回走らせた。3 版目は 2 回とも同じ値）。
+**「作成の直後に描かれたか」は PIO の子の数と外形で判定した**——描かれる前の PIO は
+子が 1 つ（型 0）で、外形は PIO の種類ごとの決まった小さな枠になる。所要時間は各 1 回の
+実測なので、1 本あたりの費用としては引かない。
+
+**結論**:
+
+1. **パラメータの値を受け取る生成 API は無い**【ヘッダ根拠】。生成の入口は
+   `CreateCustomObject(name, loc, angle, bInsert)` / `CreateCustomObjectByMatrix(name, matrix)` /
+   `CreateCustomObjectByMatrixEx(name, matrix, bInsert)` / `CreateCustomObjectPath(name, path,
+   profile, doRegen)` / `CreateCustomObjectPathNoOffset` / `CreateCustomObjectDoubleClick`
+   だけで、**再生成を止める旗を持つのは `CreateCustomObjectPath` の `doRegen` だけ**。
+2. **`CreateCustomObject` は作成の時点で描く。** 作った直後にドアは子 11・外形 910、
+   窓は子 15 で、既定値のまま描かれている。書いて `ResetObject` するともう 1 回描く。
+3. **`bInsert=false` は再生成を止めない。** 図面に入れない（親が nil）だけで、作成直後に
+   子 11 / 15 まで描かれている。`CreateCustomObjectByMatrixEx(…, false)` も同じ。
+   後から `AddObjectToContainer(h, layer)` で入れられ、入れただけでは描き直さない。
+4. **「見本を 1 本だけ普通に作り、残りは描かずに作って見本の全欄を写す」なら、1 本 1 回で
+   いつもの経路と全欄一致する個体ができる**（下記「手順」）。**ダイアログを出さない条件**
+   （`kCustomObjectPrefNever`。プラグインが実際に使う条件）で、ドア 672 欄・窓 618 欄とも
+   差 0、外形・子の型の並びも一致した。
+5. **それ以外の 1 回で済ませる経路は、ダイアログを出さない条件ではいつもの経路と同じものに
+   ならない**（下の表）。書式の既定値を書き換える経路は効かず、描かずに作って必要な欄だけ
+   書く経路は別物（袖 FIX 付きのドアなど）になる。
+
+### 1 回で済ませる経路と、いつもの経路（A）との差
+
+A は `CreateCustomObject` → `Width` を 1410 に → `ResetObject`。全欄を文字列
+（`GetParamValue`）で突き合わせた（ドア 672 欄・窓 618 欄）。
+
+| 経路 | 描く回数 | ダイアログを通した文書 | ダイアログを飛ばした文書（`kCustomObjectPrefNever`） |
+| --- | --- | --- | --- |
+| **書式の既定値を書き換えてから `CreateCustomObject`**（`VWRecordFormatObj::SetParamReal`。作ったら戻す） | 1 | **効く**（外形 1410。既にある個体は変わらない） | **効かない**——`Width` はドア 826・窓 896 のまま（既定と同じ）。A と 11 / 15 欄違う |
+| **`CreateCustomObjectPath(name, nil, nil, doRegen=false)` → `SetEntityMatrix` → 書く → `ResetObject`** | 1 | **ドアは 672 欄すべて一致**（外形・子の型の並びも一致） | **別物になる**——何も書かずに描かせるとドアは子 47・幅 1589.6（**袖 FIX 付き**の別のドア）。A0 と 67 / 61 欄違い、窓は書いた幅が外形に出ない |
+| 同上で、**`CreateCustomObject` で作った個体（A0）の全欄を `SetParamValue`（文字列）で写してから**書く | 1（＋見本の 1 本） | — | **外形・子の型の並びは A と一致。ただし線の種類の欄とそこから決まる欄が 17 / 18 欄違う**（`2D…LineStyle` が A=2 / 写した側=0、`WallLineLW` など） |
+| 同上で、**欄型ごとの口で写してから**書く（下記「手順」） | 1（＋見本の 1 本） | — | **全欄一致**（ドア 672・窓 618 欄とも差 0。外形・子の型の並びも一致） |
+
+**読みどころ**:
+
+- **`CreateCustomObject` は、作るときに書式の値へ「初期化」を掛けている。** ダイアログを
+  飛ばした文書で、書式（F）と何も書かずに作った A0 は 61 / 98 欄違う（`__version` 0→3160、
+  `DoorClass` None→一般、`SizeReference` Rough Opening→Leaf Size、`ROWidth` 0→910 など）。
+  **書式の既定値は、作られる値の出どころではない**——だから既定値を書き換えても効かない。
+  ダイアログを OK で通すと、ダイアログの値が書式へ書かれて出どころと一致する
+  （1 版目で書式経路が効いたのはこのため）【推定】。
+- **Path の入口（`doRegen=false`）はこの初期化を通らない。** 描かせると、書式とも A0 とも違う
+  値の組（`DetailLevel` Low、`SideLights` True、インチ由来の 19.05 / 25.4 など）で描かれる。
+  **ダイアログを通した文書ではドアが全欄一致した**ので、初期化の中身は「ダイアログの値」
+  に由来すると読める【推定】。
+- **線の種類の欄（欄型 `kFieldPenStyle` = 26）は `SetParamValue` の文字列では写らない。**
+  `2` を書いても `0` が残る（写した直後、`ResetObject` の前に読み戻して確認。ドア・窓とも
+  15 欄）。そのまま `ResetObject` すると、そこから決まる整数の欄（`WallLineLW` / `SwingLW` /
+  `OpDirectionLineWeight` など、欄型 1）も A と違う値になる。**`SetParamPenStyle` で写せば
+  写る**（差 0）。なぜ文字列で写らないかは突き止めていない（同梱の
+  `VWParametricObj::SetParamValue` は `kFieldText` とそれ以外で書き方を分けている、までは
+  読んだ）。
+
+### 手順（1 本 1 回で、いつもの経路と同じ個体を作る）
+
+```cpp
+// 0) 文書ごとに 1 度: ダイアログを止める
+gSDK->DefineCustomObject(name, kCustomObjectPrefNever);
+
+// 1) 文書ごと・種類ごとに 1 度: 見本を普通に作る（この 1 本は作成時に描かれる）
+MCObjectHandle sample = gSDK->CreateCustomObject(name, WorldPt(0, 0), 0.0, true);
+VWParametricObj from(sample);
+
+// 2) 1 本ごと: 描かずに作る → 置く → 見本を欄型ごとの口で写す → 値を書く → 1 回描く
+MCObjectHandle h = gSDK->CreateCustomObjectPath(name, nil, nil, false);
+gSDK->SetEntityMatrix(h, placement);          // 位置・角度（描き直さない）
+VWParametricObj to(h);
+for (size_t i = 0; i < from.GetParamsCount(); ++i) {
+    const TXString p = from.GetParamName(i);
+    switch (from.GetParamStyle(p)) {
+    case kFieldPenStyle:  to.SetParamPenStyle(p, from.GetParamPenStyle(p)); break;
+    case kFieldPenWeight: to.SetParamPenWeight(p, from.GetParamPenWeight(p)); break;
+    case kFieldFill:      to.SetParamFill(p, from.GetParamFill(p)); break;
+    case kFieldColor:     to.SetParamColor(p, from.GetParamColor(p)); break;
+    case kFieldClass:     to.SetParamClass(p, from.GetParamClass(p)); break;
+    case kFieldBuildingMaterial: to.SetParamBuildingMaterial(p, from.GetParamBuildingMaterial(p)); break;
+    case kFieldTexture:   to.SetParamTexture(p, from.GetParamTexture(p)); break;
+    case kFieldSymDef:    to.SetParamSymDef(p, from.GetParamSymDef(p)); break;
+    default:              to.SetParamValue(p, from.GetParamValue(p)); break;
+    }
+}
+to.SetParamReal("Width", width);              // 欲しい値を書く
+gSDK->ResetObject(h);                         // ここで 1 回だけ描く
+```
+
+- **実測でずれが出たのは線の種類（欄型 26）だけ**だった。上の `switch` のうち、ドア・窓で
+  実際に効き目を確かめたのは `kFieldPenStyle` の枝である（他の欄型はドア・窓に文字列で
+  写して差が出なかった。枝を足したのは同じ理由で落ちうるから）。
+- **見本は図面に 1 本残る。** 写し終えた後で消してよいかは確かめていない。見本の値は
+  「その文書でダイアログを出さずに作ったときの初期値」なので、文書をまたいで使い回さない
+  【推定】。
+- 所要は各 1 回の実測で、`ResetObject` 1 回が 15〜19ms、写す手間は測っていない。
+  減るのは「作成時の 1 回」ぶん（上の実測で 1 回 10〜20ms）。
+
+### 位置と角度は `SetEntityMatrix` で与える（描き直しを起こさない）
+
+`CreateCustomObjectPath(name, nil, nil, doRegen=false)` は原点・角度 0 に置く。
+`SetEntityMatrix`（0.00ms）で原点 (6000, 5000)・30° を与えても子は 1 のまま
+（描き直さない）。その後の `ResetObject` で、`CreateCustomObject(pt, 30°)` と**同じ外形・
+同じ子の型の並び**になった（ドア・窓とも）。
+
+**`ResetObject` の後で `SetEntityMatrix` で動かすと、外形（`GetObjectBounds`）が古い位置の
+まま残る**（原点は動いている）。もう一度 `ResetObject` すると追い付く。**置き場所は
+`ResetObject` の前に決める。**
+
 ## プラグインスタイル
 
 - **当てただけでは何も流れない。** `SetPluginObjectStyle` は関連付けまでしか
   行わないので、対象を全部置いてから **`UpdateStyledObjects` を 1 回**呼ぶ。
   スタイルを当てない PIO（データタグ・グラフィック凡例）にはそもそも要らない。
-  **`UpdateStyledObjects` が流すのは描画属性だけではない——ジオメトリの作り直しまで行う**
-  ので、スタイルを当てた PIO では 1 本ごとの `ResetObject` を省ける（速さは変わらない。
-  下記「リセット（再生成）をまとめられるか」）。
+  **`UpdateStyledObjects` が流すのは描画属性だけではない——ジオメトリまで触る**ので、
+  **バウンドまで by-style のスタイルなら**1 本ごとの `ResetObject` を省ける（そのときは
+  解決バウンドから作り直している。速さは変わらない。下記
+  「リセット（再生成）をまとめられるか」）。
+- **バウンドを by-instance にしたスタイルでは、1 本ごとの `ResetObject` を省けない。**
+  `UpdateStyledObjects` は**バウンドから作り直さず、いまの形へ
+  `自分の span − スタイルの span` を足すだけ**なので、終端が静かにずれる。
+  **流した回数ぶん累積し**、**バウンドを書き換えたあとに Update だけを流しても**ずれる。
+  狂っても `ResetObject` を 1 度通せば戻る（下記
+  「[バウンドだけ by-instance のスタイルは作れる](#バウンドだけ-by-instance-のスタイルは作れる握っているのは-dialogstartelevationreference-1-件)」の
+  「`UpdateStyledObjects` はバウンドから作り直さない」）。
+- **パラメータの値を配るのは `UpdateStyledObjects` だけで、`ResetObject` では配られない。**
+  by-style にしたパラメータは、`ResetObject` を通した直後も**インスタンスの値のまま**で、
+  `UpdateStyledObjects` を流して初めてスタイルの値になる（同じ 6 本を流す前後で読み比べた実測。同）。
 - **スタイル名 → RefNumber を名前で引く呼び出しは無い。** `GetNamedObject` ＋
   `GetObjectInternalIndex` で引く。
+- **スタイルはストーリバウンドも配る。** 当てた先に書いてあったバウンドは、次の
+  `ResetObject` / `UpdateStyledObjects` で**スタイルの持つバウンドに置き換わる**
+  （下記）。構造材のように高さをバウンドで決める PIO では、**これが横架材の高さを
+  丸ごと変える**。
+
+### スタイルを当てると書いたバウンドはスタイルのものへ置き換わる
+
+[issue #112](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/112) で
+**実機確認済み**（VW 2026 / mac・新規の空図面。`probes/runtime/style-story-bound-overwrite/` を
+**2 度**走らせた。下記 1〜6 は 2 度とも同じ値。**実行ごとに違ったのは最後の「読み戻せない
+バウンド」だけ**で、それ自体が知見である。以下の値は実行ログそのまま）。
+
+きっかけは [#109](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/109)
+の副産物で、**両端とも offset 2500 で書いた水平材にスタイルを当てたら、解決バウンドが
+2500 / 5500——書いていない値——になった**。そのスタイルの元にした PIO が
+バウンド 2500 / 5500 の鉛直材だった。
+
+**結論**:
+
+1. **書き換えるのは `SetPluginObjectStyle` ではない。** 当てる直前と直後を
+   `ResetObject` を挟まずに読むと、**レコードも解決結果も 1 ビットも変わらない**
+   （変わるのは `styleRef` だけ）。**書き換えるのは、その後の `ResetObject` /
+   `UpdateStyledObjects`**——つまりこの文書の冒頭「高さ・実体を最終的に決めるのは…」で
+   言う「バウンドから作り直す」機構が、**スタイルのバウンドを見て作り直している**。
+2. **置き換わるのはレコードごと**で、解決結果だけではない。書いた
+   `fOffset` 2500 が、`GetObjectStoryBound` で読み戻すと **5500**（スタイルの値）に
+   なっている。**だから「書いて、読み戻して、合っていた」は保証にならない。**
+3. **順序では避けられない。** 3 通り試して 3 通りとも置き換わった。
+
+   | 順序 | `ResetObject` 後の解決バウンド |
+   | --- | --- |
+   | バウンド → スタイル → `ResetObject` | 2500 / **5500** |
+   | **スタイル → バウンド** → `ResetObject` | 2500 / **5500** |
+   | バウンド → スタイル → **バウンドを書き直し** → `ResetObject` | 2500 / **5500** |
+   | （対照）バウンドのみ・スタイル無し → `ResetObject` | 2500 / 2500（書いたとおり） |
+
+   **スタイルを当てた後に書き直しても効かない**のは、置き換えが「書いた時点」ではなく
+   **「作り直す時点」に起きる**ためである（上記 1）。
+4. **効いているのはスタイル側のバウンドそのもの。** 同じ材へ当て分けると、
+   **当てたスタイルの持つバウンドがそのまま来る**。
+
+   | 当てたスタイル（元にした PIO のバウンド） | 当てた先の解決バウンド |
+   | --- | --- |
+   | 2500 / 5500 | 2500 / **5500** |
+   | 2500 / 2500 | 2500 / 2500（＝書いた値と同じなので変化に見えない） |
+   | **バウンドを 1 本も持たない** | **0 / 0**（書いた 2500 が消える） |
+
+   **「バウンドを持たないスタイル」で 0 / 0 になる**のが決定的で、これは
+   「スタイルを当てると既定値へ戻る」ではなく**「スタイルの持っているものが配られる」**
+   ことを示す。
+5. **`UpdateStyledObjects` でも同じ**（`ResetObject` を 1 度も呼ばなくても
+   2500 / 2500 → 2500 / **5500**）。**1 本ごとの `ResetObject` を省く経路でも逃げられない。**
+6. **逃げ道は `kPluginStyleParameter_ByInstance`。** スタイルを
+   `SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByInstance)` で作っておくと、
+   **`ResetObject` でも `UpdateStyledObjects` でも書いたバウンドが残った**（2500 / 2500）。
+   **バウンドはパラメータではない**（パラメータ表に名前が無い）のに、
+   **by-style / by-instance の切り替えには従う。**
+
+**実務上の指針**:
+
+- **スタイルを当てる PIO では、バウンドの検査を「書いた直後」に置かない。**
+  `GetObjectBoundElevation` の読み比べ（この文書の冒頭「実務上の指針」）は、
+  **スタイルを当てて作り直しを通した後**に行う。手前で読んだ値は最終形ではない。
+- **本ごとに違う高さを持たせたいなら、バウンドだけを by-instance にする**——
+  **`SetAllPluginStyleParameters` で全部を切り替える必要は無い。** 握っているのは
+  `DialogStartElevationReference` **ただ 1 件**で、それだけを by-instance にすれば
+  **他の 180 件は by-style のまま**にできる（下記
+  「[バウンドだけ by-instance のスタイルは作れる](#バウンドだけ-by-instance-のスタイルは作れる握っているのは-dialogstartelevationreference-1-件)」）。
+  by-style のまま当てると、**そのスタイルを当てた全部の材が、スタイルの高さに揃う**。
+- **そのスタイルでは、1 本ごとの `ResetObject` を省いてはいけない。**
+  `UpdateStyledObjects` だけで済ませると**終端が「スタイルの span」だけずれる**（同）。
+  **バウンドを書き換えたときも、そのたびにその本を `ResetObject` する**——
+  「1 度通せば以後は Update だけでよい」ではない。**狂っても `ResetObject` 1 度で戻る。**
+- **バウンドは必ず自分で両端とも書く**（スタイルに供給させない）。バウンドを 1 本も
+  持たない材にスタイルを当てて `ResetObject` すると、**バウンドは 2 本生え（ID 0 / 1）、
+  実体もスタイルどおり（2500→5500）に建つのに、その 2 本は読み戻せない**。
+  `fOffset` はスタイルどおり（2500 / 5500）なのに、`fBound` が
+  **`EStoryObjectBound` の 3 つの値（`_LayerElevation` / `_LayerWallHeight` / `_Story`
+  ＝ 0 / 1 / 2）のどれでもない値**で返り、`GetObjectBoundElevation` は**実体と食い違う**。
+  しかも**どの ID が壊れるかも、返る値も、実行ごとに違った**:
+
+  | | 壊れていた ID | その `fBound` | `GetObjectBoundElevation` | 実体 |
+  | --- | --- | --- | --- | --- |
+  | 1 度目 | ID 1 | `1807343432` | 0 / 0 | 2500→5500 |
+  | 2 度目 | ID 0 | `-1254535200` | 0 / 5500 | 2500→5500 |
+
+  **2 度目は渡す前に `fBound` を 0 で埋めてから呼んでいる**ので、返った
+  `-1254535200` は**VW が書いた値**である（呼び出し側の値が残ったのではない）。
+  **こうなった材は `GetObjectBoundElevation` で検査できない。** 自分で両端を書いてあれば
+  この状態にはならない（上記 3・4 の材はどれもレコードが素直に読み戻る）。
+
+**スタイルを当てない PIO は何も変わらない。** 上記はすべて**スタイルを当てた PIO**
+の話で、当てなければ書いたバウンドは書いたとおりに残る（上記 3 の対照行）。
+
+### バウンドだけ by-instance のスタイルは作れる——握っているのは `DialogStartElevationReference` 1 件
+
+[issue #118](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/118) で
+**実機確認済み**（VW 2026 / mac・新規の空図面。`probes/runtime/style-bound-only-by-instance/` を
+**3 度**走らせた——2 度目は**プローブ側の落ち度**で A 群の 1 行目で止まっている
+（`DefineCustomObject` を呼んでおらず「オブジェクトの設定」ダイアログが出た。
+[`probes/runtime/README.md`](../probes/runtime/README.md) に一般則として書いた）ので、
+**下記の値は 1 度目と 3 度目のもの**。総当たりは 2 度とも同じ 1 件を指した。実行ログそのまま）。
+
+**結論: 作れる。** 全部を by-style にしたうえで、**`DialogStartElevationReference` 1 件だけ**を
+by-instance へ戻す。**これで「断面や材種はスタイルで揃え、高さは本ごと」になる。**
+
+```cpp
+gSDK->SetAllPluginStyleParameters(hSymDef, kPluginStyleParameter_ByStyle);
+gSDK->SetPluginStyleParameterType(hSymDef, "DialogStartElevationReference",
+                                  kPluginStyleParameter_ByInstance);
+```
+
+1. **バウンドは「パラメータ表に名前を持たない別系統の値」ではなかった。**
+   由来表（`'PSMP'`）の鍵はパラメータ名しか無く【ソース根拠】、その **181 件を両方向に総当たり**
+   したところ、動いたのは **1 件だけ**だった。
+
+   | 掃引 | バウンドが動いた名前 |
+   | --- | --- |
+   | 全件 by-style → **1 つだけ** by-instance | `DialogStartElevationReference`（他 180 件は無反応） |
+   | 全件 by-instance → **1 つだけ** by-style | `DialogStartElevationReference`（同） |
+
+   **どちらの向きでも同じ 1 件**なので、これがバウンドの持ち主で確定である。
+2. **1 件で両端を握っている。** 始端（ID 0）と終端（ID 1）を**別々に判定できる物差し**
+   （書く 3000 / 3000・スタイルは 2500 / 5500）で測っても、**この 1 件で ID 0 も ID 1 も同時に
+   自由になる**。`Start` という名前に反して**終端も動く**ので、**バウンドのためだけなら**
+   `DialogEndElevationReference` を併せて裏返す必要は無い（単独で裏返してもバウンドは動かず、
+   総当たりでも引っ掛からなかった）。
+3. **だから `SetAllPluginStyleParameters(ByInstance)` が効いていたのは副作用である。**
+   一括の口は**表の全件に行き渡る**（181 件を読み戻して外れ値 0 件）ので、
+   「全部 by-instance」はこの 1 件も裏返していたにすぎない。**名前の表以外に何かを
+   書いているわけではない**——[#112](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/112)
+   の「バウンドはパラメータではないのに切り替えに従う」という食い違いは、これで解ける。
+4. **1 つずつ切り替える口はそのまま使える。** `SetPluginStyleParameterType(hSymDef, 名前, 種別)` で
+   書き、`GetPluginStyleParameterType` で読み戻せる（**定義からもインスタンスからも同じ値が読める**）。
+   **ただし表に無い名前を引くと `by-instance`（0）が返る**ので、
+   **戻り値から「その名前が表にある」とは判断できない**（綴りを間違えても静かに 0 が返る）。
+
+**実用になることまで確かめてある。** バウンドの違う水平材 6 本
+（3000/3000・3200/4000・1000/6500）へ当て、**インスタンス側にはスタイルと違う値**
+（`MemberID="HON-GOTO"` / `MajorBreadth=120`。スタイルは `"STYLE-GAWA"` / `300`）を書いてから
+走らせると、**6 本とも書いたバウンドのまま**で、パラメータは**スタイルの値に揃った**。
+
+**手順（この順で通した）**:
+
+1. バウンドを両端とも書く
+2. `SetPluginObjectStyle` でスタイルを当てる
+3. **1 本ごとに `ResetObject`**
+4. 最後に `UpdateStyledObjects` を 1 回
+
+#### `UpdateStyledObjects` はバウンドから作り直さない——差分を足すだけで、流した回数ぶん累積する
+
+[issue #125](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/125) で
+**実機確認済み**（VW 2026 / mac・新規の空図面。`probes/runtime/update-styled-bound-delta/` を
+1 度走らせた。所要 2.65 秒。測ったのは水平材 17 本（ほかに列挙用 1 本と、スタイルの元にする
+5 本を作っている）。以下の値はすべてその実行ログそのまま。
+**群ごとにスタイルを分けてある**——`UpdateStyledObjects` は当てた全件を舐めるので、
+1 本を共有すると後の群の呼び出しが前の群の材を作り直してしまう）。
+
+上の手順の **3（1 本ごとの `ResetObject`）を省いてはいけない**。省くと**終端だけがずれる**
+（始端＝挿入点は正しい）。#118 の 3 本は #125 でも 1 ビット違わず再現した:
+
+| 書いたバウンド | 期待する Δz | 実測 Δz | 終端の絶対Z（期待 → 実測） |
+| --- | --- | --- | --- |
+| 3000 / 3000 | 0 | **−3000** | 3000 → **0** |
+| 3200 / 4000 | 800 | **−2200** | 4000 → **1000** |
+| 1000 / 6500 | 5500 | **2500** | 6500 → **3500** |
+
+**結論**: **`UpdateStyledObjects` は「解決バウンドから作り直す」ことをしていない**
+（バウンドが by-instance のとき）。**いまの形へ差分を足すだけ**である。
+
+```
+バウンドが、最後に ResetObject で作り直した時点から変わっている本:
+    Δz（後） ＝ Δz（前） ＋ (自分のバウンドの span) − (スタイルのバウンドの span)
+
+変わっていない本:
+    Δz（後） ＝ Δz（前）（＝正しいまま。作り直し前の値が保たれる）
+```
+
+**この 2 行で、14 本すべての実測が説明できる**（下記）。なお後者が「触られなかった」のか
+「正しく作り直された」のかは、この物差しでは分かれない——**どちらでも結果は同じ**なので
+実務上は区別が要らない。
+
+**始端はバウンドから正しく置かれる。** ずれた 3 本も挿入点は 0 → 3000 / 3200 / 1000 と
+**書いた下端どおりに直っている**。つまり Update は材に触ってはいて、**終端だけを差分で
+動かしている**。
+
+**ずれ幅はスタイルの span に追随する（式が機構として確定）。**
+
+スタイルだけを span 2000（2500 / 4500）に替えて同じことをすると、**ずれ幅も 2000 になった**。
+
+| 書いたバウンド（span） | スタイル span **3000** の実測 Δz | スタイル span **2000** の実測 Δz |
+| --- | --- | --- |
+| 3000 / 3000（0） | **−3000** | **−2000** |
+| 3200 / 4000（800） | **−2200** | **−1200** |
+| 1000 / 6500（5500） | **+2500** | **+3500** |
+
+6 本すべてが `自分の span − スタイルの span` に一致する。**ずれ幅は「スタイルが持っている
+バウンドの span」そのもの**で、定数でも自分の値でもない。どちらのスタイルでも、
+1 本ごとに `ResetObject` を通した対照の本は正しいままだった。
+
+**後から `ResetObject` を通せば直る——救える。**
+
+狂った 3 本へ `ResetObject` を 1 度通すと、**3 本とも解決バウンドどおりに戻った**。
+
+| 本 | 狂っていた Δz | `ResetObject` 後の Δz（正しい値） |
+| --- | --- | --- |
+| 3000 / 3000 | −3000 | **−4.5474735088646412e-13**（＝0） |
+| 3200 / 4000 | −2200 | **800.00000000000045** |
+| 1000 / 6500 | 2500 | **5500** |
+
+残差は 1〜2 ULP で、作り直しがいつも残すもの（[#67](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/67) /
+[#71](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/71)）と同じ。
+**レコードも解決結果も狂っていないので、バウンドを書き直す必要は無い**——`ResetObject` を
+1 度呼ぶだけで戻る。**取り込みの事故としては軽い**（一度この状態にした材が救えない、ではない）。
+
+**2 度流すと累積する（収束しない）。**
+
+`ResetObject` を通していない本へ `UpdateStyledObjects` を 2 回流すと、**2 回ぶん足された**。
+
+| 書いた span | 1 回目の後 | 2 回目の後 | 収束していれば | 据え置きなら |
+| --- | --- | --- | --- | --- |
+| 0 | −3000 | **−6000** | 0 | −3000 |
+| 5500 | +2500 | **+5000** | 5500 | +2500 |
+
+**1 回流すごとに `自分の span − スタイルの span` が足される。** だから「取り込みの途中で
+何度も `UpdateStyledObjects` を呼ぶ」は、速さの問題（下記
+「[リセット（再生成）をまとめられるか](#リセット再生成をまとめられるかまとめても速くならない減らせるのは回数だけ)」）
+だけでなく**正しさの問題**である——まだ `ResetObject` を通していない材があると、
+**呼んだ回数ぶん狂う**。
+
+**バウンドが by-style なら起きない——そのときは本当に作り直している。**
+
+**バウンドまで by-style のスタイル**（＝`DialogStartElevationReference` を裏返さない）で、
+**書く span をスタイルと違えて**測ると、こうなった。
+
+| 書いたバウンド（span） | Update 後のレコード | Update 後の Δz | 判定 |
+| --- | --- | --- | --- |
+| 3000 / 3000（**0**） | 2500 / 5500（置き換わった） | **3000** | 解決バウンドどおり |
+| 1000 / 6500（**5500**） | 2500 / 5500（同） | **3000** | 同 |
+| （対照）1000 / 6500 を `ResetObject` 済み | 2500 / 5500 | 3000 | 同 |
+
+**書いた span が 0 でも 5500 でも結果は同じ 3000**（＝置き換わった解決バウンドの span）で、
+挿入点も 2500（スタイルの下端）に揃う。差分を足しているなら 0 のまま／−3000 に
+なるはずなので、**by-style では作り直しが働いている**と分かる。
+**ずれるのはバウンドが by-instance のときだけ。**
+
+**#118 がここに書いた「#81 と矛盾しない理由」は誤りだったので訂正する。** あのときは
+「by-style では自分の span とスタイルの span が同じなので、上の式でも差が 0 になる」と
+書いたが、**差が 0 なら Δz は 0 のまま**になる（この 3 本は Update 前 Δz=0）。実測は 3000 で、
+**式では説明できない**——by-style は別経路である。
+[#81](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/81) の 5 本が
+`UpdateStyledObjects` だけで正しく建ったのは**その経路だったから**で、span が同じだった
+偶然ではない。
+
+**一度 `ResetObject` した本でも、バウンドを書き換えたらまた `ResetObject` が要る。**
+
+**実務でいちばん踏みやすい形。** `ResetObject` で正しく建てた本のバウンドを書き換えて
+`UpdateStyledObjects` だけを流すと、**やはり差分で動いた**（スタイル span は 3000）。
+
+| 本 | `ResetObject` で建てた（span） | 書き換え先（span） | Update だけを流した後の Δz | 正しい値 |
+| --- | --- | --- | --- | --- |
+| 広げる | 1000 / 3000（2000） | 1000 / 6500（**5500**） | **4500** | 5500 |
+| 狭める | 1000 / 3000（2000） | 1000 / 2000（**1000**） | **≈0**（2.2737367544323206e-13） | 1000 |
+
+どちらも `Δz（前）2000 ＋ (新しい span − スタイル span 3000)` に一致する
+（2000 + 2500 = 4500 ／ 2000 − 2000 = 0）。**「1 度 `ResetObject` を通せば以後は
+`UpdateStyledObjects` だけでよい」ではない**——**バウンドを書き換えたら、その本を
+`ResetObject` する。**
+
+**【推定】内側の見方。**
+
+`ResetObject` は「いまの形はこのバウンドのものだ」と覚え、`UpdateStyledObjects` は
+**覚えないまま差分だけを足す**——だから Update でしか触っていない本は何度でも足され、
+`ResetObject` 以降にバウンドを書き換えた本も足される。**差分の基準はいつもスタイルの span**
+なので、「いまの形はスタイルどおり」という前提で書かれているように見える。
+**これは 14 本の実測を説明する読みで、内部を見たわけではない**（上の 2 行の規則そのものは実測）。
+
+**実務上の指針（この節で決まること）**:
+
+- **バウンドを by-instance にしたスタイルでは、バウンドを書いた本を必ず `ResetObject` する。**
+  `UpdateStyledObjects` は代わりにならない（速さも変わらない。下記
+  「[リセット（再生成）をまとめられるか](#リセット再生成をまとめられるかまとめても速くならない減らせるのは回数だけ)」）。
+- **バウンドを書き換えたら、そのたびにその本を `ResetObject` する。**
+- **`UpdateStyledObjects` は最後に 1 回だけ。** 途中で何度も呼ぶと、まだ作り直していない材が
+  **呼んだ回数ぶん**狂う。
+- **狂ってしまったら `ResetObject` を 1 度通す。** レコードは正しいので、それだけで戻る。
+- **検査では検知できない。** `GetObjectStoryBound` も `GetObjectBoundElevation` も正しい値を
+  返し、**図だけが違う**。この文書の冒頭「実務上の指針」の読み比べをすり抜けるので、
+  **速さのために `ResetObject` を省く改変を入れない。**
+
+#### パラメータの値を配るのは `UpdateStyledObjects` だけ（`ResetObject` では配られない）
+
+同じ 6 本を、`UpdateStyledObjects` を流す前と後で読み比べた実測:
+
+| 読んだ時点 | `MemberID` | `MajorBreadth` |
+| --- | --- | --- |
+| `ResetObject` の後・`UpdateStyledObjects` の前 | `HON-GOTO`（**インスタンスの値のまま**） | 120（同） |
+| `UpdateStyledObjects` の後 | `STYLE-GAWA`（**スタイルの値**） | 300（同） |
+
+**by-style にしただけでは値は流れない。** バウンドは `ResetObject` でも配られるのに、
+パラメータの値は配られない——**この 2 つは別の経路で動いている**。だから上の手順は
+**4（`UpdateStyledObjects` を 1 回）も省けない**。「[プラグインスタイル](#プラグインスタイル)」の
+「当てただけでは何も流れない」と同じ話だが、**`ResetObject` を挟んでも変わらない**ことまでは
+そこに書いていなかった。
 
 ### **`CreatePluginStyle` を呼んではいけない**——スタイルは作られず、文書中の PIO が全滅する
 
@@ -1553,8 +2285,9 @@ API が無い。したがって参照先の図形を動かした瞬間には PIO
    1 本ごとの `ResetObject` を省いて 1 回に寄せられる。**ただし所要はほぼ同じ**
    （12.4ms/本 対 11.5ms/本）——**作り直しの費用は 1 本ごとに掛かり、寄せても消えない**。
 3. **効くのは「作り直しの回数を 2 回から 1 回に減らす」ほう。**
-   `CreateCustomObjectPath(..., doRegen=false)` ＋ **0 長のパス**で作ると、
-   1 本 23.6ms → **11.9ms** になった（下記「`doRegen=false` は…」）。
+   `CreateCustomObjectPath(..., doRegen=false)` ＋ **Z の差が 0 のパス**で作ると、
+   1 本 23.6ms → **11.9ms**（鉛直材）。**水平材・斜め材でも同じ**で、27.1ms → 14.6ms ／
+   28.7ms → 15.4ms になった（下記「`doRegen=false` は…」）。**部材の向きを問わない。**
 
 **作り直しを起こすのは `ResetObject` だけではない。** 描画属性を「クラスに従わせる」書き込み
 （`SetPColorsByClass` 等）と `SetObjectClass` も、**PIO では 1 回ごとに作り直しを起こす**
@@ -1603,7 +2336,12 @@ VectorScript の `ResetObject` は「どの型でも受ける」と書かれて�
 落ちない）が、**中の PIO までは作り直さない**。再描画は名前のとおり描き直すだけで、
 ジオメトリには触らない。**この 2 つはもう試さない。**
 
-### `UpdateStyledObjects` はジオメトリの作り直しまで行う（issue #81 の (b)）
+### `UpdateStyledObjects` はジオメトリの作り直しまで行う（issue #81 の (b)）——**バウンドが by-style のときは**
+
+**この節はバウンドまで by-style のスタイルの話である。** バウンドを by-instance にした
+スタイルでは `UpdateStyledObjects` は**作り直さず差分を足すだけ**で、1 本ごとの
+`ResetObject` を省けない（[#125](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/125)。
+上記「[`UpdateStyledObjects` はバウンドから作り直さない](#updatestyledobjects-はバウンドから作り直さない差分を足すだけで流した回数ぶん累積する)」）。
 
 **スタイルを当てた PIO を `ResetObject` 抜きで 5 本置き、`UpdateStyledObjects` を 1 回だけ
 呼ぶと、5 本ともバウンドどおりに作り直された**（渡したパスの Z 差 1 → 解決済みバウンドの
@@ -1614,47 +2352,141 @@ span 3000）。つまり「[プラグインスタイル](#プラグインスタ�
 - **解決済みストーリバウンドから作り直す機構は、`ResetObject` のときと同じように働く**
   （issue #81 の 3）。順序も「スタイルを当てる → バウンドを書く → `UpdateStyledObjects`」で
   成立した。その後に 1 本ごとの `ResetObject` を重ねても値は変わらない（5 本とも 3000 のまま）。
+  **ただしこれは「その順序なら書いたバウンドが残る」という意味ではない**——この 5 本が
+  バウンドどおりになったのは、**当てたスタイルの持つバウンドが同じ span 3000 だった**
+  からである。**スタイルの値と食い違うバウンドを書けば、どの順序でもスタイル側が勝つ**
+  （上記「[スタイルを当てると書いたバウンドはスタイルのものへ置き換わる](#スタイルを当てると書いたバウンドはスタイルのものへ置き換わる)」）。
 - **ただし速くはならない。** 5 本で 61.8ms ＝ **12.4ms/本**で、1 本ごとの `ResetObject`
   （11.5ms/本）と同じ。**作り直しの費用は 1 本ごとに掛かる**ので、「1 回の呼び出しに
   寄せる」こと自体には得が無い。
 - **対象はそのスタイルを当てた全オブジェクト**（VectorScript の説明も
   "Update all objects of the specified style."）。取り込みの途中で何度も呼ぶと、
   **そのたびに既に置いた全件を舐める**ことになる。寄せるなら最後に 1 回だけにする。
+  **バウンドを by-instance にしたスタイルでは、これは速さだけの話ではない**——
+  まだ `ResetObject` を通していない材があると、**呼んだ回数ぶん高さが狂う**
+  （[#125](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/125)）。
 
-### `doRegen=false` は速い。ただし**0 長のパスで作る**こと（さもないと span + 元の長さになる）
+### `doRegen=false` は速い。ただし**Z の差が 0 のパスで作る**こと（さもないと span + 渡した Z の差になる）
 
-**`doRegen=false` で作ると、その後の最初の `ResetObject` が「バウンドの span ＋ 作るときに
-渡したパスの長さ」を返す。** 実測（バウンドの span は 3000）:
+**`doRegen=false` で作ると、その後の最初の `ResetObject` が返す Z の差が
+「バウンドの span ＋ 作るときに渡した Z の差」になる。** 狂いの源は**渡した Z の差だけ**で、
+**パスの平面上の長さ（水平成分）はまったく関わらない**。したがって:
 
-| 作るときに渡した Z の差 | 1 度目の `ResetObject` 後 | 2 度目の後 | `doRegen=true` なら |
-| --- | --- | --- | --- |
-| 0 | **3000**（正しい） | 3000 | 3000 |
-| 1 | 3001 | **3000** | 3000 |
-| 5 | 3005 | **3000** | 3000 |
-| 100 | 3100 | **3000** | 3000 |
+> **鉛直材・水平材・斜め材のどれであっても、両端の Z を等しくしたパスで作れば、
+> 1 回目の `ResetObject` から正しい形になる**（部材の向きを問わない）。
+
+#81 が書いた「0 長のパスで作れ」は、**鉛直材ではたまたま「Z の差 0 ＝ 0 長」だった**から
+そう見えただけで、一般の規則は**「Z の差を 0 にする」**である。水平材・斜め材は
+**平面上の長さ（＝部材長そのもの）を持たせたまま Z だけ 0**にすればよく、この速くする道は
+**鉛直材に限られない**（[#109](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/109)。
+VW 2026 / mac・新規の空図面。`probes/runtime/doregen-nonvertical/` の実行ログ）。
+
+#### 実測——同じケースを `doRegen` の true / false で 2 本ずつ作り、1 回目の `ResetObject` を読み比べた
+
+`doRegen=true` の結果を「この実機での正しい形」とする物差しに使っている。**dz** は読み戻した
+Z の差、**平面長** は `sqrt(dx² + dy²)`。
+
+| 渡したパス Δ(x, y, z) | バウンドの span | 渡した 3 次元長 | 1 回目（`doRegen=false`） | 1 回目（`doRegen=true`） | 判定 |
+| --- | --- | --- | --- | --- | --- |
+| 鉛直 `(0, 0, 0)` | 3000 | 0 | dz **3000** ／ 平面長 0 | 同じ | **○ 1 回で正しい** |
+| 鉛直 `(0, 0, 1)` | 3000 | 1 | dz **3001** ／ 平面長 0 | dz 3000 | × span ＋ 1 |
+| **水平 `(2000, 0, 0)`** | **0** | 2000 | dz **0** ／ 平面長 **2000** | 同じ | **○ 1 回で正しい** |
+| **斜め `(2000, 0, 0)`** | 3000 | 2000 | dz **3000** ／ 平面長 **2000** | 同じ | **○ 1 回で正しい** |
+| 斜め `(2000, 0, 3000)` | 3000 | 3605.5512754639894 | dz **6000** ／ 平面長 2000 | dz 3000 | × span ＋ **3000** |
+| 水平 `(2000, 0, 1)` | 0 | 2000.0002499999844 | dz **1** ／ 平面長 2000 | dz ≈ 0 | × span ＋ 1 |
 
 読み方:
 
-- **狂いは「渡した長さ」そのぶん**で、累積はしない——**2 度目の `ResetObject` で必ず正しい
-  値に収まる**（が、それでは回数が減らず速くならない）。
-- **渡すパスを厳密に 0 長にすれば、1 度目から正しい。** 30 本で検証して 30 本とも 3000
-  だった。**0 長は「作り直される側」**なので死角には落ちない（上記
-  「`ResetObject` がバウンドから作り直すのは…」）。
-- **バウンドを必ず両端とも書いて `ResetObject`（または `UpdateStyledObjects`）まで
-  呼ぶ経路が前提**（上記「実務上の指針」）。その経路を外れるなら、パスの値がそのまま
-  実体になるので 0 長で作ってはいけない。
+- **決め手は 5 行目**（斜め・Z の差 3000）。狂いが**パスの 3 次元長**に由来するなら
+  **3605.55** ずれるはずだが、実測のずれは **3000 ちょうど ＝ 渡した Z の差**だった。
+  **3 次元長ではない**と、この 1 行で確定する（鉛直材だけを振った #81 では、
+  Z の差と 3 次元長が一致するので区別が付かなかった）。
+- **平面長のずれは 6 ケースとも 0。** 平面長 2000 を持たせても狂いは 1 mm も増えない
+  （3 行目・4 行目が 1 回目から正しい）。**水平成分は `doRegen` の狂いに寄与しない**
+  ——上記「水平成分が 1e-7 以上ある部材は…」の「バウンドが決めるのは Z の差だけ」と同じ姿で、
+  `doRegen=false` でもその機構は変わらない。
+- **両端の絶対 Z も 1 回目から正しい**（水平は 2500→2500、斜めは 2500→5500。挿入点 ＋
+  ローカル Z で実測。解決バウンドの値と一致する）。
+- **狂っても累積はせず、2 度目の `ResetObject` で必ず正しい値に収まる**（3001 → 3000、
+  6000 → 3000.0000000000005、1 → −2.22e-16）。ただしそれでは作り直しの回数が減らないので
+  速くならない。**2 度目を当てにするのではなく、Z の差 0 で渡して 1 度で決めること。**
+
+#### 端部オフセットとプラグインスタイルを当てても、結論は変わらない
+
+水平材・斜め材に**端部オフセット**（`StartOffset` = 150 ／ `EndOffset` = −250。読み戻しで
+確認）と**プラグインスタイル**（`SetPluginObjectStyle`。読み戻しで `styleRef` を確認）を、
+片方ずつ・両方の 3 通りで当てて 1 回だけ `ResetObject` した結果は、**`doRegen` の
+true / false で 1 文字も違わなかった**（6 通り × 2）。**この 2 つは `doRegen` の判断に
+関係しない。**
+
+**【この調査の副産物・未解明】スタイルを当てると、先に書いたバウンドが書き換わった。**
+両端とも offset 2500 で書いた水平材にスタイルを当てると、`ResetObject` 後の解決バウンドが
+**2500 / 5500** になり（書いていない値）、dz が 3000 になった。当てたスタイルの元にした PIO が
+バウンド 2500 / 5500 の鉛直材だったので、**スタイルの持つバウンドが上書きした**と読める。
+`doRegen` の true / false 両方で同じように起きるので上の結論は揺るがないが、
+**「バウンドとスタイルはどちらを先に書くか」は別の問い**として
+[#112](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/112) に切り出した。
+**バウンドの解決結果を `GetObjectBoundElevation` で検査するなら、スタイルを当てた後に行うこと。**
+
+#### 自己修復（`SetCustomObjectPath` → もう一度 `ResetObject`）は `doRegen=false` でも効く
+
+1 回目の後に長さを読み戻し、狂っていたら**正しい最終形のパス**を `SetCustomObjectPath` で
+差し替えてもう一度 `ResetObject` する、という直し方は、`doRegen=false` で作った材でも
+そのまま効いた（鉛直・Z 差 1 の 3001 → **3000**）。**差し替え後の解決バウンドは 2500 / 5500 の
+まま**で、上記「差し替えで `fOffset` を書き換えられた部材は…」の嘘の `fOffset` は入らなかった
+（渡したパスが、そのバウンドが解決する形とぴたり同じだったため）。
+
+**ただしこれは保険であって手順ではない。** Z の差 0 で渡せば水平材・斜め材は 30 本とも
+1 回で正しくなる（下記の実測）ので、**自己修復が走るのは「Z の差 0 で渡さなかったとき」だけ**
+である。走るということは呼び出し側が規則を破っている合図と読んでよい。
 
 ### 実測（構造材 PIO 30 本 / VW 2026 / mac / 新規の空図面）
+
+**鉛直材**（[#81](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/81)）:
 
 | 作り | 1 本あたり | 内訳（30 本ぶんの合計） | 読み戻し |
 | --- | --- | --- | --- |
 | いまの作り（`doRegen=true`・長さ 1 のパス → バウンド → 1 本ごとの `ResetObject`） | **23.6ms** | 作る 363.8ms ／ リセット 344.2ms ／ バウンド 0.7ms | 全件バウンドどおり |
 | **`doRegen=false` ＋ 0 長のパス** → バウンド → 1 本ごとの `ResetObject` | **11.9ms** | 作る 13.8ms ／ リセット 344.0ms | **30 / 30 バウンドどおり** |
-| `doRegen=false`（長さ 1）で全部置いてから、第 2 パスでまとめて `ResetObject` | 11.8ms | 置く 9.0ms ／ リセット 346.4ms | **全件 3001 ＝ 狂い**（0 長で作れば直る） |
+| `doRegen=false`（長さ 1）で全部置いてから、第 2 パスでまとめて `ResetObject` | 11.8ms | 置く 9.0ms ／ リセット 346.4ms | **全件 3001 ＝ 狂い**（Z の差 0 で作れば直る） |
 
-- **作り直し 1 回がおよそ 11.5ms**で、それが費用のほぼ全部。バウンドを書くのは
-  0.02ms/本で無視してよい。
+**水平材・斜め材**（[#109](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/109)。
+どちらも平面長 2000・**渡した Z の差は 0**）:
+
+| 部材 | `doRegen` | 1 本あたり | 内訳（30 本ぶんの合計） | 1 回で正しかった本数 |
+| --- | --- | --- | --- | --- |
+| 水平（バウンド 2500 / 2500） | `true` | 27.1ms | 作る 409.6ms ／ リセット 403.4ms | 30 / 30 |
+| 水平（同上） | **`false`** | **14.6ms** | 作る **16.1ms** ／ リセット 422.1ms | **30 / 30** |
+| 斜め（バウンド 2500 / 5500） | `true` | 28.7ms | 作る 422.4ms ／ リセット 437.1ms | 30 / 30 |
+| 斜め（同上） | **`false`** | **15.4ms** | 作る **16.3ms** ／ リセット 444.6ms | **30 / 30** |
+
+- **作り直し 1 回がおよそ 11.5〜14.8ms**で、それが費用のほぼ全部。バウンドを書くのは
+  0.02ms/本で無視してよい。**この実機の絶対値は測った日で 1〜2 割ぶれる**（#81 の鉛直材
+  11.5ms/回に対し #109 は 13.4〜14.8ms/回）ので、**比で読むこと**——どの向きでも
+  **`doRegen=false` はおよそ半分**である。
+- **`doRegen=false` で消えるのは「作る」側**（409.6ms → 16.1ms ＝ **25 分の 1**）。
+  リセット側は変わらない（作り直しは 1 回きり必要だから）。
 - **だから「まとめる」ではなく「2 回を 1 回にする」が効く**——既定のままだと作成時と
-  `ResetObject` で 2 回作り直している。`doRegen=false` ＋ 0 長で**描画時間はほぼ半分**になる。
+  `ResetObject` で 2 回作り直している。**`doRegen=false` ＋ Z の差 0 で描画時間はほぼ半分**になる。
 - **第 2 パスへ寄せても速くならない**（リセットの回数が同じなので当然）。寄せる価値が
   あるのは「潰れた部材だけを第 2 パスで直す」のように**回数そのものを減らせるとき**だけ。
+
+### 実装の手順（構造材 PIO を大量に置くとき）
+
+**向きで分ける必要は無い。** 鉛直・水平・斜めのすべてで同じ手順が使える。
+
+1. パスを `CreateNurbsCurve` ＋ `Add3DVertex` の 2 点で作る。**両端の Z は必ず等しくする**
+   （0 でよい）。平面上の位置は実際の位置そのまま——鉛直材はそれが同一点になるので
+   結果として 0 長、水平材・斜め材は平面長を持つ。
+2. `CreateCustomObjectPath(name, path, nullptr, **false**)` で作る。
+3. クラス・属性は**作る前に文書の既定として立てておく**（per-object の書き込みは作り直しを
+   起こす。[Attributes and Classes](Attributes%20and%20Classes.md)）。
+4. スタイルを当てる → **バウンドを両端とも書く** → パラメータを書く。
+   **スタイルはバウンドより先に当てておく**——実機で確かめたのは**逆順**（バウンド → スタイル）で、
+   そのときスタイル側のバウンドに上書きされた（上記の副産物）。**この順なら起きないことは
+   まだ確かめていない【推定】**ので、いずれにせよ**バウンドの解決結果の検査は、
+   スタイルを当てた後に行うこと**。[#112](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/112) で確かめる。
+5. `ResetObject` を **1 回だけ**呼ぶ。
+6. 念のため長さを読み戻す。1〜5 を守っていれば狂わないが、狂っていたら
+   `SetCustomObjectPath` で正しい最終形へ差し替えて `ResetObject` をもう 1 回
+   （上記「自己修復」）。**ここが走ったら 1 を疑う。**
