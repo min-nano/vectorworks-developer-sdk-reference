@@ -6,18 +6,29 @@
 //	始端／終端の高さ・ストーリバウンドのオフセット・レイヤ／ストーリ／レベルの高さ）を
 //	実測する。
 //
-//	**目視は要らない作りにしてある。** 式の評価結果は 2 つの口から読み戻してログへ出す:
+//	**目視は要らない作りにしてある。** 式の評価結果は `GetDataTagExtractedData`
+//	（タグが抽出した「ラベル → 値」の対）で文字列として読み戻す。ワークシート式は
+//	`VWFC::Tools::WSCriteriaExpression`（＝`ISDK::CompileCriteriaExpression` ＋
+//	`ISDK::ExecWSExpression`）でハンドルへ直接評価する。
 //
-//	  ① `IDataTagSupport::GetDataTagExtractedData`（タグが抽出した「ラベル → 値」の対）
-//	  ② タグが描いた図形を走査して拾ったテキストの文字列
+//	【2 巡目】1 巡目（ビルド `b463199a44c6`）で分かったことと、直した点:
 //
-//	どちらも文字列なので、**「何が出たか」はログだけで判定できる**（ダイアログの絵を
-//	見る必要が無い）。
-//
-//	もう 1 つ、**ワークシート式の評価器**（`VWFC::Tools::WSCriteriaExpression` ＝
-//	`ISDK::CompileCriteriaExpression` ＋ `ISDK::ExecWSExpression`）でも同じ問いを引く。
-//	こちらは**コンパイル段階の誤りを enum で返す**ので、「その識別子は存在しない」と
-//	「存在するが値が空」を機械的に区別できる——候補を総当たりするのに向いている。
+//	  * **知らない識別子もコンパイルは通り、「自分自身の文字列」に評価される**
+//	    （`T187NOSUCHFUNCTION` → `s:'T187NOSUCHFUNCTION'`）。だから
+//	    **コンパイル誤りでは関数の有無を判定できない**——判定材料は**戻り値の型と中身**で、
+//	    「入れた綴りがそのまま文字列で返ったら、その関数は無い」。`ProbeI187_EvalWS` が
+//	    その判定を自分で付けるようにした。
+//	  * **`CreateStoryLevelTemplate` の出力引数 index を信用してはいけない。** 2 つ作って
+//	    **どちらも 1 が返り**、`AddStoryLevelFromTemplate` が 2 つの階へ同じ
+//	    テンプレートを足したので、`GetLayerForStory(2F, FL)` が nil になり、
+//	    **ストーリバウンドを持つ部材を用意できなかった**（1 巡目が失敗した理由）。
+//	    2 巡目は**種別で引き直す**（`GetNumStoryLevelTemplates` ＋
+//	    `GetStoryLevelTemplateInfo`）。
+//	  * バウンド付きの部材が作れなかったので、**`TOPBOUND` / `BOTBOUND`（実在する関数。
+//	    1 巡目はバウンド無しの部材で 0 だった）と、始端／終端の高さのパラメータが
+//	    バウンドのオフセットを持つのか**が未確認のまま残った。ここが 2 巡目の主目的。
+//	  * 量の名前空間は当て推量でなく**列挙できる**ので、`EQTOFunction` の 17 個を
+//	    `ISDK::ExecQTOFunction` で全部試す。
 //
 
 #include "Probe.h"
@@ -43,7 +54,6 @@ namespace
 		char buffer[64];
 		std::snprintf(buffer, sizeof(buffer), "%.4f", value);
 		std::string text(buffer);
-		// 末尾の 0 を落として読みやすくする（2699.0000 → 2699）。
 		while (text.size() > 1 && text[text.size() - 1] == '0')
 			text.erase(text.size() - 1);
 		if (!text.empty() && text[text.size() - 1] == '.')
@@ -58,7 +68,6 @@ namespace
 		return std::string(buffer);
 	}
 
-	// 制御文字（改行・タブ）が混ざったログ行で表がずれないように 1 行へ畳む。
 	std::string ProbeI187_OneLine(const std::string& value)
 	{
 		std::string out;
@@ -77,9 +86,6 @@ namespace
 		}
 		return out;
 	}
-
-	// -----------------------------------------------------------------------
-	// コンパイル誤りの enum を読める名前に直す（`ECriteriaExpressionError`）。
 
 	std::string ProbeI187_CompileError(VectorWorks::ECriteriaExpressionError err)
 	{
@@ -152,60 +158,101 @@ namespace
 	}
 
 	// -----------------------------------------------------------------------
-	// 【harness A】ワークシート式を 1 本、対象ハンドルに対して評価する。
+	// ワークシート式を 1 本、対象ハンドルに対して評価する。
 	//
-	//	`=` は付けない（SDK のコメントの例が `"Area()/2"` である）。ローカル文脈と
-	//	universal 文脈の両方でコンパイルを試し、**通ったほうで実行する**——どちらで
-	//	書くのかがそもそも分からないので、ここで決めさせる。
+	//	**判定を呼び出し側に任せない。** 1 巡目で分かったとおり、知らない識別子も
+	//	コンパイルは通って「自分自身の文字列」に評価されるので、
+	//	**「戻り値が入れた綴りそのままの文字列なら、その関数は存在しない」**が唯一の
+	//	判定条件である。それをここで付けてログへ出す。
 	void ProbeI187_EvalWS(vwprobe::Report& probe, const std::string& label, MCObjectHandle hTarget,
 						  const std::string& expression)
 	{
 		std::string line = "[A] " + label + " | " + expression + " | ";
 
-		VWFC::Tools::WSCriteriaExpression compiledLocal;
-		const bool okLocal =
-			compiledLocal.Compile(TXString(expression.c_str()), VectorWorks::eLocal);
-
-		VWFC::Tools::WSCriteriaExpression compiledUniv;
-		const bool okUniv =
-			compiledUniv.Compile(TXString(expression.c_str()), VectorWorks::eUniversal);
-
-		line += "compile local=";
-		line += okLocal ? "ok" : ProbeI187_CompileError(compiledLocal.GetLastError());
-		line += " univ=";
-		line += okUniv ? "ok" : ProbeI187_CompileError(compiledUniv.GetLastError());
-
-		VWFC::Tools::WSCriteriaExpression* used = nullptr;
-		const char* usedName = nullptr;
-		if (okLocal)
+		VWFC::Tools::WSCriteriaExpression compiled;
+		const bool okLocal = compiled.Compile(TXString(expression.c_str()), VectorWorks::eLocal);
+		if (!okLocal)
 		{
-			used = &compiledLocal;
-			usedName = "local";
-		}
-		else if (okUniv)
-		{
-			used = &compiledUniv;
-			usedName = "univ";
-		}
-
-		if (used == nullptr)
-		{
-			probe.log(line + " | exec=(コンパイルできないので実行しない)");
+			probe.log(
+				line + "compile=" + ProbeI187_CompileError(compiled.GetLastError()) +
+				" offset=" + ProbeI187_Int(static_cast<long long>(compiled.GetLastErrorOffset())) +
+				" | 判定=**構文として通らない**");
 			return;
 		}
 
 		VWVariant result;
-		const bool ran = used->ExecWSExpression(hTarget, result);
-		line += std::string(" | exec(") + usedName + ")=";
-		line += ran ? "true" : "false";
-		line += " -> " + ProbeI187_VariantText(result);
+		const bool ran = compiled.ExecWSExpression(hTarget, result);
+		line += std::string("exec=") + (ran ? "true" : "false") + " -> " +
+				ProbeI187_VariantText(result);
+
+		// 判定。
+		const bool echoed = result.GetType() == eVWVariantType_String &&
+							ProbeI187_FromTX(result.GetTXString()) == expression;
+		if (!ran)
+			line += " | 判定=実行が false（関数は在るが値を出せない見込み）";
+		else if (echoed)
+			line += " | 判定=**入れた綴りがそのまま返った＝この名前の関数は無い**";
+		else
+			line += " | 判定=値が返った";
 		probe.log(line);
 	}
 
 	// -----------------------------------------------------------------------
-	// 【harness B】タグの 1 本のテキストへ式を持たせ、更新して結果を読み戻す。
-	//
-	//	読み戻しは 2 経路。どちらも文字列なので、目視は要らない。
+	// タグを 1 つ作って部材へ関連付け、式を持たせるテキストを 1 本だけ持つ
+	// レイアウトを渡す。戻り値は「式を持たせる先のテキスト」（駄目なら nil）。
+	MCObjectHandle ProbeI187_BuildTag(vwprobe::Report& probe,
+									  VectorWorks::Extension::IDataTagSupport* tagSupport,
+									  VectorWorks::Extension::IDataTagTextLinkSupport* linkSupport,
+									  MCObjectHandle hMember, MCObjectHandle hLayer, double x,
+									  const std::string& label, MCObjectHandle& outTag)
+	{
+		outTag = gSDK->CreateCustomObject("Data Tag", WorldPt(x, 0.0), 0.0, true);
+		if (outTag == nil)
+		{
+			probe.fail("データタグ（" + label + "）を作れなかった");
+			return nil;
+		}
+		if (hLayer != nil)
+			gSDK->AddObjectToContainer(outTag, hLayer);
+		probe.log("タグ " + label + ": AssociateWithObject=" +
+				  (tagSupport->AssociateWithObject(outTag, hMember) ? "true" : "false"));
+
+		MCObjectHandle hGroup = gSDK->CreateGroup(false);
+		MCObjectHandle hText = gSDK->CreateTextBlock("T187", WorldPt(0.0, 0.0), false, 0.0);
+		if (hGroup == nil || hText == nil)
+		{
+			probe.fail("タグレイアウト（" + label + "）を組めなかった");
+			return nil;
+		}
+		gSDK->AddObjectToContainer(hText, hGroup);
+		// **中身を入れてから渡す**（Findings「データタグ」）。
+		gSDK->SetCustomObjectProfileGroup(outTag, hGroup);
+
+		// 渡したときに VW が群を複製していることがあるので、渡した後に取り直す。
+		MCObjectHandle hLiveGroup = gSDK->GetCustomObjectProfileGroup(outTag);
+		MCObjectHandle hLiveText = nil;
+		if (hLiveGroup != nil)
+		{
+			for (MCObjectHandle member = gSDK->FirstMemberObj(hLiveGroup); member != nil;
+				 member = gSDK->NextObject(member))
+			{
+				if (gSDK->GetObjectTypeN(member) == kTextNode)
+				{
+					hLiveText = member;
+					break;
+				}
+			}
+		}
+		probe.log("タグ " + label + ": 渡した後のテキスト=" + (hLiveText == nil ? "無い" : "在る") +
+				  " IsSupported=" +
+				  (hLiveText != nil && linkSupport->IsSupported(hLiveText) ? "true" : "false"));
+		if (hLiveText == nil)
+			probe.fail("タグレイアウト（" + label + "）にテキストが無い");
+		return hLiveText;
+	}
+
+	// -----------------------------------------------------------------------
+	// タグの 1 本のテキストへ式を持たせ、更新して結果を読み戻す。
 	void ProbeI187_EvalTagFormula(vwprobe::Report& probe,
 								  VectorWorks::Extension::IDataTagSupport* tagSupport,
 								  VectorWorks::Extension::IDataTagTextLinkSupport* linkSupport,
@@ -224,45 +271,90 @@ namespace
 		line += worksheetMode ? "1" : "0";
 		line += " | in='" + ProbeI187_OneLine(formula) + "'";
 
-		// 書いた式がそのまま読み戻るか（VW が式を書き換える／捨てることがあるため）。
 		const std::string readBack = ProbeI187_FromTX(linkSupport->GetFormula(hText));
 		if (readBack != formula)
-			line += " | 式の読み戻し='" + ProbeI187_OneLine(readBack) + "'";
-		line += std::string(" | wsFlag=") + (linkSupport->GetIsWorksheetFormula(hText) ? "1" : "0");
+			line += " | 読み戻し='" + ProbeI187_OneLine(readBack) + "'";
 
-		// ① タグが抽出した値。
 		VectorWorks::Extension::TXStringSTLPairArray extracted;
-		const bool gotExtracted = tagSupport->GetDataTagExtractedData(hTag, extracted);
-		line += " | extracted(" + std::string(gotExtracted ? "true" : "false") + ")=";
+		tagSupport->GetDataTagExtractedData(hTag, extracted);
+		line += " | out=";
 		if (extracted.empty())
 			line += "(0 件)";
 		for (size_t i = 0; i < extracted.size(); ++i)
-		{
-			line += "{'" + ProbeI187_OneLine(ProbeI187_FromTX(extracted[i].first)) + "'->'" +
-					ProbeI187_OneLine(ProbeI187_FromTX(extracted[i].second)) + "'}";
-		}
-
-		// ② 描かれた文字列（タグの生成した図形を 1 段だけ走査する）。
-		line += " | drawn=";
-		size_t drawnCount = 0;
-		for (MCObjectHandle member = gSDK->FirstMemberObj(hTag); member != nil;
-			 member = gSDK->NextObject(member))
-		{
-			if (gSDK->GetObjectTypeN(member) != kTextNode)
-				continue;
-			const VWFC::VWObjects::VWTextBlockObj textObj(member);
-			line += "'" + ProbeI187_OneLine(ProbeI187_FromTX(textObj.GetText())) + "'";
-			++drawnCount;
-			if (drawnCount >= 8)
-			{
-				line += "…";
-				break;
-			}
-		}
-		if (drawnCount == 0)
-			line += "(テキスト 0 件)";
-
+			line += "'" + ProbeI187_OneLine(ProbeI187_FromTX(extracted[i].second)) + "'";
 		probe.log(line);
+	}
+
+	// -----------------------------------------------------------------------
+	// レベルテンプレートを作り、**出力引数の index を信用せず種別で引き直す**
+	// （1 巡目はこれを信用して失敗した）。見つからなければ -1。
+	short ProbeI187_LevelTemplateForType(vwprobe::Report& probe, const TXString& levelType)
+	{
+		const short count = gSDK->GetNumStoryLevelTemplates();
+		std::string line = "レベルテンプレート一覧（件数=" + ProbeI187_Int(count) + "）:";
+		short found = -1;
+		// index の起点が 0 か 1 かも分からないので **0 から count まで**当たる。
+		for (short i = 0; i <= count; ++i)
+		{
+			TXString name;
+			TXString type;
+			double scale = 0.0;
+			double offset = 0.0;
+			double wallHeight = 0.0;
+			if (!gSDK->GetStoryLevelTemplateInfo(i, name, scale, type, offset, wallHeight))
+				continue;
+			line += " [" + ProbeI187_Int(i) + "]'" + ProbeI187_FromTX(name) + "'種別='" +
+					ProbeI187_FromTX(type) + "'offset=" + ProbeI187_Num(offset);
+			if (found < 0 && ProbeI187_FromTX(type) == ProbeI187_FromTX(levelType))
+				found = i;
+		}
+		probe.log(line + " → 種別 '" + ProbeI187_FromTX(levelType) + "' は index " +
+				  ProbeI187_Int(found));
+		return found;
+	}
+
+	// 部材の素性をログへ出す（式が返した数字の出どころを突き合わせるため）。
+	void ProbeI187_DumpMember(vwprobe::Report& probe, const std::string& label,
+							  MCObjectHandle hMember, bool hasBounds)
+	{
+		if (hMember == nil)
+			return;
+		const VWFC::VWObjects::VWParametricObj memberObj(hMember);
+		const VWFC::Math::VWPoint3D pos = memberObj.GetObjectModelPos();
+		std::string line = "部材 " + label + ": 挿入点Z=" + ProbeI187_Num(pos.z);
+		if (hasBounds)
+		{
+			line +=
+				" バウンド件数=" +
+				ProbeI187_Int(static_cast<long long>(gSDK->GetObjectStoryBoundsCount(hMember))) +
+				" 解決Z ID0=" + ProbeI187_Num(gSDK->GetObjectBoundElevation(hMember, 0)) +
+				" ID1=" + ProbeI187_Num(gSDK->GetObjectBoundElevation(hMember, 1));
+			VectorWorks::SStoryObjectData readBack;
+			if (gSDK->GetObjectStoryBound(hMember, 0, readBack))
+				line += " ID0.fOffset=" + ProbeI187_Num(readBack.fOffset) + " ID0.種別='" +
+						ProbeI187_FromTX(readBack.fLayerLevelType) + "'";
+			if (gSDK->GetObjectStoryBound(hMember, 1, readBack))
+				line += " ID1.fOffset=" + ProbeI187_Num(readBack.fOffset);
+		}
+		probe.log(line);
+
+		static const char* const kWatchParams[] = {"StartElevation",
+												   "EndElevation",
+												   "DialogStartElevation",
+												   "DialogEndElevation",
+												   "DialogStartElevationReference",
+												   "DialogEndElevationReference",
+												   "OffsetZ",
+												   "MajorDepth",
+												   "MemberID"};
+		std::string params = "部材 " + label + " レコード:";
+		for (size_t i = 0; i < sizeof(kWatchParams) / sizeof(kWatchParams[0]); ++i)
+		{
+			params +=
+				std::string(" ") + kWatchParams[i] + "='" +
+				ProbeI187_OneLine(ProbeI187_FromTX(memberObj.GetParamValue(kWatchParams[i]))) + "'";
+		}
+		probe.log(params);
 	}
 } // namespace
 
@@ -272,98 +364,85 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 	using namespace VectorWorks;
 	using namespace VectorWorks::Extension;
 
-	// 何かを作る前に 1 度。これが無いと最初の 1 個で「オブジェクトの設定」ダイアログが
-	// 出て止まる（probes/runtime/README.md）。
 	gSDK->DefineCustomObject("StructuralMember", kCustomObjectPrefNever);
 	gSDK->DefineCustomObject("Data Tag", kCustomObjectPrefNever);
 
 	// =======================================================================
-	// 1. 舞台を作る。**数値はすべて互いに違う値**にして、式が何を返したのかを
-	//    ログの数字だけで言い当てられるようにする。
+	// 1. 舞台。数値はすべて互いに違う値にして、式が返した数字だけで出どころが
+	//    言い当てられるようにする。
 	//
-	//	  ストーリ T187-2F   高さ 3571（レベル T187-FL は階内相対 0 ＝ 絶対 3571）
-	//	  ストーリ T187-PLAN 高さ 2699（レベル T187-PLAN-L。伏図レイヤの見立て）
-	//	  部材 A: T187-FL レイヤに置き、両端へストーリバウンド（オフセット −872 / −302）
-	//	  部材 B: T187-PLAN レイヤに置き、バウンドは書かない（局所Z 0 → 570）
-	//
-	//	現場の形（伏図レイヤの高さが FL と違う）は部材 B が写している。
-	//	「FL からの高さ」＝ 2699 − 3571 ＋ 局所Z なので、**式がレイヤ高さ 2699 と
-	//	ストーリ高さ 3571 のどちらかへ届くかどうか**が答えを分ける。
+	//	  ストーリ T187-2F   高さ 3571 / レベル T187-FL（階内相対 0）
+	//	  ストーリ T187-PLAN 高さ 2699 / レベル T187-PLAN-L（伏図レイヤの見立て）
+	//	  部材 A: T187-FL レイヤ。ストーリバウンド ID0 = −872 / ID1 = −302
+	//	  部材 B: T187-PLAN レイヤ。バウンド無し
 	// =======================================================================
 	probe.log("=== 1. 舞台を作る ===");
 
 	TXString levelTypeFL("T187-FL");
 	TXString levelTypePlan("T187-PLAN-L");
-	probe.log(std::string("CreateLayerLevelType(T187-FL)=") +
-			  (gSDK->CreateLayerLevelType(levelTypeFL) ? "true" : "false"));
-	probe.log(std::string("CreateLayerLevelType(T187-PLAN-L)=") +
-			  (gSDK->CreateLayerLevelType(levelTypePlan) ? "true" : "false"));
+	gSDK->CreateLayerLevelType(levelTypeFL);
+	gSDK->CreateLayerLevelType(levelTypePlan);
 
 	TXString storyNameFL("T187-2F");
 	TXString storySuffixFL("T187A");
-	probe.log(std::string("CreateStory(T187-2F)=") +
-			  (gSDK->CreateStory(storyNameFL, storySuffixFL) ? "true" : "false"));
+	gSDK->CreateStory(storyNameFL, storySuffixFL);
 	MCObjectHandle hStoryFL = gSDK->GetNamedObject("T187-2F");
-	if (hStoryFL == nil)
-		probe.fail("T187-2F の階を GetNamedObject で引けなかった");
-	else
-		probe.log(std::string("SetStoryElevation(T187-2F, 3571)=") +
-				  (gSDK->SetStoryElevation(hStoryFL, 3571.0) ? "true" : "false"));
+	if (hStoryFL != nil)
+		gSDK->SetStoryElevation(hStoryFL, 3571.0);
 
 	TXString storyNamePlan("T187-PLAN");
 	TXString storySuffixPlan("T187B");
-	probe.log(std::string("CreateStory(T187-PLAN)=") +
-			  (gSDK->CreateStory(storyNamePlan, storySuffixPlan) ? "true" : "false"));
+	gSDK->CreateStory(storyNamePlan, storySuffixPlan);
 	MCObjectHandle hStoryPlan = gSDK->GetNamedObject("T187-PLAN");
-	if (hStoryPlan == nil)
-		probe.fail("T187-PLAN の階を GetNamedObject で引けなかった");
-	else
-		probe.log(std::string("SetStoryElevation(T187-PLAN, 2699)=") +
-				  (gSDK->SetStoryElevation(hStoryPlan, 2699.0) ? "true" : "false"));
+	if (hStoryPlan != nil)
+		gSDK->SetStoryElevation(hStoryPlan, 2699.0);
 
-	// レベル（＝レイヤ）はレベルテンプレート経由でしか紐付かない
-	// （Findings「レイヤ・ストーリ・重ね順」）。
-	short templateIndexFL = -1;
-	TXString templateNameFL("T187-TPL-FL");
-	gSDK->CreateStoryLevelTemplate(templateNameFL, 1.0, levelTypeFL, 0.0, 2400.0, templateIndexFL);
-	short templateIndexPlan = -1;
-	TXString templateNamePlan("T187-TPL-PLAN");
-	gSDK->CreateStoryLevelTemplate(templateNamePlan, 1.0, levelTypePlan, 0.0, 2400.0,
-								   templateIndexPlan);
-	probe.log("レベルテンプレート index: FL=" + ProbeI187_Int(templateIndexFL) +
-			  " PLAN=" + ProbeI187_Int(templateIndexPlan));
-
+	// **1 つずつ作って、種別で引き直してから足す。**
 	MCObjectHandle hLayerFL = nil;
-	MCObjectHandle hLayerPlan = nil;
-	if (hStoryFL != nil && templateIndexFL >= 0)
-	{
-		gSDK->AddStoryLevelFromTemplate(hStoryFL, templateIndexFL);
-		hLayerFL = gSDK->GetLayerForStory(hStoryFL, levelTypeFL);
-	}
-	if (hStoryPlan != nil && templateIndexPlan >= 0)
-	{
-		gSDK->AddStoryLevelFromTemplate(hStoryPlan, templateIndexPlan);
-		hLayerPlan = gSDK->GetLayerForStory(hStoryPlan, levelTypePlan);
-	}
-	probe.log(std::string("レイヤ: FL=") + (hLayerFL != nil ? "取れた" : "nil") +
-			  " PLAN=" + (hLayerPlan != nil ? "取れた" : "nil"));
-	if (hLayerFL == nil || hLayerPlan == nil)
-		probe.fail("ストーリのレベルからレイヤを取れなかった（以後の高さの解釈が付かない）");
-
 	if (hStoryFL != nil)
 	{
+		short index = -1;
+		TXString templateName("T187-TPL-FL");
 		probe.log(
-			"実測 T187-2F: GetStoryElevation=" + ProbeI187_Num(gSDK->GetStoryElevation(hStoryFL)) +
-			" GetStoryLevelElevation(T187-FL)=" +
-			ProbeI187_Num(gSDK->GetStoryLevelElevation(hStoryFL, levelTypeFL)));
+			std::string("CreateStoryLevelTemplate(FL)=") +
+			(gSDK->CreateStoryLevelTemplate(templateName, 1.0, levelTypeFL, 0.0, 2400.0, index)
+				 ? "true"
+				 : "false") +
+			" 出力引数 index=" + ProbeI187_Int(index));
+		const short byType = ProbeI187_LevelTemplateForType(probe, levelTypeFL);
+		if (byType >= 0)
+		{
+			probe.log(std::string("AddStoryLevelFromTemplate(2F, ") + ProbeI187_Int(byType) + ")=" +
+					  (gSDK->AddStoryLevelFromTemplate(hStoryFL, byType) ? "true" : "false"));
+			hLayerFL = gSDK->GetLayerForStory(hStoryFL, levelTypeFL);
+		}
 	}
+
+	MCObjectHandle hLayerPlan = nil;
 	if (hStoryPlan != nil)
 	{
-		probe.log("実測 T187-PLAN: GetStoryElevation=" +
-				  ProbeI187_Num(gSDK->GetStoryElevation(hStoryPlan)) +
-				  " GetStoryLevelElevation(T187-PLAN-L)=" +
-				  ProbeI187_Num(gSDK->GetStoryLevelElevation(hStoryPlan, levelTypePlan)));
+		short index = -1;
+		TXString templateName("T187-TPL-PLAN");
+		probe.log(
+			std::string("CreateStoryLevelTemplate(PLAN)=") +
+			(gSDK->CreateStoryLevelTemplate(templateName, 1.0, levelTypePlan, 0.0, 2400.0, index)
+				 ? "true"
+				 : "false") +
+			" 出力引数 index=" + ProbeI187_Int(index));
+		const short byType = ProbeI187_LevelTemplateForType(probe, levelTypePlan);
+		if (byType >= 0)
+		{
+			probe.log(
+				std::string("AddStoryLevelFromTemplate(PLAN, ") + ProbeI187_Int(byType) +
+				")=" + (gSDK->AddStoryLevelFromTemplate(hStoryPlan, byType) ? "true" : "false"));
+			hLayerPlan = gSDK->GetLayerForStory(hStoryPlan, levelTypePlan);
+		}
 	}
+
+	probe.log(std::string("レイヤ: FL=") + (hLayerFL != nil ? "取れた" : "**nil**") +
+			  " PLAN=" + (hLayerPlan != nil ? "取れた" : "**nil**"));
+	if (hLayerFL == nil)
+		probe.fail("T187-FL のレイヤを取れなかった（バウンド付きの部材が用意できない）");
 
 	// ---- 部材 A（FL レイヤ＋ストーリバウンド）
 	MCObjectHandle hPathA = gSDK->Create3DPoly();
@@ -374,29 +453,24 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 	}
 	MCObjectHandle hMemberA = gSDK->CreateCustomObjectPath("StructuralMember", hPathA, nil, true);
 	if (hMemberA == nil)
-		probe.fail("部材 A を作れなかった（CreateCustomObjectPath が nil）");
+		probe.fail("部材 A を作れなかった");
 	else
 	{
 		if (hLayerFL != nil)
 			gSDK->AddObjectToContainer(hMemberA, hLayerFL);
-		SStoryObjectData boundStart;
-		boundStart.fBound = eStoryObjectBound_Story;
-		boundStart.fBoundStory = 0;
-		boundStart.fLayerLevelType = levelTypeFL;
-		boundStart.fOffset = -872.0;
-		SStoryObjectData boundEnd = boundStart;
-		boundEnd.fOffset = -302.0;
-		probe.log(std::string("部材 A バウンド: ID0=") +
-				  (gSDK->SetObjectStoryBound(hMemberA, 0, boundStart) ? "true" : "false") +
-				  " ID1=" + (gSDK->SetObjectStoryBound(hMemberA, 1, boundEnd) ? "true" : "false") +
-				  " 件数=" +
-				  ProbeI187_Int(static_cast<long long>(gSDK->GetObjectStoryBoundsCount(hMemberA))));
+		SStoryObjectData bound;
+		bound.fBound = eStoryObjectBound_Story;
+		bound.fBoundStory = 0;
+		bound.fLayerLevelType = levelTypeFL;
+		bound.fOffset = -872.0;
+		gSDK->SetObjectStoryBound(hMemberA, 0, bound);
+		bound.fOffset = -302.0;
+		gSDK->SetObjectStoryBound(hMemberA, 1, bound);
 		gSDK->ResetObject(hMemberA);
-		probe.log("部材 A 解決Z: ID0=" + ProbeI187_Num(gSDK->GetObjectBoundElevation(hMemberA, 0)) +
-				  " ID1=" + ProbeI187_Num(gSDK->GetObjectBoundElevation(hMemberA, 1)));
+		ProbeI187_DumpMember(probe, "A", hMemberA, true);
 	}
 
-	// ---- 部材 B（伏図レイヤ・バウンド無し。局所Z 0 → 570）
+	// ---- 部材 B（伏図レイヤ・バウンド無し）
 	MCObjectHandle hPathB = gSDK->Create3DPoly();
 	if (hPathB != nil)
 	{
@@ -405,90 +479,106 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 	}
 	MCObjectHandle hMemberB = gSDK->CreateCustomObjectPath("StructuralMember", hPathB, nil, true);
 	if (hMemberB == nil)
-		probe.fail("部材 B を作れなかった（CreateCustomObjectPath が nil）");
-	else if (hLayerPlan != nil)
-		gSDK->AddObjectToContainer(hMemberB, hLayerPlan);
-
-	// 部材のレコードから、始端／終端の高さらしいパラメータの実値を読んでおく
-	// （式が返した数字がどのパラメータなのかを突き合わせるため）。
-	if (hMemberB != nil)
+		probe.fail("部材 B を作れなかった");
+	else
 	{
-		const VWFC::VWObjects::VWParametricObj memberObjB(hMemberB);
-		static const char* const kWatchParams[] = {"StartElevation",
-												   "EndElevation",
-												   "DialogStartElevation",
-												   "DialogEndElevation",
-												   "DialogStartElevationReference",
-												   "DialogEndElevationReference",
-												   "OffsetZ",
-												   "MajorDepth",
-												   "MemberID"};
-		for (size_t i = 0; i < sizeof(kWatchParams) / sizeof(kWatchParams[0]); ++i)
-		{
-			probe.log(
-				std::string("部材 B レコード: ") + kWatchParams[i] + "='" +
-				ProbeI187_OneLine(ProbeI187_FromTX(memberObjB.GetParamValue(kWatchParams[i]))) +
-				"'");
-		}
-	}
-
-	// =======================================================================
-	// 2. 【harness A】ワークシート式の評価器で総当たりする。
-	//
-	//	コンパイル誤りが enum で返るので、`InvalIdent` なら「そんな識別子は無い」、
-	//	`None` なら「識別子は在る」と**機械的に**言える。ここが候補の総当たりを
-	//	当て推量から実測へ変える。
-	// =======================================================================
-	probe.log("=== 2. ワークシート式（CompileCriteriaExpression + ExecWSExpression）===");
-	probe.log("[A] 対象 | 式 | コンパイル結果 | 実行結果");
-
-	if (hMemberB != nil)
-	{
-		static const char* const kExpressions[] = {
-			// --- 算術そのもの（式の言語に演算があるか）
-			"1+1", "872-40", "2*3", "6/2", "(1+2)*3", "-872",
-			// --- 部材のレコードを引く 2 通りの綴り
-			"'StructuralMember'.'StartElevation'", "'StructuralMember'.'EndElevation'",
-			"'StructuralMember'.'StartElevation'+872", "'StructuralMember'.'MemberID'",
-			"OBJECTDATA('StructuralMember','StartElevation')",
-			// --- 高さ・位置を返しそうな関数の候補
-			"Z", "Z()", "ZHEIGHT", "HEIGHT", "Height", "HEIGHT()", "ELEVATION", "TOPELEVATION",
-			"BOTELEVATION", "BOTTOMELEVATION", "IPZL", "IPZ", "IPX", "IPY", "LENGTH", "Length",
-			// --- レイヤ・ストーリ・レベルへ届くか（**この調査の要**）
-			"LAYER", "LAYERNAME", "LAYERELEVATION", "LAYERZ", "LAYERDELTAZ", "LAYERCUTPLANE",
-			"STORY", "STORYNAME", "STORYELEVATION", "LEVELNAME", "LEVELELEVATION", "TOPBOUNDOFFSET",
-			"BOTBOUNDOFFSET", "TOPBOUND", "BOTBOUND",
-			// --- 文字列・書式・条件の関数
-			"CONCAT('a','b')", "NUMTOSTR(0,872)", "ROUND(872.4)", "IF(1=1,'a','b')", "ABS(-872)",
-			// --- 存在しないはずの識別子（対照。InvalIdent が返る形を見るため）
-			"T187NOSUCHFUNCTION"};
-		for (size_t i = 0; i < sizeof(kExpressions) / sizeof(kExpressions[0]); ++i)
-			ProbeI187_EvalWS(probe, "部材B", hMemberB, kExpressions[i]);
-
-		// 同じ式を**部材 A**（バウンド付き・FL レイヤ）でも引いて、値の出どころを
-		// 突き合わせる。数の多い総当たりは B で済んでいるので、ここは高さだけ。
-		if (hMemberA != nil)
-		{
-			static const char* const kHeightOnly[] = {"Z",
-													  "IPZL",
-													  "LAYERELEVATION",
-													  "STORYELEVATION",
-													  "TOPBOUNDOFFSET",
-													  "BOTBOUNDOFFSET",
-													  "'StructuralMember'.'StartElevation'",
-													  "'StructuralMember'.'EndElevation'"};
-			for (size_t i = 0; i < sizeof(kHeightOnly) / sizeof(kHeightOnly[0]); ++i)
-				ProbeI187_EvalWS(probe, "部材A", hMemberA, kHeightOnly[i]);
-		}
-		// レイヤ・ストーリのハンドルを直接対象にしても引けるのか。
 		if (hLayerPlan != nil)
-			ProbeI187_EvalWS(probe, "伏図レイヤ", hLayerPlan, "LAYERELEVATION");
-		if (hStoryFL != nil)
-			ProbeI187_EvalWS(probe, "階2F", hStoryFL, "STORYELEVATION");
+			gSDK->AddObjectToContainer(hMemberB, hLayerPlan);
+		ProbeI187_DumpMember(probe, "B", hMemberB, false);
 	}
 
 	// =======================================================================
-	// 3. 【harness B】データタグのタグフィールドの式。
+	// 2. ワークシート式。**判定は戻り値で行う**（1 巡目の教訓）。
+	// =======================================================================
+	probe.log("=== 2. ワークシート式（判定は戻り値。入れた綴りが返ったら関数は無い）===");
+
+	if (hMemberA != nil)
+	{
+		// バウンド付きの部材で、1 巡目に「実在するが 0 だった」ものを引き直す。
+		static const char* const kBoundExpressions[] = {
+			"TOPBOUND",
+			"BOTBOUND",
+			"HEIGHT",
+			"LENGTH",
+			"LAYER",
+			"STORY",
+			"'StructuralMember'.'StartElevation'",
+			"'StructuralMember'.'EndElevation'",
+			"'StructuralMember'.'DialogStartElevation'",
+			"'StructuralMember'.'DialogEndElevation'",
+			"'StructuralMember'.'DialogStartElevationReference'",
+			"'StructuralMember'.'DialogStartElevation'+3571"};
+		for (size_t i = 0; i < sizeof(kBoundExpressions) / sizeof(kBoundExpressions[0]); ++i)
+			ProbeI187_EvalWS(probe, "部材A(バウンド有)", hMemberA, kBoundExpressions[i]);
+	}
+
+	if (hMemberB != nil)
+	{
+		// レイヤ・ストーリの**高さ**へ届く名前を探す。1 巡目で外れた綴りは除いてある。
+		static const char* const kCandidates[] = {"LAYERELEV",
+												  "LAYERELEVATIONVALUE",
+												  "LAYERZVALUE",
+												  "LAYERHEIGHT",
+												  "LAYERWALLHEIGHT",
+												  "LAYERDELTA",
+												  "ELEV",
+												  "ELEVATIONVALUE",
+												  "OBJECTELEV",
+												  "ZVALUE",
+												  "DELTAZ",
+												  "LEVEL",
+												  "STORYLEVEL",
+												  "STORYHEIGHT",
+												  "STORYELEV",
+												  "LEVELELEV",
+												  "TOPBOUNDELEV",
+												  "BOTBOUNDELEV",
+												  "TOPBOUNDHEIGHT",
+												  "BOTBOUNDHEIGHT",
+												  "WALLHEIGHT",
+												  "TOPZ",
+												  "BOTZ",
+												  "MINZ",
+												  "MAXZ",
+												  "LAYERNUM",
+												  "LAYERSCALE"};
+		for (size_t i = 0; i < sizeof(kCandidates) / sizeof(kCandidates[0]); ++i)
+			ProbeI187_EvalWS(probe, "部材B", hMemberB, kCandidates[i]);
+
+		// 量の名前空間は**列挙できる**（EQTOFunction は 17 個で全部）。
+		probe.log("--- ExecQTOFunction（EQTOFunction の 17 個を全部）---");
+		static const struct
+		{
+			const char* name;
+			EQTOFunction function;
+		} kQTO[] = {{"Angle", EQTOFunction::Angle},
+					{"Count", EQTOFunction::Count},
+					{"Length", EQTOFunction::Length},
+					{"Perimeter", EQTOFunction::Perimeter},
+					{"Width", EQTOFunction::Width},
+					{"Height", EQTOFunction::Height},
+					{"Depth", EQTOFunction::Depth},
+					{"Weight", EQTOFunction::Weight},
+					{"Area", EQTOFunction::Area},
+					{"SurfaceArea", EQTOFunction::SurfaceArea},
+					{"ProjectedArea", EQTOFunction::ProjectedArea},
+					{"FootPrintArea", EQTOFunction::FootPrintArea},
+					{"CrossSectionArea", EQTOFunction::CrossSectionArea},
+					{"SpecialArea", EQTOFunction::SpecialArea},
+					{"Volume", EQTOFunction::Volume},
+					{"ObjectData", EQTOFunction::ObjectData},
+					{"Thickness", EQTOFunction::Thickness}};
+		for (size_t i = 0; i < sizeof(kQTO) / sizeof(kQTO[0]); ++i)
+		{
+			VWVariant result;
+			const bool ran = gSDK->ExecQTOFunction(hMemberB, kQTO[i].function, "", result);
+			probe.log(std::string("[QTO] ") + kQTO[i].name + " | exec=" + (ran ? "true" : "false") +
+					  " -> " + ProbeI187_VariantText(result));
+		}
+	}
+
+	// =======================================================================
+	// 3. データタグのタグフィールドの式。
 	// =======================================================================
 	probe.log("=== 3. データタグのタグフィールドの式 ===");
 
@@ -500,105 +590,6 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 		return;
 	}
 
-	MCObjectHandle hTag = gSDK->CreateCustomObject("Data Tag", WorldPt(6000.0, 0.0), 0.0, true);
-	if (hTag == nil)
-	{
-		probe.fail("データタグを作れなかった（CreateCustomObject が nil）");
-		return;
-	}
-	if (hLayerPlan != nil)
-		gSDK->AddObjectToContainer(hTag, hLayerPlan);
-	if (hMemberB != nil)
-	{
-		probe.log(std::string("AssociateWithObject(タグ, 部材B)=") +
-				  (tagSupport->AssociateWithObject(hTag, hMemberB) ? "true" : "false"));
-	}
-
-	// 式を持たせるテキストを 1 本だけ用意する。
-	//
-	//	**既定のレイアウトに `IsSupported` なテキストが在れば、それを複製して使う**
-	//	——図面ラベルでは「効いているのは文字ではなくテキストが抱えている隠れた状態」
-	//	だった（Findings「図面ラベル」）。データタグでは `SetFormula` が使えるはずだが、
-	//	使えなかったときに 1 回の実機確認を丸ごと無駄にしないよう、先に既定のテキストを
-	//	当たっておく。
-	MCObjectHandle hDefaultGroup = gSDK->GetCustomObjectProfileGroup(hTag);
-	MCObjectHandle hSupportedSeed = nil;
-	if (hDefaultGroup != nil)
-	{
-		for (MCObjectHandle member = gSDK->FirstMemberObj(hDefaultGroup); member != nil;
-			 member = gSDK->NextObject(member))
-		{
-			const short type = gSDK->GetObjectTypeN(member);
-			probe.log(
-				"既定レイアウト: 型=" + ProbeI187_Int(type) +
-				(type == kTextNode
-					 ? std::string(" IsSupported=") +
-						   (linkSupport->IsSupported(member) ? "true" : "false") + " 式='" +
-						   ProbeI187_OneLine(ProbeI187_FromTX(linkSupport->GetFormula(member))) +
-						   "'"
-					 : std::string()));
-			if (type == kTextNode && hSupportedSeed == nil && linkSupport->IsSupported(member))
-				hSupportedSeed = member;
-		}
-	}
-	else
-		probe.log("既定レイアウト: GetCustomObjectProfileGroup が nil");
-
-	MCObjectHandle hGroup = gSDK->CreateGroup(false);
-	MCObjectHandle hText = nil;
-	if (hSupportedSeed != nil)
-	{
-		hText = gSDK->DuplicateObject(hSupportedSeed);
-		probe.log("式を持たせるテキスト: 既定レイアウトのものを複製した");
-	}
-	else
-	{
-		hText = gSDK->CreateTextBlock("T187", WorldPt(0.0, 0.0), false, 0.0);
-		probe.log(std::string("式を持たせるテキスト: CreateTextBlock で作った IsSupported=") +
-				  (hText != nil && linkSupport->IsSupported(hText) ? "true" : "false"));
-	}
-	if (hGroup == nil || hText == nil)
-	{
-		probe.fail("タグレイアウトを組めなかった（群またはテキストが nil）");
-		return;
-	}
-	gSDK->AddObjectToContainer(hText, hGroup);
-	// **中身を入れてから渡す**（Findings「データタグ」）。
-	probe.log(std::string("SetCustomObjectProfileGroup=") +
-			  (gSDK->SetCustomObjectProfileGroup(hTag, hGroup) ? "true" : "false"));
-
-	// 渡したときに VW が群を複製していることがあるので、**渡した後に取り直して**
-	// その中のテキストを使う（Findings「データタグ」の「中身を入れてから渡す」）。
-	MCObjectHandle hLiveGroup = gSDK->GetCustomObjectProfileGroup(hTag);
-	MCObjectHandle hLiveText = nil;
-	if (hLiveGroup != nil)
-	{
-		for (MCObjectHandle member = gSDK->FirstMemberObj(hLiveGroup); member != nil;
-			 member = gSDK->NextObject(member))
-		{
-			if (gSDK->GetObjectTypeN(member) == kTextNode)
-			{
-				hLiveText = member;
-				break;
-			}
-		}
-	}
-	probe.log(std::string("渡した後のテキスト: ") +
-			  (hLiveText == nil ? "見つからない" : (hLiveText == hText ? "同一" : "複製された")) +
-			  " IsSupported=" +
-			  (hLiveText != nil && linkSupport->IsSupported(hLiveText) ? "true" : "false"));
-	if (hLiveText == nil)
-	{
-		probe.fail("渡したレイアウトの中にテキストが無い（式を持たせる先が無い）");
-		return;
-	}
-
-	probe.log("[B] 名 | ws | 入れた式 | 読み戻し | 抽出値 | 描かれた文字");
-
-	// 3-0. 見張り。これが評価されないなら harness そのものが壊れている。
-	ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTag, hLiveText, "見張り",
-							 "#StructuralMember#.#MemberID#", false);
-
 	struct ProbeI187_Case
 	{
 		const char* label;
@@ -606,61 +597,70 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 		bool worksheetMode;
 	};
 
-	static const ProbeI187_Case kCases[] = {
-		// --- 素の 1 フィールド（基準）
-		{"素-IPZL", "#IPZL#", false},
-		{"素-StartElevation", "#StructuralMember#.#StartElevation#", false},
-		{"素-EndElevation", "#StructuralMember#.#EndElevation#", false},
-		{"素-DialogStartElev", "#StructuralMember#.#DialogStartElevation#", false},
-		{"素-DialogStartRef", "#StructuralMember#.#DialogStartElevationReference#", false},
-		{"素-OffsetZ", "#StructuralMember#.#OffsetZ#", false},
-		// --- 四則演算（issue の問い 1 の中心）
-		{"演算-加", "#IPZL#+872", false},
-		{"演算-加-空白付き", "#IPZL# + 872", false},
-		{"演算-減", "#IPZL#-872", false},
-		{"演算-乗", "#IPZL#*2", false},
-		{"演算-除", "#IPZL#/2", false},
-		{"演算-括弧", "(#IPZL#+872)*2", false},
-		{"演算-定数のみ", "872+40", false},
-		{"演算-フィールド同士",
-		 "#StructuralMember#.#StartElevation#+#StructuralMember#.#EndElevation#", false},
-		// --- 文字列
-		{"文字-引用符あり", "\" (2FL \"", false},
-		{"文字-連結", "\" (2FL \"#IPZL#\")\"", false},
-		{"文字-引用符なし括弧", "(2FL )", false},
-		{"文字-引用符なし記号", "\xc3\x97 #IPZL#", false},
-		{"文字-plus連結", "\"a\"+\"b\"", false},
-		{"文字-amp連結", "\"a\"&\"b\"", false},
-		// --- 数値の書式（修飾子の綴り）
-		{"書式-thsep", "#IPZL##thsep#", false},
-		{"書式-sign", "#IPZL##sign#", false},
-		{"書式-thsep+sign", "#IPZL##thsep##sign#", false},
-		{"書式-未知の修飾子", "#IPZL##t187nosuch#", false},
-		{"書式-unit", "#IPZL##unit#", false},
-		{"書式-dim", "#IPZL##dim#", false},
-		{"書式-round", "#IPZL##round#", false},
-		// --- 条件式
-		{"条件-単純", "#IPZL#@#IPZL#<>0:\"ゼロ\"", false},
-		{"条件-既知の形",
-		 "\" (\"@#IPZL#<>0:\"\"#IPZL##thsep##sign#@#IPZL#<>0:\"\"\")\"@#IPZL#<>0:\"\"", false},
-		// --- レイヤ・ストーリへ届くか（**この調査の要**）
-		{"外-LAYERELEVATION", "#LAYERELEVATION#", false},
-		{"外-STORYELEVATION", "#STORYELEVATION#", false},
-		{"外-LAYERNAME", "#LAYERNAME#", false},
-		{"外-Z", "#Z#", false},
-		// --- ワークシート式モード（第 3 引数 true）
-		{"WS-定数", "1+1", true},
-		{"WS-Z", "Z", true},
-		{"WS-IPZL", "IPZL", true},
-		{"WS-レコード", "'StructuralMember'.'StartElevation'", true},
-		{"WS-レコード+定数", "'StructuralMember'.'StartElevation'+872", true},
-		{"WS-LAYERELEVATION", "LAYERELEVATION", true},
-		{"WS-イコール付き", "=1+1", true}};
-
-	for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i)
+	// ---- 3-A. バウンド付きの部材（**この調査の要**。1 巡目で取り損ねた分）
+	if (hMemberA != nil)
 	{
-		ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTag, hLiveText, kCases[i].label,
-								 kCases[i].formula, kCases[i].worksheetMode);
+		MCObjectHandle hTagA = nil;
+		MCObjectHandle hTextA = ProbeI187_BuildTag(probe, tagSupport, linkSupport, hMemberA,
+												   hLayerFL, 6000.0, "A", hTagA);
+		if (hTextA != nil)
+		{
+			static const ProbeI187_Case kCasesA[] = {
+				{"A-見張り", "#StructuralMember#.#MemberID#", false},
+				{"A-IPZL", "#IPZL#", false},
+				{"A-StartElevation", "#StructuralMember#.#StartElevation#", false},
+				{"A-EndElevation", "#StructuralMember#.#EndElevation#", false},
+				{"A-DialogStartElev", "#StructuralMember#.#DialogStartElevation#", false},
+				{"A-DialogEndElev", "#StructuralMember#.#DialogEndElevation#", false},
+				{"A-DialogStartRef", "#StructuralMember#.#DialogStartElevationReference#", false},
+				{"A-DialogEndRef", "#StructuralMember#.#DialogEndElevationReference#", false},
+				{"A-連動の候補", "\" (2FL \"#StructuralMember#.#DialogStartElevation#\")\"", false},
+				{"A-WS-TOPBOUND", "TOPBOUND", true},
+				{"A-WS-BOTBOUND", "BOTBOUND", true},
+				{"A-WS-DialogStartElev", "'StructuralMember'.'DialogStartElevation'", true}};
+			for (size_t i = 0; i < sizeof(kCasesA) / sizeof(kCasesA[0]); ++i)
+			{
+				ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagA, hTextA,
+										 kCasesA[i].label, kCasesA[i].formula,
+										 kCasesA[i].worksheetMode);
+			}
+		}
+	}
+
+	// ---- 3-B. 書式修飾子の綴りを詰める（1 巡目は「どう書いても同じ」で終わった）
+	if (hMemberB != nil)
+	{
+		MCObjectHandle hTagB = nil;
+		MCObjectHandle hTextB = ProbeI187_BuildTag(probe, tagSupport, linkSupport, hMemberB,
+												   hLayerPlan, 9000.0, "B", hTagB);
+		if (hTextB != nil)
+		{
+			// `MajorDepth` は 600（正の 3 桁）。`*10` で 6000 にすれば、桁区切りが
+			// 効いているかどうかが 1 目で分かる。
+			static const ProbeI187_Case kCasesB[] = {
+				{"B-見張り", "#StructuralMember#.#MajorDepth#", false},
+				{"B-桁区切り-無印", "#StructuralMember#.#MajorDepth#*10", false},
+				{"B-桁区切り-thsep", "#StructuralMember#.#MajorDepth#*10#thsep#", false},
+				{"B-桁区切り-二重#", "#StructuralMember#.#MajorDepth##thsep#", false},
+				{"B-桁区切り-単一#", "#StructuralMember#.#MajorDepth#thsep#", false},
+				{"B-符号-二重#", "#StructuralMember#.#MajorDepth##sign#", false},
+				{"B-符号-単一#", "#StructuralMember#.#MajorDepth#sign#", false},
+				{"B-連鎖-issue の綴り", "#StructuralMember#.#MajorDepth##thsep#sign#", false},
+				{"B-未知の修飾子-二重#", "#StructuralMember#.#MajorDepth##t187nosuch#", false},
+				{"B-未知の修飾子-単一#", "#StructuralMember#.#MajorDepth#t187nosuch#", false},
+				// 小数の見え方（1 巡目の `#IPZL#/2` が `-1349 1/2` になった件）。
+				{"B-小数", "#StructuralMember#.#MajorDepth#/7", false},
+				// 引用符なしの演算子・括弧はどう壊れるか（1 巡目は空文字列だった）。
+				{"B-引用符なし括弧のみ", "(2FL )", false},
+				{"B-引用符なし後置", "#IPZL# (2FL )", false},
+				{"B-引用符あり後置", "#IPZL#\" (2FL )\"", false}};
+			for (size_t i = 0; i < sizeof(kCasesB) / sizeof(kCasesB[0]); ++i)
+			{
+				ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagB, hTextB,
+										 kCasesB[i].label, kCasesB[i].formula,
+										 kCasesB[i].worksheetMode);
+			}
+		}
 	}
 
 	probe.log("=== 終わり ===");
