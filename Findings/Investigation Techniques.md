@@ -312,6 +312,44 @@
 - **「乱れている」で終わらせない。** 同じ手順を繰り返して違う値が出るなら、**繰り返し
   回数を増やして並べる**（#179 では 6〜8 本を 1 フェーズにした）。3 本では乱数に見える
   ものが、6 本並べると規則になる。
+- **ワークシート式は、ワークシートを作らずにハンドルへ直接評価できる**
+  ——`ISDK::CompileCriteriaExpression(式, 誤りのコールバック, 文脈)` で
+  コンパイルし、`ISDK::ExecWSExpression(h, compiled, outResult)` で実行する
+  （ラッパーは `VWFC::Tools::WSCriteriaExpression`。`Compile` / `ExecWSExpression` /
+  `GetLastError` / `GetLastErrorOffset` が生えている）。**`=` は付けない**
+  ——SDK のコメントの例が `"Area()/2"` である。文脈は `eLocal`（ローカライズされた綴り）と
+  `eUniversal` を選ぶ。【ヘッダ根拠】
+  - **これが「識別子の総当たり」を当て推量から実測へ変える。** ただし
+    **判定材料はコンパイル誤りではない**——下記のとおり、**知らない識別子でも
+    コンパイルは通る**。見るのは**戻り値**である。
+  - **知らない識別子は「自分自身の文字列」に評価される。**【実測】対照として入れた
+    `T187NOSUCHFUNCTION` が、コンパイル `ok` のまま `s:'T187NOSUCHFUNCTION'` を返した
+    （[#187](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/187)）。
+    つまり**裸の語は、関数として知られていなければ文字列リテラルとして扱われる**。
+    したがって唯一の判定条件は:
+
+    | 戻り値 | 意味 |
+    | --- | --- |
+    | **入れた綴りと同一の文字列** | **その名前の関数は無い** |
+    | 数値・真偽・別の文字列 | 関数が在って値を返した |
+    | コンパイル誤り（`InvalExpr` 等） | 構文として通らない（`Z()` のように**関数でないものに `()` を付けた**とき） |
+
+    > **訂正。** この節は当初「コンパイルの失敗（`InvalIdent`）で『そんな名前は無い』と
+    > 判定できる」と書いていた。**誤りである**——実測では `InvalIdent` は 1 度も返らず、
+    > 知らない名前はすべて `ok` ＋ 自分自身の文字列だった。**戻り値を見なければ
+    > 総当たりは成立しない。**
+  - **対照を 1 本入れる。** 存在しないはずの識別子（`T187NOSUCHFUNCTION` のような）を
+    必ず混ぜて、「無いときに何が返るか」を同じ走行の中に持っておく。**上の訂正は、
+    その対照が入っていたからその場で分かった**——対照が無ければ、自分自身の文字列を
+    返した 20 以上の候補を「値が空の関数」と読み違えていた。
+  - 戻り値は `VWVariant` なので、**型（`GetType`）も一緒にログへ出す**
+    ——`eVWVariantType_Empty` と「空文字列」は別物であり、**上の判定は型を見ないと
+    付かない**。
+  - 量（長さ・面積・体積など）だけなら `ISDK::ExecQTOFunction` ＋ `EQTOFunction`
+    （`Angle` / `Count` / `Length` / `Perimeter` / `Width` / `Height` / `Depth` / `Weight` /
+    `Area` / `SurfaceArea` / `ProjectedArea` / `FootPrintArea` / `CrossSectionArea` /
+    `SpecialArea` / `Volume` / `ObjectData` / `Thickness` の 17 個）という**列挙できる口**も
+    ある。【ヘッダ根拠】
 
 ## 運用
 
