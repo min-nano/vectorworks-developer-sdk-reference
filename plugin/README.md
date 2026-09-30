@@ -122,7 +122,8 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
      **PR の Actions 実行ページから成果物をダウンロードする**（PR でもビルドはしている。
      公開だけしない）。**どれを落とすかはプラットフォームで違う。**
      - **macOS は `vwlibrary-zip`。** 展開すると `VwSdkProbes.vwlibrary.zip` が出てくるので、
-       それをもう一度展開して Plug-Ins へ置く。**二度手間に見えるが、こちらが正しい道**
+       それをもう一度展開して Plug-Ins へ置く（**展開は Finder ではなく `unzip -d` で**。
+       下記「展開と設置で踏む入れ子 2 つ」）。**二度手間に見えるが、こちらが正しい道**
        ——**GitHub の成果物は 1 度 zip になり、その zip は実行権限を保たない**ので、素の
        ファイルで上げてある `VwSdkProbes-mac` を展開すると `.vwlibrary` の実行ビットが落ち、
        **`dlopen` が失敗して Vectorworks が「互換性のないプラグイン情報／コンパイルした
@@ -180,6 +181,39 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
      `.ps1` は入れ替えと結果の投稿にプラグインが叩く同梱スクリプト）。
    - **カタログ（`VwSdkProbes.probes.txt`）を忘れない。** これが無いとピッカーが空に
      なる（殻はこれを見て一覧を出す）。
+   - **展開と設置で踏む入れ子 2 つ**（[#184](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/184)
+     で実際に踏んだ）。**置けた形は「3 種が Plug-Ins の直下に横に並ぶ」**で、
+     `VwSdkProbes.vwlibrary` というフォルダの中にそれらが入っている状態は誤りである。
+
+     ```
+     VwSdkProbes.vwlibrary.zip の中身（＝ Plug-Ins へ置く形）
+     ├── VwSdkProbes.vwlibrary/                 ← バンドル（中に Contents/）
+     ├── VwSdkProbes.probes.txt                 ← カタログ
+     └── VwSdkProbesPayload-<群>.vwpayload      ← 群の数だけ
+     ```
+
+     1. **Finder で開くと容れ物フォルダができる。** アーカイブ名が
+        `VwSdkProbes.vwlibrary.zip` で、中に同名の `VwSdkProbes.vwlibrary` が入っている。
+        アーカイブユーティリティは**複数項目のアーカイブをアーカイブ名のフォルダへ展開する**
+        ので、`VwSdkProbes.vwlibrary/VwSdkProbes.vwlibrary/Contents/…` になる。外側は
+        Finder が作った容れ物で、バンドルではない（`.vwlibrary` 拡張子が付くので
+        バンドルに見えてしまう）。**`unzip -o <zip> -d <別名のフォルダ>` で展開する。**
+     2. **`cp -R` は同名ディレクトリがあると中へ入れ子にする。** 既に入っている
+        `$PLUGINS/VwSdkProbes.vwlibrary` へ `cp -R … VwSdkProbes.vwlibrary "$PLUGINS"/` を
+        かけると `…/VwSdkProbes.vwlibrary/VwSdkProbes.vwlibrary` になる。
+        **置く前に古いバンドルを `rm -rf` する。**
+
+     ```sh
+     PLUGINS="$HOME/Library/Application Support/Vectorworks/2026/Plug-Ins"
+     unzip -o vwlibrary-zip.zip -d vwzip
+     unzip -o vwzip/VwSdkProbes.vwlibrary.zip -d vwplugin
+     ls -1 vwplugin                       # 3 種が横に並ぶことを確かめる
+     rm -rf "$PLUGINS/VwSdkProbes.vwlibrary"
+     cp -R vwplugin/* "$PLUGINS"/
+     xattr -dr com.apple.quarantine "$PLUGINS/VwSdkProbes.vwlibrary" \
+       "$PLUGINS"/VwSdkProbesPayload-*.vwpayload
+     ls -1 "$PLUGINS" | grep VwSdkProbes  # Plug-Ins の直下に並んだことを確かめる
+     ```
    - **殻を入れ替えるときは Vectorworks を終了してから**（読み込み済みのモジュールは
      差し替えられない）。**本体だけなら動かしたままでよい**——それが下記の自動
      アップデートの通常の道。
