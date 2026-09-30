@@ -43,3 +43,40 @@
   **`IDataTagTextLinkSupport` が効かない**（`IsSupported` が `false`）ので `SetFormula` で
   持たせられず、**既定のレイアウトのテキストを複製する**しかない
   （[Drawing Labels](Drawing%20Labels.md)）。
+
+## タグフィールドの式——文法は 2 系統あり、綴りは SDK に 1 文字も書いていない
+
+タグレイアウトのテキストが持つ式（`IDataTagTextLinkSupport::SetFormula` / `GetFormula`）に
+ついて、**先に押さえること**。
+
+- **文法は 2 系統ある。** `SetFormula` の第 3 引数が `isWorksheetFormula`（既定 `false`）で、
+  読み戻しは `GetIsWorksheetFormula`。つまり同じ 1 本のテキストを、**独自の `#…#` 記法**と
+  **ワークシート式**のどちらでも持たせられる。【ヘッダ根拠】
+- **`#…#` 記法の綴りは SDK のどこにも無い。** `IPZL|thsep|#sign#|DataTagField|TagField` を
+  SDKLib（ヘッダ＋同梱の VWFC 実装ソース、961 ファイル全部）へ掛けたときのヒットは
+  **`ShowDefineTagFieldDlg()` の 1 行だけ**だった（`sdk-grep` 実測）。**数値の修飾子の一覧も
+  条件式の形も VW 本体側**にあるので、**`sdk-grep` では 1 件も出ない**——ここは実機で
+  総当たりするしかない。「ヘッダに無いから無い」と読み違えないこと。
+- **`#レコード#.#フィールド#` のレコードは PIO の universal 名、フィールドはその
+  パラメータ名。** 構造材なら `#StructuralMember#.#StartElevation#`。パラメータの全件は
+  [Parametric Objects](Parametric%20Objects.md)「構造材（`StructuralMember`）のパラメータ表」
+  にある（始端・終端の高さらしい欄は索引 28〜33 の
+  `DialogStartElevationReference` / `DialogStartElevation` /
+  `DialogEndElevationReference` / `DialogEndElevation` / `StartElevation` / `EndElevation`）。
+- **`#IPZL#` はレコードのフィールドではない。** 構造材のパラメータ**181 件の表に `IPZL` は
+  無い**。`#…#` が 1 対しか無い綴りは、レコード参照とは**別の名前空間**（関数）である。
+
+### 式の評価結果は機械で読み戻せる——目視は要らない
+
+式を入れて「何が出たか」を確かめるのに、結果ダイアログの絵は要らない。**文字列で読み戻す
+口が 2 つある**ので、プローブのログだけで判定できる。
+
+- **`IDataTagSupport::GetDataTagExtractedData(hTag, outArrExtractedData, txtLabel = "")`**
+  ——タグが抽出した結果を「ラベル → 値」の対
+  （`TXStringSTLPairArray` ＝ `std::vector<std::pair<TXString, TXString>>`）で返す。【ヘッダ根拠】
+- **タグが描いたテキスト**——`FirstMemberObj` / `NextObject` でタグの生成物を走査し、
+  型が `kTextNode` のものを `VWFC::VWObjects::VWTextBlockObj::GetText` で読む。
+- ワークシート式のほうは、タグを介さずに**ハンドルへ直接**評価できる
+  （`ISDK::CompileCriteriaExpression` ＋ `ISDK::ExecWSExpression`。
+  [調査の作法](Investigation%20Techniques.md)「ワークシート式は…」）。**コンパイル誤りが
+  enum で返る**ので、候補の識別子を総当たりするときは**まずこちらで引く**。
