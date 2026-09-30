@@ -242,8 +242,14 @@ namespace
 	};
 
 	// 通り芯を 1 本作る。x の位置に、y0 から y1 まで。
-	MCObjectHandle ProbeMakeGridAxis(vwprobe::Report& probe, double x, double y0, double y1,
-									 int ordinal)
+	//
+	// **作ったものはアクティブレイヤに入る。** SDK にアクティブレイヤを切り替える口は
+	// 無い（`GetActiveLayer` はあるが setter が無い）ので、**入れ直す**
+	// （Findings/Symbols.md「レイヤへ入れ直す」）。入れ直さないと、通り芯が狙った
+	// デザインレイヤではなく既定のレイヤに載り、「注釈にグリッド線が出ない」が
+	// レイヤ違いのせいなのか本当に出ないのか分からなくなる。
+	MCObjectHandle ProbeMakeGridAxis(vwprobe::Report& probe, MCObjectHandle layer, double x,
+									 double y0, double y1, int ordinal)
 	{
 		MCObjectHandle h = gSDK->CreateCustomObject("GridAxis", WorldPt(x, y0), 0.0);
 		if (h == nil)
@@ -252,6 +258,12 @@ namespace
 					   ProbeWhole(ordinal) + " 本目）");
 			return nil;
 		}
+		const MCObjectHandle bornIn = gSDK->ParentObject(h);
+		if (bornIn != layer)
+			gSDK->AddObjectToContainer(h, layer);
+		probe.log("  通り芯 " + ProbeWhole(ordinal) +
+				  " の親: 生まれた先=" + ProbeHandleText(bornIn) + " 入れ直した後=" +
+				  ProbeHandleText(gSDK->ParentObject(h)) + " 狙い=" + ProbeHandleText(layer));
 		VWParametricObj pio(h);
 		const long long internalId = static_cast<long long>(pio.GetInternalID());
 		const bool linear = pio.GetParamIndex("LineLength") != (size_t)-1;
@@ -295,7 +307,7 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 	std::vector<MCObjectHandle> axes;
 	for (int i = 0; i < 3; ++i)
 	{
-		MCObjectHandle axis = ProbeMakeGridAxis(probe, kGridX[i], -2000.0, 10000.0, i + 1);
+		MCObjectHandle axis = ProbeMakeGridAxis(probe, design, kGridX[i], -2000.0, 10000.0, i + 1);
 		if (axis == nil)
 			return; // 通り芯が作れないならこの調査は先へ進めない
 		axes.push_back(axis);
@@ -313,8 +325,11 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 		MCObjectHandle rect = gSDK->CreateRectangle(box);
 		if (rect != nil)
 			gSDK->AddObjectToContainer(rect, extrude);
+		if (gSDK->ParentObject(extrude) != design)
+			gSDK->AddObjectToContainer(extrude, design); // 通り芯と同じ理由で入れ直す
 		gSDK->ResetObject(extrude);
-		probe.log("  押出 h=" + ProbeHandleText(extrude) + " " +
+		probe.log("  押出 h=" + ProbeHandleText(extrude) +
+				  " 親=" + ProbeHandleText(gSDK->ParentObject(extrude)) + " " +
 				  ProbeBoxText(ProbeBoundsOf(extrude)));
 	}
 	else
@@ -372,7 +387,15 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 				  ProbeHandleText(gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation)));
 
 		// 表示レイヤ・クラスを表示へ、レンダは隠線消去、切断面より奥を表示（Viewports.md）。
-		gSDK->SetViewportLayerVisibility(v.vp, design, 0 /* 表示 */);
+		// **デザインレイヤは 1 枚だけ表示にするのではなく、全部を表示へ倒す。**
+		// アクティブレイヤを切り替える口が無いので、何かが既定のレイヤへ残っていても
+		// 断面に映るようにしておく（「グリッド線が出ない」の原因からレイヤ違いを外すため）。
+		gSDK->ForEachLayerN(
+			[&v, sheet](MCObjectHandle layer)
+			{
+				if (layer != sheet)
+					gSDK->SetViewportLayerVisibility(v.vp, layer, 0 /* 表示 */);
+			});
 		gSDK->ForEachClass(
 			true, [&v](MCObjectHandle cls)
 			{ gSDK->SetViewportClassVisibility(v.vp, gSDK->GetObjectInternalIndex(cls), 0); });
