@@ -82,6 +82,16 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
   中身を変えれば、**main の版と PR の版が並んで出る**——見比べるのが目的なら、それでよい。補助のヘッダ（`.h`）や追加の `.cpp` を同じディレクトリへ
   置くのは自由（**すべてコンパイル対象になる**ので、そちらの名前は衝突しないよう
   無名名前空間か `static` に入れる）。
+- **同じ PR で足した「殻」のヘッダを include しない。** 殻（`plugin/src/**`）は
+  `-I plugin/src` に入っているので手元では通るが、**公開ビルドは「main の殻 ＋ 各 PR の
+  `probes/runtime/` だけ」で組まれる**（[`scripts/gather-probes.sh`](../../scripts/gather-probes.sh)
+  は PR の木から `probes/runtime` しか取り出さない）。だから**その PR で足したヘッダは
+  公開ビルドには存在せず、その群だけコンパイルが落ちる**——`Probe auto update / publish`
+  だけが赤くなり、PR ビルド（`build-mac` / `build-windows`。PR の木を丸ごと使う）は緑の
+  ままなので、見分けが付きにくい（[#184](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/184)
+  で実際に踏んだ）。殻と約束事を共有したいときは、**値をプローブ側へ書き写して
+  自己完結させる**（`probes/runtime/pio-recalc-env-*` がその形）。**main に既にある**
+  ヘッダなら include してよい。
 - **短い名前・ありふれた名前を使わない。** SDK と OS のヘッダは、プローブが使いそうな
   名前をグローバルへ撒いている。**無名名前空間へ入れていても「参照が曖昧」で
   コンパイルが通らない**（どちらも実際に踏んだ）。

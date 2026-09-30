@@ -2726,6 +2726,85 @@ API が無い。したがって参照先の図形を動かした瞬間には PIO
 なお **PIO を同梱する代償は小さい**ことを実機で確認した。プラグインを外して過去の図面を
 開いても、**PIO が描いたジオメトリは保存されていて表示できる**（更新ができないだけ）。
 
+## `Recalculate` の中から見える環境は「取り込み時のリセット」と「OIP 編集」で**同じ**
+
+**同じである。** 自前の PIO を登録して `Recalculate` の中から SDK を叩き、
+「外からの `ResetObject`」と「利用者が OIP でパラメータを編集したとき」で突き合わせた
+（VW 2026 / mac / 新規の空図面。[issue #183](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/183)）。
+**測った 11 項目がすべて一致し、違ったのは編集したパラメータの値そのものだけ**だった。
+
+| 測ったもの | 取り込み時（`kObjectExternalReset`） | OIP 編集（`kParameterChangedReset`） |
+| --- | --- | --- |
+| `VWParametricObj::GetObjectToWorldTransform` | offset=(0,0,0) U=(1,0,0) | 同じ |
+| `gSDK->GetEntityMatrix` | offset=(0,0) i=(1,0) | 同じ |
+| `GetLinearObjectPos` | A=(0,0) B=(0,0) | 同じ |
+| 自分の外接（`GetObjectBounds`） | 幅=300 高=0 left=0 bottom=0 | 同じ |
+| パラメータ表 | 3 個（登録したぶんだけ） | 同じ |
+| `LineLength` | 表に無い | 同じ |
+| `gSDK->GetActiveLayer` | 有り（名前も一致） | 同じ |
+| `gSDK->GetNamedLayer("…")` | **見つかった** | 同じ |
+| `gSDK->GetNamedObject("…")` ＋ その外接 | 型=3 / left=1000 bottom=1500 幅=1000 高=1000 | 同じ |
+| レイヤの走査（`FirstMemberObj` → `NextObject`） | 3 件／自分も対象も見えた | 同じ |
+| 編集したパラメータ（`TraceNote`） | `""` | `"何か1"` |
+
+**要点は「自分以外の図形を探して測れる」こと。** 名前引き（`GetNamedObject`）も
+レイヤの走査も `Recalculate` の中で普通に効き、**他のレイヤも `GetNamedLayer` で引ける**。
+**どちらの文脈でも同じ**なので、「OIP 編集のときだけ対象が見つからない」は起きない。
+
+### リセットの理由は `OnAddState` で分かる（`kObjXPropAcceptStates` が要る）
+
+`OnInitXProperties` で `kObjXPropAcceptStates` を立てると、**`Recalculate` の直前に
+理由が届く**（`ObjectState::fSpecifier`。`ObjectEventCall` 由来）。実測で観測した並び:
+
+| 起こしたこと | 届いた `fSpecifier` |
+| --- | --- |
+| `CreateCustomObject` | `13` `kObjectCreated` → `0` `kFirstRegenReset` → `Recalculate` |
+| `gSDK->ResetObject` | `16` `kObjectExternalReset` → `Recalculate` |
+| OIP でパラメータを 1 つ編集 | `3` `kParameterChangedReset` → `Recalculate` |
+
+**PIO 側から文脈を見分けられる**——立てなければ `ObjectState::kAction` 自体が来ないので、
+「区別できない」と見えるだけである（[`Info/Parametric Extended Properties.md`](../Info/Parametric%20Extended%20Properties.md)）。
+**OIP の編集 1 回で `Recalculate` は 1 回**（2 回走ることはなかった）。
+
+### 最初の `Recalculate` では**自分の外接が読めない**
+
+作成時（`kFirstRegenReset`）の `Recalculate` で `gSDK->GetObjectBounds(自分)` を呼ぶと、
+`true` を返すのに**中身は空の矩形**だった——`left` = `bottom` = `1.7976931348623157e308`
+（`DBL_MAX`）、幅・高さが `-inf`。**まだ自分のジオメトリが 1 つも無いため**である。
+2 回目以降（`kObjectExternalReset` / `kParameterChangedReset`）は前回描いた絵の外接
+（幅=300 高=0）が正しく返る。
+
+**自分の外接を足場にして描く PIO は、初回だけ壊れる。** しかも `GetObjectBounds` は
+`true` を返すので、戻り値を見ても気付けない。**幅が負・`left` が `DBL_MAX` を疑う**か、
+自分の外接に頼らない作りにすること。
+
+### SDK で登録した線分 PIO に `LineLength` は**無い**
+
+サブタイプ `kParametricSubType_Linear` で登録した PIO のパラメータ表に出たのは
+**登録した 3 つだけ**で、`LineLength` は `Recalculate` の中からも外からも
+`GetParamIndex` が `(size_t)-1` を返した。`Info/Parametric Object Types.md` が言う
+「線分 PIO は行列＋隠しパラメータ `LineLength`」は、**少なくとも SDK で登録した PIO には
+当てはまらない**（`LineLength` という綴りは SDK のヘッダにも VWFC の実装にも無い。
+[issue #181](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/181)）。
+
+**`SetLinearObjectPos` も効かない。** `(0,0)`–`(3000,0)` を与えてから読み戻しても、
+`Recalculate` の中でも外でも `A=(0,0) B=(0,0)` のままだった（例外も戻り値も無い）。
+**線分 PIO の長さを SDK から与える口は、この経路には無い。**
+
+### 測り方（この節の数値の出どころ）
+
+`Recalculate` の中はメニューコマンドから走るプローブでは踏めない——**立てられるのは
+自前の PIO の中だけ**なので、実機確認プラグインの殻へ調査用の PIO を 1 つ登録し、
+`Recalculate` が見たものを一時ファイルへ書き溜め、プローブがその前後に印を入れて
+吐き出す形で測った（[PR #184](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/184)。
+調査用の PIO とプローブはマージ前に外してある）。
+
+**突き合わせはプローブが機械で行ったが、その出力の最後の 1 行は読み違えである。**
+「→ **違いがある**（同じ 11 件 / 違う 0 件 / 片方だけ 2 件）」と出たが、[片方だけ] の 2 行は
+**同じ項目**（`TraceNote="…" TraceLength=…`）で、この行だけ `:` を含まないために
+突き合わせの鍵が値ごと切り出され、別項目として数えられただけである。
+**実質の差は 0**——上の表のとおり。
+
 ## パラメータ変更を PIO へ伝える口は無い
 
 `kParameterChangedReset`（`ObjectStateData_ParamChanged`）は **PIO 側が受け取る**

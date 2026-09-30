@@ -119,15 +119,29 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
      （外れたままにはならない——下の点検が戻す）。
    - `workflow_dispatch` は**デフォルトブランチにあるワークフローしか起動できない**
      （GitHub の仕様）。このワークフロー自体を変える PR の間は使えないので、そのときは
-     **PR の Actions 実行ページから成果物 `VwSdkProbes-mac` / `VwSdkProbes-windows` を
-     ダウンロードする**（PR でもビルドはしている。公開だけしない）。この 2 つは
-     **展開したらそのまま Plug-Ins へ置ける**——中に zip を作っていない（GitHub の成果物
-     自体が 1 度 zip になるので、その中がさらに zip だと展開と置き直しが二度手間になる）。
-     - 成果物の zip は**実行権限を保たないことがある**。macOS で読み込まれないときは
-       `chmod +x VwSdkProbes.vwlibrary/Contents/MacOS/VwSdkProbes` を足してから、下記の
-       隔離フラグ外しと署名し直しを行う。
-     - `vwlibrary-zip` / `vlb-zip` はリリース資産（＝自動アップデータが落とす zip）を
-       作るための内部用で、人が落とすものではない。
+     **PR の Actions 実行ページから成果物をダウンロードする**（PR でもビルドはしている。
+     公開だけしない）。**どれを落とすかはプラットフォームで違う。**
+     - **macOS は `vwlibrary-zip`。** 展開すると `VwSdkProbes.vwlibrary.zip` が出てくるので、
+       それをもう一度展開して Plug-Ins へ置く（**展開は Finder ではなく `unzip -d` で**。
+       下記「展開と設置で踏む入れ子 2 つ」）。**二度手間に見えるが、こちらが正しい道**
+       ——**GitHub の成果物は 1 度 zip になり、その zip は実行権限を保たない**ので、素の
+       ファイルで上げてある `VwSdkProbes-mac` を展開すると `.vwlibrary` の実行ビットが落ち、
+       **`dlopen` が失敗して Vectorworks が「互換性のないプラグイン情報／コンパイルした
+       バージョン: 不明」を出す**（版が合わないのではなく、**開けないので版を読めていない**）。
+       `vwlibrary-zip` の中身は runner 上で `zip -qry` した zip なので、実行権限もアドホック
+       署名もそのまま残っている——リリース資産と同じものである
+       （[#184](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/184) で実測）。
+     - **Windows は `VwSdkProbes-windows` でよい**（実行権限の概念が無いので、素のファイルの
+       まま展開して置ける）。`vlb-zip` は同じ中身の zip 版。
+     - **`VwSdkProbes-mac` を使ってしまったときは**、置いたあとに実行権限を戻し、隔離フラグを
+       外して、署名し直す。
+
+       ```sh
+       chmod +x VwSdkProbes.vwlibrary/Contents/MacOS/VwSdkProbes
+       xattr -dr com.apple.quarantine VwSdkProbes.vwlibrary VwSdkProbesPayload-*.vwpayload
+       codesign --force --deep --sign - VwSdkProbes.vwlibrary
+       for p in VwSdkProbesPayload-*.vwpayload; do codesign --force --sign - "$p"; done
+       ```
    - 転がりタグ `probes` は**最後に公開したビルド**を指す。プローブを持つ PR が複数
      動いていると、後から push した方で置き換わる（何が入っているかはリリースノートの
      表とピッカーの出所欄で分かる）。
@@ -167,6 +181,39 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
      `.ps1` は入れ替えと結果の投稿にプラグインが叩く同梱スクリプト）。
    - **カタログ（`VwSdkProbes.probes.txt`）を忘れない。** これが無いとピッカーが空に
      なる（殻はこれを見て一覧を出す）。
+   - **展開と設置で踏む入れ子 2 つ**（[#184](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/184)
+     で実際に踏んだ）。**置けた形は「3 種が Plug-Ins の直下に横に並ぶ」**で、
+     `VwSdkProbes.vwlibrary` というフォルダの中にそれらが入っている状態は誤りである。
+
+     ```
+     VwSdkProbes.vwlibrary.zip の中身（＝ Plug-Ins へ置く形）
+     ├── VwSdkProbes.vwlibrary/                 ← バンドル（中に Contents/）
+     ├── VwSdkProbes.probes.txt                 ← カタログ
+     └── VwSdkProbesPayload-<群>.vwpayload      ← 群の数だけ
+     ```
+
+     1. **Finder で開くと容れ物フォルダができる。** アーカイブ名が
+        `VwSdkProbes.vwlibrary.zip` で、中に同名の `VwSdkProbes.vwlibrary` が入っている。
+        アーカイブユーティリティは**複数項目のアーカイブをアーカイブ名のフォルダへ展開する**
+        ので、`VwSdkProbes.vwlibrary/VwSdkProbes.vwlibrary/Contents/…` になる。外側は
+        Finder が作った容れ物で、バンドルではない（`.vwlibrary` 拡張子が付くので
+        バンドルに見えてしまう）。**`unzip -o <zip> -d <別名のフォルダ>` で展開する。**
+     2. **`cp -R` は同名ディレクトリがあると中へ入れ子にする。** 既に入っている
+        `$PLUGINS/VwSdkProbes.vwlibrary` へ `cp -R … VwSdkProbes.vwlibrary "$PLUGINS"/` を
+        かけると `…/VwSdkProbes.vwlibrary/VwSdkProbes.vwlibrary` になる。
+        **置く前に古いバンドルを `rm -rf` する。**
+
+     ```sh
+     PLUGINS="$HOME/Library/Application Support/Vectorworks/2026/Plug-Ins"
+     unzip -o vwlibrary-zip.zip -d vwzip
+     unzip -o vwzip/VwSdkProbes.vwlibrary.zip -d vwplugin
+     ls -1 vwplugin                       # 3 種が横に並ぶことを確かめる
+     rm -rf "$PLUGINS/VwSdkProbes.vwlibrary"
+     cp -R vwplugin/* "$PLUGINS"/
+     xattr -dr com.apple.quarantine "$PLUGINS/VwSdkProbes.vwlibrary" \
+       "$PLUGINS"/VwSdkProbesPayload-*.vwpayload
+     ls -1 "$PLUGINS" | grep VwSdkProbes  # Plug-Ins の直下に並んだことを確かめる
+     ```
    - **殻を入れ替えるときは Vectorworks を終了してから**（読み込み済みのモジュールは
      差し替えられない）。**本体だけなら動かしたままでよい**——それが下記の自動
      アップデートの通常の道。
@@ -272,7 +319,8 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
 公開ビルド（タグ `probes`）は **main のワークフローと main の殻**で作られ、PR からは
 `probes/runtime/` だけを取り込む。つまり**この仕組み自体（`plugin/src/**`）を直す PR は、
 公開ビルドでは自分の直したものを走らせられない**——確かめるには PR の Actions から
-成果物（`VwSdkProbes-mac` / `VwSdkProbes-windows`）を落として手で入れる（上記「使い方」1）。
+成果物を落として手で入れる（上記「使い方」1）。**macOS は `vwlibrary-zip`**（`VwSdkProbes-mac`
+は GitHub の zip 化で実行権限が落ち、読み込めない）、**Windows は `VwSdkProbes-windows`**。
 
 そのビルドではプローブが**群 main に入る**（PR のツリーをそのままビルドするため）ので、
 出所に PR 番号が無い。それだけだと投稿先が決まらず、**投稿を直した PR が投稿を確かめ
@@ -560,3 +608,33 @@ VCOM ユニバーサル名 `CExtMenuVwSdkProbes` / 拡張機能 UUID
 
 **実プラグイン（[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)）
 とは別の識別子**なので、両方を同時に入れておける。
+
+## 拡張機能を一時的に足して調べる（[issue #183](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/183) の例）
+
+ふつうこのプラグインが登録する拡張機能は**メニューコマンド 1 つだけ**だが、
+**拡張機能でなければ調べられないことがある**。例が「`Recalculate` の中から何が見えるか」
+——`Recalculate` に自分のコードを立てられるのは**自前の PIO の中だけ**で、その登録は
+モジュールの読み込みのときに起きるため、入れ替えできる本体（`.vwpayload`）には置けない。
+
+issue #183 ではそのために**殻へ調査用の PIO を 1 つ登録し、調査が済んだら外した**
+（結論は [Findings「`Recalculate` の中から見える環境」](../Findings/Parametric%20Objects.md)）。
+同じことをするときの形:
+
+- **殻（`plugin/src/**`）に置き、`ModuleMain.cpp` で登録する。** したがって
+  **公開ビルド（転がりタグ `probes`）では確かめられない**——公開ビルドの殻は main の
+  ものなので、PR で足した拡張機能は入っていない。上記
+  「[PR のビルドを手で入れて確かめるとき](#pr-のビルドを手で入れて確かめるとき)」の
+  手順で PR の成果物を手で入れる。
+- **プローブとの受け渡しはファイルで行う。** 境界（`src/PayloadAbi.h`）は殻 → 本体の
+  一方向しか持たず、しかも利用者が OIP を編集した瞬間には本体が読み込まれてさえいない。
+  プロセスにも読み込み状態にも依らないもので渡すこと（1 行ごとに開いて閉じれば、
+  Vectorworks ごと落ちてもそこまでが残る）。
+- **プローブはその殻のヘッダを include できない。** 公開ビルドは「main の殻 ＋ 各 PR の
+  `probes/runtime/` だけ」で組まれるので、同じ PR で足したヘッダは向こうに無い
+  （[`probes/runtime/README.md`](../probes/runtime/README.md) の「決まり」）。約束事は
+  プローブ側へ書き写して自己完結させる。
+- **入れ替え忘れを機械で弾く。** プローブの先頭で `gSDK->DefineCustomObject(名前, …)` を
+  呼び、nil なら「この殻には入っていない」と言って止める。これが無いと、公開ビルドの殻で
+  走らせた結果を「実測」と誤読しかねない。
+- **常駐させない。** 済んだら殻・登録・`CMakeLists.txt` のソース・`.vwr` の文字列・
+  プローブを一緒に落とす。

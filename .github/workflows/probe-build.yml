@@ -377,10 +377,13 @@ jobs:
           name: vwlibrary-zip
           path: dist
 
-      # 人が手で入れる用。**中に zip を作らない**——GitHub の成果物はダウンロード時点で
-      # 1 度 zip になるので、その中がさらに zip だと「展開したら zip が出てきて、もう
-      # 一度展開して置き直す」ことになる。ここは素のファイルのまま上げて、展開したら
-      # そのまま Plug-Ins へ置ける形にしておく。
+      # 人が手で入れる用（素のファイル）。**macOS ではこちらを使わせない。**
+      # GitHub の成果物はダウンロード時点で 1 度 zip になり、**その zip は実行権限を
+      # 保たない**ので、展開した `.vwlibrary` は実行ビットが落ちて `dlopen` が失敗する
+      # ——Vectorworks は「互換性のないプラグイン情報／コンパイルしたバージョン: 不明」
+      # としか言わない（版の不一致ではなく、開けないので版を読めていない。#184 で実測）。
+      # **手で入れるなら上の `vwlibrary-zip`**（runner 上で zip したものなので実行権限も
+      # アドホック署名も残る）。これは chmod / codesign し直す前提の逃げ道として残す。
       - name: Upload the plug-in files (for hand install)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
