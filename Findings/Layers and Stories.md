@@ -37,9 +37,91 @@
   タイマーだけ）。
 - **「動かせた数」を並べ替えの成否と読まない。** 既に希望どおりでも 0 件、失敗しても 0 件。
   並びそのものを読み戻して確かめること。
-- **レイヤ高さを取得する呼び出し（VS の `GetLayerElevation` 相当）が無い。** 高さは
-  呼び出し側が自分で持ち回る。レイヤ相対へ切り替えられるよう、絶対 Z を渡す箇所に名前を
-  付けておくとよい。
+- **【訂正】レイヤ高さを読む口も書く口も ISDK にある**（下記「レイヤの高さ」）。
+  ここには当初「取得する呼び出しが無い」と書いていたが、**誤り**だった
+  ——`VWFC::VWObjects::VWLayerObj::GetElevation` / `SetElevation` と、オブジェクト変数
+  `ovLayerHeightInCurrUnits`(157) が同じ箱を読み書きする
+  （[#194](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/194) で実測）。
+
+## レイヤの高さ（読み書きの 4 経路と、絶対Z の決まり方）
+
+[issue #194](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/194) で
+**実機確認済み**（VW 2026 / mac。`probes/runtime/ipzl-layer-elevation/` と
+`probes/runtime/layer-elevation-absolute-z/` を新規の空図面で 1 回ずつ。以下の値は
+実行ログそのまま）。
+
+### 書く口は 4 つあり、**すべて同じ箱に届く**
+
+レイヤ高さを 4 通りで与え、**5 経路で読み戻して突き合わせた**（数値はすべて互いに違う）。
+
+| 与え方 | `VWLayerObj::GetElevation` | `ovLayerHeightInCurrUnits`(157) | バウンド経路 | `GetHeight` / `ov158`(厚さ) |
+| --- | --- | --- | --- | --- |
+| `VWLayerObj::SetElevation(872)` | 872 | 872 | 872 | 0 |
+| `SetObjectVariable(h, 157, 1234)` | 1234 | 1234 | 1234 | 0 |
+| VS `SetLayerElevation(h, 1500, 2400)` | 1500 | 1500 | 1500 | **2400** |
+| VS `SetLayerElevationN(h, 1600, 2400)` | 1600 | 1600 | 1600 | **2400** |
+| ストーリのレベル（階 2699・階内相対Z −40） | **2659** | 2659 | 2659 | 0 |
+
+- **`ovLayerHeightInCurrUnits`(157) は `VWLayerObj::GetElevation` / `SetElevation` と
+  同じ箱。** ヘッダのコメントも "current units, **the base elevation height of the
+  layer**"（`Kernel/API/ObjectVariables.h`）。**読むだけなら `GetElevation` が一番短い。**
+- **`VWLayerObj::SetElevation` の実体は `GS_Kludge(gCBP, 1002, …)`、`GetElevation` は
+  同 `1000`**（SDK 同梱の `VWLayerObj.cpp` を読んだ。**書きと読みでセレクタが違う**ので、
+  「書いた値が読み戻せた」だけでは図面に届いた証拠にならない——実際に届いていることは
+  下記の絶対Z で確かめた）。
+- **厚さ（ΔZ・階高）まで 1 回で書けるのは VectorScript の 2 つだけ**
+  （`IVectorScriptEngine::ExecuteScript` 経由。`ISDK` に相当する口は無い。
+  ただし `VWLayerObj::SetHeight` が `GS_Kludge` 1003 で厚さを書く【ヘッダ根拠】）。
+  `SetLayerElevation` と `SetLayerElevationN` は**この舞台では同じ振る舞い**だった。
+- **`eStoryObjectBound_LayerWallHeight` が返すのは「高さ ＋ 厚さ」。** 高さ 1500 ＋
+  厚さ 2400 で **3900**。厚さが 0 なら高さと同値になるので、**取り違えに気付きにくい。**
+- **ストーリ由来のレイヤの高さは「階の高さ ＋ 階内相対Z」**（2699 − 40 = **2659**）。
+  4 つの書き口と同じ箱に入る。
+
+### オブジェクトの絶対Z は「**生まれたレイヤ**の高さ ＋ ローカルZ」
+
+データタグの `#IPZ#`（絶対Z）で測った。**この節は
+[Data Tags](Data%20Tags.md)「式から読める高さ」の前提になる。**
+
+| 段 | 何をしたか | `#IPZ#`（絶対Z） |
+| --- | --- | --- |
+| P | 高さ 0 のレイヤで部材を作る | `0` |
+| P | **そのレイヤへ後から** 800 を与える | **`800`**（追随した） |
+| Q | 最初から高さ 900 のレイヤで部材を作る | **`900`**（作成時も乗る） |
+| R | Q の部材を**高さ 1100 のレイヤへ `AddObjectToContainer`** | **`900` のまま** |
+| R | さらに移した先を 1300 にする | **`900` のまま**（追随しない） |
+| T | **ストーリ由来のレイヤ**（2659）で部材を作る | **`2659`**（素のレイヤと同じ） |
+| U | そのレイヤへ後から `SetElevation(5000)` | **`5000`**（追随した） |
+
+- **レイヤの高さは、その上のオブジェクトの絶対Z を持ち上げる。** 作った後に高さを
+  変えても追随する（段 P・段 U）。**ストーリ由来のレイヤでも素のデザインレイヤでも
+  同じ**（段 T）——ストーリかどうかは関係しない。
+- **ただし `AddObjectToContainer` で別のレイヤへ移したオブジェクトは別**。
+  **移した時点の絶対Z を保ち、以後は所属レイヤの高さが変わっても動かない**（段 R）。
+  - **「レイヤ面の上に置く」つもりなら、`gSDK->SetCurrentLayer(layer)` で
+    そのレイヤをアクティブにしてから作る。** 作ってから移すと、**そのレイヤの面から
+    見た高さが意図しない値になる**（上表なら −200）。
+  - これは `#IPZL#` / `#ZTBBL#`（レイヤ基準の綴り）に直接効く
+    （[Data Tags](Data%20Tags.md)）。`#IPZS#`（階基準）は掛からない。
+- **`#IPZS#` は「絶対Z − 階の高さ」なので、レイヤ面上の部材では階内相対Z がそのまま出る**
+  ——段 T で `#IPZS#` は **`-40`** だった（2659 − 2699）。
+
+### ストーリに属するレイヤへ `SetElevation` を掛けてはいけない
+
+段 U の実測。ストーリ由来のレイヤ（階 2699 ＋ 相対Z −40 ＝ 2659）へ
+`SetElevation(5000)` を掛けると:
+
+| 読んだもの | 値 |
+| --- | --- |
+| レイヤの高さ（4 経路とも） | **5000** |
+| 部材の絶対Z（`#IPZ#`） | **5000**（図面ごと動いた） |
+| `GetStoryElevation`（階の高さ） | **2699**（変わらない） |
+| `GetStoryLevelElevation`（階内相対Z） | **−40 のまま**（更新されない） |
+
+**レイヤは動くのに、階とレベルは動かない。** その結果「階 2699 ＋ 相対Z −40 ＝ 2659」と
+実際のレイヤ高さ 5000 が食い違い、`#IPZS#` は **2301**（＝5000 − 2699）という
+**どこにも対応しない数**を返すようになる。**階に属するレイヤの高さは、階
+（`SetStoryElevation`）かレベル（`SetStoryLevelElevation`）から動かすこと。**
 
 ## レイヤの縮尺（`SetLayerScaleN` は黙って効かないことがある）
 
@@ -131,7 +213,7 @@
   `GetStoryObjectDataBoundHeight` に解かせた値（`fBound = eStoryObjectBound_Story` ＋
   `fBoundStory = 0` ＋ レベル種別。解き方は
   [Parametric Objects](Parametric%20Objects.md)「階やレベルを指すバウンド」）。
-  **レイヤ高さを読む口が無い問題は、この 2 つを足せば回避できる。**
+  （**レイヤ高さそのものを読む口は別にある**。下記「レイヤの高さ」。）
 - **テンプレートの `elevationOffset` がそのまま相対Z になる**（100 を渡せば 100）。
 - **`SetStoryLevelElevation` は相対Z を取る。** 300 を渡したら相対Z が 300・絶対Z が 5900
   になった（＝絶対Z を渡す口ではない）。
@@ -177,8 +259,10 @@
 - **レイヤの高さ（レベルに紐付いたレイヤの Z）は、測った全行でレベルの絶対Z と一致した**
   ——UI で作ったストーリでも、SDK で作ったストーリでも。**読む道**は
   `eStoryObjectBound_LayerElevation` のバウンドをそのレイヤを入れ物にして
-  `GetStoryObjectDataBoundHeight` に解かせること（VS の `GetLayerElevation` に当たる
-  ISDK の口は無いが、この経路で取れる）。**ずれ得るのかは確かめていない**【未確認】——
+  `GetStoryObjectDataBoundHeight` に解かせること。**【訂正】「VS の `GetLayerElevation`
+  に当たる ISDK の口は無い」と書いていたが誤り**で、`VWLayerObj::GetElevation` と
+  `ovLayerHeightInCurrUnits`(157) が同じ値を返す（下記「レイヤの高さ」。3 経路とも
+  一致すると実測済み）。**ずれ得るのかは確かめていない**【未確認】——
   測った文書ではどれも一致していた。
 
 > **【突き合わせの誤りの記録】**「描かれた数値が絶対Z と一致しない」と一度書いた
