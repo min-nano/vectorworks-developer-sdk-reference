@@ -1,37 +1,48 @@
 //
 //	probes/runtime/datatag-slope-top-elevation/probe.cpp
 //
-//	[issue #196] データタグで**構造材の天端の高さ**を材に連動して出すために、残った 2 点を
-//	実機で測る。舞台は**プラグインが実際に作る形**——パスは平面（Z=0）の 2 点、高さは
-//	始端・終端とも `SetObjectStoryBound` だけ（レベル ＋ オフセット）、断面は天端中央基準
-//	（`AxisAlign`=1）、材はストーリのレベルから作ったレイヤに置く。
+//	[issue #196] データタグで**構造材の天端の高さ**を材に連動して出すための 2 点を実機で測る。
 //
-//	1. **`#IPZS#` の直後に `#sign#` は効くか。** `#sign#` が**レコードのフィールド**の
-//	   直後で効くことは #190 で実測済みだが、`#IPZS#` のような「レコードのフィールドでない
-//	   綴り」の直後では一度も試されていない。**正の値で引く**（負の値では効き目が見えない
-//	   ——#190 の教訓）。0 のときに何が出るかも見る。効かないときの代わり
-//	   （条件式 `"+"@<式>>0:""<式>`）が `#IPZS#` でも書けるかを同じ走行で測る。
-//	2. **傾斜材の両端の天端を、それぞれ材に連動する形で読めるか。** 欲しい注記は
-//	   `` (2FL -872~-40)``（低い端〜高い端）。始端は `#IPZS#` で読めるが、**もう一方の端**を
-//	   読む綴りが要る。候補は `#ZTBBS#`（バウンディングボックス上面_ストーリ基準）で、
-//	   #187 では**実体の無い構造材で `±1.79e308`（＝`DBL_MAX`）のまま**だった
-//	   ——ここでは**バウンドを両端に書くので実体が作られる**。
+//	  1. `#IPZS#` の直後に `#sign#` は効くか（**正の値で**引く）。
+//	  2. 実体のある**傾斜した**構造材で `#ZTBBS#`（外接上面_ストーリ基準）は何を返すか。
+//	     欲しい注記は `` (2FL -872~-40)``（低い端〜高い端）。
 //
-//	舞台の数値（#187 と同じ現場の形にしてある）:
+//	【2 巡目】1 巡目（ビルド `3f956537df62`）は**舞台の組み方で失敗した**。取れたものと
+//	失敗の中身:
 //
-//	  階 `T196-2F` の高さ **3571**、その階のレベル `T196-FL`（階内相対Z 0）から作ったレイヤ。
-//	  部材の断面は **105 × 240**（横架材）、断面基準点は**天端中央**。
+//	  取れたもの（値に依らない部分なので生きている）
+//	    `#IPZS##sign#`  -> `±0`      **修飾子として読まれている**
+//	    `#IPZS#sign#`   -> `0sign`   `#` 1 つでは文字が出る（＝綴りは `##` が正しい）
+//	    `#IPZS##t196nosuch#` -> `0`  知らない修飾子は消える
+//	    → **`#sign#` は `#IPZS#` の直後で効く**。ただし**値が全部 0 だった**ので、
+//	      正の値に `+` が付くかはまだ見えていない（`±0` は 0 のときの出力）。
 //
-//	  部材 P（水平・**正**）  : 両端 offset **+128**  → 絶対Z 3699  → `#IPZS#` = **+128**
-//	  部材 O（水平・**0**）   : 両端 offset **0**     → 絶対Z 3571  → `#IPZS#` = **0**
-//	  部材 N（水平・**負**）  : 両端 offset **−872**  → 絶対Z 2699  → `#IPZS#` = **−872**
-//	  部材 S（傾斜・**始端が低い**）: ID0 −872 / ID1 −40 → `#IPZS#` = −872、高い端の天端は −40
-//	  部材 H（傾斜・**始端が高い**）: ID0 −40 / ID1 −872 → `#IPZS#` = −40（低い端を読む口は？）
+//	  失敗の中身——**部材に高さが入らず、3D 実体も作られなかった**
+//	    `GetObjectBoundElevation` は ID0/ID1 で**正しく違う値**を返した（S は 2699 / 3531）。
+//	    にもかかわらず挿入点Z は**どの部材も 3571**（＝レイヤ面）で、`#IPZ#`=3571 /
+//	    `#IPZS#`=0 / 外接は `±DBL_MAX`（＝図形が無い）。つまり**バウンドは書けていたのに
+//	    `ResetObject` が部材をそこへ動かさず、断面も作られなかった**。
 //
-//	**式の答えを目視に頼らない**——値は `GetDataTagExtractedData` で読み戻し、
-//	`#ZTBB…#` / `#ZBBB…#` が何を指しているかは `GetObjectCube`（3D の外接）と
-//	突き合わせる。`GetObjectBoundElevation` で両端の解決Zも出すので、**ログだけで
-//	検算できる**。
+//	  1 巡目との違いは**パスの作り方**だと見当を付けた。1 巡目（と #187）は
+//	  `Create3DPoly` ＋ `Add3DVertex` で 3D ポリゴンのパスを与えており、**どちらも実体が
+//	  できていない**。一方 #173 の `member-minor-dims` は **`VWPolygon2DObj`（2D）**の
+//	  パスで、**実体（型 84）ができている**。
+//
+//	**この版は見当に賭けない。** 部材を**梯子状に**並べ、どこで壊れるかをログだけで
+//	切り分けられるようにした（どれが通っても、通った本で式が測れる）:
+//
+//	  K  2D パス・基本の欄だけ・**バウンド無し**       ← #173 と同じ形。通らなければ環境の問題
+//	  A  K ＋ `AxisAlign`=1 / `StartCondition`=3 等    ← 足した欄が実体を壊すか
+//	  P  A ＋ バウンド（両端 **+128**）               ← **正の値**。`#sign#` の本題
+//	  O  A ＋ バウンド（両端 0）                      ← 0 のときの出力
+//	  N  A ＋ バウンド（両端 −872）                   ← 負（対照）
+//	  S  A ＋ バウンド（−872 → −40）**傾斜・始端が低い**
+//	  H  A ＋ バウンド（−40 → −872）**傾斜・始端が高い**
+//	  X  **3D パス**（1 巡目と同じ）＋ S と同じバウンド ← **失敗した道の対照**
+//
+//	舞台: 階 `T196-2F` の高さ **3571**、そのレベル `T196-FL`（階内相対Z 0）から作ったレイヤ。
+//	断面は **105 × 240**（横架材）。目視は使わない——値は `GetDataTagExtractedData` で
+//	読み戻し、実体の有無は**子の型 84 の数**と `GetObjectCube` で判定する。
 //
 
 #include "Probe.h"
@@ -53,8 +64,14 @@ namespace
 		return utf8 != nullptr ? std::string(utf8) : std::string();
 	}
 
+	// **`±1.79e308` は「図形が無い」の意味**（反転した空矩形＝`DBL_MAX`）なので、
+	// 桁を並べずにそう書く。数として読み違えないため。
 	std::string ProbeI196_Num(double value)
 	{
+		if (value > 1.0e300)
+			return "+DBL_MAX(図形なし)";
+		if (value < -1.0e300)
+			return "-DBL_MAX(図形なし)";
 		char buffer[64];
 		std::snprintf(buffer, sizeof(buffer), "%.4f", value);
 		std::string text(buffer);
@@ -84,100 +101,156 @@ namespace
 		return out;
 	}
 
-	// -------------------------------------------------------------------
-	// **プラグインと同じ作り方**で構造材を 1 本作る。パスは平面（Z=0）の 2 点で、
-	// 高さは `SetObjectStoryBound` だけが決める（始端＝ID 0 / 終端＝ID 1。
-	// [Findings「Parametric Objects」](../../../Findings/Parametric%20Objects.md)）。
-	MCObjectHandle ProbeI196_MakeMember(vwprobe::Report& probe, const std::string& label,
-										MCObjectHandle hLayer, const TXString& levelType, double y,
-										double offsetStart, double offsetEnd)
+	void ProbeI196_SetReal(vwprobe::Report& probe, MCObjectHandle member, const char* name,
+						   double value)
 	{
-		MCObjectHandle hPath = gSDK->Create3DPoly();
-		if (hPath != nil)
+		VWParametricObj pio(member);
+		const size_t index = pio.GetParamIndex(TXString(name));
+		if (index == size_t(-1) || index >= pio.GetParamsCount())
 		{
-			gSDK->Add3DVertex(hPath, WorldPt3(0.0, y, 0.0));
-			gSDK->Add3DVertex(hPath, WorldPt3(kProbeI196_Run, y, 0.0));
+			probe.fail(std::string("欄 ") + name + " を名前で引けなかった");
+			return;
 		}
-		MCObjectHandle hMember = gSDK->CreateCustomObjectPath("StructuralMember", hPath, nil, true);
+		pio.SetParamReal(index, value);
+	}
+
+	void ProbeI196_SetValue(vwprobe::Report& probe, MCObjectHandle member, const char* name,
+							const char* value)
+	{
+		VWParametricObj pio(member);
+		const size_t index = pio.GetParamIndex(TXString(name));
+		if (index == size_t(-1) || index >= pio.GetParamsCount())
+		{
+			probe.fail(std::string("欄 ") + name + " を名前で引けなかった");
+			return;
+		}
+		pio.SetParamValue(index, TXString(value));
+	}
+
+	// -------------------------------------------------------------------
+	// 部材を 1 本作る。`use3DPath` で**パスの作り方だけ**を切り替える（失敗した道の対照）。
+	// `extraParams` は `AxisAlign` などの追加の欄、`withBounds` はストーリバウンド。
+	MCObjectHandle ProbeI196_MakeMember(vwprobe::Report& probe, const std::string& label,
+										const TXString& levelType, double y, bool use3DPath,
+										bool extraParams, bool withBounds, double offsetStart,
+										double offsetEnd)
+	{
+		MCObjectHandle hPath = nil;
+		if (use3DPath)
+		{
+			hPath = gSDK->Create3DPoly();
+			if (hPath != nil)
+			{
+				gSDK->Add3DVertex(hPath, WorldPt3(0.0, y, 0.0));
+				gSDK->Add3DVertex(hPath, WorldPt3(kProbeI196_Run, y, 0.0));
+			}
+		}
+		else
+		{
+			// **#173 の `member-minor-dims` が実体を作れた形**（2D のパス）。
+			VWPolygon2DObj path({VWPoint2D(0.0, y), VWPoint2D(kProbeI196_Run, y)});
+			hPath = path.GetThisObject();
+		}
+		if (hPath == nil)
+		{
+			probe.fail("部材 " + label + " のパスを作れなかった");
+			return nil;
+		}
+
+		MCObjectHandle hMember =
+			gSDK->CreateCustomObjectPath("StructuralMember", hPath, nil, false);
 		if (hMember == nil)
 		{
 			probe.fail("部材 " + label + " を作れなかった（CreateCustomObjectPath が nil）");
 			return nil;
 		}
-		if (hLayer != nil)
-			gSDK->AddObjectToContainer(hMember, hLayer);
+		gSDK->ResetObject(hMember); // #173 の形（欄を書く前に 1 度）
 
-		VWFC::VWObjects::VWParametricObj pio(hMember);
-		pio.SetParamValue("MemberType", "2"); // 2＝木（寸法 4 欄がそのまま断面になる）
-		pio.SetParamValue("AxisAlign", "1");	  // 1＝**天端中央**基準
-		pio.SetParamValue("StartCondition", "3"); // 3＝直切り（材軸に直角）
-		pio.SetParamValue("EndCondition", "3");
-		pio.SetParamReal("MajorBreadth", kProbeI196_Breadth);
-		pio.SetParamReal("MajorDepth", kProbeI196_Depth);
-		pio.SetParamReal("MinorBreadth", kProbeI196_Breadth); // ＝主幅 ⇒ 無垢の矩形
-		pio.SetParamReal("MinorDepth", kProbeI196_Depth / 2.0);
+		ProbeI196_SetValue(probe, hMember, "MemberType", "2"); // 2＝木（寸法 4 欄が断面になる）
+		ProbeI196_SetReal(probe, hMember, "MajorBreadth", kProbeI196_Breadth);
+		ProbeI196_SetReal(probe, hMember, "MajorDepth", kProbeI196_Depth);
+		ProbeI196_SetReal(probe, hMember, "MinorBreadth", kProbeI196_Breadth); // ＝主幅 ⇒ 矩形
+		ProbeI196_SetReal(probe, hMember, "MinorDepth", kProbeI196_Depth / 2.0);
+		if (extraParams)
+		{
+			ProbeI196_SetValue(probe, hMember, "AxisAlign", "1");	   // 1＝**天端中央**基準
+			ProbeI196_SetValue(probe, hMember, "StartCondition", "3"); // 3＝直切り
+			ProbeI196_SetValue(probe, hMember, "EndCondition", "3");
+		}
 
-		VectorWorks::SStoryObjectData dataStart;
-		dataStart.fBound = VectorWorks::eStoryObjectBound_Story;
-		dataStart.fBoundStory = 0;
-		dataStart.fLayerLevelType = levelType;
-		dataStart.fOffset = offsetStart;
-		VectorWorks::SStoryObjectData dataEnd = dataStart;
-		dataEnd.fOffset = offsetEnd;
-		const bool okStart = gSDK->SetObjectStoryBound(hMember, 0, dataStart);
-		const bool okEnd = gSDK->SetObjectStoryBound(hMember, 1, dataEnd);
+		if (withBounds)
+		{
+			VectorWorks::SStoryObjectData dataStart;
+			dataStart.fBound = VectorWorks::eStoryObjectBound_Story;
+			dataStart.fBoundStory = 0;
+			dataStart.fLayerLevelType = levelType;
+			dataStart.fOffset = offsetStart;
+			VectorWorks::SStoryObjectData dataEnd = dataStart;
+			dataEnd.fOffset = offsetEnd;
+			const bool okStart = gSDK->SetObjectStoryBound(hMember, 0, dataStart);
+			const bool okEnd = gSDK->SetObjectStoryBound(hMember, 1, dataEnd);
+			if (!okStart || !okEnd)
+				probe.log("部材 " + label + ": **バウンドの書き込みに失敗** " +
+						  (okStart ? "ok" : "**失敗**") + "/" + (okEnd ? "ok" : "**失敗**"));
+		}
 		gSDK->ResetObject(hMember);
-
-		// **書いたら数えて読む。** 解決Zが上下で違わなければ材は 0 長になる（#59）。
-		probe.log("部材 " + label + ": バウンド書き込み=" + (okStart ? "ok" : "**失敗**") + "/" +
-				  (okEnd ? "ok" : "**失敗**") +
-				  " 件数=" + ProbeI196_Num(double(gSDK->GetObjectStoryBoundsCount(hMember))) +
-				  " 解決Z ID0=" + ProbeI196_Num(gSDK->GetObjectBoundElevation(hMember, 0)) +
-				  " ID1=" + ProbeI196_Num(gSDK->GetObjectBoundElevation(hMember, 1)));
 		return hMember;
 	}
 
-	// 実体が作られたか・3D の外接がどこにあるかを出す。**`#ZTBB…#` / `#ZBBB…#` が
-	// 何を指しているかは、この外接と突き合わせて読む。**
+	// 実体があるか・どこにあるかを 1 行で出す。**判定はここだけを見れば済む。**
 	void ProbeI196_LogGeometry(vwprobe::Report& probe, const std::string& label,
 							   MCObjectHandle hMember)
 	{
 		if (hMember == nil)
+		{
+			probe.log("部材 " + label + ": **nil**");
 			return;
-		VWFC::VWObjects::VWParametricObj pio(hMember);
-		const VWFC::Math::VWPoint3D pos = pio.GetObjectModelPos();
+		}
+		size_t solids = 0;
+		for (MCObjectHandle child = gSDK->FirstMemberObj(hMember); child != nil;
+			 child = gSDK->NextObject(child))
+		{
+			if (gSDK->GetObjectTypeN(child) == 84)
+				++solids;
+		}
+
+		VWParametricObj pio(hMember);
+		const VWPoint3D pos = pio.GetObjectModelPos();
 		WorldCube cube;
 		gSDK->GetObjectCube(hMember, cube);
-		probe.log("部材 " + label + ": 挿入点Z=" + ProbeI196_Num(pos.z) +
-				  " 外接 left=" + ProbeI196_Num(cube.left) + " right=" + ProbeI196_Num(cube.right) +
-				  " bottom=" + ProbeI196_Num(cube.bottom) + " top=" + ProbeI196_Num(cube.top) +
-				  " back=" + ProbeI196_Num(cube.back) + " front=" + ProbeI196_Num(cube.front));
 
-		MCObjectHandle hPath = gSDK->GetCustomObjectPath(hMember);
-		if (hPath != nil)
-		{
-			WorldPt3 v0;
-			WorldPt3 v1;
-			gSDK->Get3DVertex(hPath, 1, v0);
-			gSDK->Get3DVertex(hPath, 2, v1);
-			probe.log("部材 " + label + ": 作り直し後のパス 始端Z=" + ProbeI196_Num(pos.z + v0.z) +
-					  " 終端Z=" + ProbeI196_Num(pos.z + v1.z) + "（挿入点＋パスZ）");
-		}
+		std::string line = "部材 " + label + ": " + (solids != 0 ? "実体84=有" : "**実体84=無**") +
+						   " 挿入点Z=" + ProbeI196_Num(pos.z) +
+						   " 外接Z 下=" + ProbeI196_Num(double(cube.MinZ())) +
+						   " 上=" + ProbeI196_Num(double(cube.MaxZ()));
+		if (gSDK->GetObjectStoryBoundsCount(hMember) != 0)
+			line += " ／ バウンド解決Z ID0=" +
+					ProbeI196_Num(gSDK->GetObjectBoundElevation(hMember, 0)) +
+					" ID1=" + ProbeI196_Num(gSDK->GetObjectBoundElevation(hMember, 1));
+		else
+			line += " ／ バウンド無し";
+		probe.log(line);
+
+		probe.log("  読み戻し 断面=" + ProbeI196_Num(pio.GetParamReal(TXString("MajorBreadth"))) +
+				  "x" + ProbeI196_Num(pio.GetParamReal(TXString("MajorDepth"))) + " AxisAlign=[" +
+				  ProbeI196_FromTX(pio.GetParamValue(TXString("AxisAlign"))) +
+				  "] StartCondition=[" +
+				  ProbeI196_FromTX(pio.GetParamValue(TXString("StartCondition"))) + "]");
 	}
 
 	MCObjectHandle ProbeI196_BuildTag(vwprobe::Report& probe,
 									  VectorWorks::Extension::IDataTagSupport* tagSupport,
-									  MCObjectHandle hMember, MCObjectHandle hLayer, double x,
-									  const std::string& label, MCObjectHandle& outTag)
+									  MCObjectHandle hMember, double x, const std::string& label,
+									  MCObjectHandle& outTag)
 	{
+		if (hMember == nil)
+			return nil;
 		outTag = gSDK->CreateCustomObject("Data Tag", WorldPt(x, 0.0), 0.0, true);
 		if (outTag == nil)
 		{
 			probe.fail("データタグ（" + label + "）を作れなかった");
 			return nil;
 		}
-		if (hLayer != nil)
-			gSDK->AddObjectToContainer(outTag, hLayer);
 		tagSupport->AssociateWithObject(outTag, hMember);
 
 		MCObjectHandle hGroup = gSDK->CreateGroup(false);
@@ -264,10 +337,9 @@ namespace
 		"#IPZS##sign#",		  // **本題**: フィールドでない綴りの直後で効くか
 		"#IPZS#sign#",		  // 対照: `#` 1 つ（効かないなら文字が出る）
 		"#IPZS##t196nosuch#", // 対照: 知らない修飾子（黙って消えるはず）
-		"\" (2FL \"#IPZS##sign#\")\"",			   // **欲しい注記そのもの**
-		"\"+\"@#IPZS#>0:\"\"#IPZS#",			   // 代わりの手（条件式）
-		"\" (2FL \"\"+\"@#IPZS#>0:\"\"#IPZS#\")\"" // 条件式版の注記そのもの
-	};
+		"\" (2FL \"#IPZS##sign#\")\"",				 // **欲しい注記そのもの**
+		"\"+\"@#IPZS#>0:\"\"#IPZS#",				 // 代わりの手（条件式）
+		"\" (2FL \"\"+\"@#IPZS#>0:\"\"#IPZS#\")\""}; // 条件式版の注記そのもの
 
 	// **傾斜材の試験**（両端の天端を読む口を探す）。
 	const char* const kProbeI196_SlopeCases[] = {
@@ -302,7 +374,7 @@ VW_PROBE("datatag-slope-top-elevation", "傾斜材の天端と符号を測る",
 
 	// =======================================================================
 	// 1. 舞台。階 `T196-2F`（高さ 3571）＋ そのレベル `T196-FL`（階内相対Z 0）から
-	//	作ったレイヤ。**部材の高さはバウンドの offset だけが決める。**
+	//	作ったレイヤを**アクティブにしてから**部材を作る。
 	// =======================================================================
 	probe.log("=== 1. 舞台 ===");
 
@@ -352,23 +424,36 @@ VW_PROBE("datatag-slope-top-elevation", "傾斜材の天端と符号を測る",
 			  " 階内相対Z=" + ProbeI196_Num(gSDK->GetStoryLevelElevation(hStory, levelType)) +
 			  "（この 2 つの和がレイヤの絶対Z）");
 
-	MCObjectHandle hMemberP =
-		ProbeI196_MakeMember(probe, "P(水平・正 +128)", hLayer, levelType, 0.0, 128.0, 128.0);
-	MCObjectHandle hMemberO =
-		ProbeI196_MakeMember(probe, "O(水平・0)", hLayer, levelType, 1000.0, 0.0, 0.0);
-	MCObjectHandle hMemberN =
-		ProbeI196_MakeMember(probe, "N(水平・負 -872)", hLayer, levelType, 2000.0, -872.0, -872.0);
-	MCObjectHandle hMemberS = ProbeI196_MakeMember(probe, "S(傾斜・始端が低い)", hLayer, levelType,
-												   3000.0, -872.0, -40.0);
-	MCObjectHandle hMemberH = ProbeI196_MakeMember(probe, "H(傾斜・始端が高い)", hLayer, levelType,
-												   4000.0, -40.0, -872.0);
+	// =======================================================================
+	// 2. **梯子**。どこで実体が消えるかを切り分ける（1 巡目はここで失敗した）。
+	// =======================================================================
+	probe.log("=== 2. 部材の梯子（どこで実体が消えるか） ===");
 
-	probe.log("--- 実体（3D の外接）。**`#ZTBB…#` はこれと突き合わせて読む** ---");
+	MCObjectHandle hMemberK = ProbeI196_MakeMember(probe, "K(2D・基本の欄だけ・バウンド無し)",
+												   levelType, 0.0, false, false, false, 0.0, 0.0);
+	MCObjectHandle hMemberA = ProbeI196_MakeMember(probe, "A(K＋AxisAlign 等・バウンド無し)",
+												   levelType, 1000.0, false, true, false, 0.0, 0.0);
+	MCObjectHandle hMemberP = ProbeI196_MakeMember(probe, "P(水平・正 +128)", levelType, 2000.0,
+												   false, true, true, 128.0, 128.0);
+	MCObjectHandle hMemberO =
+		ProbeI196_MakeMember(probe, "O(水平・0)", levelType, 3000.0, false, true, true, 0.0, 0.0);
+	MCObjectHandle hMemberN = ProbeI196_MakeMember(probe, "N(水平・負 -872)", levelType, 4000.0,
+												   false, true, true, -872.0, -872.0);
+	MCObjectHandle hMemberS = ProbeI196_MakeMember(probe, "S(傾斜・始端が低い)", levelType, 5000.0,
+												   false, true, true, -872.0, -40.0);
+	MCObjectHandle hMemberH = ProbeI196_MakeMember(probe, "H(傾斜・始端が高い)", levelType, 6000.0,
+												   false, true, true, -40.0, -872.0);
+	MCObjectHandle hMemberX = ProbeI196_MakeMember(probe, "X(**3D パス**＝1 巡目の道)", levelType,
+												   7000.0, true, true, true, -872.0, -40.0);
+
+	ProbeI196_LogGeometry(probe, "K", hMemberK);
+	ProbeI196_LogGeometry(probe, "A", hMemberA);
 	ProbeI196_LogGeometry(probe, "P", hMemberP);
 	ProbeI196_LogGeometry(probe, "O", hMemberO);
 	ProbeI196_LogGeometry(probe, "N", hMemberN);
 	ProbeI196_LogGeometry(probe, "S", hMemberS);
 	ProbeI196_LogGeometry(probe, "H", hMemberH);
+	ProbeI196_LogGeometry(probe, "X", hMemberX);
 
 	IDataTagSupportPtr tagSupport(IID_DataTagSupport);
 	IDataTagTextLinkSupportPtr linkSupport(IID_DataTagTextLinkSupport);
@@ -383,65 +468,68 @@ VW_PROBE("datatag-slope-top-elevation", "傾斜材の天端と符号を測る",
 	MCObjectHandle hTagN = nil;
 	MCObjectHandle hTagS = nil;
 	MCObjectHandle hTagH = nil;
-	MCObjectHandle hTextP =
-		ProbeI196_BuildTag(probe, tagSupport, hMemberP, hLayer, 6000.0, "P", hTagP);
-	MCObjectHandle hTextO =
-		ProbeI196_BuildTag(probe, tagSupport, hMemberO, hLayer, 7000.0, "O", hTagO);
-	MCObjectHandle hTextN =
-		ProbeI196_BuildTag(probe, tagSupport, hMemberN, hLayer, 8000.0, "N", hTagN);
-	MCObjectHandle hTextS =
-		ProbeI196_BuildTag(probe, tagSupport, hMemberS, hLayer, 9000.0, "S", hTagS);
-	MCObjectHandle hTextH =
-		ProbeI196_BuildTag(probe, tagSupport, hMemberH, hLayer, 10000.0, "H", hTagH);
+	MCObjectHandle hTagX = nil;
+	MCObjectHandle hTextP = ProbeI196_BuildTag(probe, tagSupport, hMemberP, 9000.0, "P", hTagP);
+	MCObjectHandle hTextO = ProbeI196_BuildTag(probe, tagSupport, hMemberO, 10000.0, "O", hTagO);
+	MCObjectHandle hTextN = ProbeI196_BuildTag(probe, tagSupport, hMemberN, 11000.0, "N", hTagN);
+	MCObjectHandle hTextS = ProbeI196_BuildTag(probe, tagSupport, hMemberS, 12000.0, "S", hTagS);
+	MCObjectHandle hTextH = ProbeI196_BuildTag(probe, tagSupport, hMemberH, 13000.0, "H", hTagH);
+	MCObjectHandle hTextX = ProbeI196_BuildTag(probe, tagSupport, hMemberX, 14000.0, "X", hTagX);
 
 	const size_t signCount = sizeof(kProbeI196_SignCases) / sizeof(kProbeI196_SignCases[0]);
 	const size_t slopeCount = sizeof(kProbeI196_SlopeCases) / sizeof(kProbeI196_SlopeCases[0]);
 
 	// =======================================================================
-	// 2. **`#sign#` は `#IPZS#` の直後で効くか。** 正（+128）・0・負（−872）の 3 本で
-	//	同じ綴りを引く。**正で `+` が出れば効いている**（負では効き目が見えない）。
+	// 3. **`#sign#` は `#IPZS#` の直後で効くか。** 1 巡目で「修飾子としては読まれている」
+	//	ところまでは出た（`#` 1 つなら文字が出る・知らない修飾子は消える）。
+	//	**残るのは「正の値に `+` が付くか」**で、それには P の `#IPZS#` が +128 に
+	//	なっている必要がある（段 2 で確かめられる）。
 	// =======================================================================
-	probe.log("=== 2. #IPZS# の直後の #sign#（正 / 0 / 負） ===");
-	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagP, hTextP, "段2-P(正 +128)",
+	probe.log("=== 3. #IPZS# の直後の #sign#（正 / 0 / 負） ===");
+	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagP, hTextP, "段3-P(正 +128)",
 					  kProbeI196_SignCases, signCount);
-	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagO, hTextO, "段2-O(0)",
+	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagO, hTextO, "段3-O(0)",
 					  kProbeI196_SignCases, signCount);
-	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagN, hTextN, "段2-N(負 -872)",
+	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagN, hTextN, "段3-N(負 -872)",
 					  kProbeI196_SignCases, signCount);
 
 	// =======================================================================
-	// 3. **傾斜材の両端の天端。** S は始端が低い端（`#IPZS#`=−872 のはず）、
+	// 4. **傾斜材の両端の天端。** S は始端が低い端（`#IPZS#`=−872 のはず）、
 	//	H は始端が高い端（`#IPZS#`=−40 のはず）。`#ZTBBS#` が高い端の天端 −40 と
-	//	一致するか——断面の角が天端より上に出ないか——を外接と突き合わせて見る。
+	//	一致するか——断面の角が天端より上に出ないか——を段 2 の外接と突き合わせて見る。
 	// =======================================================================
-	probe.log("=== 3. 傾斜材 S（始端が低い端） ===");
-	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagS, hTextS, "段3-S", kProbeI196_SlopeCases,
+	probe.log("=== 4. 傾斜材 S（始端が低い端） ===");
+	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagS, hTextS, "段4-S", kProbeI196_SlopeCases,
 					  slopeCount);
 
-	probe.log("=== 4. 傾斜材 H（始端が高い端。低い端を読む口はあるか） ===");
-	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagH, hTextH, "段4-H", kProbeI196_SlopeCases,
+	probe.log("=== 5. 傾斜材 H（始端が高い端。低い端を読む口はあるか） ===");
+	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagH, hTextH, "段5-H", kProbeI196_SlopeCases,
 					  slopeCount);
 
-	probe.log("=== 5. 水平材 N に同じ式を当てる（両端が同じ値になるはず） ===");
-	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagN, hTextN, "段5-N(水平)",
+	probe.log("=== 6. 水平材 N に同じ式を当てる（両端が同じ値になるはず） ===");
+	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagN, hTextN, "段6-N(水平)",
+					  kProbeI196_SlopeCases, slopeCount);
+
+	probe.log("=== 7. 対照: X（3D パス＝1 巡目の道） ===");
+	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagX, hTextX, "段7-X(3D パス)",
 					  kProbeI196_SlopeCases, slopeCount);
 
 	// =======================================================================
-	// 6. **バウンドの offset を動かして追随するか。** 利用者の要望は「取り込み後に
+	// 8. **バウンドの offset を動かして追随するか。** 利用者の要望は「取り込み後に
 	//	高さを変えても注記が追随すること」なので、ここが要望そのものの試験である。
 	//	S を両端 −1000 下げる（−1872 / −1040）→ `#IPZS#` は **−1872**、
 	//	`#ZTBBS#` は **−1040** になるはず。
 	// =======================================================================
-	probe.log("=== 6. バウンドの offset を −1000 して読み直す ===");
+	probe.log("=== 8. バウンドの offset を動かして読み直す ===");
 	ProbeI196_SetOffsets(hMemberS, levelType, -1872.0, -1040.0);
-	ProbeI196_LogGeometry(probe, "S(offset 変更後)", hMemberS);
-	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagS, hTextS, "段6-S(offset 変更後)",
+	ProbeI196_LogGeometry(probe, "S(両端 -1000)", hMemberS);
+	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagS, hTextS, "段8-S(両端 -1000)",
 					  kProbeI196_SlopeCases, slopeCount);
 
 	// 片端だけ動かす（勾配そのものが変わる）。
 	ProbeI196_SetOffsets(hMemberS, levelType, -1872.0, 128.0);
 	ProbeI196_LogGeometry(probe, "S(片端だけ +128 へ)", hMemberS);
-	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagS, hTextS, "段6-S(片端だけ変更)",
+	ProbeI196_EvalAll(probe, tagSupport, linkSupport, hTagS, hTextS, "段8-S(片端だけ変更)",
 					  kProbeI196_SlopeCases, slopeCount);
 
 	probe.log("=== 終わり ===");
