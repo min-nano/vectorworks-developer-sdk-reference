@@ -470,6 +470,38 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 		ProbeI187_DumpMember(probe, "A", hMemberA, true);
 	}
 
+	// ---- 部材 C（**現場の形そのまま**: 伏図レイヤ（2699）に置き、**別の階**
+	//      T187-2F の FL レベル（3571）へバウンドする）。`fBoundStory` は
+	//      **相対の階番号**なので、PLAN から見て 1 つ上の 2F は `+1`
+	//      （Findings「同じオブジェクトに 2 本のバウンドを書く」）。
+	//
+	//	ここが issue #187 の核心。部材 A（FL レイヤに置いた本）で高さが読めても、
+	//	**レイヤと基準の階が食い違うこの形で読めなければ意味が無い。**
+	MCObjectHandle hPathC = gSDK->Create3DPoly();
+	if (hPathC != nil)
+	{
+		gSDK->Add3DVertex(hPathC, WorldPt3(0.0, 2000.0, 0.0));
+		gSDK->Add3DVertex(hPathC, WorldPt3(4000.0, 2000.0, 0.0));
+	}
+	MCObjectHandle hMemberC = gSDK->CreateCustomObjectPath("StructuralMember", hPathC, nil, true);
+	if (hMemberC == nil)
+		probe.fail("部材 C を作れなかった");
+	else
+	{
+		if (hLayerPlan != nil)
+			gSDK->AddObjectToContainer(hMemberC, hLayerPlan);
+		SStoryObjectData boundC;
+		boundC.fBound = eStoryObjectBound_Story;
+		boundC.fBoundStory = 1; // PLAN から 1 つ上＝T187-2F
+		boundC.fLayerLevelType = levelTypeFL;
+		boundC.fOffset = -872.0;
+		gSDK->SetObjectStoryBound(hMemberC, 0, boundC);
+		boundC.fOffset = -302.0;
+		gSDK->SetObjectStoryBound(hMemberC, 1, boundC);
+		gSDK->ResetObject(hMemberC);
+		ProbeI187_DumpMember(probe, "C(伏図レイヤ＋他階の FL バウンド)", hMemberC, true);
+	}
+
 	// ---- 部材 B（伏図レイヤ・バウンド無し）
 	MCObjectHandle hPathB = gSDK->Create3DPoly();
 	if (hPathB != nil)
@@ -510,6 +542,22 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 			"'StructuralMember'.'DialogStartElevation'+3571"};
 		for (size_t i = 0; i < sizeof(kBoundExpressions) / sizeof(kBoundExpressions[0]); ++i)
 			ProbeI187_EvalWS(probe, "部材A(バウンド有)", hMemberA, kBoundExpressions[i]);
+	}
+
+	if (hMemberC != nil)
+	{
+		static const char* const kBoundExpressionsC[] = {
+			"TOPBOUND",
+			"BOTBOUND",
+			"LAYER",
+			"STORY",
+			"'StructuralMember'.'StartElevation'",
+			"'StructuralMember'.'EndElevation'",
+			"'StructuralMember'.'DialogStartElevation'",
+			"'StructuralMember'.'DialogEndElevation'",
+			"'StructuralMember'.'DialogStartElevationReference'"};
+		for (size_t i = 0; i < sizeof(kBoundExpressionsC) / sizeof(kBoundExpressionsC[0]); ++i)
+			ProbeI187_EvalWS(probe, "部材C(現場の形)", hMemberC, kBoundExpressionsC[i]);
 	}
 
 	if (hMemberB != nil)
@@ -623,6 +671,37 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 				ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagA, hTextA,
 										 kCasesA[i].label, kCasesA[i].formula,
 										 kCasesA[i].worksheetMode);
+			}
+		}
+	}
+
+	// ---- 3-C. **現場の形**（伏図レイヤ＋他階の FL バウンド）。ここが答えを分ける。
+	if (hMemberC != nil)
+	{
+		MCObjectHandle hTagC = nil;
+		MCObjectHandle hTextC = ProbeI187_BuildTag(probe, tagSupport, linkSupport, hMemberC,
+												   hLayerPlan, 12000.0, "C", hTagC);
+		if (hTextC != nil)
+		{
+			static const ProbeI187_Case kCasesC[] = {
+				{"C-見張り", "#StructuralMember#.#MemberID#", false},
+				{"C-IPZL", "#IPZL#", false},
+				{"C-StartElevation", "#StructuralMember#.#StartElevation#", false},
+				{"C-EndElevation", "#StructuralMember#.#EndElevation#", false},
+				{"C-DialogStartElev", "#StructuralMember#.#DialogStartElevation#", false},
+				{"C-DialogEndElev", "#StructuralMember#.#DialogEndElevation#", false},
+				{"C-DialogStartRef", "#StructuralMember#.#DialogStartElevationReference#", false},
+				// **これが出せれば issue の要望は満たせる。**
+				{"C-連動の候補", "\" (2FL \"#StructuralMember#.#DialogStartElevation#\")\"", false},
+				{"C-WS-TOPBOUND", "TOPBOUND", true},
+				{"C-WS-BOTBOUND", "BOTBOUND", true},
+				{"C-WS-DialogStartElev", "'StructuralMember'.'DialogStartElevation'", true},
+				{"C-WS-StartElevation", "'StructuralMember'.'StartElevation'", true}};
+			for (size_t i = 0; i < sizeof(kCasesC) / sizeof(kCasesC[0]); ++i)
+			{
+				ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagC, hTextC,
+										 kCasesC[i].label, kCasesC[i].formula,
+										 kCasesC[i].worksheetMode);
 			}
 		}
 	}
