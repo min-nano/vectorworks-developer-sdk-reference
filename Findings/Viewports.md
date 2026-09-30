@@ -175,6 +175,198 @@ gSDK->ResetObject(marker);        // → 絶対Z が出る
   （＝**引数の話ではなく表示の話だった**）。
 - **断面線オブジェクトとの結び付きでもない**——総当りで**ハンドル型の差は 0 件**。
 
+### 断面ビューポートの注釈に出るグリッド線（通り芯）——符号の位置を決めるのは `ShoulderLengthAtStart`（#189）
+
+断面ビューポートを更新すると、**切断面を横切る通り芯が「グリッド線」として注釈の中に
+現れる**（UI の「ビューポート注釈の編集」で選べるもの）。符号（ラベル枠）を用紙の上で
+動かしたいなら**触るのはこの個体の 1 欄だけ**で、断面の高さ範囲では動かない。
+
+実機確認済み（VW 2026 / mac・日本語 UI・新規の空図面。
+[issue #189](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/189)。
+プローブ `section-vp-grid-annotation` を **5 版**走らせた実測で、以下の数値は実行ログそのまま。
+プローブは役目を終えたので消してある）。
+
+#### 正体と見つけ方
+
+- **正体はデザインレイヤの通り芯と同じ PIO**——`GridAxis`（内部 ID **647** ＝
+  `kInternalID_GridAxis`、ローカライズ名 **「グリッド線」**）。パラメータ表も**同じ 32 件**で、
+  デザインレイヤの個体と universal 名・欄型・既定値が一致する。**別物を探さなくてよい。**
+- **注釈群を自分で降りる**（criteria では見つからない。下記「注釈の中の図形は…」）。
+  通り芯 1 本につき個体 1 つ。
+- **`ovPositionLocked`（709）が `true`**。SDK ヘッダのコメント
+  （*"GridAxisInstances are always position locked."*）がこの個体を指している。
+  **ロックされていても `SetParamReal` と `ResetObject` は通る。**
+- **SDK 側にグリッド線専用の API・オブジェクト変数は 1 つも無い**【ヘッダ根拠】。
+  `SDKLib` 全体（`Include` ＋同梱 `Source`）を `GridAxis|HorizLine|GridLineLength|SectionGrid|GridBubble`
+  で引いて出るのは 4 件だけ——上記 647、`kInternalID_GridBubble = 127`、
+  `kObjectStylesGridAxisFolder = 332`、そして `ovPositionLocked` のコメント。
+  **触る道はパラメータ経由しか無い。**
+
+#### いつできるか——`UpdateViewport` が作り、更新し直しても作り直さない
+
+| 段 | 注釈群 | 中身 |
+| --- | --- | --- |
+| `CreateSectionViewport` の直後 | **`nil`** | — |
+| `UpdateViewport` の後 | 取れる | 通り芯 3 本 → **`GridAxis` 3 個**（＋型 76・型 90） |
+| もう一度 `UpdateViewport` | 同じ | **ハンドルが 3 つとも同一**・件数も同じ・**書いた値も残る** |
+| `ovViewportResetForOnlyAnnotationsChange`(1053) を立てて更新 | 同じ | 同上 |
+
+**＝書いた値が更新で消えることはない。** 注釈へレベル基準線などを置くときと違って、
+グリッド線は**自分で作るものではなく、更新が置いていくもの**である。
+
+#### 出すには「通り芯が切断面を横切っている」ことが要る——しかも点で置いた通り芯では出ない
+
+- **`CreateCustomObject("GridAxis", 位置, 角度)` で置いた通り芯は「線」を 1 本も持たない。**
+  外接は **750 × 1225**（ラベル枠と水平線だけ）で、切断面まで届かない。
+- **`GridAxis` は線分 PIO ではない**——`LineLength` を持たないので
+  `Set/GetLinearObjectPos` は**完全な no-op**（下記
+  [Parametric Objects「線分 PIO の両端と長さ」](Parametric%20Objects.md)のとおり）。
+  **長さのパラメータも 32 件のどこにも無い。**
+- **したがって線は「パス」で与える**——`CreateCustomObjectPath` に**2 頂点の 2D ポリライン**を
+  渡す（パスの型は [Parametric Objects「パスの型を間違えると…」](Parametric%20Objects.md)）。
+  こうして作った通り芯は `GetObjectPath()` が非 nil になり、外接がパスの範囲まで伸びる。
+
+  ```cpp
+  VWFC::VWObjects::VWPolygon2DObj path({VWFC::Math::VWPoint2D(x, y0),
+                                        VWFC::Math::VWPoint2D(x, y1)});
+  path.SetClosed(false);
+  MCObjectHandle axis = gSDK->CreateCustomObjectPath("GridAxis", path);
+  gSDK->AddObjectToContainer(axis, designLayer);   // 作ったものはアクティブレイヤに入る
+  gSDK->ResetObject(axis);
+  ```
+
+#### 符号を動かす欄——`ShoulderLengthAtStart`。**単位は用紙 mm**
+
+座標欄（`kFieldCoordDisp` ＝ 7）は 32 件中この 2 つだけである。
+
+| 索引 | universal 名 | ローカライズ名 | 既定 | 絵への効き |
+| --- | --- | --- | --- | --- |
+| 4 | **`ShoulderLengthAtStart`** | 水平線の長さ（先端） | `5` | **符号がこのぶん上へ動く** |
+| 5 | `ShoulderLengthAtEnd` | 水平線の長さ（終端） | `5` | **動かない**（下記） |
+
+**単位は用紙 mm**——書いた値に**その容れ物の縮尺**が掛かって世界座標になる。
+`5 → 15`（＋10）で測った実測:
+
+| 測った場所 | 縮尺 | 外接の上端の動き | 倍率 |
+| --- | --- | --- | --- |
+| デザインレイヤの通り芯 | 1/100 | **1000** | **×100** |
+| デザインレイヤの通り芯 | 1/50 | **500** | **×50** |
+| **注釈のグリッド線** | ビューポート 1/100 | **1000** | **×100** |
+| **注釈のグリッド線** | ビューポート 1/50 | **500** | **×50** |
+
+**＝「用紙で 10mm 上げたい」なら、縮尺に関わらず `+10` を書けばよい。** issue #189 が OIP で
+見た「5 → 15 で符号が用紙で約 10mm 上へ移る」がそのまま説明できる。
+パラメータ `World-based` が `False` であることもこれと合う。
+
+- **`ShoulderLengthAtEnd` は絵を 1mm も動かさない**（`5 → 15` でも `5 → 12000` でも外接が
+  変わらない）。`ShowBubbleAt` が **`Start Point`** で、終端側には何も描かれていないため。
+  **「始端と終端の両方を書けば確実」と考えて終端を書いても無駄である。**
+- **書いた後に `ResetObject` が要る。** 値は書いた直後に読み戻せる（`15.000`）が、
+  **外接は `ResetObject` まで動かない**（書いた直後の上端 Δ = 0、Reset 後 Δ = 1000）。
+- **スタイルは握っていない。** ツールのプラグインスタイル（`styleRef=51`・「グリッド線」）が
+  勝手に当たっているが、`GetPluginStyleParameterType` は `ShoulderLengthAtStart` /
+  `ShoulderLengthAtEnd` / `ShowBubbleAt` / `AddElbowToSholder` に **`2`
+  （`kPluginStyleParameter_AllwaysByInstance`）**を返す。
+  **＝個体へ書けば効く。スタイルを外す必要は無い**（実測でも、スタイルが当たったままの
+  個体へ書いて絵が動いた）。`BubbleScaleFactor` と `World-based` は `0`（`_ByInstance`）。
+
+#### 符号の位置の基準は「**映っているモデルの上端**」——高さ範囲では動かない
+
+**1 つずつしか違わない枚を並べて実測した**（注釈座標での外接 y の上端）:
+
+| 枚 | 映っているモデルの高さ | 高さ範囲の上端 | 縮尺 | グリッド線の外接 y の上端 |
+| --- | --- | --- | --- | --- |
+| **A** | 3000 | 9000 | 1/100 | **4235** |
+| **B** | 3000 | **4000** | 1/100 | **4235**（A と一致） |
+| **D** | **6000** | 9000 | 1/100 | **7235**（A ＋ 3000） |
+| **C** | 3000 | 9000 | **1/50** | **3622.5** |
+
+- **高さ範囲の上端（`endHeight`）を 9000 → 4000 に変えても 1 桁も動かない**（A と B）。
+- **映っているモデルを 3000 → 6000 にすると、ちょうど 3000 動く**（A と D）。
+- **式は「映っているモデルの上端 ＋ 用紙スケールの固定分」**:
+
+  | 縮尺 | 固定分 | 検算 |
+  | --- | --- | --- |
+  | 1/100 | **1235** | 3000 + 1235 = **4235**（A・B） / 6000 + 1235 = **7235**（D） |
+  | 1/50 | **622.5** | 3000 + 622.5 = **3622.5**（C） |
+
+  固定分は**水平線（`ShoulderLengthAtStart` ＝ 5 用紙 mm）とラベル枠の合計**で、
+  用紙 mm なので縮尺で割れる（12.35mm / 12.45mm）。
+- **断面が空のときの上端は固定分だけ**（1/100 で `1235`・1/50 で `622.5`）
+  ＝**モデルの上端が 0 として扱われる**。
+
+**＝符号は「断面に実際に描かれているものの上端」から、用紙で一定の高さに乗る。**
+だから `CreateSectionViewport` の高さ範囲を広げても符号は動かない
+（[plugin#181](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/181)
+が上端を 3600mm 上げても寸法と符号が重なったままだった理由）。**用紙の上で符号を動かしたい
+なら `ShoulderLengthAtStart` を足す**——それが唯一の手である。
+
+#### 断面に何か映すには、モデルを `pt3` の**反対側**へ置く（`pt3` は「見る側」）
+
+この節を測るために断面を空でなくする必要があり、そこで 3 巡ぶん足を取られたので記録しておく。
+
+- **`pt3` と同じ側にモデルを置いた枚は、断面が空のままだった**——
+  `ovSectionViewportDisplayObjectsBeforeCutPlane`（**1065**）を `true` にして
+  （書き込みも読み戻しも `true`）**空のまま**で、キャッシュ群も 3/5/6/7/15 すべて 0 件。
+  反対側に置いた枚は `1064` だけで映り、**キャッシュ群 5 に 13 件・7 に 2 件**が入った。
+  **＝「奥」は `pt3` の反対側**であり、`1065` は手前側を呼び戻してくれない。
+- **グリッド線は断面が空でも注釈に出る**（そのときの上端は上記の固定分だけ）。
+  **x の並びは見る側で反転する**（`pt3` を反対側にすると 3 本の順序が逆になる）。
+- **`ovViewportDisplay2DComponents`（1059）は書いても入らなかった**——`SetObjectVariable` が
+  `true` を返すのに読み戻しは `false`（レンダは先に隠線消去にしてある）。
+- **壁を断面に映すなら高さを専用関数で与える**（`SetWallOverallHeights`。
+  [Walls](Walls.md)「`CreateWall` が建てた壁は、新規の空図面では高さ 0 になる」）。
+
+#### `GridAxis` のパラメータ表（VW 2026 / mac・日本語 UI。全 32 件）
+
+デザインレイヤの通り芯と、断面ビューポートの注釈のグリッド線で**同一**だった。
+`欄型` は `EFieldStyle`（2=真偽 / 3=実数 / 4=文字列 / 7=座標 / 8=ポップアップ /
+14=ボタン / 18=クラス）。
+
+| 索引 | universal 名 | ローカライズ名 | 欄型 | 既定値 |
+| --- | --- | --- | --- | --- |
+| 0 | `Label` | ラベル | 4 | `1`（置いた順に増える） |
+| 1 | `Note` | 注釈 | 4 | （空） |
+| 2 | `GridLineClass` | グリッド線のクラス | 18 | （空） |
+| 3 | `ShoulderLineClass` | 水平線のクラス | 18 | （空） |
+| 4 | `ShoulderLengthAtStart` | 水平線の長さ（先端） | **7** | `5` |
+| 5 | `ShoulderLengthAtEnd` | 水平線の長さ（終端） | **7** | `5` |
+| 6 | `ShowBubbleAt` | ラベル枠の表示 | 8 | `Start Point` |
+| 7 | `BubbleScaleFactor` | ラベル枠の倍率 | 3 | `1` |
+| 8 | `AddElbowToSholder` | 水平線にひじ部を追加 | 2 | `False` |
+| 9–18 | `GridLineStyleByClass` / `GridLineStyle` / `GridLineWeightByClass` / `GridLineWeight` / `GridLineColorByClass` / `GridLineColor_C` / `_M` / `_Y` / `_K` / `_Name` | （空） | 2/1/2/1/2/3/3/3/3/4 | `True` / `2` / `True` / `2` / `True` / `0` / `0` / `0` / `1` / （空） |
+| 19–28 | `ShoulderLineStyleByClass` / `ShoulderLineStyle` / `ShoulderLineWeightByClass` / `ShoulderLineWeight` / `ShoulderLineColorByClass` / `ShoulderLineColor_C` / `_M` / `_Y` / `_K` / `_Name` | （空） | 同上 | 同上 |
+| 29 | `EditBubbleLayout` | （空） | 14 | （空） |
+| 30 | `EditBubbleData` | （空） | 14 | （空） |
+| 31 | `World-based` | `__NNA_DO_NOT_CHANGE` | 2 | `False` |
+
+#### 書き方（全断面ビューポートの符号を用紙で 10mm 上げる）
+
+```cpp
+// ① 更新してからでないと、注釈群も中のグリッド線もまだ無い
+gSDK->UpdateViewport(vp);
+
+// ② 注釈群を降りる（criteria では見つからない）
+MCObjectHandle annotation = gSDK->GetViewportGroup(vp, kViewportGroupAnnotation);
+for (MCObjectHandle h = gSDK->FirstMemberObj(annotation); h != nil; h = gSDK->NextObject(h))
+{
+    if (gSDK->GetObjectTypeN(h) != kParametricNode)
+        continue;
+    VWFC::VWObjects::VWParametricObj pio(h);
+    if (pio.GetInternalID() != kInternalID_GridAxis)   // 647
+        continue;
+
+    // ③ **用紙 mm** で書く（縮尺は VW が掛ける）。スタイルは外さなくてよい
+    const double paper = pio.GetParamReal("ShoulderLengthAtStart");
+    pio.SetParamReal("ShoulderLengthAtStart", paper + 10.0);
+
+    // ④ **絵は ResetObject まで動かない**（値だけは書いた直後に読み戻せる）
+    gSDK->ResetObject(h);
+}
+```
+
+**この後にビューポートを更新しても、書いた値は残る**（個体が作り直されないため）。
+
 ## 注釈の中の図形は、検索条件（criteria）では見つからない
 
 **`ISDK::ForEachObjectInCriteria` は、ビューポートの注釈の中の図形を 1 件も返さない**
