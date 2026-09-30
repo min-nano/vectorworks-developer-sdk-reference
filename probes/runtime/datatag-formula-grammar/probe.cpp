@@ -11,34 +11,31 @@
 //	`VWFC::Tools::WSCriteriaExpression`（＝`ISDK::CompileCriteriaExpression` ＋
 //	`ISDK::ExecWSExpression`）でハンドルへ直接評価する。
 //
-//	【4 巡目】文法は 1〜3 巡目で確定した。残っているのは issue の本題ただ 1 つ
-//	——**「その階の FL から測った高さ」の数値を式から出せるか**である。
-//	3 巡目で分かったこと（と、**こちらの書き方の誤り 2 つ**）:
+//	【5 巡目】4 巡目（ビルド `100801caa370`）で**本題に答えが出た**。残っているのは
+//	ただ 1 つ——**その数値は動かしても正しいままか**である。
 //
-//	  * **`#IPZL#` は生きている。** `MoveObject3D` で +1000 動かしたら `-2699` → `-1699`
-//	    に変わった。**オブジェクトと連動する値は在る**——足りないのは「レイヤと FL の差」
-//	    という定数だけである。
-//	  * `#DialogStartElevationReference#` は**バウンド先のレベル名**を返し、他階へ
-//	    繋いだ材では `T187-FL [上階]` まで出る。**移動しても保たれる。**
-//	  * `#DialogStartElevation#` は 0 のまま（バウンドの −872 が出てこない）。
-//	  * **誤り 1: パラメータを `VWRecordFormatObj` へ書いていた。** それは
-//	    **書式の既定値**を変える口で、既にある個体には効かない
-//	    （Findings「取り込みでどう書くか」）。`MajorDepth` に 12345 を書いたのに
-//	    読み戻しが `600` だったのがその証拠。**個体へ書くのは
-//	    `VWParametricObj::SetParamReal` / `SetParamValue`。**
-//	  * **誤り 2: 部材が何も描いていなかった**（`GetObjectBounds` が空。`MemberType` と
-//	    `Minor*` を書いていないため。Findings「取り込みでどう書くか」）。ジオメトリが
-//	    無い本の読み値は当てにできない。
+//	4 巡目で確定したこと:
 //
-//	そこで 4 巡目は**Findings の手順どおりに描ける部材を作ってから**、
+//	  * **数値は出せる。** `#StructuralMember#.#DialogStartElevation#` が **−872** を
+//	    描いた（`" (2FL "#…#DialogStartElevation#")"` → `` (2FL -872)``）。
+//	    ただし**値がパラメータに入っているときだけ**で、`SetObjectStoryBound` で
+//	    バウンドを書いただけでは 0 のまま（部材 E は `fOffset=−872` なのに式は 0）。
+//	  * **名前と数値は出どころが逆。** バウンドで書いた本は**名前**が読めて
+//	    （`T187-FL [上階]`）数値が 0、パラメータで書いた本は**数値**が読めて
+//	    （−872）名前が空。**両方書けば両方出るのか**は未確認。
+//	  * `#thsep#` は**3 桁のコンマを出さない**（`MajorDepth`=1234 を読み戻しで確かめた上で
+//	    `##thsep#` → `1234`）。`#sign#` は同じ値で `+1234` を出すので、
+//	    **修飾子が無視されているのではなく `#thsep#` にその働きが無い**。
 //
-//	  経路 1: `SetObjectStoryBound` で書いた本を読む
-//	  経路 2: **個体のパラメータへ**「始端高さ基準 / 始端高さオフセット」を書いて読む
-//	          （選択肢の綴りが分からないので `GetParamChoices` で一覧を出してから書く）
-//	  経路 3: 動かしてから読み直す（連動の試験）
+//	**5 巡目の問い**: 利用者の要望は「取り込み後に高さを変えても注記が追随すること」。
+//	パラメータに書いた −872 が、**部材を動かした後も正しい値であり続けるか**を確かめる。
+//	追随しないなら、その式は**黙って古い数字を出し続ける**——いまの「固定の文字列」より
+//	悪い（嘘だと気付けない）ので、そこまで確かめないと答えにならない。
 //
-//	を引き直す。あわせて `#thsep#` を**4 桁の値**で引き直す（3 巡目は誤り 1 のせいで
-//	値が 600 のままだった）。
+//	  H: バウンド **＋** パラメータの両方を書く → 名前と数値が両方出るか
+//	  H を +1000 動かす → 数値は追随するか
+//	  H のバウンドの `fOffset` を書き換える → パラメータは追随するか
+//	  I: パラメータだけを書く → 動かしたときどうなるか
 
 #include "Probe.h"
 
@@ -247,48 +244,6 @@ namespace
 		return hMember;
 	}
 
-	// ポップアップの選択肢を出す（`PopupGetChoicesCount` は 0 を返すので使えない。
-	//	Findings「選択肢は GetParamChoices でしか採れない」）。
-	void ProbeI187_DumpChoices(vwprobe::Report& probe, MCObjectHandle hMember, const char* param)
-	{
-		VWFC::Tools::CObjectParamProvider provider(hMember);
-		TXStringSTLArray choices;
-		const bool got = provider.GetParamChoices(TXString(param), choices);
-		std::string line = std::string("選択肢 ") + param + " (got=" + (got ? "true" : "false") +
-						   " 件数=" + ProbeI187_Int(static_cast<long long>(choices.size())) + "):";
-		for (size_t i = 0; i < choices.size(); ++i)
-			line += " [" + ProbeI187_Int(static_cast<long long>(i)) + "]'" +
-					ProbeI187_OneLine(ProbeI187_FromTX(choices[i])) + "'";
-		probe.log(line);
-	}
-
-	// パスを読み戻して、ジオメトリが退化していないかを確かめる。
-	//	**退化した本（長さ 0）の読み値は当てにできない**（Findings「ResetObject が
-	//	バウンドから作り直すのは『長さ 0』か『長さ 1e-7 以上』のパスだけ」）。
-	void ProbeI187_DumpPath(vwprobe::Report& probe, const std::string& label,
-							MCObjectHandle hMember)
-	{
-		MCObjectHandle hPath = gSDK->GetCustomObjectPath(hMember);
-		if (hPath == nil)
-		{
-			probe.log("パス " + label + ": GetCustomObjectPath が nil");
-			return;
-		}
-		WorldPt3 v0;
-		WorldPt3 v1;
-		gSDK->Get3DVertex(hPath, 1, v0);
-		gSDK->Get3DVertex(hPath, 2, v1);
-		WorldRect bounds;
-		const bool gotBounds = gSDK->GetObjectBounds(hMember, bounds);
-		probe.log("パス " + label + ": v1=(" + ProbeI187_Num(v0.x) + "," + ProbeI187_Num(v0.y) +
-				  "," + ProbeI187_Num(v0.z) + ") v2=(" + ProbeI187_Num(v1.x) + "," +
-				  ProbeI187_Num(v1.y) + "," + ProbeI187_Num(v1.z) +
-				  ") Δz=" + ProbeI187_Num(v1.z - v0.z) + " 外接=" +
-				  (gotBounds && bounds.right > bounds.left
-					   ? "幅 " + ProbeI187_Num(bounds.right - bounds.left)
-					   : "**空（図形が無い）**"));
-	}
-
 	// 部材の素性をログへ出す（式が返した数字の出どころを突き合わせるため）。
 	void ProbeI187_DumpMember(vwprobe::Report& probe, const std::string& label,
 							  MCObjectHandle hMember, bool hasBounds)
@@ -420,62 +375,41 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 	if (hLayerFL == nil)
 		probe.fail("T187-FL のレイヤを取れなかった（バウンド付きの部材が用意できない）");
 
-	// ---- **描ける**部材を 3 本作る（3 巡目はここを省いて空の本を測っていた）
-	//	E: 伏図レイヤ＋他階の FL バウンド（現場の形）
-	//	F: 伏図レイヤ＋**個体のパラメータへ**始端高さ基準／オフセットを書く
-	//	G: 書式修飾子の試験用（せい 1234 ＝ 4 桁）
-	MCObjectHandle hMemberE = ProbeI187_MakeDrawnMember(probe, "E", hLayerPlan, 0.0, 600.0);
-	MCObjectHandle hMemberF = ProbeI187_MakeDrawnMember(probe, "F", hLayerPlan, 1500.0, 600.0);
-	MCObjectHandle hMemberG = ProbeI187_MakeDrawnMember(probe, "G", hLayerPlan, 3000.0, 1234.0);
+	// ---- 部材を 2 本作る。
+	//	H: バウンド **＋** パラメータの両方を書く
+	//	I: パラメータだけを書く
+	MCObjectHandle hMemberH = ProbeI187_MakeDrawnMember(probe, "H", hLayerPlan, 0.0, 600.0);
+	MCObjectHandle hMemberI = ProbeI187_MakeDrawnMember(probe, "I", hLayerPlan, 1500.0, 600.0);
 
-	if (hMemberE != nil)
+	if (hMemberH != nil)
 	{
 		SStoryObjectData bound;
 		bound.fBound = eStoryObjectBound_Story;
 		bound.fBoundStory = 1; // 伏図の階から 1 つ上＝T187-2F
 		bound.fLayerLevelType = levelTypeFL;
 		bound.fOffset = -872.0;
-		gSDK->SetObjectStoryBound(hMemberE, 0, bound);
+		gSDK->SetObjectStoryBound(hMemberH, 0, bound);
 		bound.fOffset = -302.0;
-		gSDK->SetObjectStoryBound(hMemberE, 1, bound);
-		gSDK->ResetObject(hMemberE);
-		ProbeI187_DumpMember(probe, "E(バウンドで書いた)", hMemberE, true);
-		ProbeI187_DumpPath(probe, "E", hMemberE);
+		gSDK->SetObjectStoryBound(hMemberH, 1, bound);
+		VWFC::VWObjects::VWParametricObj pioH(hMemberH);
+		pioH.SetParamReal("DialogStartElevation", -872.0);
+		pioH.SetParamReal("DialogEndElevation", -302.0);
+		gSDK->ResetObject(hMemberH);
+		ProbeI187_DumpMember(probe, "H(バウンド＋パラメータ)", hMemberH, true);
 	}
-
-	// =======================================================================
-	// 2. 経路 2: **個体のパラメータへ**「始端高さ基準 / 始端高さオフセット」を書く。
-	//	綴りが分からないので、まず選択肢の一覧を出す。
-	// =======================================================================
-	probe.log("=== 2. 個体のパラメータへ始端高さ基準／オフセットを書く ===");
-
-	if (hMemberF != nil)
+	if (hMemberI != nil)
 	{
-		ProbeI187_DumpChoices(probe, hMemberF, "DialogStartElevationReference");
-		ProbeI187_DumpChoices(probe, hMemberF, "DialogEndElevationReference");
-
-		VWFC::VWObjects::VWParametricObj pioF(hMemberF);
-		// 選択肢の綴りが分からないので**3 通り**書いてみて、読み戻しで効いたものを見る。
-		static const char* const kRefCandidates[] = {"T187-FL", "2", "1"};
-		for (size_t i = 0; i < sizeof(kRefCandidates) / sizeof(kRefCandidates[0]); ++i)
-		{
-			pioF.SetParamValue("DialogStartElevationReference", TXString(kRefCandidates[i]));
-			pioF.SetParamReal("DialogStartElevation", -872.0);
-			gSDK->ResetObject(hMemberF);
-			probe.log(
-				std::string("部材 F: 基準へ '") + kRefCandidates[i] + "' を書いた → 基準='" +
-				ProbeI187_FromTX(pioF.GetParamValue("DialogStartElevationReference")) +
-				"' オフセット='" + ProbeI187_FromTX(pioF.GetParamValue("DialogStartElevation")) +
-				"' バウンド件数=" +
-				ProbeI187_Int(static_cast<long long>(gSDK->GetObjectStoryBoundsCount(hMemberF))));
-		}
-		ProbeI187_DumpMember(probe, "F(パラメータで書いた)", hMemberF, false);
+		VWFC::VWObjects::VWParametricObj pioI(hMemberI);
+		pioI.SetParamReal("DialogStartElevation", -872.0);
+		pioI.SetParamReal("DialogEndElevation", -302.0);
+		gSDK->ResetObject(hMemberI);
+		ProbeI187_DumpMember(probe, "I(パラメータだけ)", hMemberI, false);
 	}
 
 	// =======================================================================
-	// 3. データタグのタグフィールドの式で読み直す。
+	// 2. タグの式で読む → 動かす → 読み直す。
 	// =======================================================================
-	probe.log("=== 3. データタグのタグフィールドの式 ===");
+	probe.log("=== 2. 読む → 動かす → 読み直す（連動の試験）===");
 
 	IDataTagSupportPtr tagSupport(IID_DataTagSupport);
 	IDataTagTextLinkSupportPtr linkSupport(IID_DataTagTextLinkSupport);
@@ -489,76 +423,83 @@ VW_PROBE("datatag-formula-grammar", "データタグの式を総当たりで実�
 	{
 		const char* label;
 		const char* formula;
-		bool worksheetMode;
 	};
 
-	static const ProbeI187_Case kHeightCases[] = {
-		{"IPZL", "#IPZL#", false},
-		{"StartElevation", "#StructuralMember#.#StartElevation#", false},
-		{"EndElevation", "#StructuralMember#.#EndElevation#", false},
-		{"DialogStartElev", "#StructuralMember#.#DialogStartElevation#", false},
-		{"DialogEndElev", "#StructuralMember#.#DialogEndElevation#", false},
-		{"DialogStartRef", "#StructuralMember#.#DialogStartElevationReference#", false},
-		{"連動の候補", "\" (2FL \"#StructuralMember#.#DialogStartElevation#\")\"", false}};
+	static const ProbeI187_Case kCases[] = {
+		{"IPZL", "#IPZL#"},
+		{"DialogStartElev", "#StructuralMember#.#DialogStartElevation#"},
+		{"DialogEndElev", "#StructuralMember#.#DialogEndElevation#"},
+		{"DialogStartRef", "#StructuralMember#.#DialogStartElevationReference#"},
+		{"注記の形", "\" (2FL \"#StructuralMember#.#DialogStartElevation#\")\""}};
 
-	MCObjectHandle hTagE = nil;
-	MCObjectHandle hTextE = nil;
-	if (hMemberE != nil)
+	MCObjectHandle hTagH = nil;
+	MCObjectHandle hTextH = nil;
+	if (hMemberH != nil)
+		hTextH = ProbeI187_BuildTag(probe, tagSupport, linkSupport, hMemberH, hLayerPlan, 6000.0,
+									"H", hTagH);
+	MCObjectHandle hTagI = nil;
+	MCObjectHandle hTextI = nil;
+	if (hMemberI != nil)
+		hTextI = ProbeI187_BuildTag(probe, tagSupport, linkSupport, hMemberI, hLayerPlan, 9000.0,
+									"I", hTagI);
+
+	// --- 段 1: そのまま読む
+	probe.log("--- 段 1: 作ったまま ---");
+	if (hTextH != nil)
+		for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i)
+			ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagH, hTextH,
+									 std::string("段1-H-") + kCases[i].label, kCases[i].formula,
+									 false);
+	if (hTextI != nil)
+		for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i)
+			ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagI, hTextI,
+									 std::string("段1-I-") + kCases[i].label, kCases[i].formula,
+									 false);
+
+	// --- 段 2: **+1000 動かす**。要望（高さを変えたら注記が追随する）の直接の試験。
+	//	`#IPZL#` は追随すると分かっている（3 巡目）。問題は **−872 のほう**で、
+	//	追随しなければ**黙って古い数字を出し続ける**。
+	probe.log("--- 段 2: +1000 動かした後（追随するか）---");
+	if (hMemberH != nil)
 	{
-		hTextE = ProbeI187_BuildTag(probe, tagSupport, linkSupport, hMemberE, hLayerPlan, 6000.0,
-									"E", hTagE);
-		if (hTextE != nil)
-			for (size_t i = 0; i < sizeof(kHeightCases) / sizeof(kHeightCases[0]); ++i)
-				ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagE, hTextE,
-										 std::string("E(バウンド)-") + kHeightCases[i].label,
-										 kHeightCases[i].formula, kHeightCases[i].worksheetMode);
+		gSDK->MoveObject3D(hMemberH, 0.0, 0.0, 1000.0);
+		gSDK->ResetObject(hMemberH);
+		ProbeI187_DumpMember(probe, "H 移動後", hMemberH, true);
+		if (hTextH != nil)
+			for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i)
+				ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagH, hTextH,
+										 std::string("段2-H-") + kCases[i].label, kCases[i].formula,
+										 false);
+	}
+	if (hMemberI != nil)
+	{
+		gSDK->MoveObject3D(hMemberI, 0.0, 0.0, 1000.0);
+		gSDK->ResetObject(hMemberI);
+		ProbeI187_DumpMember(probe, "I 移動後", hMemberI, false);
+		if (hTextI != nil)
+			for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i)
+				ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagI, hTextI,
+										 std::string("段2-I-") + kCases[i].label, kCases[i].formula,
+										 false);
 	}
 
-	MCObjectHandle hTagF = nil;
-	MCObjectHandle hTextF = nil;
-	if (hMemberF != nil)
+	// --- 段 3: **バウンドの `fOffset` を書き換える**。VW の側から高さが変わる形
+	//	（Findings「始点をずらせば ID 0 の fOffset も書き換わる」）に近いのはこちら。
+	probe.log("--- 段 3: バウンドの fOffset を -1872 に書き換えた後 ---");
+	if (hMemberH != nil)
 	{
-		hTextF = ProbeI187_BuildTag(probe, tagSupport, linkSupport, hMemberF, hLayerPlan, 9000.0,
-									"F", hTagF);
-		if (hTextF != nil)
-			for (size_t i = 0; i < sizeof(kHeightCases) / sizeof(kHeightCases[0]); ++i)
-				ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagF, hTextF,
-										 std::string("F(パラメータ)-") + kHeightCases[i].label,
-										 kHeightCases[i].formula, kHeightCases[i].worksheetMode);
-	}
-
-	// ---- 連動の試験: 動かしてから読み直す。
-	probe.log("--- 部材を +1000 動かして読み直す（連動の試験）---");
-	if (hMemberE != nil && hTextE != nil)
-	{
-		gSDK->MoveObject3D(hMemberE, 0.0, 0.0, 1000.0);
-		gSDK->ResetObject(hMemberE);
-		ProbeI187_DumpMember(probe, "E 移動後", hMemberE, true);
-		ProbeI187_DumpPath(probe, "E 移動後", hMemberE);
-		for (size_t i = 0; i < sizeof(kHeightCases) / sizeof(kHeightCases[0]); ++i)
-			ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagE, hTextE,
-									 std::string("E 移動後-") + kHeightCases[i].label,
-									 kHeightCases[i].formula, kHeightCases[i].worksheetMode);
-	}
-
-	// ---- `#thsep#` を **4 桁の値**で引き直す（3 巡目は値が 600 のままだった）。
-	if (hMemberG != nil)
-	{
-		MCObjectHandle hTagG = nil;
-		MCObjectHandle hTextG = ProbeI187_BuildTag(probe, tagSupport, linkSupport, hMemberG,
-												   hLayerPlan, 12000.0, "G", hTagG);
-		if (hTextG != nil)
+		SStoryObjectData bound;
+		if (gSDK->GetObjectStoryBound(hMemberH, 0, bound))
 		{
-			static const ProbeI187_Case kFormatCases[] = {
-				{"G-4桁-無印", "#StructuralMember#.#MajorDepth#", false},
-				{"G-4桁-thsep", "#StructuralMember#.#MajorDepth##thsep#", false},
-				{"G-4桁-未知の修飾子", "#StructuralMember#.#MajorDepth##t187nosuch#", false},
-				{"G-4桁-sign", "#StructuralMember#.#MajorDepth##sign#", false},
-				{"G-4桁-thsep+sign", "#StructuralMember#.#MajorDepth##thsep#sign#", false}};
-			for (size_t i = 0; i < sizeof(kFormatCases) / sizeof(kFormatCases[0]); ++i)
-				ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagG, hTextG,
-										 kFormatCases[i].label, kFormatCases[i].formula,
-										 kFormatCases[i].worksheetMode);
+			bound.fOffset = -1872.0;
+			gSDK->SetObjectStoryBound(hMemberH, 0, bound);
+			gSDK->ResetObject(hMemberH);
+			ProbeI187_DumpMember(probe, "H fOffset 書き換え後", hMemberH, true);
+			if (hTextH != nil)
+				for (size_t i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i)
+					ProbeI187_EvalTagFormula(probe, tagSupport, linkSupport, hTagH, hTextH,
+											 std::string("段3-H-") + kCases[i].label,
+											 kCases[i].formula, false);
 		}
 	}
 
