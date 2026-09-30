@@ -80,3 +80,85 @@
   （`ISDK::CompileCriteriaExpression` ＋ `ISDK::ExecWSExpression`。
   [調査の作法](Investigation%20Techniques.md)「ワークシート式は…」）。**コンパイル誤りが
   enum で返る**ので、候補の識別子を総当たりするときは**まずこちらで引く**。
+
+### `#…#` 記法の文法——**実測**（VW 2026 / mac）
+
+[issue #187](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/187) で
+**実機確認済み**（`probes/runtime/datatag-formula-grammar/`。値は実行ログそのまま。
+この走行では `#IPZL#` が **−2699**、`#StructuralMember#.#MajorDepth#` が **600**）。
+
+**四則演算は効く。括弧も演算の括弧として読まれる。**
+
+| 入れた式 | 出た値 |
+| --- | --- |
+| `#IPZL#` | `-2699` |
+| `#IPZL#+872` | `-1827` |
+| `#IPZL# + 872`（空白付き） | `-1827`（**空白は効かない**＝同じ） |
+| `#IPZL#-872` | `-3571` |
+| `#IPZL#*2` | `-5398` |
+| `#IPZL#/2` | **`-1349 1/2`**（**分数で出る**。下記） |
+| `(#IPZL#+872)*2` | `-3654`（＝ `-1827 × 2`。**括弧が効いている**） |
+| `872+40`（フィールドを含まない定数式） | `912` |
+
+- **`/` の結果は図面の単位設定の書式で出る**（この走行では `-1349 1/2`）。
+  **小数が欲しければ式の側では決められない**ので、割り算を式に入れるときは
+  この見え方を前提にする。
+
+**文字列は二重引用符で囲む。連結は「並置」だけで、`+` も `&` も連結ではない。**
+
+| 入れた式 | 出た値 |
+| --- | --- |
+| `" (2FL "` | `` (2FL `` |
+| `" (2FL "#IPZL#")"` | `` (2FL -2699)``（**並置で連結される**） |
+| `(2FL )`（引用符なし・括弧を含む） | **空文字列**（式全体が値を出せなくなる） |
+| `× #IPZL#`（引用符なし・演算子でない文字） | `× -2699`（**通る**） |
+| `"a"+"b"` | **`a+b`**（`+` が文字として出る＝連結ではない） |
+| `"a"&"b"` | **`a&b`**（同じ。`&` も連結ではない） |
+
+- **引用符なしで括弧を書くと、その式は空になる。** issue の見立て（「本文のまま出る」）
+  とは違い、**何も出ない**。括弧付きの文字を出したいなら**必ず引用符で囲む**。
+
+**条件式 `値@条件:代替` は効く。入れ子にもできる。**
+
+| 入れた式 | 出た値 |
+| --- | --- |
+| `#IPZL#@#IPZL#<>0:"ゼロ"` | `-2699`（条件が真なので左の値） |
+| `" ("@#IPZL#<>0:""#IPZL##thsep##sign#@#IPZL#<>0:""")"@#IPZL#<>0:""` | `` (-2699)`` |
+
+**知らない `#…#` は空文字列になる**（エラーにはならない）。`#LAYERELEVATION#` /
+`#STORYELEVATION#` / `#LAYERNAME#` / `#Z#` は**どれも空**だった。
+**`#IPZL#` だけが「レコードのフィールドでない綴り」として実際に値を返した。**
+
+### ワークシート式モードは効く——ただし高さを返す関数は見つからない
+
+`SetFormula(hText, 式, /*isWorksheetFormula=*/true)` は**そのまま効く**。書いた式は
+**先頭に `=` を付けられて**保存される（`GetFormula` の読み戻しが `=1+1` になる）。
+
+| 入れた式（ws=1） | 出た値 |
+| --- | --- |
+| `1+1` | `2` |
+| `=1+1`（自分で `=` を付けても同じ） | `2` |
+| `'StructuralMember'.'StartElevation'` | `0` |
+| `'StructuralMember'.'StartElevation'+872` | `872`（**レコード参照と演算が混ぜられる**） |
+| `Z` / `IPZL` / `LAYERELEVATION` | **入れた綴りがそのまま**（＝そんな関数は無い） |
+
+- **ワークシート式では `#IPZL#` は使えない。** `IPZL` は**データタグの `#…#` 記法だけの
+  綴り**で、ワークシート式の関数ではない（裸の `IPZL` は文字列 `IPZL` に評価される）。
+- **`ISDK::ExecWSExpression` で引いた結果も同じ**（[調査の作法](Investigation%20Techniques.md)
+  「ワークシート式は…」）。タグを組まずに同じ問いを引けるので、候補の総当たりは
+  そちらが速い。実在すると分かった関数と、外れた候補:
+
+  | 引いたもの | 結果 |
+  | --- | --- |
+  | `HEIGHT` / `Height` / `HEIGHT()` / `LENGTH` / `Length` / `TOPBOUND` / `BOTBOUND` | **数値を返す（実在）** |
+  | `LAYER` | **レイヤ名**を返す（`T187-TPL-PLAN-T187B`） |
+  | `STORY` | **階名**を返す（`T187-PLAN`） |
+  | `CONCAT('a','b')` → `ab` / `ROUND(872.4)` → `872` / `IF(1=1,'a','b')` → `a` / `ABS(-872)` → `872` | **実在** |
+  | `'レコード'.'フィールド'` | 値を返す（`'StructuralMember'.'MemberID'` → `B14`） |
+  | `Z` `ZHEIGHT` `ELEVATION` `TOPELEVATION` `BOTELEVATION` `BOTTOMELEVATION` `IPZL` `IPZ` `IPX` `IPY` `LAYERNAME` `LAYERELEVATION` `LAYERZ` `LAYERDELTAZ` `LAYERCUTPLANE` `STORYNAME` `STORYELEVATION` `LEVELNAME` `LEVELELEVATION` `TOPBOUNDOFFSET` `BOTBOUNDOFFSET` | **すべて自分自身の文字列＝存在しない** |
+  | `Z()` / `NUMTOSTR(0,872)` | コンパイルが通らない（`InvalExpr`） |
+  | `OBJECTDATA('StructuralMember','StartElevation')` | コンパイルは通るが**実行が `false`** |
+
+- **したがって「レイヤの高さ」「ストーリの高さ」「レベルの高さ」を数値で返す関数は、
+  ここまでの総当たりでは 1 つも見つかっていない。** 取れるのは**名前**（`LAYER` / `STORY`）
+  までである。
