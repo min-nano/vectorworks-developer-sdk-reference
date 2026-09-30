@@ -609,181 +609,185 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 		std::vector<ProbeItem> section;
 		ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupSection), 0, section);
 	}
-}
-// ------------------------------------- 4. A の注釈で見つかった PIO を洗い出す
-probe.log("== 4. A の注釈にいる PIO ==");
-std::vector<ProbeItem> aPios;
-for (const ProbeItem& item : vps[0].annotation)
-{
-	if (item.type == kParametricNode)
-		aPios.push_back(item);
-}
-probe.log("  A の注釈の PIO は " + ProbeWhole(static_cast<long long>(aPios.size())) + " 件");
-if (aPios.empty())
-{
-	probe.fail("A の注釈に PIO が 1 件も無い——グリッド線は注釈群には現れなかった");
-	return;
-}
-
-// ------------------------------------------ 4. パラメータ表を全件ダンプ（Q3）
-probe.log("== 5. A の注釈の PIO[0] のパラメータ表（全件） ==");
-probe.log("  PIO=" + aPios[0].pioName + " 内部ID=" + ProbeWhole(aPios[0].internalId));
-const std::vector<ProbeParam> params = ProbeDumpParams(probe, aPios[0].h, true);
-
-probe.log("== 6. 「水平線の長さ」らしいパラメータを選ぶ ==");
-const std::vector<ProbeParam> candidates = ProbePickCandidates(probe, params);
-for (const ProbeParam& p : candidates)
-{
-	probe.log("  候補: [" + ProbeWhole(static_cast<long long>(p.index)) + "] " + p.name +
-			  " / loc=" + p.loc + " / 欄型=" + ProbeWhole(p.fieldStyle) + " / 値=" + p.value +
-			  " / スタイル由来=" +
-			  ProbeWhole(static_cast<long long>(
-				  gSDK->GetPluginStyleParameterType(aPios[0].h, TXString(p.name.c_str())))));
-}
-if (candidates.empty())
-{
-	probe.fail("「水平線の長さ」に当たるパラメータを選べなかった（上の全件表から選び直す）");
-	return;
-}
-
-// --------------------------------- 6. 書いてみる（A と C の同じ位置の個体へ）
-// 対照のため PIO[0] には何も書かない。PIO[1] に候補 0、PIO[2] に候補 1 を書く。
-probe.log("== 7. 候補を書いて読み戻す（A と C。PIO[0] は対照で触らない） ==");
-const size_t kWriteTargets[2] = {1, 2};
-for (size_t vi = 0; vi < vps.size(); ++vi)
-{
-	if (vps[vi].tag == "B")
-		continue; // B は Q5 用の対照——何も書かない
-	ProbeViewport& v = vps[vi];
-	std::vector<ProbeItem> pios;
-	for (const ProbeItem& item : v.annotation)
+	// ------------------------------------- 4. A の注釈で見つかった PIO を洗い出す
+	probe.log("== 4. A の注釈にいる PIO ==");
+	std::vector<ProbeItem> aPios;
+	for (const ProbeItem& item : vps[0].annotation)
 	{
 		if (item.type == kParametricNode)
-			pios.push_back(item);
+			aPios.push_back(item);
 	}
-	probe.log("  [" + v.tag + "] 注釈の PIO は " + ProbeWhole(static_cast<long long>(pios.size())) +
-			  " 件");
-	for (size_t ci = 0; ci < candidates.size() && ci < 2; ++ci)
+	probe.log("  A の注釈の PIO は " + ProbeWhole(static_cast<long long>(aPios.size())) + " 件");
+	if (aPios.empty())
 	{
-		const size_t target = kWriteTargets[ci];
-		if (target >= pios.size())
+		probe.fail("A の注釈に PIO が 1 件も無い——グリッド線は注釈群には現れなかった");
+		return;
+	}
+
+	// ------------------------------------------ 4. パラメータ表を全件ダンプ（Q3）
+	probe.log("== 5. A の注釈の PIO[0] のパラメータ表（全件） ==");
+	probe.log("  PIO=" + aPios[0].pioName + " 内部ID=" + ProbeWhole(aPios[0].internalId));
+	const std::vector<ProbeParam> params = ProbeDumpParams(probe, aPios[0].h, true);
+
+	probe.log("== 6. 「水平線の長さ」らしいパラメータを選ぶ ==");
+	const std::vector<ProbeParam> candidates = ProbePickCandidates(probe, params);
+	for (const ProbeParam& p : candidates)
+	{
+		probe.log("  候補: [" + ProbeWhole(static_cast<long long>(p.index)) + "] " + p.name +
+				  " / loc=" + p.loc + " / 欄型=" + ProbeWhole(p.fieldStyle) + " / 値=" + p.value +
+				  " / スタイル由来=" +
+				  ProbeWhole(static_cast<long long>(
+					  gSDK->GetPluginStyleParameterType(aPios[0].h, TXString(p.name.c_str())))));
+	}
+	if (candidates.empty())
+	{
+		probe.fail("「水平線の長さ」に当たるパラメータを選べなかった（上の全件表から選び直す）");
+		return;
+	}
+
+	// --------------------------------- 6. 書いてみる（A と C の同じ位置の個体へ）
+	// 対照のため PIO[0] には何も書かない。PIO[1] に候補 0、PIO[2] に候補 1 を書く。
+	probe.log("== 7. 候補を書いて読み戻す（A と C。PIO[0] は対照で触らない） ==");
+	const size_t kWriteTargets[2] = {1, 2};
+	for (size_t vi = 0; vi < vps.size(); ++vi)
+	{
+		if (vps[vi].tag == "B")
+			continue; // B は Q5 用の対照——何も書かない
+		ProbeViewport& v = vps[vi];
+		std::vector<ProbeItem> pios;
+		for (const ProbeItem& item : v.annotation)
 		{
-			probe.log("    PIO[" + ProbeWhole(static_cast<long long>(target)) +
-					  "] が無いので候補 " + ProbeWhole(static_cast<long long>(ci)) + " は書けない");
-			continue;
+			if (item.type == kParametricNode)
+				pios.push_back(item);
 		}
-		MCObjectHandle h = pios[target].h;
-		const TXString univ(candidates[ci].name.c_str());
-		VWParametricObj pio(h);
-		const double before = pio.GetParamReal(univ);
-		const ProbeBox boxBefore = ProbeBoundsOf(h);
-		const double want = before + 10.0;
-		pio.SetParamReal(univ, want);
-		const double afterWrite = pio.GetParamReal(univ);
-		const ProbeBox boxAfterWrite = ProbeBoundsOf(h);
-		const bool reset = gSDK->ResetObject(h) != 0;
-		const double afterReset = VWParametricObj(h).GetParamReal(univ);
-		const ProbeBox boxAfterReset = ProbeBoundsOf(h);
-		probe.log("    [" + v.tag + "] PIO[" + ProbeWhole(static_cast<long long>(target)) + "] " +
-				  candidates[ci].name + ": 前=" + ProbeReal(before) + " 書いた=" + ProbeReal(want) +
-				  " 直後=" + ProbeReal(afterWrite) + " ResetObject=" + (reset ? "true" : "false") +
-				  " 後=" + ProbeReal(afterReset));
-		probe.log("      外接 前: " + ProbeBoxText(boxBefore));
-		probe.log("      外接 書いた直後: " + ProbeBoxText(boxAfterWrite));
-		probe.log("      外接 Reset 後: " + ProbeBoxText(boxAfterReset));
-		if (boxBefore.ok && boxAfterReset.ok)
-			probe.log("      外接の動き: 上端 Δ=" + ProbeReal(boxAfterReset.top - boxBefore.top) +
-					  " 下端 Δ=" + ProbeReal(boxAfterReset.bottom - boxBefore.bottom) +
-					  " 左 Δ=" + ProbeReal(boxAfterReset.left - boxBefore.left) +
-					  " 右 Δ=" + ProbeReal(boxAfterReset.right - boxBefore.right));
-	}
-}
-
-// ---------------------------- 7. 更新で保たれるか・作り直されるか（Q2 / Q4）
-probe.log("== 8. A を更新して、書いた値とハンドルが残るか ==");
-{
-	ProbeViewport& v = vps[0];
-	std::vector<MCObjectHandle> beforeHandles;
-	for (const ProbeItem& item : v.annotation)
-	{
-		if (item.type == kParametricNode)
-			beforeHandles.push_back(item.h);
-	}
-	gSDK->UpdateViewport(v.vp);
-	std::vector<ProbeItem> after;
-	probe.log("  更新後の注釈群の中身:");
-	ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation), 0, after);
-	std::vector<MCObjectHandle> afterHandles;
-	for (const ProbeItem& item : after)
-	{
-		if (item.type == kParametricNode)
-			afterHandles.push_back(item.h);
-	}
-	probe.log("  PIO の件数 更新前=" + ProbeWhole(static_cast<long long>(beforeHandles.size())) +
-			  " 更新後=" + ProbeWhole(static_cast<long long>(afterHandles.size())));
-	bool same = beforeHandles.size() == afterHandles.size();
-	for (size_t i = 0; same && i < beforeHandles.size(); ++i)
-		same = beforeHandles[i] == afterHandles[i];
-	probe.log("  ハンドルは " +
-			  std::string(same ? "同一（作り直されていない）" : "違う（作り直された）"));
-	for (size_t ci = 0; ci < candidates.size() && ci < 2; ++ci)
-	{
-		const size_t target = kWriteTargets[ci];
-		if (target >= afterHandles.size())
-			continue;
-		const TXString univ(candidates[ci].name.c_str());
-		probe.log("  更新後の値 PIO[" + ProbeWhole(static_cast<long long>(target)) + "] " +
-				  candidates[ci].name + " = " +
-				  ProbeReal(VWParametricObj(afterHandles[target]).GetParamReal(univ)));
+		probe.log("  [" + v.tag + "] 注釈の PIO は " +
+				  ProbeWhole(static_cast<long long>(pios.size())) + " 件");
+		for (size_t ci = 0; ci < candidates.size() && ci < 2; ++ci)
+		{
+			const size_t target = kWriteTargets[ci];
+			if (target >= pios.size())
+			{
+				probe.log("    PIO[" + ProbeWhole(static_cast<long long>(target)) +
+						  "] が無いので候補 " + ProbeWhole(static_cast<long long>(ci)) +
+						  " は書けない");
+				continue;
+			}
+			MCObjectHandle h = pios[target].h;
+			const TXString univ(candidates[ci].name.c_str());
+			VWParametricObj pio(h);
+			const double before = pio.GetParamReal(univ);
+			const ProbeBox boxBefore = ProbeBoundsOf(h);
+			const double want = before + 10.0;
+			pio.SetParamReal(univ, want);
+			const double afterWrite = pio.GetParamReal(univ);
+			const ProbeBox boxAfterWrite = ProbeBoundsOf(h);
+			const bool reset = gSDK->ResetObject(h) != 0;
+			const double afterReset = VWParametricObj(h).GetParamReal(univ);
+			const ProbeBox boxAfterReset = ProbeBoundsOf(h);
+			probe.log("    [" + v.tag + "] PIO[" + ProbeWhole(static_cast<long long>(target)) +
+					  "] " + candidates[ci].name + ": 前=" + ProbeReal(before) +
+					  " 書いた=" + ProbeReal(want) + " 直後=" + ProbeReal(afterWrite) +
+					  " ResetObject=" + (reset ? "true" : "false") +
+					  " 後=" + ProbeReal(afterReset));
+			probe.log("      外接 前: " + ProbeBoxText(boxBefore));
+			probe.log("      外接 書いた直後: " + ProbeBoxText(boxAfterWrite));
+			probe.log("      外接 Reset 後: " + ProbeBoxText(boxAfterReset));
+			if (boxBefore.ok && boxAfterReset.ok)
+				probe.log(
+					"      外接の動き: 上端 Δ=" + ProbeReal(boxAfterReset.top - boxBefore.top) +
+					" 下端 Δ=" + ProbeReal(boxAfterReset.bottom - boxBefore.bottom) +
+					" 左 Δ=" + ProbeReal(boxAfterReset.left - boxBefore.left) +
+					" 右 Δ=" + ProbeReal(boxAfterReset.right - boxBefore.right));
+		}
 	}
 
-	// 1053（注釈だけ変えたときの更新）を立ててもう一度更新する。
-	TVariableBlock only;
-	only = static_cast<Boolean>(1);
-	const bool wrote1053 =
-		gSDK->SetObjectVariable(v.vp, ovViewportResetForOnlyAnnotationsChange, only) != 0;
-	gSDK->UpdateViewport(v.vp);
-	std::vector<ProbeItem> after2;
-	ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation), 0, after2);
-	std::vector<MCObjectHandle> after2Handles;
-	for (const ProbeItem& item : after2)
+	// ---------------------------- 7. 更新で保たれるか・作り直されるか（Q2 / Q4）
+	probe.log("== 8. A を更新して、書いた値とハンドルが残るか ==");
 	{
-		if (item.type == kParametricNode)
-			after2Handles.push_back(item.h);
-	}
-	probe.log(
-		"  1053 を書いて（" + std::string(wrote1053 ? "true" : "false") +
-		"）もう一度更新: PIO の件数=" + ProbeWhole(static_cast<long long>(after2Handles.size())));
-	for (size_t ci = 0; ci < candidates.size() && ci < 2; ++ci)
-	{
-		const size_t target = kWriteTargets[ci];
-		if (target >= after2Handles.size())
-			continue;
-		const TXString univ(candidates[ci].name.c_str());
-		probe.log("  1053 後の値 PIO[" + ProbeWhole(static_cast<long long>(target)) + "] " +
-				  candidates[ci].name + " = " +
-				  ProbeReal(VWParametricObj(after2Handles[target]).GetParamReal(univ)));
-	}
-}
+		ProbeViewport& v = vps[0];
+		std::vector<MCObjectHandle> beforeHandles;
+		for (const ProbeItem& item : v.annotation)
+		{
+			if (item.type == kParametricNode)
+				beforeHandles.push_back(item.h);
+		}
+		gSDK->UpdateViewport(v.vp);
+		std::vector<ProbeItem> after;
+		probe.log("  更新後の注釈群の中身:");
+		ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation), 0, after);
+		std::vector<MCObjectHandle> afterHandles;
+		for (const ProbeItem& item : after)
+		{
+			if (item.type == kParametricNode)
+				afterHandles.push_back(item.h);
+		}
+		probe.log(
+			"  PIO の件数 更新前=" + ProbeWhole(static_cast<long long>(beforeHandles.size())) +
+			" 更新後=" + ProbeWhole(static_cast<long long>(afterHandles.size())));
+		bool same = beforeHandles.size() == afterHandles.size();
+		for (size_t i = 0; same && i < beforeHandles.size(); ++i)
+			same = beforeHandles[i] == afterHandles[i];
+		probe.log("  ハンドルは " +
+				  std::string(same ? "同一（作り直されていない）" : "違う（作り直された）"));
+		for (size_t ci = 0; ci < candidates.size() && ci < 2; ++ci)
+		{
+			const size_t target = kWriteTargets[ci];
+			if (target >= afterHandles.size())
+				continue;
+			const TXString univ(candidates[ci].name.c_str());
+			probe.log("  更新後の値 PIO[" + ProbeWhole(static_cast<long long>(target)) + "] " +
+					  candidates[ci].name + " = " +
+					  ProbeReal(VWParametricObj(afterHandles[target]).GetParamReal(univ)));
+		}
 
-// -------------------- 8. 符号の位置の基準（A と B。上端だけが違う）（Q5）
-probe.log("== 9. 高さ範囲の上端を上げると符号は動くか（A: 上端 4000 / B: 上端 8000） ==");
-for (size_t vi = 0; vi < vps.size(); ++vi)
-{
-	const ProbeViewport& v = vps[vi];
-	probe.log("  [" + v.tag + "] 上端=" + ProbeReal(v.endHeight) + " 縮尺=1/" + ProbeReal(v.scale) +
-			  " 注釈群=" + ProbeHandleText(gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation)));
-	size_t n = 0;
-	for (const ProbeItem& item : v.annotation)
-	{
-		if (item.type != kParametricNode)
-			continue;
-		probe.log("    PIO[" + ProbeWhole(static_cast<long long>(n)) + "] " + item.pioName + " " +
-				  ProbeBoxText(ProbeBoundsOf(item.h)));
-		++n;
+		// 1053（注釈だけ変えたときの更新）を立ててもう一度更新する。
+		TVariableBlock only;
+		only = static_cast<Boolean>(1);
+		const bool wrote1053 =
+			gSDK->SetObjectVariable(v.vp, ovViewportResetForOnlyAnnotationsChange, only) != 0;
+		gSDK->UpdateViewport(v.vp);
+		std::vector<ProbeItem> after2;
+		ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation), 0, after2);
+		std::vector<MCObjectHandle> after2Handles;
+		for (const ProbeItem& item : after2)
+		{
+			if (item.type == kParametricNode)
+				after2Handles.push_back(item.h);
+		}
+		probe.log("  1053 を書いて（" + std::string(wrote1053 ? "true" : "false") +
+				  "）もう一度更新: PIO の件数=" +
+				  ProbeWhole(static_cast<long long>(after2Handles.size())));
+		for (size_t ci = 0; ci < candidates.size() && ci < 2; ++ci)
+		{
+			const size_t target = kWriteTargets[ci];
+			if (target >= after2Handles.size())
+				continue;
+			const TXString univ(candidates[ci].name.c_str());
+			probe.log("  1053 後の値 PIO[" + ProbeWhole(static_cast<long long>(target)) + "] " +
+					  candidates[ci].name + " = " +
+					  ProbeReal(VWParametricObj(after2Handles[target]).GetParamReal(univ)));
+		}
 	}
-	probe.log("    ビューポート自身の外接: " + ProbeBoxText(ProbeBoundsOf(v.vp)));
-}
 
-probe.log("== おわり ==");
+	// -------------------- 8. 符号の位置の基準（A と B。上端だけが違う）（Q5）
+	probe.log("== 9. 高さ範囲の上端を上げると符号は動くか（A: 上端 4000 / B: 上端 8000） ==");
+	for (size_t vi = 0; vi < vps.size(); ++vi)
+	{
+		const ProbeViewport& v = vps[vi];
+		probe.log(
+			"  [" + v.tag + "] 上端=" + ProbeReal(v.endHeight) + " 縮尺=1/" + ProbeReal(v.scale) +
+			" 注釈群=" + ProbeHandleText(gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation)));
+		size_t n = 0;
+		for (const ProbeItem& item : v.annotation)
+		{
+			if (item.type != kParametricNode)
+				continue;
+			probe.log("    PIO[" + ProbeWhole(static_cast<long long>(n)) + "] " + item.pioName +
+					  " " + ProbeBoxText(ProbeBoundsOf(item.h)));
+			++n;
+		}
+		probe.log("    ビューポート自身の外接: " + ProbeBoxText(ProbeBoundsOf(v.vp)));
+	}
+
+	probe.log("== おわり ==");
 }
