@@ -967,6 +967,161 @@ Z の差だけが span（3000）へ書き換わった:
   一覧は**名前順**に並ぶので、`Create*Template` が返す `index` は挿入時点での整列位置に
   過ぎない（2 本続けて足すと 1 本目が押し下げられ、どちらも `index=1` を返しうる）。
 
+## 線分 PIO の両端と長さ——`LineLength` を持つ PIO にだけ `Set/GetLinearObjectPos` が効く
+
+[`Info/Parametric Object Types.md`](../Info/Parametric%20Object%20Types.md) は「線分 PIO
+（`kParametricSubType_Linear`）は行列＋**隠しパラメータ** `LineLength`（`kFieldCoordDisp`）で
+形が決まる」と言う。ところが **SDK には `LineLength` という綴りがどこにも無く**（`SDKLib` の
+`Include` ＋同梱の実装 `Source` の全数検索。出るのは `glm/gtx/closest_point.inl` のローカル
+変数と `VWLine2D/3D::IsPtOnLine` の引数 `lineLength` だけ）、**長さを返すオブジェクト変数も、
+サブタイプを実行時に問い合わせる API も無い**（`EPluginObjectSubType` の `kLineLike = 10` は
+登録時の資源 `PExt` の値。`MiniCadCallBacks.h:1107`）【ヘッダ根拠】。
+
+[issue #181](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/181) で、
+**実機の組み込み PIO 10 件を同じ手順に掛けて**決着させた（VW 2026 / mac・新規の空図面。
+`CreateCustomObject(名前, (10000, 5000), 0°)` で作り、読み書きして読み戻した）。
+
+**結論**:
+
+1. **`LineLength` は隠しパラメータではない——ふつうのパラメータとして表に並ぶ。**
+   `GetParamsCount` / `GetParamName` の表に普通に出てくる（欄型 `7` ＝ `kFieldCoordDisp`）。
+   読み書きは `VWParametricObj::GetParamReal` / `SetParamReal` でよく、
+   **`ResetObject` を挟めば絵（外接）もその長さになる**。
+2. **`VWParametricObj::Set/GetLinearObjectPos`（＝`GS_Set/GetEndPoints`＝`ISDK::Set/GetEndPoints`）
+   は「`LineLength` を持つ PIO」にだけ効く。** 効く PIO では `Set` が**行列の i 軸と
+   `LineLength` を同時に書き**（`ResetObject` を待たずにその場で読み戻せる）、`Get` が両端を
+   返す。
+3. **`LineLength` を持たない PIO では `Get` が `(0, 0), (0, 0)` を返し、`Set` は完全な no-op
+   である。** 例外も戻り値も無く、行列も外接も 1mm も動かない。
+   **`(0, 0), (0, 0)` は「まだ値が入っていない」ではなく「この PIO は線分ではない」という
+   意味**である。ここを読み違えると、効かない口を使い続けることになる。
+4. **したがって `LineLength` の有無が、その PIO が線分として登録されているかの判定手段に
+   なる**——サブタイプを読む口は無いので、**これが唯一の手段**である。
+
+   ```cpp
+   VWParametricObj pio(h);
+   const bool isLinear = pio.GetParamIndex("LineLength") != (size_t) -1;
+   ```
+
+5. **名前に「Line」「Linear」が入っていても線分とは限らない。** `Leader Line` /
+   `Center Line Marker` / `Linear Material` はどれも `LineLength` を持たない。
+   **構造材（`StructuralMember`）も線分ではない**（長さはパスの両端で測る。下記
+   「打ち切った調査: 構造材 PIO から『スパン』『部材長』をパラメータで読む」）。
+
+### 実測（組み込み PIO 10 件。`LineLength` の有無で 3 対 7 にきれいに割れた）
+
+| universal 名 | 内部 ID | パラメータ数 | `LineLength` | 作成直後の `GetLinearObjectPos` | `Set…` |
+| --- | --- | --- | --- | --- | --- |
+| `Break Line` | 27 | 6 | **索引 5**（既定 `1`） | A=(10000, 5000) B=(10001, 5000) | **効く** |
+| `Joist` | 180 | 23 | **索引 1**（既定 `1524`） | A=(10000, 5000) B=(11524, 5000) | **効く** |
+| `Clothes Rod` | 60 | 5 | **索引 0**（既定 `1`） | A=(10000, 5000) B=(10001, 5000) | **効く** |
+| `Grab Bars` | 124 | 12 | 無い | `(0, 0), (0, 0)` | no-op |
+| `Scale Bar` | 309 | 11 | 無い | `(0, 0), (0, 0)` | no-op |
+| `Leader Line` | 195 | 10 | 無い | `(0, 0), (0, 0)` | no-op |
+| `Center Line Marker` | 47 | 3 | 無い | `(0, 0), (0, 0)` | no-op |
+| `Linear Material` | 198 | 11 | 無い | `(0, 0), (0, 0)` | no-op |
+| `StructuralMember` | 537 | 181 | 無い | `(0, 0), (0, 0)` | no-op |
+| `Door` | 92 | 672 | 無い | `(0, 0), (0, 0)` | no-op |
+
+- **作成直後の終端は、`LineLength` の既定値そのもの**である（`Joist` は既定 1524 で
+  B=(11524, 5000)、`Break Line` / `Clothes Rod` は既定 1 で B=(10001, 5000)）。
+  **既定が `1`（＝1mm）の線分 PIO があるので、「作った直後は長さ 0」と思ってはいけない。**
+- **内部 ID は `MiniCadHookIntf.h` の `kInternalID_*` とそのまま一致した**（10 件すべて。
+  `kInternalID_BreakLine = 27`・`kInternalID_Joist = 180`・`kInternalID_StructuralMember = 537`
+  など）。読むのは `gSDK->GetObjectVariable(h, 1165 /* ovParametricInternalID */, …)` で、
+  **「いま触っている PIO が思っている種別か」をヘッダの定数と突き合わせて確かめられる**。
+- 型（`GetObjectTypeN`）は **10 件すべて 86** で、線分かどうかの区別には使えない。
+
+### `Set…` が効く PIO では、行列の i 軸と `LineLength` が同時に書かれる
+
+`Break Line` の実測（1 本を順に振った。数値はログそのまま）:
+
+| 段 | 呼んだもの | `GetLinearObjectPos` の \|AB\| | 行列 i | `LineLength` | 外接 幅 × 高 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 作成直後 | 1.000 | (1.000, 0.000) | 1.000 | 4622.800 × 1219.200 |
+| 2 | `SetParamReal("LineLength", 4321)` → `ResetObject` | 4321.000 | (1.000, 0.000) | 4321.000 | 4321.000 × 1905.000 |
+| 3 | `SetLinearObjectPos((10000,5000), (13000,9000))`（長さ 5000・53.130°） | 5000.000 | **(0.600, 0.800)** | **5000.000** | 4524.000 × 5143.000 |
+| 4 | `gSDK->SetEndPoints((10000,5000), (10000,12000))`（長さ 7000・90°） | 7000.000 | **(0.000, 1.000)** | 7000.000 | 1905.000 × 7000.000 |
+
+**読みどころ**:
+
+- **与えた方向がそのまま行列の i 軸になる。** 段 3 の `(0.600, 0.800)` は
+  `atan2(4, 3) = 53.130°`、段 4 の `(0.000, 1.000)` は 90°。
+- **`Set…` の効き目は `ResetObject` を待たない。** 段 3 は**書いた直後**に両端・i 軸・
+  `LineLength` のすべてが新しい値で読み戻せた（`ResetObject` の後も同じ値）。
+- **ただし絵を測るなら `ResetObject` の後。** `Clothes Rod` では書いた直後の外接
+  3446.906 × 4335.180 が `ResetObject` で 3441.744 × 4331.308 へわずかに詰まった。
+- **`LineLength` を書いても行列は動かない**（段 2 の i は `(1.000, 0.000)` のまま）。
+  **長さだけを変えたいなら `LineLength`、向きも変えたいなら `SetLinearObjectPos`。**
+- **`gSDK->SetEndPoints` と `VWParametricObj::SetLinearObjectPos` は同じもの**
+  【ソース根拠】——VWFC は `GS_SetEndPoints` を素通しで呼ぶだけで判定も戻り値も無く
+  （`SDKLib/Source/VWSDK/VWFC/VWObjects/VWParametricObj.cpp:281-284`）、その `GS_*` も
+  コールバックを呼ぶ trampoline（`APIBase.Legacy.Defs.cpp:2984`）。実測でも段 3（VWFC 経由）と
+  段 4（`ISDK` 直）で挙動が同じだった。**「例外が出ないのに効かない」の正体は、
+  カーネル側が線分でない PIO を黙って無視すること**である。
+- SDK の中でこの口を使っているのは**線分（`VWLine2DObj`）と壁（`VWWallObj`）だけ**で、
+  PIO のために使っている箇所は 1 つも無い【ヘッダ根拠】。**PIO で使えるのは、その PIO が
+  線分として登録されているときに限られる**と読める。
+
+### 両端の正体は「始端＝行列の offset」「終端＝offset ＋ `LineLength` × i 軸」
+
+**`SetLinearObjectPos(A, B)` は A を行列の offset へそのまま書く**——つまり
+**オブジェクトを動かす操作でもある**（「長さを変えるだけ」ではない）。`Break Line` と
+`Joist` で実測し、**両者で数値まで同一**だった（違ったのは外接だけ——種類ごとに描く形が
+違うため）。
+
+| 段 | 呼んだもの | offset | i | `LineLength` | 両端 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 作成（`(10000, 5000)`・0°） | (10000, 5000) | (1.000, 0.000) | 既定値 | A=offset、B=offset＋既定値×i |
+| 5 | `SetLinearObjectPos((12000,6000), (12000,11000))` | **(12000, 6000)**（動いた） | (0.000, 1.000) | 5000.000 | A=(12000, 6000) B=(12000, 11000) |
+| 6 | `SetLinearObjectPos((12000,6000), (15000,10000))` | (12000, 6000) 据え置き | (0.600, 0.800) | 5000.000 | A=(12000, 6000) B=(15000, 10000) |
+| 7 | `SetParamReal("LineLength", 1000)` → `ResetObject` | (12000, 6000) 据え置き | (0.600, 0.800) 据え置き | 1000.000 | A=(12000, 6000) **B=(12600, 6800)** |
+
+- **段 7 の終端は `offset + 1000 × (0.600, 0.800) = (12600, 6800)` にぴったり一致する。**
+  **`LineLength` を縮めても始端は動かず、終端だけが i 軸方向に詰まる**（外接の原点側
+  `left` / `bottom` も段 6 と段 7 で同じ値のままだった）。
+- **したがって与え方は 2 通りあり、使い分けられる**:
+  - **位置・向き・長さをまとめて決めたい** → `SetLinearObjectPos(始端, 終端)`。
+    `ResetObject` を待たずに効き、**始端に渡した点へオブジェクトが移る**。
+  - **長さだけを変えたい（位置と向きは動かしたくない）** →
+    `SetParamReal("LineLength", 長さ)` ＋ `ResetObject`。
+- **`CreateCustomObject(名前, 位置, 角度)` の位置がそのまま offset になる**ので、
+  **取り込みで線分 PIO を置くなら「`CreateCustomObject` で始端と角度を与え、長さは
+  `LineLength` で書く」だけで足りる**（`SetLinearObjectPos` は「始端も含めて上書きしたい」
+  ときの口である）。
+
+### OIP でパラメータを編集しても、VW は行列も長さも触らない
+
+**利用者が OIP でパラメータを 1 つ編集した前後で、行列（offset・i 軸）・`LineLength`・
+両端・外接のすべてが 1 桁も変わらなかった。**
+
+測り方は 2 段——プローブが 1 回目に読んだ値の**指紋を図形の名前へ書き込み**、利用者が OIP で
+編集し、2 回目に読み直して突き合わせる（OIP の編集は SDK から起こせず、`SetParamReal` ＋
+`ResetObject` で真似ると調べたいものを迂回してしまうため）。被験体は `Break Line`
+（原点 (10000, 5000)・30°・`LineLength` 4321）。
+
+```
+1 回目の指紋 = VWPROBE181 g=ae021063 p=0c8701be
+2 回目の指紋 = VWPROBE181 g=ae021063 p=000157eb
+                         ↑ 幾何は一致   ↑ パラメータは変わった
+1 回目の値 = off=10000.000,5000.000;i=0.866,0.500;len=4321.000;
+             ep=10000.000,5000.000,13742.096,7160.500;bw=4694.596;bh=3810.278
+2 回目の値 = off=10000.000,5000.000;i=0.866,0.500;len=4321.000;
+             ep=10000.000,5000.000,13742.096,7160.500;bw=4694.596;bh=3810.278
+```
+
+- **「パラメータの指紋が変わっている」ことが、利用者が本当に編集した証拠である。**
+  編集せずに 2 回目を走らせると**両方の指紋が一致**し、プローブが「まだ編集されていない」と
+  言う作りにしてある。**幾何の指紋だけが一致した**ので、「編集が無かったから変わらなかった」
+  ではない。
+- **したがって「線分 PIO を OIP で 1 度編集したら絵がずれる」という症状は、VW が行列や長さを
+  書き換えたからではない。** 同じ行列・同じ長さで `Recalculate` が呼ばれているのだから、
+  **疑うのは `Recalculate` が自分以外から読んでいるもの**（他の図形・レイヤ・文書の状態）が
+  取り込み時と違う、という筋である。
+  **`Recalculate` の中から何が見えるかは
+  [issue #183](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/183) で測る**
+  ——自前の PIO を登録しないと `Recalculate` の中に立てないので、道具の追加ぶんとして切り出した。
+
 ## パラメータ名は実機の PIO 登録から採る
 
 VectorScript のエクスポートから推測した名前（`pitch` / `label` / 先頭大文字の
