@@ -119,15 +119,28 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
      （外れたままにはならない——下の点検が戻す）。
    - `workflow_dispatch` は**デフォルトブランチにあるワークフローしか起動できない**
      （GitHub の仕様）。このワークフロー自体を変える PR の間は使えないので、そのときは
-     **PR の Actions 実行ページから成果物 `VwSdkProbes-mac` / `VwSdkProbes-windows` を
-     ダウンロードする**（PR でもビルドはしている。公開だけしない）。この 2 つは
-     **展開したらそのまま Plug-Ins へ置ける**——中に zip を作っていない（GitHub の成果物
-     自体が 1 度 zip になるので、その中がさらに zip だと展開と置き直しが二度手間になる）。
-     - 成果物の zip は**実行権限を保たないことがある**。macOS で読み込まれないときは
-       `chmod +x VwSdkProbes.vwlibrary/Contents/MacOS/VwSdkProbes` を足してから、下記の
-       隔離フラグ外しと署名し直しを行う。
-     - `vwlibrary-zip` / `vlb-zip` はリリース資産（＝自動アップデータが落とす zip）を
-       作るための内部用で、人が落とすものではない。
+     **PR の Actions 実行ページから成果物をダウンロードする**（PR でもビルドはしている。
+     公開だけしない）。**どれを落とすかはプラットフォームで違う。**
+     - **macOS は `vwlibrary-zip`。** 展開すると `VwSdkProbes.vwlibrary.zip` が出てくるので、
+       それをもう一度展開して Plug-Ins へ置く。**二度手間に見えるが、こちらが正しい道**
+       ——**GitHub の成果物は 1 度 zip になり、その zip は実行権限を保たない**ので、素の
+       ファイルで上げてある `VwSdkProbes-mac` を展開すると `.vwlibrary` の実行ビットが落ち、
+       **`dlopen` が失敗して Vectorworks が「互換性のないプラグイン情報／コンパイルした
+       バージョン: 不明」を出す**（版が合わないのではなく、**開けないので版を読めていない**）。
+       `vwlibrary-zip` の中身は runner 上で `zip -qry` した zip なので、実行権限もアドホック
+       署名もそのまま残っている——リリース資産と同じものである
+       （[#184](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/184) で実測）。
+     - **Windows は `VwSdkProbes-windows` でよい**（実行権限の概念が無いので、素のファイルの
+       まま展開して置ける）。`vlb-zip` は同じ中身の zip 版。
+     - **`VwSdkProbes-mac` を使ってしまったときは**、置いたあとに実行権限を戻し、隔離フラグを
+       外して、署名し直す。
+
+       ```sh
+       chmod +x VwSdkProbes.vwlibrary/Contents/MacOS/VwSdkProbes
+       xattr -dr com.apple.quarantine VwSdkProbes.vwlibrary VwSdkProbesPayload-*.vwpayload
+       codesign --force --deep --sign - VwSdkProbes.vwlibrary
+       for p in VwSdkProbesPayload-*.vwpayload; do codesign --force --sign - "$p"; done
+       ```
    - 転がりタグ `probes` は**最後に公開したビルド**を指す。プローブを持つ PR が複数
      動いていると、後から push した方で置き換わる（何が入っているかはリリースノートの
      表とピッカーの出所欄で分かる）。
@@ -272,7 +285,8 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
 公開ビルド（タグ `probes`）は **main のワークフローと main の殻**で作られ、PR からは
 `probes/runtime/` だけを取り込む。つまり**この仕組み自体（`plugin/src/**`）を直す PR は、
 公開ビルドでは自分の直したものを走らせられない**——確かめるには PR の Actions から
-成果物（`VwSdkProbes-mac` / `VwSdkProbes-windows`）を落として手で入れる（上記「使い方」1）。
+成果物を落として手で入れる（上記「使い方」1）。**macOS は `vwlibrary-zip`**（`VwSdkProbes-mac`
+は GitHub の zip 化で実行権限が落ち、読み込めない）、**Windows は `VwSdkProbes-windows`**。
 
 そのビルドではプローブが**群 main に入る**（PR のツリーをそのままビルドするため）ので、
 出所に PR 番号が無い。それだけだと投稿先が決まらず、**投稿を直した PR が投稿を確かめ
