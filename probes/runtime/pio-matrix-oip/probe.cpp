@@ -225,10 +225,13 @@ VW_PROBE("pio-matrix-oip",
 		if (line.find(kMatrixAbortMarker) != std::string::npos)
 		{
 			probe.fail("① が「この殻に調査用 PIO が入っていない」で中止している。"
-					   "**OIP の編集ではなく、PR の Actions の成果物（macOS は "
+					   "**OIP の編集ではなく、この PR のビルドの成果物（macOS は "
 					   "vwlibrary-zip / Windows は VwSdkProbes-windows）を手で入れて "
-					   "Vectorworks を再起動する**のが先です（ピッカー先頭の入れ替えで"
-					   "取れるのは main の殻なので、この PIO は入っていません）。"
+					   "Vectorworks を再起動する**のが先です。"
+					   " ◆**ピッカー先頭の入れ替えでも、リリース（タグ probes）の zip でも"
+					   "入りません**——どちらも殻は main のものです。"
+					   " ◆**見分け方は、この投稿の「ビルドの素性」の `殻:` の行**"
+					   "（`main` のままなら入れ替え先が違います）。"
 					   "入れ替えたら ① → OIP の編集 → ② の順で。");
 			return;
 		}

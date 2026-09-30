@@ -273,12 +273,21 @@ VW_PROBE("pio-matrix-reset",
 		// これが無くて「OIP を編集してください」と見当違いのお願いをした）。
 		MatrixTraceAppend(std::string(kMatrixAbortMarker) +
 						  "（DefineCustomObject が nil）。PR の成果物を手で入れて再起動が要る。");
-		probe.fail(std::string("DefineCustomObject(\"") + kMatrixPioUniversalName +
-				   "\") が nil。**この殻には調査用 PIO が入っていない**"
-				   "——PR の Actions の成果物 **vwlibrary-zip**（macOS）/ "
-				   "**VwSdkProbes-windows**（Windows）を手で入れて**Vectorworks を再起動**"
-				   "してから走らせてください（ピッカー先頭の入れ替えで取れるのは main の殻"
-				   "なので、この PIO は入っていません）。");
+		// **「どうすればよいか」だけでなく「いま何が入っているかの見分け方」を言う。**
+		// これが無いと、入れ替えたつもりで同じ失敗を繰り返す——ピッカー先頭の入れ替えも
+		// リリース（タグ `probes`）の zip も**殻は main のもの**なので、どちらも
+		// この PIO は入らない。**実際に 2 回踏んだ**（PR #186）。
+		probe.fail(
+			std::string("DefineCustomObject(\"") + kMatrixPioUniversalName +
+			"\") が nil ——**この殻には調査用 PIO が入っていません。**"
+			" ◆**ピッカー先頭の入れ替えでも、リリース（タグ probes）の zip でも入りません**"
+			"——どちらも殻は main のものです。要るのは**この PR のビルドの成果物**"
+			"（macOS は **vwlibrary-zip**、Windows は **VwSdkProbes-windows**）を手で入れて、"
+			"**Vectorworks を再起動**することです。"
+			" ◆**見分け方は、この投稿の「ビルドの素性」の `殻:` の行**です。"
+			"`殻: main <sha>` なら main の殻（いまこれ。走りません）、"
+			"`殻: <PR のブランチ名> <sha>` なら PR の殻（これなら走ります）。"
+			"`殻:` の id が新しくなっていても、`main` のままなら入れ替え先が違います。");
 		return;
 	}
 	probe.log(std::string("DefineCustomObject(\"") + kMatrixPioUniversalName +
