@@ -600,8 +600,6 @@ cmake -S plugin -B build -DVW_SDK_DIR=... \
 | `src/PayloadHostHolder.h` | 本体の側。**殻から渡されたものを写して持つ**（`tests/PayloadHostHolderTests.cpp` が確かめる） |
 | `src/PluginPrefix.h` | SDK アンブレラヘッダ（プリコンパイル対象） |
 | `resources/VwSdkProbes.vwr/` | メニュー項目の表示名（UTF-16 の .vwstrings） |
-| `src/ExtPioRecalcEnv.{h,cpp}` | **一時的な調査用 PIO**（[issue #183](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/183)）。下記「調査用の PIO」 |
-| `src/PioRecalcTrace.h` | その PIO とプローブが共有する書き溜め先（同上） |
 
 プラグインの識別子は 1 か所（`src/BuildConfig.h` と `CMakeLists.txt`）にまとまっている:
 バンドル名 `VwSdkProbes` / バンドル ID `io.github.min-nano.VwSdkProbes` /
@@ -611,31 +609,32 @@ VCOM ユニバーサル名 `CExtMenuVwSdkProbes` / 拡張機能 UUID
 **実プラグイン（[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)）
 とは別の識別子**なので、両方を同時に入れておける。
 
-## 調査用の PIO（一時的。役目を終えたら外す）
+## 拡張機能を一時的に足して調べる（[issue #183](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/183) の例）
 
 ふつうこのプラグインが登録する拡張機能は**メニューコマンド 1 つだけ**だが、
-**「`Recalculate` の中から何が見えるか」だけはメニューコマンドからは測れない**
-——`Recalculate` に自分のコードを立てられるのは**自前の PIO の中だけ**で、組み込み PIO の
-`Recalculate` には入れないからである。そのために
-[issue #183](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/183)
-の調査中だけ、殻が PIO を 1 つ登録している。
+**拡張機能でなければ調べられないことがある**。例が「`Recalculate` の中から何が見えるか」
+——`Recalculate` に自分のコードを立てられるのは**自前の PIO の中だけ**で、その登録は
+モジュールの読み込みのときに起きるため、入れ替えできる本体（`.vwpayload`）には置けない。
 
-| | |
-| --- | --- |
-| ユニバーサル名 | `VwSdkProbesRecalcEnv`（サブタイプは線分＝`kParametricSubType_Linear`） |
-| すること | `Recalculate` の中で見えたもの（自分の行列・他のレイヤ・他の図形の外接・自分の両端とパラメータ表）を**ファイルへ 1 行ずつ書き溜める**だけ。絵は線 1 本 |
-| 書き溜め先 | 一時ディレクトリの `VwSdkProbes-pio-recalc-trace.log`（`src/PioRecalcTrace.h`。環境変数 `VW_PROBE_PIO_TRACE` で差し替え可） |
-| 読む側 | プローブ `pio-recalc-env-reset`（印を入れて作って `ResetObject`）と `pio-recalc-env-oip`（OIP 編集の回と機械で突き合わせる） |
+issue #183 ではそのために**殻へ調査用の PIO を 1 つ登録し、調査が済んだら外した**
+（結論は [Findings「`Recalculate` の中から見える環境」](../Findings/Parametric%20Objects.md)）。
+同じことをするときの形:
 
-- **なぜファイル越しなのか。** PIO の登録と `Recalculate` は殻、プローブは本体
-  （`.vwpayload`）にあり、境界（`src/PayloadAbi.h`）は殻 → 本体の一方向しか持たない。
-  しかも `Recalculate` が呼ばれる瞬間（利用者が OIP を編集したとき）には本体が読み込まれて
-  さえいない。だから**プロセスにも読み込み状態にも依らないもの**で受け渡す。
-- **この PIO は公開ビルド（転がりタグ `probes`）では確かめられない。** 公開ビルドの殻は
-  main のものなので、PR で足した拡張機能は入っていない。上記
-  「[PR のビルドを手で入れて確かめるとき](#pr-のビルドを手で入れて確かめるとき)」の手順で
-  PR の成果物を手で入れる（プローブだけが nil の定義を見て「殻に入っていない」と言うので、
-  取り違えたままの実行にはならない）。
-- **常駐させない。** 調査が済んだら `src/ExtPioRecalcEnv.{h,cpp}` ／ `src/PioRecalcTrace.h` ／
-  `ModuleMain.cpp` の登録 1 行 ／ `CMakeLists.txt` のソース 1 行 ／ `.vwstrings` の `pio*` の
-  4 行 ／ `probes/runtime/pio-recalc-env-*` を一緒に落とす。
+- **殻（`plugin/src/**`）に置き、`ModuleMain.cpp` で登録する。** したがって
+  **公開ビルド（転がりタグ `probes`）では確かめられない**——公開ビルドの殻は main の
+  ものなので、PR で足した拡張機能は入っていない。上記
+  「[PR のビルドを手で入れて確かめるとき](#pr-のビルドを手で入れて確かめるとき)」の
+  手順で PR の成果物を手で入れる。
+- **プローブとの受け渡しはファイルで行う。** 境界（`src/PayloadAbi.h`）は殻 → 本体の
+  一方向しか持たず、しかも利用者が OIP を編集した瞬間には本体が読み込まれてさえいない。
+  プロセスにも読み込み状態にも依らないもので渡すこと（1 行ごとに開いて閉じれば、
+  Vectorworks ごと落ちてもそこまでが残る）。
+- **プローブはその殻のヘッダを include できない。** 公開ビルドは「main の殻 ＋ 各 PR の
+  `probes/runtime/` だけ」で組まれるので、同じ PR で足したヘッダは向こうに無い
+  （[`probes/runtime/README.md`](../probes/runtime/README.md) の「決まり」）。約束事は
+  プローブ側へ書き写して自己完結させる。
+- **入れ替え忘れを機械で弾く。** プローブの先頭で `gSDK->DefineCustomObject(名前, …)` を
+  呼び、nil なら「この殻には入っていない」と言って止める。これが無いと、公開ビルドの殻で
+  走らせた結果を「実測」と誤読しかねない。
+- **常駐させない。** 済んだら殻・登録・`CMakeLists.txt` のソース・`.vwr` の文字列・
+  プローブを一緒に落とす。
