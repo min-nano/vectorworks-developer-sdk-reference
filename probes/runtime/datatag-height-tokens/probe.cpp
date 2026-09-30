@@ -4,24 +4,22 @@
 //	[issue #187] データタグのタグフィールドの式で、**ストーリ基準・レイヤ基準・基準平面
 //	基準の高さ**（`#IPZS#` / `#ZTBBS#` / `#ZTBBG#` …）が実際に何を返すかを測る。
 //
-//	**なぜやり直すか。** #188 で「レイヤ高さ・ストーリ高さを数値で返す口は無い」と
-//	書いたが、根拠が足りていなかった。測ったのは**こちらが推測した綴り**
-//	（`#LAYERELEVATION#` など 4 本＋ワークシート式 37 本）だけで、**正式な一覧を
-//	持っていなかった**。VW の「タグフィールドの定義」ダイアログ
-//	（`IDataTagSupport::ShowDefineTagFieldDlg`）には、ストーリ基準・レイヤ基準・
-//	基準平面基準の高さがはっきり並んでいる。**`#IPZS#` と `#ZTBBS#` は一度も
-//	試していない**——しかも `#ZTBB…#` は「バウンディングボックス上面の高さ」＝
-//	この調査がまさに欲しかった**天端の高さ**である。
+//	【2 巡目】1 巡目（ビルド `09488cfbfb4b`）で**綴りは全部生きている**と分かった
+//	（`#IPZ#`＝絶対Z・`#IPZS#`＝ストーリ基準・`#IPZL#`＝レイヤ基準。どれも動かすと追随する）。
+//	ただし**3 つ取り残した**:
 //
-//	**測って決めたいこと**:
-//	  1. 各綴りが何を返すか。とくに「**ストーリの高さ**」の基準が**階の高さ**なのか
-//	     **その階の FL レベル**なのか——数値を見ないと決まらない。
-//	  2. **動かしたら追随するか**（`#IPZL#` は追随すると実測済み）。
-//	  3. 伏図レイヤと基準の階が食い違う現場の形で、**定数なしで「FL からの高さ」が
-//	     出る綴りがあるか**。
+//	  1. **`#IPZS#` と `#IPZL#` が同じ値（−2699）を返した。** 舞台のレベルの階内相対Z を
+//	     0 にしていたので、**階の高さとレイヤの高さが一致していた**——2 つを見分けられない
+//	     舞台だった。**レベルに相対Z −40 を与えて割る。**
+//	  2. **`#ZTBB…#` / `#ZBBB…#` が `±1.7976931348623e308`（＝`DBL_MAX`）を返した。**
+//	     これは**何も描いていない PIO の反転した空矩形**で、綴りが悪いのではない。
+//	     構造材を描かせられていないので、**確実に描かれる押し出し（`CreateExtrude`）**を
+//	     別に置いて、そちらで上面・底面の基準が何かを測る。
+//	  3. **`" (2FL "#IPZL#-872")"` が空になった。** `" (2FL "#IPZL#")"`（連結だけ）も
+//	     `#IPZL#-872`（演算だけ）も通るのに、**混ぜると空**。#188 でこの組み合わせを
+//	     確かめずに推奨へ書いてしまった。**綴りを何通りか試して、通る形を見つける。**
 //
 //	舞台の数値はすべて互いに違えてあるので、**返った数字だけで出どころが言い当てられる**。
-//
 
 #include "Probe.h"
 
@@ -234,7 +232,11 @@ VW_PROBE("datatag-height-tokens", "タグの式の高さの綴りを測る",
 			continue;
 		short index = -1;
 		TXString templateName = (pass == 0) ? TXString("T187-TPL-FL") : TXString("T187-TPL-PLAN");
-		gSDK->CreateStoryLevelTemplate(templateName, 1.0, levelType, 0.0, 2400.0, index);
+		// **伏図のレベルだけ階内相対Z を −40 にする。** 1 巡目は 0 にしていたので
+		// 階の高さとレイヤの高さが一致し、`#IPZS#` と `#IPZL#` を見分けられなかった。
+		//   階 PLAN の高さ 2699 ＋ 相対Z −40 → **レイヤの絶対Z は 2659**
+		const double levelOffset = (pass == 0) ? 0.0 : -40.0;
+		gSDK->CreateStoryLevelTemplate(templateName, 1.0, levelType, levelOffset, 2400.0, index);
 		short byType = -1;
 		const short count = gSDK->GetNumStoryLevelTemplates();
 		for (short i = 0; i <= count && byType < 0; ++i)
@@ -289,6 +291,34 @@ VW_PROBE("datatag-height-tokens", "タグの式の高さの綴りを測る",
 			ProbeI187b_Int(static_cast<long long>(gSDK->GetObjectStoryBoundsCount(hMemberP))) +
 			" 解決Z ID0=" + ProbeI187b_Num(gSDK->GetObjectBoundElevation(hMemberP, 0)) +
 			" ID1=" + ProbeI187b_Num(gSDK->GetObjectBoundElevation(hMemberP, 1)));
+	}
+
+	// ---- **確実に描かれる本**を 1 つ置く（押し出し）。構造材を描かせられていないので、
+	//	`#ZTBB…#` / `#ZBBB…#` の基準はこちらで測る。
+	//	  伏図レイヤ（絶対Z **2659**）の上に、**局所Z 100 → 700** の押し出しを置く。
+	//	  したがって期待される値は互いに違う:
+	//	    上面: 基準平面 **3359** / レイヤ **700** / ストーリ **660**（2659+700−2699）
+	//	    底面: 基準平面 **2759** / レイヤ **100** / ストーリ **60**
+	MCObjectHandle hExtrude = nil;
+	{
+		MCObjectHandle hProfile =
+			gSDK->CreateRectangleN(WorldPt(0.0, 5000.0), Vector2(1.0, 0.0), 2000.0, 1000.0);
+		hExtrude = gSDK->CreateExtrude(100.0, 700.0);
+		if (hExtrude != nil && hProfile != nil)
+		{
+			gSDK->AddObjectToContainer(hProfile, hExtrude);
+			gSDK->ResetObject(hExtrude);
+			if (hLayerPlan != nil)
+				gSDK->AddObjectToContainer(hExtrude, hLayerPlan);
+			WorldRect bounds;
+			const bool got = gSDK->GetObjectBounds(hExtrude, bounds);
+			probe.log(std::string("押し出し: 外接=") +
+					  (got && bounds.right > bounds.left
+						   ? "幅 " + ProbeI187b_Num(bounds.right - bounds.left)
+						   : "**空（図形が無い）**"));
+		}
+		else
+			probe.log("押し出しを作れなかった（以後 bbox 系は構造材でしか測れない）");
 	}
 
 	// =======================================================================
@@ -359,11 +389,47 @@ VW_PROBE("datatag-height-tokens", "タグの式の高さの綴りを測る",
 	// 4. 「その階の FL から測った天端の高さ」を**定数なしで**出せる綴りがあれば、
 	//	そのまま注記の形にして確かめる。
 	// =======================================================================
-	probe.log("=== 4. 注記の形（演算と組み合わせる）===");
-	static const char* const kFormulas[] = {"\" (2FL \"#ZTBBS#\")\"", "\" (2FL \"#ZTBBG#-3571\")\"",
-											"\" (2FL \"#IPZL#-872\")\"", "\" (2FL \"#IPZS#\")\""};
-	for (size_t i = 0; i < sizeof(kFormulas) / sizeof(kFormulas[0]); ++i)
-		ProbeI187b_Eval(probe, tagSupport, linkSupport, hTagP, hTextP, "段3", kFormulas[i]);
+	// =======================================================================
+	// 4. **確実に描かれる本**（押し出し）で bbox 系の基準を測る。
+	// =======================================================================
+	probe.log("=== 4. 押し出しで bbox 系の基準を測る ===");
+	if (hExtrude != nil)
+	{
+		MCObjectHandle hTagE = nil;
+		MCObjectHandle hTextE = ProbeI187b_BuildTag(probe, tagSupport, linkSupport, hExtrude,
+													hLayerPlan, 9000.0, "E", hTagE);
+		if (hTextE != nil)
+		{
+			static const char* const kBBox[] = {"#ZTBBS#", "#ZTBBL#", "#ZTBBG#", "#ZBBBS#",
+												"#ZBBBL#", "#ZBBBG#", "#IPZ#",	 "#IPZS#",
+												"#IPZL#",  "#ZCTR#",  "#ST#",	 "#L#"};
+			for (size_t i = 0; i < sizeof(kBBox) / sizeof(kBBox[0]); ++i)
+				ProbeI187b_Eval(probe, tagSupport, linkSupport, hTagE, hTextE, "段4(押し出し)",
+								kBBox[i]);
+		}
+	}
+
+	// =======================================================================
+	// 5. **連結と演算を混ぜる綴り**を詰める。1 巡目で
+	//	`" (2FL "#IPZL#-872")"` が空になった——単独ではどちらも通るのに、である。
+	//	通る形が 1 つでも見つかれば、それが推奨の式になる。
+	// =======================================================================
+	probe.log("=== 5. 連結と演算を混ぜる綴り ===");
+	static const char* const kSyntax[] = {
+		"#IPZL#",						// 基準: フィールドだけ
+		"#IPZL#-872",					// 基準: 演算だけ（通ると実測済み）
+		"\" (2FL \"#IPZL#\")\"",		// 基準: 連結だけ（通ると実測済み）
+		"\" (2FL \"#IPZL#-872\")\"",	// 1 巡目に空だった形
+		"\" (2FL \"(#IPZL#-872)\")\"",	// 括弧で括る
+		"(\" (2FL \"#IPZL#-872\")\")",	// 全体を括る
+		"\" (2FL \"(#IPZL#-872)\" )\"", // 括弧＋閉じ側に空白
+		"#IPZL#-872\" (2FL)\"",			// 演算を先、文字を後ろ
+		"\"(\"#IPZL#-872\")\"",			// いちばん短い形
+		"\" (2FL \"#IPZL#\"-872)\"",	// 演算子を文字側へ入れた形（対照）
+		"\" (2FL \"#IPZS#-40\")\"",		// ストーリ基準でも同じか
+		"\" (2FL \"(#IPZS#-40)\")\""};
+	for (size_t i = 0; i < sizeof(kSyntax) / sizeof(kSyntax[0]); ++i)
+		ProbeI187b_Eval(probe, tagSupport, linkSupport, hTagP, hTextP, "段5", kSyntax[i]);
 
 	probe.log("=== 終わり ===");
 }
