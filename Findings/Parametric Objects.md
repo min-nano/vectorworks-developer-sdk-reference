@@ -2747,6 +2747,11 @@ API が無い。したがって参照先の図形を動かした瞬間には PIO
 | レイヤの走査（`FirstMemberObj` → `NextObject`） | 3 件／自分も対象も見えた | 同じ |
 | 編集したパラメータ（`TraceNote`） | `""` | `"何か1"` |
 
+**行列の 2 行だけは、この表では「同じ」と読めても足りない。** 被験 PIO が
+**原点・無回転**（offset=(0,0,0) U=(1,0,0)）に置かれていたので、**編集時だけ単位行列に
+化けていても同じ値が出る**。原点から離し・回転させた PIO で測り直した結果は下記
+「[PIO の行列を読む口](#pio-の行列を読む口名前は-4-つ実体は-2-つ)」にある。
+
 **要点は「自分以外の図形を探して測れる」こと。** 名前引き（`GetNamedObject`）も
 レイヤの走査も `Recalculate` の中で普通に効き、**他のレイヤも `GetNamedLayer` で引ける**。
 **どちらの文脈でも同じ**なので、「OIP 編集のときだけ対象が見つからない」は起きない。
@@ -2804,6 +2809,39 @@ API が無い。したがって参照先の図形を動かした瞬間には PIO
 **同じ項目**（`TraceNote="…" TraceLength=…`）で、この行だけ `:` を含まないために
 突き合わせの鍵が値ごと切り出され、別項目として数えられただけである。
 **実質の差は 0**——上の表のとおり。
+
+## PIO の行列を読む口——名前は 4 つ、実体は 2 つ
+
+PIO の配置（ローカル座標 → 世界座標の変換）を読む口は、綴りが 4 つある。**うち 2 組は
+1 行違わず同じ呼び出しに落ちる**ので、**「この口が駄目なら別の口にする」で直る余地は
+思ったより狭い**。SDK は VWFC の実装 `.cpp` を同梱しているので、これは読めば分かる
+（[調査の作法](Investigation%20Techniques.md)。以下【ヘッダ根拠】）。
+
+| 口 | 実装 | 中で呼んでいるもの |
+| --- | --- | --- |
+| `VWParametricObj::GetObjectToWorldTransform` | `VWParametricObj.cpp:92` | `::GS_GetEntityMatrix(gCBP, h, mat)` |
+| `VWObject::GetObjectMatrix` | `VWObject.cpp:330` | `::GS_GetEntityMatrix(gCBP, h, mat)` |
+| `VWObject::GetObjectModelMatrix` | `VWObject.cpp:355` | `gSDK->GetEntityMatrix(h, mat)` |
+| `gSDK->GetEntityMatrix` | `ISDK.h:845`（実装は VW 本体側） | ——（これが底） |
+
+- **上の 2 つは完全に同じ。** どちらも「素の `TransformMatrix` を `GS_GetEntityMatrix` で
+  埋めて `VWTransformMatrix` へ代入する」3 行で、分岐も後処理も無い。
+  **`GetObjectToWorldTransform` が返す値に不満があるとき、`GetObjectMatrix` に変えても
+  1 ビットも変わらない。**
+- **違いがあるのは「旧 callback 経由（`GS_GetEntityMatrix`）か ISDK 経由
+  （`gSDK->GetEntityMatrix`）か」の 1 点だけ**で、しかも旧 callback は
+  **`bUseLegacyZ = true` を渡している**（`APIBase.Legacy.Defs.cpp:2034`。
+  `typedef void (*GetEntityMatrixPtr)(MCObjectHandle, TransformMatrix&, bool bUseLegacyZ)`）。
+  つまり**差が出るとすれば Z だけ**が期待できる余地で、XY の平行移動・回転が
+  口によって違うことはこの実装からは起こり得ない。
+- **`GetObjectToWorldTransform` の名前は誤解を招く。** コメントは
+  `currently: get the object matrix to the layer if object is inside a layer` と書いてあり、
+  `VWObject::GetObjectMatrix` のコメントと**一字一句同じ**である。**「world」は
+  「レイヤ座標」の意味**で、シンボル内・グループ内の PIO で親を遡って積む処理は入って
+  いない。
+
+**宣言があることは動くことを意味しない**（この節は【ヘッダ根拠】）。「`Recalculate` の中で
+実際に何が返るか」は下記のとおり実機で測る。
 
 ## パラメータ変更を PIO へ伝える口は無い
 
