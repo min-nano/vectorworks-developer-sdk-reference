@@ -15,8 +15,22 @@
 //	  5. 符号（ラベル枠）の位置の基準。**高さ範囲の上端だけ違うビューポート 2 枚**で
 //	     グリッド線の外接の上端を比べる。
 //
-//	図面を壊す前提（新規の空図面で走らせる）。デザインレイヤ 1 枚・通り芯 3 本・
-//	押出 1 つ・シートレイヤ 1 枚・断面ビューポート 3 枚を作る。
+//	図面を壊す前提（新規の空図面で走らせる）。デザインレイヤ 1 枚・通り芯 4 本
+//	（1 本は試験用）・押出 1 つ・シートレイヤ 1 枚・断面ビューポート 3 枚を作る。
+//
+//	【1 巡目（ビルド 8016526ba982）で分かったこと】
+//	  * `CreateCustomObject("GridAxis", …)` は**組み込みの通り芯**を作る（内部 ID 647・
+//	    パラメータ 32 件）。名前は当たっていた。
+//	  * **`GridAxis` は線分 PIO ではない**——`LineLength` を持たないので
+//	    `SetLinearObjectPos` は完全な no-op（Findings/Parametric Objects.md のとおり）。
+//	    その結果、作りたての通り芯は**外接 y[-2000..-775]＝1225mm しか伸びていなかった**。
+//	  * だから y=4000 に引いた断面線は**通り芯を 1 本も横切っていなかった**。
+//	    注釈群は 3 枚とも nil で、断面群にあったのは `Section Line2`(645) 1 本だけ。
+//	    ＝「注釈にグリッド線が出ない」は**通り芯が切断面に届いていなかったから**の
+//	    可能性が残っており、1 巡目の失敗は結論ではない。
+//	2 巡目で潰すのはそこ: (a) 通り芯の長さをパラメータで与え、(b) 断面線の y を
+//	**通り芯の実測外接の真ん中**に取り、(c) それでも注釈群が nil なら矩形を 1 つ
+//	置いて注釈群を作らせてから更新し直す。
 //
 
 #include "Probe.h"
@@ -241,42 +255,82 @@ namespace
 		std::vector<ProbeItem> annotation; // 更新後に注釈群で見つけたもの
 	};
 
-	// 通り芯を 1 本作る。x の位置に、y0 から y1 まで。
+	// 通り芯（GridAxis）を 1 本作って、狙ったレイヤへ入れ直す。
 	//
 	// **作ったものはアクティブレイヤに入る。** SDK にアクティブレイヤを切り替える口は
 	// 無い（`GetActiveLayer` はあるが setter が無い）ので、**入れ直す**
-	// （Findings/Symbols.md「レイヤへ入れ直す」）。入れ直さないと、通り芯が狙った
-	// デザインレイヤではなく既定のレイヤに載り、「注釈にグリッド線が出ない」が
-	// レイヤ違いのせいなのか本当に出ないのか分からなくなる。
+	// （Findings/Symbols.md「レイヤへ入れ直す」）。
+	//
+	// **`GridAxis` は線分 PIO ではない**（1 巡目の実測: `LineLength` を持たず、
+	// `SetLinearObjectPos` は no-op。Findings/Parametric Objects.md「線分 PIO の両端と
+	// 長さ」のとおり）。だから長さは**パラメータで**与えるしかなく、それがどれかは
+	// 下の ProbeFindLengthParam が実機で当てる。
 	MCObjectHandle ProbeMakeGridAxis(vwprobe::Report& probe, MCObjectHandle layer, double x,
-									 double y0, double y1, int ordinal)
+									 double y, const char* label)
 	{
-		MCObjectHandle h = gSDK->CreateCustomObject("GridAxis", WorldPt(x, y0), 0.0);
+		MCObjectHandle h = gSDK->CreateCustomObject("GridAxis", WorldPt(x, y), 0.0);
 		if (h == nil)
 		{
-			probe.fail("CreateCustomObject(\"GridAxis\") が nil を返した（通り芯 " +
-					   ProbeWhole(ordinal) + " 本目）");
+			probe.fail(std::string("CreateCustomObject(\"GridAxis\") が nil を返した（") + label +
+					   "）");
 			return nil;
 		}
-		const MCObjectHandle bornIn = gSDK->ParentObject(h);
-		if (bornIn != layer)
+		if (gSDK->ParentObject(h) != layer)
 			gSDK->AddObjectToContainer(h, layer);
-		probe.log("  通り芯 " + ProbeWhole(ordinal) +
-				  " の親: 生まれた先=" + ProbeHandleText(bornIn) + " 入れ直した後=" +
-				  ProbeHandleText(gSDK->ParentObject(h)) + " 狙い=" + ProbeHandleText(layer));
-		VWParametricObj pio(h);
-		const long long internalId = static_cast<long long>(pio.GetInternalID());
-		const bool linear = pio.GetParamIndex("LineLength") != (size_t)-1;
-		probe.log(
-			"  通り芯 " + ProbeWhole(ordinal) + ": h=" + ProbeHandleText(h) +
-			" PIO=" + ProbeTextOf(pio.GetParametricName()) + " 内部ID=" + ProbeWhole(internalId) +
-			"（kInternalID_GridAxis=647 と一致するか）" + " LineLength=" + (linear ? "有" : "無") +
-			" パラメータ数=" + ProbeWhole(static_cast<long long>(pio.GetParamsCount())));
-		if (linear)
-			pio.SetLinearObjectPos(WorldPt(x, y0), WorldPt(x, y1));
 		gSDK->ResetObject(h);
-		probe.log("    " + ProbeBoxText(ProbeBoundsOf(h)));
+		VWParametricObj pio(h);
+		probe.log(std::string("  ") + label + ": h=" + ProbeHandleText(h) +
+				  " PIO=" + ProbeTextOf(pio.GetParametricName()) +
+				  " loc名=" + ProbeTextOf(pio.GetLocalizedParametricName()) +
+				  " 内部ID=" + ProbeWhole(static_cast<long long>(pio.GetInternalID())) +
+				  " styleRef=" + ProbeWhole(static_cast<long long>(pio.GetStyleRefNumber())) +
+				  " パラメータ数=" + ProbeWhole(static_cast<long long>(pio.GetParamsCount())) +
+				  " 親=" + ProbeHandleText(gSDK->ParentObject(h)) + " " +
+				  ProbeBoxText(ProbeBoundsOf(h)));
 		return h;
+	}
+
+	// **どのパラメータが通り芯の「長さ」か**を実機に当てさせる。言語に依らない形で。
+	//
+	// 座標欄（`kFieldCoordDisp` = 7）を 1 つずつ大きくして `ResetObject` し、**外接が
+	// 最も伸びたもの**を長さとみなす。試した値は毎回戻すので、この 1 本は使い捨てで
+	// よい（断面線の届かない遠くへ置いてある）。
+	std::string ProbeFindLengthParam(vwprobe::Report& probe, MCObjectHandle axis,
+									 const std::vector<ProbeParam>& params)
+	{
+		const double kTry = 12000.0;
+		std::string best;
+		double bestGain = 0.0;
+		for (const ProbeParam& p : params)
+		{
+			if (p.fieldStyle != kFieldCoordDisp || p.name.empty())
+				continue;
+			const TXString univ(p.name.c_str());
+			VWParametricObj pio(axis);
+			const double before = pio.GetParamReal(univ);
+			const ProbeBox boxBefore = ProbeBoundsOf(axis);
+			pio.SetParamReal(univ, kTry);
+			gSDK->ResetObject(axis);
+			const ProbeBox boxAfter = ProbeBoundsOf(axis);
+			double gain = 0.0;
+			if (boxBefore.ok && boxAfter.ok)
+				gain = ((boxAfter.right - boxAfter.left) + (boxAfter.top - boxAfter.bottom)) -
+					   ((boxBefore.right - boxBefore.left) + (boxBefore.top - boxBefore.bottom));
+			probe.log("    " + p.name + "（loc=" + p.loc + "）: " + ProbeReal(before) + " → " +
+					  ProbeReal(kTry) + " で 外接の伸び=" + ProbeReal(gain) + " / " +
+					  ProbeBoxText(boxAfter));
+			// 戻す（次の欄の試行を汚さない）
+			VWParametricObj(axis).SetParamReal(univ, before);
+			gSDK->ResetObject(axis);
+			if (gain > bestGain)
+			{
+				bestGain = gain;
+				best = p.name;
+			}
+		}
+		probe.log("  → 長さとみなしたのは " + (best.empty() ? std::string("（無し）") : best) +
+				  "（伸び=" + ProbeReal(bestGain) + "）");
+		return best;
 	}
 } // namespace
 
@@ -289,8 +343,6 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 	// 「オブジェクトの設定」ダイアログで止まらないように（probes/runtime/README.md）。
 	gSDK->DefineCustomObject("GridAxis", kCustomObjectPrefNever);
 
-	// ------------------------------------------------ 1. モデル側（通り芯と実体）
-	probe.log("== 1. デザインレイヤ・通り芯 3 本・押出 1 つ ==");
 	MCObjectHandle design = gSDK->CreateLayer("i189-model", kLayerDesign);
 	if (design == nil)
 	{
@@ -301,32 +353,69 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 	probe.log("  デザインレイヤ h=" + ProbeHandleText(design) +
 			  " / 作った後のアクティブレイヤ=" + ProbeHandleText(gSDK->GetActiveLayer()));
 
-	// 通り芯は x = 0 / 4000 / 8000 に、y = -2000 〜 10000 の縦線として引く。
-	// 断面線は y = 4000 の横線なので、3 本とも切断面を横切る。
+	// ------------------------------------- 1. 通り芯のパラメータ表と「長さ」の在処
+	//
+	// 1 巡目でここが要ると分かった。作りたての通り芯は **y 方向に 1225mm しか伸びて
+	// いない**（外接 y[-2000..-775]）ので、y=4000 に引いた断面線を横切っておらず、
+	// 「注釈にグリッド線が出ない」の原因がそこだった可能性を潰せなかった。
+	probe.log("== 1. 通り芯（GridAxis）のパラメータ表と「長さ」の在処 ==");
+	// **断面線の届かない遠く**（x = -50000）へ試験用の 1 本を置く。値を振って戻すので
+	// 使い捨てでよく、断面には映らない。
+	MCObjectHandle probeAxis = ProbeMakeGridAxis(probe, design, -50000.0, 0.0, "試験用の通り芯");
+	if (probeAxis == nil)
+		return;
+	probe.log("  パラメータ表（全件）:");
+	const std::vector<ProbeParam> axisParams = ProbeDumpParams(probe, probeAxis, true);
+	probe.log("  座標欄を 1 つずつ 12000 にして、外接がいちばん伸びる欄を探す:");
+	const std::string lengthParam = ProbeFindLengthParam(probe, probeAxis, axisParams);
+
+	// --------------------------------------------- 2. 本番の通り芯 3 本と押出 1 つ
+	probe.log("== 2. 通り芯 3 本（長さを与える）と押出 1 つ ==");
 	const double kGridX[3] = {0.0, 4000.0, 8000.0};
 	std::vector<MCObjectHandle> axes;
 	for (int i = 0; i < 3; ++i)
 	{
-		MCObjectHandle axis = ProbeMakeGridAxis(probe, design, kGridX[i], -2000.0, 10000.0, i + 1);
+		const std::string label = "通り芯 " + ProbeWhole(i + 1);
+		MCObjectHandle axis = ProbeMakeGridAxis(probe, design, kGridX[i], 0.0, label.c_str());
 		if (axis == nil)
-			return; // 通り芯が作れないならこの調査は先へ進めない
+			return;
+		if (!lengthParam.empty())
+		{
+			VWParametricObj(axis).SetParamReal(TXString(lengthParam.c_str()), 12000.0);
+			gSDK->ResetObject(axis);
+			probe.log("    長さ（" + lengthParam +
+					  "）に 12000 を書いた後: " + ProbeBoxText(ProbeBoundsOf(axis)));
+		}
 		axes.push_back(axis);
 	}
 
-	// 断面に何か映るように、切断面の奥（y > 4000）へ押出を 1 つ置く。
+	// **断面線の y は、通り芯が実際に占めている範囲の真ん中に取る。**
+	// 座標を決め打ちすると（1 巡目のように）通り芯を横切らない断面線ができてしまい、
+	// 「グリッド線が出ない」の理由が分からなくなる。**測ってから決める。**
+	const ProbeBox axisBox = ProbeBoundsOf(axes[0]);
+	if (!axisBox.ok)
+	{
+		probe.fail("通り芯の外接が読めないので、断面線をどこへ引けばよいか決められない");
+		return;
+	}
+	const double cutY = (axisBox.top + axisBox.bottom) * 0.5;
+	probe.log("  通り芯 1 の外接 " + ProbeBoxText(axisBox) + " → 断面線の y = " + ProbeReal(cutY) +
+			  "（通り芯を確かに横切る）");
+
+	// 断面に何か映るように、切断面の奥（y > cutY）へ押出を 1 つ置く。
 	MCObjectHandle extrude = gSDK->CreateExtrude(0.0, 3000.0);
 	if (extrude != nil)
 	{
 		WorldRect box;
 		box.left = 0.0;
 		box.right = 8000.0;
-		box.top = 7000.0;
-		box.bottom = 5000.0;
+		box.bottom = cutY + 1000.0;
+		box.top = cutY + 3000.0;
 		MCObjectHandle rect = gSDK->CreateRectangle(box);
 		if (rect != nil)
 			gSDK->AddObjectToContainer(rect, extrude);
 		if (gSDK->ParentObject(extrude) != design)
-			gSDK->AddObjectToContainer(extrude, design); // 通り芯と同じ理由で入れ直す
+			gSDK->AddObjectToContainer(extrude, design);
 		gSDK->ResetObject(extrude);
 		probe.log("  押出 h=" + ProbeHandleText(extrude) +
 				  " 親=" + ProbeHandleText(gSDK->ParentObject(extrude)) + " " +
@@ -337,8 +426,8 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 		probe.log("  押出を作れなかった（断面が空でも注釈のグリッド線は出るかを見る）");
 	}
 
-	// ---------------------------------------------------- 2. シートレイヤと 3 枚
-	probe.log("== 2. シートレイヤと断面ビューポート 3 枚 ==");
+	// ---------------------------------------------------- 3. シートレイヤと 3 枚
+	probe.log("== 3. シートレイヤと断面ビューポート 3 枚 ==");
 	MCObjectHandle sheet = gSDK->CreateLayer("i189-sheet", kLayerSheet);
 	if (sheet == nil)
 	{
@@ -371,10 +460,10 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 	for (size_t i = 0; i < vps.size(); ++i)
 	{
 		ProbeViewport& v = vps[i];
-		// 断面線は y = 4000 を x = -2000 〜 10000 に引く。pt3（見る側）は -Y 側。
-		v.vp =
-			gSDK->CreateSectionViewport(WorldPt(-2000.0, 4000.0), WorldPt(10000.0, 4000.0),
-										WorldPt(4000.0, -8000.0), 0.0, -500.0, v.endHeight, sheet);
+		// 断面線は y = cutY を x = -2000 〜 10000 に引く。pt3（見る側）は -Y 側。
+		v.vp = gSDK->CreateSectionViewport(WorldPt(-2000.0, cutY), WorldPt(10000.0, cutY),
+										   WorldPt(4000.0, cutY - 8000.0), 0.0, -500.0, v.endHeight,
+										   sheet);
 		if (v.vp == nil)
 		{
 			probe.fail("CreateSectionViewport が nil を返した（" + v.tag + "）");
@@ -386,10 +475,8 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 		probe.log("    更新前の注釈群 = " +
 				  ProbeHandleText(gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation)));
 
-		// 表示レイヤ・クラスを表示へ、レンダは隠線消去、切断面より奥を表示（Viewports.md）。
-		// **デザインレイヤは 1 枚だけ表示にするのではなく、全部を表示へ倒す。**
-		// アクティブレイヤを切り替える口が無いので、何かが既定のレイヤへ残っていても
-		// 断面に映るようにしておく（「グリッド線が出ない」の原因からレイヤ違いを外すため）。
+		// 表示レイヤ・クラスを表示へ、レンダは隠線消去、切断面より奥を表示
+		// （Findings/Viewports.md）。
 		gSDK->ForEachLayerN(
 			[&v, sheet](MCObjectHandle layer)
 			{
@@ -409,19 +496,39 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 
 		gSDK->UpdateViewport(v.vp);
 		probe.log("    更新後: 縮尺=" + ProbeVarText(v.vp, ovViewportScale) + " 注釈群=" +
-				  ProbeHandleText(gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation)));
+				  ProbeHandleText(gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation)) + " " +
+				  ProbeBoxText(ProbeBoundsOf(v.vp)));
 		probe.log("    注釈群の中身:");
 		ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation), 0, v.annotation);
-		if (v.annotation.empty())
-		{
-			probe.log("      （空）断面群（kViewportGroupSection）の中身も出す:");
-			std::vector<ProbeItem> section;
-			ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupSection), 0, section);
-		}
-	}
 
-	// ------------------------------------- 3. A の注釈で見つかった PIO を洗い出す
-	probe.log("== 3. A の注釈にいる PIO ==");
+		// **注釈群がまだ無いなら、1 つ図形を置いて作らせてから更新し直す。**
+		// 作りたてのビューポートの注釈群は nil で（Findings/Drawing Labels.md）、
+		// VW がグリッド線の個体を入れる先が無いのかもしれない——という筋を潰す。
+		if (gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation) == nil)
+		{
+			WorldRect seedBox;
+			seedBox.left = 0.0;
+			seedBox.right = 100.0;
+			seedBox.bottom = 0.0;
+			seedBox.top = 100.0;
+			MCObjectHandle seed = gSDK->CreateRectangle(seedBox);
+			const bool added = seed != nil && gSDK->AddViewportAnnotationObject(v.vp, seed) != 0;
+			probe.log("    注釈群が無いので矩形を 1 つ置いてみた: AddViewportAnnotationObject=" +
+					  std::string(added ? "true" : "false") + " 注釈群=" +
+					  ProbeHandleText(gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation)));
+			gSDK->UpdateViewport(v.vp);
+			v.annotation.clear();
+			probe.log("    置いた後に更新した注釈群の中身:");
+			ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupAnnotation), 0,
+					  v.annotation);
+		}
+
+		probe.log("    断面群（kViewportGroupSection）の中身:");
+		std::vector<ProbeItem> section;
+		ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupSection), 0, section);
+	}
+	// ------------------------------------- 4. A の注釈で見つかった PIO を洗い出す
+	probe.log("== 4. A の注釈にいる PIO ==");
 	std::vector<ProbeItem> aPios;
 	for (const ProbeItem& item : vps[0].annotation)
 	{
@@ -436,11 +543,11 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 	}
 
 	// ------------------------------------------ 4. パラメータ表を全件ダンプ（Q3）
-	probe.log("== 4. A の注釈の PIO[0] のパラメータ表（全件） ==");
+	probe.log("== 5. A の注釈の PIO[0] のパラメータ表（全件） ==");
 	probe.log("  PIO=" + aPios[0].pioName + " 内部ID=" + ProbeWhole(aPios[0].internalId));
 	const std::vector<ProbeParam> params = ProbeDumpParams(probe, aPios[0].h, true);
 
-	probe.log("== 5. 「水平線の長さ」らしいパラメータを選ぶ ==");
+	probe.log("== 6. 「水平線の長さ」らしいパラメータを選ぶ ==");
 	const std::vector<ProbeParam> candidates = ProbePickCandidates(probe, params);
 	for (const ProbeParam& p : candidates)
 	{
@@ -458,7 +565,7 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 
 	// --------------------------------- 6. 書いてみる（A と C の同じ位置の個体へ）
 	// 対照のため PIO[0] には何も書かない。PIO[1] に候補 0、PIO[2] に候補 1 を書く。
-	probe.log("== 6. 候補を書いて読み戻す（A と C。PIO[0] は対照で触らない） ==");
+	probe.log("== 7. 候補を書いて読み戻す（A と C。PIO[0] は対照で触らない） ==");
 	const size_t kWriteTargets[2] = {1, 2};
 	for (size_t vi = 0; vi < vps.size(); ++vi)
 	{
@@ -513,7 +620,7 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 	}
 
 	// ---------------------------- 7. 更新で保たれるか・作り直されるか（Q2 / Q4）
-	probe.log("== 7. A を更新して、書いた値とハンドルが残るか ==");
+	probe.log("== 8. A を更新して、書いた値とハンドルが残るか ==");
 	{
 		ProbeViewport& v = vps[0];
 		std::vector<MCObjectHandle> beforeHandles;
@@ -581,7 +688,7 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 	}
 
 	// -------------------- 8. 符号の位置の基準（A と B。上端だけが違う）（Q5）
-	probe.log("== 8. 高さ範囲の上端を上げると符号は動くか（A: 上端 4000 / B: 上端 8000） ==");
+	probe.log("== 9. 高さ範囲の上端を上げると符号は動くか（A: 上端 4000 / B: 上端 8000） ==");
 	for (size_t vi = 0; vi < vps.size(); ++vi)
 	{
 		const ProbeViewport& v = vps[vi];
