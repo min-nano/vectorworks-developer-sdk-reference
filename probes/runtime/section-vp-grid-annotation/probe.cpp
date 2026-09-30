@@ -18,36 +18,35 @@
 //	図面を壊す前提（新規の空図面で走らせる）。デザインレイヤ 1 枚・通り芯 4 本
 //	（1 本は試験用）・押出 1 つ・シートレイヤ 1 枚・断面ビューポート 3 枚を作る。
 //
-//	【1〜3 巡目（ビルド 8016526ba982 / 7dc0e49e2116 / f36a8303f020）で確定したこと】
-//	  ここまでで #189 の 1〜4 と、5 の前半は答えが出ている（下記）。**残っているのは
-//	  5 の後半ひとつだけ**——「符号の位置は、映っているモデルの上端で決まるのか」。
-//	  3 巡目は**断面が空のまま**（ビューポートの外接が 53mm 角の空き箱）だったので、
-//	  「映っているモデル」が存在せず、そこだけ確かめられなかった。
+//	【1〜4 巡目で確定したこと】（#189 の 1〜4 と 5 の前半。詳しくは Findings/Viewports.md）
+//	  1. 注釈のグリッド線は **`GridAxis`（内部 ID 647・loc 名「グリッド線」）**——デザイン
+//	     レイヤの通り芯と同じ PIO・同じ 32 件の表。注釈群を降りれば見つかる。
+//	     注釈の中の個体は **`ovPositionLocked` が `true`**（デザインレイヤの個体は `false`）。
+//	  2. **作るのは `UpdateViewport`**（`CreateSectionViewport` の直後は注釈群が nil）。
+//	     **更新し直しても作り直さない**（ハンドル同一・書いた値も残る）。
+//	  3. 欄は **`ShoulderLengthAtStart` / `ShoulderLengthAtEnd`**（欄型 7・既定 5）。
+//	     **単位は用紙 mm**（1/100 で +10 → 1000・1/50 で +10 → 500）。
+//	     **スタイルは握っていない**（由来 2 ＝ `_AllwaysByInstance`）。
+//	  4. **書いた後に `ResetObject` が要る**（値は即読み戻せるが絵は Reset まで動かない）。
+//	  5. **高さ範囲の上端は符号を動かさない**（上端 4000 と 9000 で外接が一致）。
 //
-//	  1. 注釈の中のグリッド線は **`GridAxis`（内部 ID 647・loc 名「グリッド線」）**。
-//	     デザインレイヤの通り芯と**同じ PIO・同じ 32 件の表**で、注釈群を降りれば見つかる。
-//	     **`ovPositionLocked` が `true`**（SDK ヘッダの "GridAxisInstances are always
-//	     position locked" のとおり）。
-//	  2. **作るのは `UpdateViewport`。** `CreateSectionViewport` の直後は注釈群そのものが
-//	     nil で、更新すると注釈群ができて中に通り芯 1 本につき 1 個ができる。
-//	     **更新し直しても作り直されない**（ハンドルが同一・件数も同じ・書いた値も残る）。
-//	  3. 欄は **`ShoulderLengthAtStart`（水平線の長さ（先端））/ `ShoulderLengthAtEnd`
-//	     （終端）**、欄型 7・既定 5。**単位は用紙 mm**（縮尺 1/100 で 10 書くと 1000 動き、
-//	     1/50 では 500 動く＝倍率がその縮尺と一致）。**スタイルは握っていない**
-//	     （`GetPluginStyleParameterType` が 2 ＝ `_AllwaysByInstance`）。
-//	  4. **書いた後に `ResetObject` が要る**（値は即座に読み戻せるが、絵は Reset まで
-//	     動かない）。更新でも 1053 を立てた更新でも値は保たれる。
-//	  5. **高さ範囲の上端は符号を動かさない**（上端 4000 と 8000 で外接が 1 桁も違わない）。
-//	     動かすのは `ShoulderLengthAtStart` だけ。**← ここまで確定。**
-//	     **残り: 映っているモデルの上端で決まるのか。**
+//	【4 巡目（ビルド d12b01bcc821）で見つけた**こちらの 2 つの誤り**】
+//	  * **レイヤを隠せていなかった。** `kLayerVisibilityInvisible` は **`-1`** で、
+//	    渡していた `2` は **`kLayerVisibilityGrayed`（＝灰色で表示）**だった
+//	    （`VWLayerObj.h`）。つまり A も D も**両方のモデルが映る設定**で、
+//	    「A と D の外接が一致した」は**中身が同じだったから**にすぎない。
+//	  * **断面が空のまま**だった（4 枚とも 2D 断面キャッシュ 0 件・外接 ±26.649）。
+//	    壁の高さは書けている（読み戻し 上 3000 / 下 0）のに映らない。**1064 を書いた
+//	    だけで読み戻していなかった**のが疑い（[Findings「調査の作法」](../../Findings/Investigation%20Techniques.md)
+//	    の「書けたことを読み戻さずに信じない」）。切断面のどちら側に置いたかも
+//	    確かめていない。
 //
-//	4 巡目はその 1 点だけを測る。そのために 2 つ直す:
-//	  (a) **断面を空にしない。** 3 巡目の押出は断面に映らなかったので、Findings/Walls.md の
-//	      手順（`CreateWall` ＋ **`SetWallOverallHeights`**——壁は専用関数でないと高さ 0 の
-//	      板になる）で壁を建てる。押出も残して、どちらが映るかをログで見る。
-//	  (b) **「映っているモデル」だけが違う 2 枚**を作る。モデルを高さ 3000 と 6000 の
-//	      2 枚のレイヤに分け、表示レイヤの切り替えだけで映るものを変える。
-//	      A（低い方が映る）と D（高い方が映る）で、注釈のグリッド線の外接を比べる。
+//	5 巡目で潰すのは「符号は**映っているモデルの上端**で決まるのか」ただ 1 つ。そのために:
+//	  (a) **隠すときは `-1`**。しかも `GetViewportLayerVisibility` で**読み戻して**から進む。
+//	  (b) **1064（奥）と 1065（手前）の両方を立て、4 つとも読み戻す**（1035 / 1059 も
+//	      Findings の作法どおり与える）。
+//	  (c) **`pt3` を反対側にした枚**も作り、どちら側が「奥」なのかを実測で決める。
+//	  (d) **キャッシュ群 3 / 5 / 6 / 7 / 15 の件数**を出して、断面が本当に作られたかを見る。
 //
 #include "Probe.h"
 
@@ -290,6 +289,7 @@ namespace
 		MCObjectHandle modelLayer = nil; // 映すモデルのレイヤ（grid レイヤは常に映す）
 		double endHeight = 0.0;
 		double scale = 0.0;
+		bool viewerOnMinusY = true; // pt3 を -Y 側に置くか（＝どちら側から見るか）
 		std::vector<ProbeItem> annotation; // 更新後に注釈群で見つけたもの
 	};
 
@@ -417,10 +417,31 @@ namespace
 			probe.log(std::string("  ") + label + " 押出を作れなかった");
 		}
 	}
+	// キャッシュ群の件数を数える。**断面が本当に作られたか**の目安
+	// （Findings/Viewports.md の 2×2 の表で「キャッシュ群 有/無」を分けていたもの）。
+	std::string ProbeCacheCounts(MCObjectHandle vp)
+	{
+		const short groups[] = {kViewportGroupCache, kViewportGroup3DSectionCache,
+								kViewportGroup2DSectionCache, kViewportGroup3DSectionExCache,
+								kViewportGroup2DSectionPenCache};
+		std::string out;
+		for (short g : groups)
+		{
+			size_t n = 0;
+			MCObjectHandle container = gSDK->GetViewportGroup(vp, g);
+			for (MCObjectHandle h = gSDK->FirstMemberObj(container); h != nil;
+				 h = gSDK->NextObject(h))
+				++n;
+			if (!out.empty())
+				out += " ";
+			out += ProbeWhole(g) + "=" + ProbeWhole(static_cast<long long>(n));
+		}
+		return out;
+	}
 } // namespace
 
 VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグリッド線を掴む",
-		 "通り芯とモデルを置いて断面ビューポートを 4 枚作り、符号の位置の基準を決める")
+		 "通り芯とモデルを置いて断面ビューポートを 6 枚作り、符号の位置の基準を決める")
 {
 	probe.log("== 0. 前置き ==");
 	probe.log("  アクティブレイヤ（走り出し）= " + ProbeHandleText(gSDK->GetActiveLayer()));
@@ -506,7 +527,7 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 	probe.log("  通り芯 1 の外接 " + ProbeBoxText(ProbeBoundsOf(axes[0])));
 
 	// ---------------------------------------------------- 3. シートレイヤと 4 枚
-	probe.log("== 3. シートレイヤと断面ビューポート 4 枚 ==");
+	probe.log("== 3. シートレイヤと断面ビューポート 6 枚 ==");
 	MCObjectHandle sheet = gSDK->CreateLayer("i189-sheet", kLayerSheet);
 	if (sheet == nil)
 	{
@@ -518,7 +539,7 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 	{
 		ProbeViewport a;
 		a.tag = "A";
-		a.note = "低いモデル・上端 9000・1/100（本命。ここへ書く）";
+		a.note = "低いモデル（3000）・上端 9000・1/100・視点 -Y（本命。ここへ書く）";
 		a.modelLayer = lowLayer;
 		a.endHeight = 9000.0;
 		a.scale = 100.0;
@@ -544,14 +565,32 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 		d.endHeight = 9000.0;
 		d.scale = 100.0;
 		vps.push_back(d);
+		// **4 巡目は 6 枚とも断面が空だった。** どちら側が「奥」なのかを実測で決めるため、
+		// A / D と同じ設定で **pt3 だけを反対側**に置いた 2 枚を足す。
+		ProbeViewport e;
+		e.tag = "E";
+		e.note = "A との差は **pt3（見る側）だけ**——+Y 側から見る";
+		e.modelLayer = lowLayer;
+		e.endHeight = 9000.0;
+		e.scale = 100.0;
+		e.viewerOnMinusY = false;
+		vps.push_back(e);
+		ProbeViewport f;
+		f.tag = "F";
+		f.note = "E との差は**映っているモデルの高さだけ**（3000 → 6000）";
+		f.modelLayer = highLayer;
+		f.endHeight = 9000.0;
+		f.scale = 100.0;
+		f.viewerOnMinusY = false;
+		vps.push_back(f);
 	}
 
 	for (size_t i = 0; i < vps.size(); ++i)
 	{
 		ProbeViewport& v = vps[i];
+		const double pt3Y = v.viewerOnMinusY ? cutY - 8000.0 : cutY + 14000.0;
 		v.vp = gSDK->CreateSectionViewport(WorldPt(-2000.0, cutY), WorldPt(10000.0, cutY),
-										   WorldPt(4000.0, cutY - 8000.0), 0.0, -500.0, v.endHeight,
-										   sheet);
+										   WorldPt(4000.0, pt3Y), 0.0, -500.0, v.endHeight, sheet);
 		if (v.vp == nil)
 		{
 			probe.fail("CreateSectionViewport が nil を返した（" + v.tag + "）");
@@ -565,22 +604,53 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 
 		// **通り芯のレイヤと、その枚が映すモデルのレイヤだけを表示にする。**
 		// 高さの違う 2 段のうち片方だけを映すのが、この巡の肝。
+		// **隠すのは `-1`（`kLayerVisibilityInvisible`）。** 4 巡目は `2` を渡していたが、
+		// それは `kLayerVisibilityGrayed`（＝灰色で**表示**）で、隠せていなかった
+		// ——だから「A と D の外接が一致した」は中身が同じだっただけである。
+		// 書いたら **読み戻して**確かめる（Findings「調査の作法」）。
+		std::string visLog;
 		gSDK->ForEachLayerN(
-			[&v, sheet, gridLayer, layer50](MCObjectHandle layer)
+			[&v, sheet, gridLayer, layer50, &visLog](MCObjectHandle layer)
 			{
 				if (layer == sheet)
 					return;
 				const bool show =
 					(layer == gridLayer) || (layer == v.modelLayer) || (layer == layer50);
-				gSDK->SetViewportLayerVisibility(v.vp, layer, show ? 0 /* 表示 */ : 2 /* 非表示 */);
+				gSDK->SetViewportLayerVisibility(v.vp, layer, show ? 0 : -1);
+				short readBack = 99;
+				gSDK->GetViewportLayerVisibility(v.vp, layer, readBack);
+				TXString name;
+				gSDK->GetObjectName(layer, name);
+				if (!visLog.empty())
+					visLog += " / ";
+				visLog += ProbeTextOf(name) + "=" + ProbeWhole(readBack) +
+						  (show ? "(表示のつもり)" : "(隠すつもり)");
 			});
+		probe.log("    表示レイヤの読み戻し（0=表示 / -1=非表示 / 2=灰色）: " + visLog);
 		gSDK->ForEachClass(
 			true, [&v](MCObjectHandle cls)
 			{ gSDK->SetViewportClassVisibility(v.vp, gSDK->GetObjectInternalIndex(cls), 0); });
 		VWViewportObj(v.vp).SetRenderType(renderFinalHiddenLine);
-		TVariableBlock beyond;
-		beyond = static_cast<Boolean>(1);
-		gSDK->SetObjectVariable(v.vp, ovSectionViewportDisplayObjectsBeyondCutPlane, beyond);
+		// **奥（1064）と手前（1065）の両方を立てる。** 4 巡目は 1064 だけを書いて
+		// 読み戻しもしておらず、モデルが切断面のどちら側にいるのかも確かめていなかった。
+		// 1035（プレイナーは表示しない）・1059（2D コンポーネントを表示する）も
+		// Findings/Viewports.md の作法どおり与える。**4 つとも読み戻す。**
+		const short kFlagSel[] = {ovSectionViewportDisplayObjectsBeyondCutPlane,
+								  ovSectionViewportDisplayObjectsBeforeCutPlane,
+								  ovViewportDisplayPlanar, ovViewportDisplay2DComponents};
+		const Boolean kFlagWant[] = {1, 1, 0, 1};
+		std::string flagLog;
+		for (size_t fi = 0; fi < 4; ++fi)
+		{
+			TVariableBlock value;
+			value = static_cast<Boolean>(kFlagWant[fi]);
+			const bool wrote = gSDK->SetObjectVariable(v.vp, kFlagSel[fi], value) != 0;
+			if (!flagLog.empty())
+				flagLog += " / ";
+			flagLog += ProbeWhole(kFlagSel[fi]) + ": 書けた=" + (wrote ? "true" : "false") +
+					   " 読み戻し=" + ProbeVarText(v.vp, kFlagSel[fi]);
+		}
+		probe.log("    表示の欄（1064 奥 / 1065 手前 / 1035 プレイナー / 1059 2D）: " + flagLog);
 		TVariableBlock scale;
 		scale = static_cast<Real64>(v.scale);
 		gSDK->SetObjectVariable(v.vp, ovViewportScale, scale);
@@ -596,15 +666,12 @@ VW_PROBE("section-vp-grid-annotation", "断面ビューポートの注釈のグ�
 		probe.log("    断面群（kViewportGroupSection）の中身:");
 		std::vector<ProbeItem> section;
 		ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroupSection), 0, section);
-		probe.log("    2D 断面キャッシュ群（6）の中身の件数を数える:");
-		std::vector<ProbeItem> cache;
-		ProbeWalk(probe, gSDK->GetViewportGroup(v.vp, kViewportGroup2DSectionCache), 0, cache);
-		probe.log("      2D 断面キャッシュ = " + ProbeWhole(static_cast<long long>(cache.size())) +
-				  " 件");
+		probe.log("    キャッシュ群の件数（3/5/6/7/15。すべて 0 なら断面は作られていない）: " +
+				  ProbeCacheCounts(v.vp));
 	}
 
 	// ------------------------- 4. 符号の位置の基準（この巡の本題。#189 の 5 の後半）
-	probe.log("== 4. 符号の位置の基準——A と D は「映っているモデルの高さ」だけが違う ==");
+	probe.log("== 4. 符号の位置の基準——A 対 D と E 対 F が「映っているモデルの高さ」だけの差 ==");
 	for (size_t vi = 0; vi < vps.size(); ++vi)
 	{
 		const ProbeViewport& v = vps[vi];
