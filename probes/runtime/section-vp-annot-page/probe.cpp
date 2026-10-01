@@ -33,6 +33,19 @@
 //	**縮尺の解釈（ovViewportScale が 100 なのか 0.01 なのか）は当てにしない**——
 //	注釈座標と用紙座標の両方で測った同じ矩形の幅から係数を割り出し、読み戻した値と併記する。
 //
+//	【2 巡目】1 巡目（ビルド 6d906c05489f）で 1024/1025・1049・1051・1050/1055/1056・crop・
+//	注釈群・注釈座標 → 用紙座標の係数は確定したが、**断面が空（53.3mm 角の「×」印の空枠）
+//	だったため、外接が「映っているモデル」と「高さ範囲」を含むか（issue の 2 番）と、
+//	GL（モデル Z=0）の在り所が取れなかった**。2 巡目で直したのは 4 点:
+//	  ・表示レイヤを **ForEachLayerN で全レイヤ**倒す（1 巡目は自分のレイヤ 1 枚だけ）
+//	  ・クラスの番号を **gSDK->GetObjectInternalIndex(cls)** で引く
+//	    （1 巡目は VWClass::GetClassFromHandle で引いていた）
+//	  ・**キャッシュ群（3/4/5/6/7/15）の件数と外接を出す**——断面が描けたかの唯一の判定で、
+//	    ここを見ていなかったので 1 巡目は空枠を「外接は中身を含まない」と読み違えかけた。
+//	    そして**群の外接が GL の在り所そのもの**になる（段階 12）
+//	  ・目印の矩形を **4 辺すべてを自分で作る大きさ**へ広げる（1 巡目は右上だけ外側で、
+//	    左下が空枠の縁のままだったため係数が 1.0366 という無意味な値になった）
+//
 
 #include "Probe.h"
 
@@ -47,10 +60,13 @@ namespace
 	const double kProbeI200EndH = 9000.0;
 
 	// 注釈へ置く目印の矩形。**断面の中身より十分に外側**へ置く（縁を必ずこれが作るように）。
-	const double kProbeI200MarkLeft = 100000.0;
-	const double kProbeI200MarkRight = 101000.0;
-	const double kProbeI200MarkBottom = 200000.0;
-	const double kProbeI200MarkTop = 201000.0;
+	// **4 辺すべてをこの矩形が作るように、空枠（53.3mm 角＝注釈座標で ±2664.9）より
+	// 外へ広げる。** 1 巡目は右上だけ外側に置いたので、左下は空枠の縁のままになり、
+	// 幅から割り出した係数が 1.0366 という無意味な値になった（割り出しが壊れた）。
+	const double kProbeI200MarkLeft = -300000.0;
+	const double kProbeI200MarkRight = 100000.0;
+	const double kProbeI200MarkBottom = -400000.0;
+	const double kProbeI200MarkTop = 200000.0;
 
 	// 用紙の上でビューポートを動かす量（用紙 mm）。
 	const double kProbeI200MoveDX = 137.0;
@@ -125,6 +141,32 @@ namespace
 			return false;
 		out = (value != 0);
 		return true;
+	}
+
+	// **キャッシュ群**（断面が実際に描けたかの唯一の判定手段）。
+	// Findings「Viewports」#151 の表が 3/5/6/7/15 を見ているので同じ顔ぶれ＋断面群 4 を出す。
+	// **件数が全部 0 なら断面は空**——1 巡目はここを見ていなかったので、空枠（53.3mm 角）を
+	// 「外接が中身を含まない」と読み違えるところだった。
+	void ProbeI200DumpCaches(vwprobe::Report& probe, const std::string& tag, MCObjectHandle vp)
+	{
+		const short kProbeI200Groups[] = {3, 4, 5, 6, 7, 15};
+		for (short groupType : kProbeI200Groups)
+		{
+			MCObjectHandle group = gSDK->GetViewportGroup(vp, groupType);
+			if (group == nil)
+			{
+				probe.log("  [" + tag + "] 群 " + std::to_string(groupType) + " は nil");
+				continue;
+			}
+			size_t count = 0;
+			for (MCObjectHandle h = gSDK->FirstMemberObj(group); h != nil; h = gSDK->NextObject(h))
+				++count;
+			WorldRect rect;
+			const bool okRect = gSDK->GetObjectBounds(group, rect) != 0;
+			probe.log("  [" + tag + "] 群 " + std::to_string(groupType) + ": " +
+					  std::to_string(count) + " 件 / 外接 " +
+					  (okRect ? ProbeI200RectText(rect) : std::string("読めず")));
+		}
 	}
 
 	// 高さ z1 の直方体を 1 つ作る（x0〜x1 × y 0〜1000 × z 0〜z1）。作成先はアクティブレイヤ。
@@ -238,6 +280,25 @@ VW_PROBE("section-vp-annot-page", "断面VPの注釈→用紙座標", "外接と
 		probe.log("  低い方の平面上の外接 " + ProbeI200RectText(boxRect));
 	if (gSDK->GetObjectBounds(boxHigh, boxRect))
 		probe.log("  高い方の平面上の外接 " + ProbeI200RectText(boxRect));
+	// **どのレイヤに入ったかを必ず出す。** 1 巡目の断面が空だった原因の筋の 1 つが
+	// 「VWExtrudeObj がアクティブレイヤへ入っていない」だったのに、確かめる術が無かった。
+	{
+		TXString layerName;
+		gSDK->GetObjectName(designLayer, layerName);
+		probe.log(std::string("  作ったデザインレイヤの名前 = '") +
+				  static_cast<const char*>(layerName) + "'");
+		MCObjectHandle lowParent = gSDK->ParentObject(boxLow);
+		MCObjectHandle highParent = gSDK->ParentObject(boxHigh);
+		TXString lowName, highName;
+		if (lowParent != nil)
+			gSDK->GetObjectName(lowParent, lowName);
+		if (highParent != nil)
+			gSDK->GetObjectName(highParent, highName);
+		probe.log(std::string("  低い方の親 = '") + static_cast<const char*>(lowName) +
+				  "'（デザインレイヤと同一か=" + (lowParent == designLayer ? "はい" : "いいえ") +
+				  "） / 高い方の親 = '" + static_cast<const char*>(highName) +
+				  "'（同一か=" + (highParent == designLayer ? "はい" : "いいえ") + "）");
+	}
 
 	// ---- 2. シートレイヤ ---------------------------------------------------
 	probe.log("■ 2. シートレイヤを作る");
@@ -280,32 +341,61 @@ VW_PROBE("section-vp-annot-page", "断面VPの注釈→用紙座標", "外接と
 			return;
 		}
 
-		// 表示の下ごしらえ（Findings「Viewports」「Layers and Stories」）。
-		// **更新より前**に: 隠線消去 → 切断面より奥を表示 → レイヤとクラスを表示へ。
+		// 表示の下ごしらえ——**Findings「Viewports」#151 の実証済みの手順をそのまま踏む。**
+		// 1 巡目はここを 2 点外して断面が空（53.3mm 角の「×」印の空枠）になった:
+		//   ・表示レイヤを「自分が作ったレイヤ 1 枚」にしか倒していなかった
+		//     → **`ForEachLayerN` で全レイヤを倒す**（モデルがどのレイヤに在るかに依らなくなる）
+		//   ・クラスの番号を `VWClass::GetClassFromHandle` で引いていた
+		//     → **手順どおり `gSDK->GetObjectInternalIndex(cls)` で引く**
+		// 戻り値と読み戻しは**全部ログへ出す**。1 巡目は出していなかったので、どこで落ちたのか
+		// 結果から分からなかった（空枠を「外接が中身を含まない」と読み違えるところだった）。
+		MCObjectHandle capturedVP = vps[i];
+		size_t layerOk = 0, layerNg = 0;
+		gSDK->ForEachLayerN(
+			[capturedVP, &layerOk, &layerNg](MCObjectHandle layer)
+			{
+				if (gSDK->SetViewportLayerVisibility(capturedVP, layer, 0))
+					++layerOk;
+				else
+					++layerNg;
+			});
+		size_t classOk = 0, classNg = 0;
+		gSDK->ForEachClass(true,
+						   [capturedVP, &classOk, &classNg](MCObjectHandle cls)
+						   {
+							   if (gSDK->SetViewportClassVisibility(
+									   capturedVP, gSDK->GetObjectInternalIndex(cls), 0))
+								   ++classOk;
+							   else
+								   ++classNg;
+						   });
+
 		VWFC::VWObjects::VWViewportObj vpObj(vps[i]);
 		vpObj.SetRenderType(renderFinalHiddenLine);
 		TVariableBlock beyond(static_cast<Boolean>(true));
-		gSDK->SetObjectVariable(vps[i], ovSectionViewportDisplayObjectsBeyondCutPlane, beyond);
+		const bool wroteBeyond =
+			gSDK->SetObjectVariable(vps[i], ovSectionViewportDisplayObjectsBeyondCutPlane,
+									beyond) != 0;
+		TVariableBlock planar(static_cast<Boolean>(false));
+		gSDK->SetObjectVariable(vps[i], ovViewportDisplayPlanar, planar);
+		TVariableBlock comp2D(static_cast<Boolean>(true));
+		gSDK->SetObjectVariable(vps[i], ovViewportDisplay2DComponents, comp2D);
 		TVariableBlock scaleBlock(kProbeI200Scale);
 		gSDK->SetObjectVariable(vps[i], ovViewportScale, scaleBlock);
-		gSDK->SetViewportLayerVisibility(
-			vps[i], designLayer, static_cast<short>(VWFC::VWObjects::kLayerVisibilityNormal));
-		MCObjectHandle capturedVP = vps[i];
-		gSDK->ForEachClass(true,
-						   [capturedVP](MCObjectHandle hClass)
-						   {
-							   gSDK->SetViewportClassVisibility(
-								   capturedVP, VWFC::VWObjects::VWClass::GetClassFromHandle(hClass),
-								   0);
-						   });
 		gSDK->UpdateViewport(vps[i]);
 
 		double readScale = 0.0;
-		bool isSection = false;
+		bool isSection = false, readBeyond = false;
 		ProbeI200ReadRealVar(vps[i], ovViewportScale, readScale);
 		ProbeI200ReadBoolVar(vps[i], ovIsSectionViewport, isSection);
+		ProbeI200ReadBoolVar(vps[i], ovSectionViewportDisplayObjectsBeyondCutPlane, readBeyond);
 		probe.log(std::string("  ") + kProbeI200Names[i] + ": 1003 縮尺の読み戻し=" +
-				  ProbeI200Num(readScale) + " / 1054 断面か=" + (isSection ? "true" : "false"));
+				  ProbeI200Num(readScale) + " / 1054 断面か=" + (isSection ? "true" : "false") +
+				  " / 1064 書き=" + (wroteBeyond ? "ok" : "ng") +
+				  " 読み=" + (readBeyond ? "true" : "false"));
+		probe.log(std::string("    表示レイヤ ok=") + std::to_string(layerOk) +
+				  " ng=" + std::to_string(layerNg) + " / クラス ok=" + std::to_string(classOk) +
+				  " ng=" + std::to_string(classNg));
 	}
 
 	// ---- 4. 段階 A: 更新直後（注釈は空）------------------------------------
@@ -313,7 +403,11 @@ VW_PROBE("section-vp-annot-page", "断面VPの注釈→用紙座標", "外接と
 	probe.log("  ※ 高さ範囲は 2 枚とも同じなので、外接の高さが違えば「範囲は入らない」、"
 			  "同じなら「範囲が入る」と読める");
 	for (int i = 0; i < 2; ++i)
+	{
 		ProbeI200DumpViewport(probe, std::string("A ") + kProbeI200Names[i], vps[i]);
+		// **ここが「断面が描けたか」の唯一の判定。** 全部 0 件なら空。
+		ProbeI200DumpCaches(probe, std::string("A ") + kProbeI200Names[i], vps[i]);
+	}
 
 	// ---- 5. 注釈へ目印の矩形を置く -----------------------------------------
 	// **中身よりはるかに外側**（100000〜101000, 200000〜201000）に置く。こうすると
@@ -361,6 +455,7 @@ VW_PROBE("section-vp-annot-page", "断面VPの注釈→用紙座標", "外接と
 	for (int i = 0; i < 2; ++i)
 	{
 		ProbeI200DumpViewport(probe, std::string("C ") + kProbeI200Names[i], vps[i]);
+		ProbeI200DumpCaches(probe, std::string("C ") + kProbeI200Names[i], vps[i]);
 		WorldRect got;
 		if (gSDK->GetObjectBounds(marks[i], got))
 			probe.log(std::string("  C ") + kProbeI200Names[i] + " 注釈の矩形の外接 " +
@@ -395,8 +490,11 @@ VW_PROBE("section-vp-annot-page", "断面VPの注釈→用紙座標", "外接と
 	}
 
 	// ---- 11. 割り出した対応 ------------------------------------------------
-	// 目印の矩形は中身よりはるかに外側なので、ビューポートの外接の右上の縁はそれが作る。
-	// 用紙 = 注釈 × k + off として k と off をその場で解く（縮尺の解釈に依らない）。
+	// 目印の矩形は**4 辺すべてを自分で作る大きさ**にしてあるので、ビューポートの外接の
+	// 4 辺はこの矩形が決める。用紙 = 注釈 × k + off として、**左下の角と右上の角から
+	// 別々に off を解いて突き合わせる**（両方一致すれば、対応は平行移動つきの相似で
+	// 間違いない。1 巡目は右上だけを外側に置いたので左下が空枠の縁のままになり、
+	// 幅から出した k が 1.0366 という無意味な値になった）。
 	probe.log("■ 11. 目印の矩形から割り出した「注釈座標 → 用紙座標」");
 	for (int i = 0; i < 2; ++i)
 	{
@@ -406,6 +504,11 @@ VW_PROBE("section-vp-annot-page", "断面VPの注釈→用紙座標", "外接と
 			probe.log(std::string("  ") + kProbeI200Names[i] + ": 外接が読めず割り出せない");
 			continue;
 		}
+		if (ProbeI200RectIsEmpty(page) || ProbeI200RectIsEmpty(annot))
+		{
+			probe.log(std::string("  ") + kProbeI200Names[i] + ": どちらかの外接が空");
+			continue;
+		}
 		const double annotW = static_cast<double>(annot.right) - static_cast<double>(annot.left);
 		const double annotH = static_cast<double>(annot.top) - static_cast<double>(annot.bottom);
 		if (annotW == 0.0 || annotH == 0.0)
@@ -413,23 +516,59 @@ VW_PROBE("section-vp-annot-page", "断面VPの注釈→用紙座標", "外接と
 			probe.log(std::string("  ") + kProbeI200Names[i] + ": 矩形の幅か高さが 0");
 			continue;
 		}
-		// 縁がこの矩形で作られている前提の係数（x は右、y は上の縁で解く）。
 		const double kx =
 			(static_cast<double>(page.right) - static_cast<double>(page.left)) / annotW;
 		const double ky =
 			(static_cast<double>(page.top) - static_cast<double>(page.bottom)) / annotH;
-		const double offX = static_cast<double>(page.right) - static_cast<double>(annot.right) * kx;
-		const double offY = static_cast<double>(page.top) - static_cast<double>(annot.top) * ky;
+		// 左下の角から解いた off と、右上の角から解いた off。
+		const double offXlo = static_cast<double>(page.left) - static_cast<double>(annot.left) * kx;
+		const double offYlo =
+			static_cast<double>(page.bottom) - static_cast<double>(annot.bottom) * ky;
+		const double offXhi =
+			static_cast<double>(page.right) - static_cast<double>(annot.right) * kx;
+		const double offYhi = static_cast<double>(page.top) - static_cast<double>(annot.top) * ky;
 		probe.log(std::string("  ") + kProbeI200Names[i] + ": k=(" + ProbeI200Num(kx) + ", " +
-				  ProbeI200Num(ky) + ") off=(" + ProbeI200Num(offX) + ", " + ProbeI200Num(offY) +
-				  ")");
-		probe.log("    ＝注釈 y=0（GL）の用紙 y は " + ProbeI200Num(offY) +
-				  " という見込み。上の 1024/1025 と 1049/1051 の off と見比べる");
+				  ProbeI200Num(ky) + ")  ※ 1/縮尺 = " + ProbeI200Num(1.0 / kProbeI200Scale));
+		probe.log("    off 左下から=(" + ProbeI200Num(offXlo) + ", " + ProbeI200Num(offYlo) +
+				  ")  右上から=(" + ProbeI200Num(offXhi) + ", " + ProbeI200Num(offYhi) +
+				  ")  ずれ=(" + ProbeI200Num(offXhi - offXlo) + ", " +
+				  ProbeI200Num(offYhi - offYlo) + ")");
+		probe.log("    ＝注釈 y=0 の用紙 y は " + ProbeI200Num(offYlo) + " という見込み");
 		double px = 0.0, py = 0.0;
 		ProbeI200ReadRealVar(vps[i], ovViewportXPosition, px);
 		ProbeI200ReadRealVar(vps[i], ovViewportYPosition, py);
-		probe.log("    1024/1025 との差 = (" + ProbeI200Num(offX - px) + ", " +
-				  ProbeI200Num(offY - py) + ")");
+		probe.log("    1024/1025=(" + ProbeI200Num(px) + ", " + ProbeI200Num(py) + ") との差 = (" +
+				  ProbeI200Num(offXlo - px) + ", " + ProbeI200Num(offYlo - py) + ")");
+	}
+
+	// ---- 12. GL（モデル Z=0）が注釈座標／用紙座標のどこに来るか -------------
+	// **この調査の本題。** 断面に描かれた中身（キャッシュ群）の外接を読み、映っている
+	// モデルの Z の範囲（低=0〜3000 / 高=0〜6000）と突き合わせる。
+	//   ・2 枚の「下端」が一致すれば → **GL は映るモデルの高さに依らず同じ所に来る**
+	//     ＝その値を用紙へ写すだけで段ごとに GL が揃う。
+	//   ・一致しなければ → VW が中身を中央へ寄せている。差は上端 − 下端の半分に出るので、
+	//     2 枚の数値から寄せ方を割り出せる。
+	// 併せて、注釈座標と用紙座標の両方で出す（上の k・off を当てる）。
+	probe.log("■ 12. GL（モデル Z=0）の在り所——断面の中身の外接から割り出す");
+	probe.log("  モデルの Z: 低=0〜3000 / 高=0〜6000。高さ範囲は 2 枚とも " +
+			  ProbeI200Num(kProbeI200StartH) + "〜" + ProbeI200Num(kProbeI200EndH));
+	for (int i = 0; i < 2; ++i)
+	{
+		const short kProbeI200ContentGroups[] = {5, 6, 7, 15};
+		for (short groupType : kProbeI200ContentGroups)
+		{
+			MCObjectHandle group = gSDK->GetViewportGroup(vps[i], groupType);
+			if (group == nil)
+				continue;
+			WorldRect rect;
+			if (!gSDK->GetObjectBounds(group, rect) || ProbeI200RectIsEmpty(rect))
+				continue;
+			probe.log(std::string("  ") + kProbeI200Names[i] + " 群 " + std::to_string(groupType) +
+					  " の外接 " + ProbeI200RectText(rect));
+			probe.log("    → これを 1/縮尺 した用紙 y: 下=" +
+					  ProbeI200Num(static_cast<double>(rect.bottom) / kProbeI200Scale) +
+					  " 上=" + ProbeI200Num(static_cast<double>(rect.top) / kProbeI200Scale));
+		}
 	}
 
 	probe.log("■ 終わり。図面は壊れたままでよい（新規の空図面で走らせる前提）");
