@@ -79,12 +79,22 @@ namespace
 		return std::string(buf);
 	}
 
+	// **空の容れ物の外接は「反転した矩形」で返る**（左=+DBL_MAX・右=-DBL_MAX）。
+	// 1 巡目はこれを生の桁で出してしまい読みにくかったので、空は空と書く。
+	bool ProbeI200RectIsEmpty(const WorldRect& r)
+	{
+		return static_cast<double>(r.left) > static_cast<double>(r.right) ||
+			   static_cast<double>(r.bottom) > static_cast<double>(r.top);
+	}
+
 	std::string ProbeI200RectText(const WorldRect& r)
 	{
 		const double left = static_cast<double>(r.left);
 		const double top = static_cast<double>(r.top);
 		const double right = static_cast<double>(r.right);
 		const double bottom = static_cast<double>(r.bottom);
+		if (ProbeI200RectIsEmpty(r))
+			return "【空＝反転した矩形】";
 		return "左=" + ProbeI200Num(left) + " 下=" + ProbeI200Num(bottom) +
 			   " 右=" + ProbeI200Num(right) + " 上=" + ProbeI200Num(top) +
 			   " / 幅=" + ProbeI200Num(right - left) + " 高=" + ProbeI200Num(top - bottom);
