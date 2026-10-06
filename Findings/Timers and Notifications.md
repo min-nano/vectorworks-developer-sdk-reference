@@ -93,18 +93,26 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
 
 ## 4. OS のタイマーから `gSDK` を呼ぶ
 
-**【実機確認待ち】** `probes/runtime/runloop-timer-sdk/` で測っている。測ること:
+**【実機確認待ち】** `probes/runtime/runloop-timer-sdk/` で測っている。局面ごとに刻みの
+回数と間隔（`dt_ms`）、そのときのランループモード、`gSDK` の戻り値を記録する。
 
-1. メニューコマンドの中からランループタイマー（mac: `CFRunLoopTimer` をメインの
-   ランループの `kCFRunLoopCommonModes` へ）を仕掛けられるか。
-2. **モーダルダイアログが開いている間も刻むか**（刻みごとに
-   `CFRunLoopCopyCurrentMode` を記録するので、`NSModalPanelRunLoopMode` で来たかが分かる）。
-3. **Vectorworks がほかのアプリの裏に回っている間**も 250 ms で刻むか（＝ JS タイマーと
-   違って間引かれないか）。
-4. **メニューコマンドが戻った後**（プラグインのコードがスタックに 1 本も無い状態）でも
-   刻み、そこから `gSDK` を**読めるか・書けるか**。
+| 測る局面 | 確かめたいこと |
+| --- | --- |
+| ① 自分でランループを 1.5 秒回す | メニューコマンドの中から仕掛けられるか（mac: `CFRunLoopTimer` をメインのランループの `kCFRunLoopCommonModes` へ） |
+| ①b **ランループを回さず 3 秒働く** | **こちらの同期処理に割り込まれるか**（＝自分が undo イベントを開いて描いている最中に刻みが入るか） |
+| ①c **進捗ダイアログの `DoYield` を 3 秒回す** | **VW が自分でイベントを回す場面**で刻むか |
+| ② モーダル（alert）が開いている間 | 刻むか。刻むなら `mode=` が `NSModalPanelRunLoopMode` になる |
+| ③ ほかのアプリの裏に回っている間 | **250 ms が保たれるか**（＝ JS タイマーと違って間引かれないか） |
+| ④ **メニューコマンドが戻った後** | 刻み続けるか。そこから `gSDK` を**読めるか・書けるか**（8 回目の刻みで 2D 基準点を 1 つ作る） |
 
-結果が出たらここへ実測値を書き、`Findings/` のこの節の印を外す。
+④ は 1 回の実行では見えないので、プローブは**2 回走らせる**作りにしてある（1 回目が
+仕掛けて一時ファイルへ書き溜め、2 回目が読んで報告する）。結果が出たらここへ実測値を
+書き、この節の【実機確認待ち】を外す。
+
+**本体（`.vwpayload`）はピン留めしてある。** 殻はプローブが終わると本体を `dlclose` する
+ので（[Plug-in Modules](Plug-in%20Modules.md)）、ピン留めしないとタイマーの行き先が消えて
+落ちる。**＝「コマンドが戻った後も動き続ける仕掛け」を本体（入れ替えできる側）へ置くなら、
+モジュールを降ろさせない手当てが要る**（実プラグインでは殻に置けば済む話）。
 
 ## 5. ウェブパレットの JS タイマーは、隠れると 60 秒に 1 回まで間引かれる
 
@@ -168,12 +176,13 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
   起動直後に requests を取りこぼしたくないなら、文書が開いたことを
   `kNotifyDocOpen`（上記 2）で拾って、そこから始める。【ヘッダ根拠】
 
-## まだ分かっていないこと
+## まだ分かっていないこと（別の issue に切り出したもの）
 
-- **OS のタイマーを、undo の記録中・描画の最中に踏んだときの振る舞い**。プローブは
-  undo イベントを自分では開かない決まり（[Undo](Undo.md)・`probes/runtime/README.md`）
-  なので、この調査の範囲から外した。
+- **VW 自身が undo イベントを開いたまま自分でイベントを回している最中**（ツールのドラッグ中・
+  レンダリング中など）に刻みが当たったら何が起きるか。プローブは undo イベントを自分では
+  開かない決まり（[Undo](Undo.md)・`probes/runtime/README.md`）なので、その場面を狙って
+  作れない。
   → [issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)
-- **Windows の `SetTimer`（ウィンドウ無しのスレッドタイマー）の振る舞い**。プローブは
-  両プラットフォーム向けに書いてあるが、実機確認は macOS でしか取れていない。
-  → [issue #207](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/207)
+- **Windows の `SetTimer`（ウィンドウ無しのスレッドタイマー）の振る舞い。** プローブは
+  両プラットフォーム向けに書いてあるが、**実機確認は macOS でしか取れていない**。
+  → [issue #205](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/205)
