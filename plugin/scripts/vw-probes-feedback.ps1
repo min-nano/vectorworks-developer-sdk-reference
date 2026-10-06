@@ -1,4 +1,4 @@
-<#
+﻿<#
     vw-probes-feedback.ps1 — プローブの結果を、そのプローブが来た PR へ投稿する（Windows）。
     macOS 版 vw-probes-feedback.sh の相方で、仕組みの全体はあちらのヘッダと
     plugin/src/Feedback.h にある。

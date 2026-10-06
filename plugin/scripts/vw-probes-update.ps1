@@ -1,4 +1,4 @@
-<#
+﻿<#
     vw-probes-update.ps1 — 実機確認プラグイン（VwSdkProbes）を入れ替える（Windows）。
 
     plugin/scripts/vw-probes-update.sh の Windows 版。Windows のプラグインは

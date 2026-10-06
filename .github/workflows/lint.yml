@@ -144,6 +144,22 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File plugin/tests/vw-probes-update.test.ps1
 
+      # **実機の Windows PowerShell 5.1 は BOM の無い .ps1 を ANSI（日本語環境なら CP932）で
+      # 読む。** ここの pwsh 7 は UTF-8 で読むので、上の試験も下の構文チェックも通ってしまう
+      # ——BOM が無いまま配ると、実機でだけスクリプトが読み崩れて何も返さなくなる
+      # （トークンの登録も更新の確認も「理由なし」で失敗した）。だから BOM を門にする。
+      - name: Require a UTF-8 BOM on non-ASCII PowerShell scripts
+        run: |
+          bad=0
+          while IFS= read -r f; do
+            if LC_ALL=C grep -q '[^[:print:][:space:]]' "$f" &&
+              [ "$(head -c3 "$f" | od -An -tx1 | tr -d ' \n')" != "efbbbf" ]; then
+              echo "::error file=$f::UTF-8 の BOM がありません（Windows PowerShell 5.1 が CP932 として読み崩します）"
+              bad=1
+            fi
+          done < <(git ls-files '*.ps1')
+          exit "$bad"
+
       - name: Parse the PowerShell scripts
         shell: pwsh
         run: |
