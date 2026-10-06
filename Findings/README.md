@@ -53,6 +53,7 @@
 | [Tagged Data](Tagged%20Data.md) | タグ付きデータ（`TaggedData*`）の型・読み書きの癖・補助オブジェクトの生バイト構造 |
 | [Undo](Undo.md) | undo イベントの開き方・登録の作法・戻らないもの |
 | [Progress and Diagnostics](Progress%20and%20Diagnostics.md) | 進捗ダイアログ・`DoYield`・例外境界・VW バージョンは取れない |
+| [Timers and Notifications](Timers%20and%20Notifications.md) | 周期実行の刻みの中で何をしてよいか・undo イベントが開いているかを問う口・`kNotify…` で囲めるもの |
 | [Layout Dialogs](Layout%20Dialogs.md) | レイアウトダイアログ（`VWDialog`）の大きさ・コントロール・イベントの作法・**モードレスなパレット（`IExtensionWebPalette`。未確認）** |
 | [File and Folder Dialogs](File%20and%20Folder%20Dialogs.md) | OS のファイル／フォルダ選択ダイアログ。**フォルダ選択は `IFolderChooserDialog` で開ける**・キャンセルの戻り値・受け取るパスは末尾に区切りが付く UTF-8 の絶対パス・`IFileIdentifier::GetFolder` は同じ文字列を返す |
 | [File and Folder Identifiers](File%20and%20Folder%20Identifiers.md) | `IFileIdentifier` / `IFolderIdentifier` そのもの。**`GetAttributes` の `fbDirectory` は常に `false`**（種類の判定に使えない）・`fbReadOnly` / `fbCanWrite` は生きている・**`SetAttributes` はフォルダでは未実装、ファイルでは権限だけが書ける**・`ExistsOnDisk` は戻り値ではなく出力引数を見る・`EnumerateContents` の振り分けは信用できる |
