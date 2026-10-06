@@ -54,6 +54,30 @@
 //	押す**だけ。待つのは、その間に刻みを当てるため（押すのが速いと刻みが 1 回も
 //	入らず、(1) が「届かなかった」と見分けられなくなる）。
 //
+//	■ 実機で分かったこと（1・2 回目。この版は 3 回目用）
+//
+//	  (1) **答えが出た。** VW のモーダルループの最中に刻みは届く
+//	      （`mode=NSModalPanelRunLoopMode`）。ただし**`kCFRunLoopCommonModes` に
+//	      登録した 1 本だけ**で、`kCFRunLoopDefaultMode` だけに登録した 1 本は
+//	      1 回も届かない。届いた刻みからは `gSDK` を読めて書けた。
+//	      1 回目 85 回・2 回目 44 回、どちらも全件 `building=yes` で読めた。
+//
+//	  (3) **2 回とも判定不能だった。** 理由が 2 回目で割れた——
+//	      **`CreateLocus` そのものが undo イベントを開く**（走り出し `building=no`
+//	      が、対照 PRE を作った直後に `yes` になった）。つまり「どのイベントの外でも
+//	      ないところに作った対照」は素朴には作れない: **作る行為がイベントを開く**。
+//	      その結果 PRE も TICK も同じ開いたままのイベントに入り、取り消し 1 段で
+//	      両方消えて、TICK が消えた理由が割れなかった。
+//
+//	      → この版では**開いてしまったイベントを `EndUndoEvent` で閉じて**、PRE を
+//	        「閉じた別の段」へ置く。さらに**取り消しを 2 段掛けて**、どちらの段で
+//	        何が消えるかを観測する（推論ではなく段の境目を直接見る）。
+//
+//	  なお `CreateLocus` が開くという事実そのものが知見である——`Findings/Undo.md`
+//	  の「SDK 内部が自前でイベントを開く呼び出しがある」の一覧（PIO ＋ `ResetObject`・
+//	  ビューポートの生成と更新・`DeleteObject(useUndo=true)`）に、**素の 2D 図形の
+//	  生成**が加わる。
+//
 //	■ 範囲外（ここでは測らない）——ツールのドラッグ中・レンダリング中そのもの
 //
 //	ドラッグの最中に刻みを当てるには、**プローブが終わった後も生き続けるタイマー**が
@@ -234,9 +258,33 @@ VW_PROBE("undo-event-timer-tick", "VW の undo イベント中の刻み",
 		probe.log("PRE を作った。名前で引けた=" +
 				  ProbeI206YesNo(ProbeI206Exists(kProbeI206NamePre)));
 	}
-	probe.log(
-		"PRE を作った直後の building=" + ProbeI206YesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()) +
-		"（CreateLocus そのものがイベントを開くかどうかの記録）");
+	// **`CreateLocus` そのものが undo イベントを開く**（2 回目の実機で判明——走り出し
+	// `building=no` が、PRE を作った直後に `yes` になった）。だから「どのイベントの外
+	// でもないところに作った対照」は、素朴には作れない——作る行為がイベントを開く。
+	//
+	// そこで**開いてしまったイベントをここで閉じる**。閉じれば PRE は「閉じた別の
+	// イベント」に入るので、この後 VW が開く別のイベント（梃子 1）とは**別の段**に
+	// なり、取り消し 1 段では消えない＝対照として使える。
+	//
+	// **これは「プローブは undo イベントを自分では開かない」決まりに反しない**——
+	// 開いたのは SDK（`CreateLocus`）であって、ここでやるのは**閉じる**ことである。
+	// しかも `Findings/Undo.md` はまさにこれを勧めている（「`useUndo` に任せきりに
+	// せず、終わったら `EndUndoEvent` まで自分で閉じる」）。半端に開いたままにする
+	// ほうが危うく、閉じるのは安全側である。
+	if (gSDK->IsCurrentlyBuildingAnUndoEvent())
+	{
+		probe.log("PRE を作ったらイベントが開いた（CreateLocus が自分で開く）。**閉じる**"
+				  "——閉じれば PRE は別の段になり、対照として使える。");
+		const Boolean ended = gSDK->EndUndoEvent();
+		probe.log(
+			std::string("EndUndoEvent の戻り値=") + (ended ? "true" : "false") +
+			" / 閉じた後の building=" + ProbeI206YesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+	}
+	else
+	{
+		probe.log("PRE を作ってもイベントは開かなかった（この場合 PRE はどのイベントにも"
+				  "属さないので、そのまま対照になる）。");
+	}
 
 	// --- タイマーを 2 本仕掛ける -------------------------------------------------
 	probe.log("");
@@ -414,8 +462,19 @@ VW_PROBE("undo-event-timer-tick", "VW の undo イベント中の刻み",
 
 		const bool tickAfterUndo = ProbeI206Exists(kProbeI206NameTick);
 		const bool preAfterUndo = ProbeI206Exists(kProbeI206NamePre);
-		probe.log("取り消した後: TICK=" + ProbeI206YesNo(tickAfterUndo) +
+		probe.log("**1 段目の取り消しの後**: TICK=" + ProbeI206YesNo(tickAfterUndo) +
 				  " / PRE=" + ProbeI206YesNo(preAfterUndo));
+		probe.log("  （1 段目の後の building=" +
+				  ProbeI206YesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()) + "）");
+
+		// **2 段目も掛ける。** 1 段で何が消え、2 段目で何が消えるかが分かれば、
+		// 「同じ段に居たのか・別の段だったのか」が推論ではなく観測で決まる。
+		probe.log("もう 1 段だけ取り消す（段の境目を直接見るため）");
+		engine->ExecuteScript("DoMenuTextByName('Undo', 0);");
+		const bool tickAfter2 = ProbeI206Exists(kProbeI206NameTick);
+		const bool preAfter2 = ProbeI206Exists(kProbeI206NamePre);
+		probe.log("**2 段目の取り消しの後**: TICK=" + ProbeI206YesNo(tickAfter2) +
+				  " / PRE=" + ProbeI206YesNo(preAfter2));
 		probe.log("");
 		probe.log("── (3) の読み方——**対照を先に見る** ──");
 		// **順序が肝。** 対照（PRE）が成立していないのに TICK だけを読むと、
@@ -435,22 +494,24 @@ VW_PROBE("undo-event-timer-tick", "VW の undo イベント中の刻み",
 		}
 		else if (preBeforeUndo && !preAfterUndo)
 		{
-			probe.fail("(3) は判定不能——**対照 PRE まで消えた。** PRE はどの undo イベントの"
-					   "外で作ったので、取り消し 1 回では残るのが既知の正（Findings「Undo」）。"
-					   "それが消えたということは、この取り消しは想定より広く効いている"
-					   "——TICK が消えたことを『VW のイベントに混ざった』の証拠にできない");
+			probe.fail("(3) は判定不能——**1 段目で対照 PRE まで消えた。** PRE は閉じた別の段に"
+					   "入れたので、1 段目では残るはずだった。両方が同じ段に居たということ"
+					   "なので、TICK が消えたことを『VW が開いていたイベントに混ざった』の"
+					   "証拠にできない。2 段目の行と EndUndoEvent の戻り値を見ること");
 		}
 		else if (!tickAfterUndo)
 		{
-			probe.log("**対照 PRE は残り、TICK だけが消えた。**");
-			probe.log("→ 刻みの中での書き込みは、VW が開いていた undo イベントに**混ざる**。");
-			probe.log("  利用者の 1 回の取り消しが、刻みが作ったものまで持っていく。");
+			probe.log("**1 段目で、対照 PRE は残り TICK だけが消えた。**");
+			probe.log("→ 刻みの中での書き込みは、**そのとき開いていた undo イベントに");
+			probe.log("  混ざる**。利用者の 1 回の取り消しが、刻みが作ったものまで");
+			probe.log("  持っていく（しかも刻みと無関係な作業と同じ段で消える）。");
+			probe.log("  PRE が 2 段目で消えていれば、段が分かれていたことの裏も取れている。");
 		}
 		else
 		{
-			probe.log("**対照 PRE も TICK も残った。**");
-			probe.log("→ 刻みの中での書き込みは、VW が開いていたイベントには**混ざらない**");
-			probe.log("  （1 回の取り消しでは消えない）。");
+			probe.log("**1 段目で TICK も PRE も残った。**");
+			probe.log("→ 刻みの中での書き込みは、そのとき開いていたイベントには");
+			probe.log("  **混ざらない**（1 段の取り消しでは消えない）。2 段目の行も見ること。");
 		}
 	}
 
