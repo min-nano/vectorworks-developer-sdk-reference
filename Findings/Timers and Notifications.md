@@ -12,7 +12,7 @@
 | --- | --- |
 | ISDK に「暇なとき／周期的に」呼ばれる口はあるか | **無い。** ISDK 全体で「登録」できるのは**メニューのコールバック**・**通知手続き**・**ダイアログのタイマー**の 3 つだけで、常駐の時計になるものは 1 つも無い【ソース根拠】（下記 1） |
 | 代わりに使えるもの | ① **ツール拡張の `kAction_OnIdle`**——ただし**自分のツールが選ばれている間だけ**（下記 3）／② **`RegisterNotificationProcedure` ＋ `kNotify*`**——**出来事に反応するだけで周期ではない**（下記 2）／③ **OS のタイマー**（下記 4） |
-| OS のタイマー（`CFRunLoopTimer` / `SetTimer`）から `gSDK` を呼んでよいか | 下記 4（実機確認） |
+| OS のタイマー（`CFRunLoopTimer` / `SetTimer`）から `gSDK` を呼んでよいか | **まだ分かっていない**——mac（[#204](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/204)）も Windows（[#205](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/205)）も実機確認待ち（下記 4） |
 | CEF に隠れたページのタイマーを間引かせない口は SDK にあるか | **無い。** SDK 全体で CEF に触れる口は `WebDlgEnableConsole`（コンソールログの出力）ただ 1 つ【ソース根拠】（下記 5） |
 | 図面が開いていないときにウェブパレットを出せるか | **出す口は無い**（`SetWebPaletteVisibility` を呼んでも出ないのは実測）。**「文書が無い間は動かない」前提で設計する**（下記 6） |
 
@@ -93,18 +93,65 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
 
 ## 4. OS のタイマーから `gSDK` を呼ぶ
 
-**【実機確認待ち】** `probes/runtime/runloop-timer-sdk/` で測っている。測ること:
+**【実機確認待ち】** `probes/runtime/runloop-timer-sdk/` で測っている。
+**mac・Windows のどちらの実機確認もまだ取れていない**——プローブは最初から両
+プラットフォーム向けに書いてあるが、**これを載せた PR が無かったあいだは実機へ配られる
+ビルドに 1 度も入っていなかった**（転がりタグ `probes` のリリースに現れていなかった）。
 
-1. メニューコマンドの中からランループタイマー（mac: `CFRunLoopTimer` をメインの
-   ランループの `kCFRunLoopCommonModes` へ）を仕掛けられるか。
-2. **モーダルダイアログが開いている間も刻むか**（刻みごとに
-   `CFRunLoopCopyCurrentMode` を記録するので、`NSModalPanelRunLoopMode` で来たかが分かる）。
+測ること（mac は [issue #204](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/204)、
+**Windows は [issue #205](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/205)**）:
+
+1. メニューコマンドの中からタイマーを仕掛けられるか（mac: `CFRunLoopTimer` をメインの
+   ランループの `kCFRunLoopCommonModes` へ / Windows: `SetTimer(nullptr, 0, 250, proc)`
+   ＝**ウィンドウを持たないスレッドタイマー**）。
+2. **モーダルダイアログが開いている間も刻むか**（VW の入れ子のメッセージループ）。
 3. **Vectorworks がほかのアプリの裏に回っている間**も 250 ms で刻むか（＝ JS タイマーと
    違って間引かれないか）。
 4. **メニューコマンドが戻った後**（プラグインのコードがスタックに 1 本も無い状態）でも
    刻み、そこから `gSDK` を**読めるか・書けるか**。
+5. **本体（`.vwpayload`）のピン留めが効くか**（mac: `dlopen(RTLD_NOLOAD)` / Windows:
+   `GetModuleHandleExW` の `GET_MODULE_HANDLE_EX_FLAG_PIN`）。
 
-結果が出たらここへ実測値を書き、`Findings/` のこの節の印を外す。
+### プラットフォームで違うのは「誰が配るか」である【ヘッダ根拠】
+
+| | macOS | Windows |
+| --- | --- | --- |
+| 仕掛ける口 | `CFRunLoopTimerCreate` ＋ `CFRunLoopAddTimer(CFRunLoopGetMain(), …, kCFRunLoopCommonModes)` | `SetTimer(nullptr, 0, ms, proc)` |
+| 配られる経路 | メインのランループが回ったとき | **スレッドのメッセージキュー**（`hwnd=NULL` のスレッドメッセージ）を VW のポンプが `DispatchMessage` したとき |
+| モーダルの最中に届くか | `kCFRunLoopCommonModes` に `NSModalPanelRunLoopMode` が入るので**届く見込み** | **VW のポンプの作りで決まる**（下記） |
+| どの局面で来たかの見分け | `CFRunLoopCopyCurrentMode` がモード名をそのまま返す | **モード名に当たるものが無い**ので組み立てる（下記） |
+
+**Windows で引っ掛かりうるのはここ**——`SetTimer` に `hwnd=NULL` を渡したタイマーの
+`WM_TIMER` は、**どの窓にも属さないスレッドメッセージ**としてキューへ入り、
+`DispatchMessage` が `lParam` の `TimerProc` を呼ぶことで初めて実行される。つまり
+**VW のメッセージポンプが窓を絞らずに `GetMessage` / `PeekMessage` を回していなければ、
+`WM_TIMER` は永久に配られない**（`PeekMessage(&msg, hwnd, …)` と窓を指定して絞るポンプは
+スレッドメッセージを拾わない）。**VW 本体の実装は SDK に入っていない**ので
+（`SDKLib` にあるのはヘッダと VWFC の実装だけ）、**これは実機でしか決まらない。**
+
+### プローブは Windows で何を見るか（読み違えないための計装）
+
+mac が `CFRunLoopCopyCurrentMode` 1 本で済むところを、Windows では次で代替する。
+
+- **②（モーダル）**: `GUITHREADINFO` に**モーダルを表す旗は無い**（`flags` にあるのは
+  `GUI_CARETBLINKING` / `GUI_INMOVESIZE` / `GUI_INMENUMODE` / `GUI_SYSTEMMENUMODE` /
+  `GUI_POPUPMENUMODE` / `GUI_16BITTASK` だけ）。そこで**「持ち主の窓が無効になっているか」**
+  （`GetWindow(…, GW_OWNER)` ＋ `IsWindowEnabled`）で見る——これが Win32 でのモーダルの
+  定義そのものである。併せてアクティブな窓の**クラス名**も残す（標準のダイアログは
+  `#32770`。VW が自前のクラスで出していても名前で分かるように、決め打ちしない）。
+- **③（裏に回っている間）**: 刻みごとに**前面に居るか**を（`GetForegroundWindow` ＋
+  `GetWindowThreadProcessId`）記録する。これが無いと**「間引かれなかった」と
+  「利用者が切り替えを忘れた」が見分けられない。**
+- **⑤（ピン留め）**: `GetModuleFileNameW` で**留めた先の名前**を出す。殻
+  （`VwSdkProbes.vlb`）ではなく本体（`VwSdkProbesPayload-<群>.vwpayload`）が留まって
+  いることを、推測ではなく名前で確かめる。
+
+**Windows の時計の分解能に注意**——`WM_TIMER` はシステムの時計の刻み（約 15.6 ms）へ
+丸められるので、250 ms で仕掛けても間隔は 250〜266 ms に散る。**これは間引きではない。**
+間引きに当たっていれば 60000 ms 前後（下記 5 の JS タイマーと同じ桁）になる。
+
+結果が出たらここへ実測値を書き、この節の印を外す。**mac と Windows で違えば
+「Windows では」と書き分ける。**
 
 ## 5. ウェブパレットの JS タイマーは、隠れると 60 秒に 1 回まで間引かれる
 
@@ -172,8 +219,7 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
 
 - **OS のタイマーを、undo の記録中・描画の最中に踏んだときの振る舞い**。プローブは
   undo イベントを自分では開かない決まり（[Undo](Undo.md)・`probes/runtime/README.md`）
-  なので、この調査の範囲から外した。
-  → [issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)
-- **Windows の `SetTimer`（ウィンドウ無しのスレッドタイマー）の振る舞い**。プローブは
-  両プラットフォーム向けに書いてあるが、実機確認は macOS でしか取れていない。
-  → [issue #207](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/207)
+  なので、この調査の範囲から外した。**issue はまだ立てていない。**
+- **Windows の `SetTimer`（ウィンドウ無しのスレッドタイマー）の振る舞い**
+  → [issue #205](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/205)
+  （上記 4。**mac の実機確認も未了**なので、両方そこで待っている）

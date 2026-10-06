@@ -17,6 +17,13 @@
 //	  ③ Vectorworks が**ほかのアプリの裏に回っている間**も 250 ms で刻むか（間引かれないか）。
 //	  ④ **メニューコマンドが戻った後**（こちらのコードがスタックに 1 本も無い状態）でも
 //	     刻み続け、そこから `gSDK` を読める・書けるか。
+//	  ⑤ **本体のピン留めが効くか**（mac は `dlopen(RTLD_NOLOAD)`、Windows は
+//	     `GetModuleHandleExW` の `GET_MODULE_HANDLE_EX_FLAG_PIN`）。留めた先の名前を
+//	     ログに出すので、**殻ではなく本体を留めたか**まで確かめられる。
+//
+//	**Windows の実機確認は issue #205**（#204 から切り出したもの）。プローブは最初から
+//	両プラットフォーム向けに書いてあるが、**Windows の道は実機でも CI でも一度も通って
+//	いなかった**（この調査まで、このプローブを載せた PR が無かったため）。
 //
 //	仕掛け: ④ は 1 回の実行では見えないので、**2 回走らせる**。1 回目が仕掛けて刻みを
 //	ファイルへ書き溜め、2 回目がそれを読んで報告し、ファイルを消す（消えたことが古い
@@ -40,6 +47,15 @@
 #include <vector>
 
 #if defined(_WIN32)
+//	**NOMINMAX を先に立てる。** windows.h（windef.h）は `min` / `max` を**マクロ**で
+//	定義するので、下の VwProbeReport の `std::min` / `std::max` がマクロに食われる。
+//	SDK 側にも `#undef min` / `#undef max` はあるが（`Include/KernelBaseTypes.h` /
+//	`Include/Kernel/Math/MathBasic.h`。どちらも `#if _WINDOWS` の中）、**それは
+//	"Probe.h" を読んでいる最中の話**で、その後に windows.h を読むこちらには届かない。
+//	念のため呼ぶ側も `(std::min)(…)` と括って、マクロが生きていても展開されないようにした。
+#	ifndef NOMINMAX
+#		define NOMINMAX
+#	endif
 #	include <windows.h>
 #else
 #	include <CoreFoundation/CoreFoundation.h>
@@ -115,14 +131,61 @@ namespace
 			.count();
 	}
 
+#if defined(_WIN32)
+	// ワイド文字列を UTF-8 へ。ログへ出すだけなので、読めなければ空で構わない。
+	std::string VwProbeNarrow(const wchar_t* w)
+	{
+		if (w == nullptr || w[0] == L'\0')
+			return std::string();
+		const int need = ::WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+		if (need <= 1)
+			return std::string();
+		std::string out((size_t)(need - 1), '\0');
+		::WideCharToMultiByte(CP_UTF8, 0, w, -1, &out[0], need - 1, nullptr, nullptr);
+		return out;
+	}
+#endif
+
 	// いまランループが回っているモード。**モーダルの最中かどうかがこれで分かる**
 	// （macOS の alert は `NSModalPanelRunLoopMode` で回す）。
 	std::string VwProbeCurrentMode()
 	{
 #if defined(_WIN32)
-		// Windows の WM_TIMER にモードの概念は無い。入れ子のモーダルループに居るかは
-		// 分からないので、代わりに「どのスレッドで来たか」を出す。
-		return std::string("thread-") + std::to_string((unsigned long)::GetCurrentThreadId());
+		// Windows の WM_TIMER に「ランループモード」の概念は無いので、mac の
+		// `NSModalPanelRunLoopMode` に当たるものを USER32 から組み立てる。
+		//
+		// **`GUITHREADINFO` にモーダルを表す旗は無い**（`flags` にあるのは
+		// `GUI_CARETBLINKING` / `GUI_INMOVESIZE` / `GUI_INMENUMODE` /
+		// `GUI_SYSTEMMENUMODE` / `GUI_POPUPMENUMODE` / `GUI_16BITTASK` だけ）。
+		// そこで②（モーダルの最中に届くか）は次の 2 つで見る:
+		//   ・`+ownerdisabled` ——**モーダルダイアログは持ち主の窓を無効にする**。
+		//     これが Win32 でのモーダルの定義そのものなので、一番当てになる。
+		//   ・`+cls:<クラス名>` ——アクティブな窓のクラス名。Win32 の標準のダイアログは
+		//     `#32770` だが、**VW が自前のクラスで出している見込みもある**ので、
+		//     決め打ちせず名前をそのまま残す（初回の実機ログで何なのかが分かる）。
+		std::string out = "thread-" + std::to_string((unsigned long)::GetCurrentThreadId());
+		GUITHREADINFO gti;
+		::ZeroMemory(&gti, sizeof(gti));
+		gti.cbSize = sizeof(gti);
+		if (::GetGUIThreadInfo(::GetCurrentThreadId(), &gti) == 0)
+			return out + "+gti-failed";
+		if ((gti.flags & GUI_INMENUMODE) != 0)
+			out += "+menu";
+		if ((gti.flags & GUI_POPUPMENUMODE) != 0)
+			out += "+popupmenu";
+		if ((gti.flags & GUI_SYSTEMMENUMODE) != 0)
+			out += "+sysmenu";
+		if ((gti.flags & GUI_INMOVESIZE) != 0)
+			out += "+movesize";
+		if (gti.hwndActive == nullptr)
+			return out + "+noactive";
+		wchar_t cls[64] = {0};
+		if (::GetClassNameW(gti.hwndActive, cls, 64) > 0)
+			out += "+cls:" + VwProbeNarrow(cls);
+		const HWND owner = ::GetWindow(gti.hwndActive, GW_OWNER);
+		if (owner != nullptr && ::IsWindowEnabled(owner) == 0)
+			out += "+ownerdisabled";
+		return out;
 #else
 		CFStringRef mode = ::CFRunLoopCopyCurrentMode(::CFRunLoopGetMain());
 		if (mode == nullptr)
@@ -131,6 +194,25 @@ namespace
 		const Boolean ok = ::CFStringGetCString(mode, buf, sizeof(buf), kCFStringEncodingUTF8);
 		::CFRelease(mode);
 		return ok ? std::string(buf) : std::string("(unprintable)");
+#endif
+	}
+
+	// **Vectorworks がいま前面に居るか。** ③（裏に回っている間も刻むか）を
+	// 読み違えないための対照である——利用者が切り替えを忘れたまま OK を押しても、
+	// 刻みが全部 `fg=yes` なら「裏に回っていなかった＝③は測れていない」と機械で分かる。
+	// これが無いと「間引かれなかった」と「切り替えなかった」が見分けられない。
+	std::string VwProbeForeground()
+	{
+#if defined(_WIN32)
+		const HWND fg = ::GetForegroundWindow();
+		if (fg == nullptr)
+			return "none";
+		DWORD pid = 0;
+		::GetWindowThreadProcessId(fg, &pid);
+		return (pid == ::GetCurrentProcessId()) ? "yes" : "no";
+#else
+		// mac 側は未計装（#204 の範囲なので、こちらでは足さない）。
+		return "?";
 #endif
 	}
 
@@ -205,12 +287,12 @@ namespace
 		const long long dt = ms - st->lastMs;
 		st->lastMs = ms;
 
-		const std::string head = "tick" + VwProbeField("n", VwProbeNum(st->ticks)) +
-								 VwProbeField("t_ms", VwProbeNum(ms)) +
-								 VwProbeField("dt_ms", VwProbeNum(dt)) +
-								 VwProbeField("phase", st->phase) +
-								 VwProbeField("inside_probe", st->insideProbe ? "yes" : "no") +
-								 VwProbeField("mode", VwProbeCurrentMode());
+		const std::string head =
+			"tick" + VwProbeField("n", VwProbeNum(st->ticks)) +
+			VwProbeField("t_ms", VwProbeNum(ms)) + VwProbeField("dt_ms", VwProbeNum(dt)) +
+			VwProbeField("phase", st->phase) +
+			VwProbeField("inside_probe", st->insideProbe ? "yes" : "no") +
+			VwProbeField("mode", VwProbeCurrentMode()) + VwProbeField("fg", VwProbeForeground());
 
 		// **gSDK を呼ぶ前に「これから呼ぶ」を残す。** 落ちたらこの行が最後に通った場所に
 		// なる（落ち方そのものが知見）。
@@ -294,13 +376,25 @@ namespace
 	// -----------------------------------------------------------------------
 	// **本体をピン留めする。** 殻はプローブが終わると本体を降ろすので、ピン留めしないと
 	// タイマーの行き先が消える。失敗したら仕掛けてはいけない。
-	std::string VwProbePinSelf()
+	std::string VwProbePinSelf(std::string& pinnedPath)
 	{
 #if defined(_WIN32)
 		HMODULE mod = nullptr;
+		// FROM_ADDRESS なので第 2 引数は**名前ではなくアドレス**（だからこの cast が要る）。
+		// PIN は UNCHANGED_REFCOUNT と併用できないが、FROM_ADDRESS とは併用できる。
 		const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
 		if (::GetModuleHandleExW(flags, (LPCWSTR)&VwProbePinSelf, &mod) == 0)
-			return "GetModuleHandleExW(PIN) が失敗した";
+			return "GetModuleHandleExW(PIN) が失敗した（GetLastError=" +
+				   std::to_string((unsigned long)::GetLastError()) + "）";
+		// **どれを留めたかを名前で残す。** 期待は本体
+		// （`VwSdkProbesPayload-<群>.vwpayload`）——殻（`VwSdkProbes.vlb`）を留めて
+		// しまっていたら⑤の答えが逆になるので、推測ではなく名前で確かめられるようにする。
+		wchar_t buf[MAX_PATH] = {0};
+		const DWORD n = ::GetModuleFileNameW(mod, buf, MAX_PATH);
+		if (n > 0 && n < MAX_PATH)
+			pinnedPath = VwProbeNarrow(buf);
+		if (pinnedPath.empty())
+			pinnedPath = "(GetModuleFileNameW が読めなかった)";
 		return std::string();
 #else
 		::Dl_info info;
@@ -311,6 +405,7 @@ namespace
 		void* handle = ::dlopen(info.dli_fname, RTLD_NOLOAD | RTLD_LAZY);
 		if (handle == nullptr)
 			return std::string("dlopen(RTLD_NOLOAD) が失敗した: ") + info.dli_fname;
+		pinnedPath = info.dli_fname;
 		return std::string();
 #endif
 	}
@@ -319,15 +414,21 @@ namespace
 	void VwProbePump(double seconds)
 	{
 #if defined(_WIN32)
-		const DWORD until = ::GetTickCount() + (DWORD)(seconds * 1000.0);
-		while (::GetTickCount() < until)
+		// **GetTickCount64 を使う。** GetTickCount は約 49.7 日で巻き戻るので、
+		// 稼働の長い実機では `until` が巻き戻りを跨いでこのループが即座に抜け、
+		// ①が「0 回」と出てしまう——**仕掛かっていないのと見分けが付かない**。
+		const ULONGLONG until = ::GetTickCount64() + (ULONGLONG)(seconds * 1000.0);
+		// **スレッドメッセージだけを配る**（PeekMessage の hWnd に `-1`）。ウィンドウを
+		// 持たないタイマーの WM_TIMER は `hwnd=NULL` のスレッドメッセージとして来るので、
+		// ①（仕掛かって刻むか）はこれで足りる。hWnd に nullptr を渡して VW のウィンドウ
+		// 向けのメッセージまで配ると、**プラグインの呼び出しの最中に VW のウィンドウ
+		// プロシージャへ再入する**ことになるので、そこは踏まない
+		// （「**VW のポンプが配るか**」は②③④が測る。そちらが本題である）。
+		while (::GetTickCount64() < until)
 		{
 			MSG msg;
-			while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE) != 0)
-			{
-				::TranslateMessage(&msg);
-				::DispatchMessageW(&msg);
-			}
+			while (::PeekMessageW(&msg, (HWND)(INT_PTR)-1, 0, 0, PM_REMOVE) != 0)
+				::DispatchMessageW(&msg); // WM_TIMER は lParam の TimerProc へ回される
 			::Sleep(10);
 		}
 #else
@@ -358,6 +459,8 @@ namespace
 			long long minDt = 0;
 			long long maxDt = 0;
 			long long sumDt = 0;
+			int fgNo = 0; // Vectorworks が裏に回っていた刻み（③ の対照）
+			int modal = 0; // 入れ子のモーダルループの最中に来た刻み（② の答え）
 		};
 		std::vector<VwProbePhaseStat> stats;
 		int ticksWithSdk = 0;
@@ -394,12 +497,19 @@ namespace
 					found = &s;
 			if (found == nullptr)
 			{
-				stats.push_back(VwProbePhaseStat{phase, 0, dt, dt, 0});
+				stats.push_back(VwProbePhaseStat{phase, 0, dt, dt, 0, 0, 0});
 				found = &stats.back();
 			}
 			++found->count;
-			found->minDt = std::min(found->minDt, dt);
-			found->maxDt = std::max(found->maxDt, dt);
+			if (line.find("fg=no") != std::string::npos)
+				++found->fgNo;
+			// モーダルの判定は「持ち主の窓が無効」——VwProbeCurrentMode と同じ基準。
+			if (line.find("+ownerdisabled") != std::string::npos)
+				++found->modal;
+			// **括って呼ぶ。** windows.h の `min` / `max` マクロが生きていても、
+			// `(std::min)(…)` の形なら関数形式マクロとして展開されない。
+			found->minDt = (std::min)(found->minDt, dt);
+			found->maxDt = (std::max)(found->maxDt, dt);
 			found->sumDt += dt;
 		}
 
@@ -409,10 +519,37 @@ namespace
 			const long long avg = (s.count > 0) ? (s.sumDt / s.count) : 0;
 			probe.log("  " + s.phase + ": " + std::to_string(s.count) + " 回, dt 最小 " +
 					  std::to_string(s.minDt) + " / 平均 " + std::to_string(avg) + " / 最大 " +
-					  std::to_string(s.maxDt) + " ms");
+					  std::to_string(s.maxDt) + " ms（裏に回っていた刻み " +
+					  std::to_string(s.fgNo) + " 回 / モーダルの最中の刻み " +
+					  std::to_string(s.modal) + " 回）");
 		}
 		probe.log("gSDK から値が読めた刻み: " + std::to_string(ticksWithSdk) +
 				  " 回 / 異常のあった刻み: " + std::to_string(ticksWithTrouble) + " 回");
+		probe.log("");
+
+		// **読み方をプローブ自身に書かせる。** 刻みの数と dt だけを渡すと、
+		// 「切り替えを忘れた」と「間引かれなかった」、「時計の分解能」と「間引き」が
+		// 取り違えられる。判定の境目はここに書いておく。
+		probe.log("--- 読み方 ---");
+		probe.log("・dt が 250 前後なら間引かれていない。60000 前後ならウェブパレットの");
+		probe.log("  JS タイマーと同じ間引きに当たっている。");
+		probe.log("・`background` の行で「裏に回っていた刻み」が 0 なら、**切り替えが");
+		probe.log("  行われていないので③は測れていない**（間引きが無いという根拠には");
+		probe.log("  ならない。走らせ直す）。");
+#if defined(_WIN32)
+		probe.log("・Windows の WM_TIMER はシステムの時計の刻み（約 15.6 ms）へ丸められる");
+		probe.log("  ので、250 ms で仕掛けても dt は 250〜266 ms に散る。**これは間引きでは");
+		probe.log("  ない。**");
+		probe.log("・②の答えは「モーダルの最中の刻み」の列に出る。数えているのは");
+		probe.log("  `mode=` に `+ownerdisabled` が付いた刻み——**持ち主の窓が無効**なのが");
+		probe.log("  Win32 でのモーダルの定義である。`modal-wait` の行がそこで 0 なら、");
+		probe.log("  **入れ子のモーダルループには WM_TIMER が配られていない**ということ。");
+		probe.log("・`+cls:` にはアクティブな窓のクラス名が出る（標準のダイアログは");
+		probe.log("  `#32770`）。`modal-wait` でここが 0 件なら、VW の alert が");
+		probe.log("  持ち主を無効にしない作りだということなので、クラス名の側で判断する。");
+		probe.log("・`mode=` の `thread-<id>` が `arm` 行の `mode_at_arm` と一致している");
+		probe.log("  ことを確かめる（ウィンドウ無しの SetTimer は仕掛けたスレッドへ来る）。");
+#endif
 		probe.log("");
 
 		// 要点の行（仕掛け・書き込み・店じまい）は全部出す。刻みの行は多すぎるので、
@@ -454,21 +591,30 @@ VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
 	}
 
 	// ---------------------------------------------------------------- 仕掛ける
-	const std::string pinTrouble = VwProbePinSelf();
+	std::string pinnedPath;
+	const std::string pinTrouble = VwProbePinSelf(pinnedPath);
 	if (!pinTrouble.empty())
 	{
 		probe.fail("本体をピン留めできなかったので仕掛けない（" + pinTrouble + "）");
 		return;
 	}
 	probe.log("本体をピン留めした（殻が降ろしても、タイマーの行き先は残る）。");
+	// ⑤ の答えがここに出る——**本体（…Payload-<群>.vwpayload）の名前が出ていなければ
+	// 留め先を間違えている**ので、刻みが続いたとしてもピン留めの根拠にはならない。
+	probe.log("  留めた先: " + pinnedPath);
 
 	gVwProbeTimerState = new VwProbeTimerState();
 	gVwProbeTimerState->filePath = path;
 	gVwProbeTimerState->armedAt = std::chrono::steady_clock::now();
 	gVwProbeTimerState->phase = "pump";
 
+	// 仕掛けたスレッドを残す。**ウィンドウ無しの SetTimer は仕掛けたスレッドの
+	// キューへ来る**ので、刻みの `mode=thread-<id>` がこれと一致するかが確かめられる。
 	VwProbeAppend(path, "arm" + VwProbeField("interval_ms", VwProbeNum(kVwProbeIntervalMs)) +
 							VwProbeField("max_ticks", VwProbeNum(kVwProbeMaxTicks)) +
+							VwProbeField("mode_at_arm", VwProbeCurrentMode()) +
+							VwProbeField("fg_at_arm", VwProbeForeground()) +
+							VwProbeField("pinned", pinnedPath) +
 							VwProbeField("objs_at_arm", VwProbeNum(VwProbeCountObjects())));
 
 #if defined(_WIN32)
