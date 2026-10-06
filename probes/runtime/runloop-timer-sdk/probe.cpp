@@ -1,30 +1,44 @@
 //
 //	probes/runtime/runloop-timer-sdk/probe.cpp
 //
-//	[issue #204] **OS のランループタイマーから gSDK を呼べるか**を実測する。
+//	[issue #204] **OS のタイマーから gSDK を呼べるか**を実測する。
 //
 //	背景: 周期的にプラグインのコードを動かす手立ては、いまのところウェブパレットの HTML の
 //	`setInterval` しかない。ところがパレットを隠す／Vectorworks が裏に回ると、埋め込みの
 //	Chromium が隠れたページのタイマーを 60 秒に 1 回まで間引く。そこで「パレットの外へ
-//	時計を移す」——macOS なら `CFRunLoopTimer` をメインのランループへ——が成り立つかを
-//	確かめる。ISDK にアイドル／タイマーの口が無いことはヘッダで確認済み（Findings）。
+//	時計を移す」が成り立つかを確かめる。ISDK にアイドル／タイマーの口が無いことは
+//	ヘッダで確認済み（[Findings「周期実行と通知」](../../../Findings/Timers%20and%20Notifications.md)）。
 //
-//	確かめること:
-//	  ① メニューコマンドの中からランループタイマーを仕掛けられるか（自分でランループを
-//	     回して刻みを数える）。
-//	  ② **モーダルダイアログが開いている間も刻むか**（刻みごとに現在のランループモードを
-//	     記録するので、`NSModalPanelRunLoopMode` で来たかがそのまま分かる）。
-//	  ③ Vectorworks が**ほかのアプリの裏に回っている間**も 250 ms で刻むか（間引かれないか）。
-//	  ④ **メニューコマンドが戻った後**（こちらのコードがスタックに 1 本も無い状態）でも
-//	     刻み続け、そこから `gSDK` を読める・書けるか。
+//	**1 回目の計測（ビルド 1d5b70f53506 / 782dd705b13f）で分かったこと**——
+//	`CFRunLoopTimer` を**メインのランループの `kCFRunLoopCommonModes` へ**入れると、
+//	刻みが来るのは**VW が入れ子のモーダルループを回している間だけ**だった
+//	（観測した刻みの `mode=` は全て `NSModalPanelRunLoopMode`）。**メニューコマンドが
+//	戻った後は 1 回も来ない**（`outside` 局面の刻みが 0 件）。つまり VW のアイドルの
+//	ループは、共通モードの CFRunLoop を回していない。
 //
-//	仕掛け: ④ は 1 回の実行では見えないので、**2 回走らせる**。1 回目が仕掛けて刻みを
-//	ファイルへ書き溜め、2 回目がそれを読んで報告し、ファイルを消す（消えたことが古い
-//	タイマーへの「店じまい」の合図になる。下記 VwProbeTickBody）。
+//	そこでこの版は「**できない**」と結論する前に、取りに行ける答えを 3 つ取る:
+//
+//	  ① **モードを総当たりする。** `CFRunLoopCopyAllModes` で主ランループが知っている
+//	     モードを全部並べ、**その全てに**タイマーを入れる（VW が私物のモードで回して
+//	     いるなら、共通モードでは届かなくてもこちらで届く）。
+//	  ② **別の口を並べて比べる。** `dispatch_source_t`（**メインキュー**のタイマー）を
+//	     同時に仕掛ける。メインキューの消化はランループのモードに依らないので、
+//	     VW がアイドルでもメインキューを回していれば**こちらだけ刻む**。
+//	     刻みの行の `src=` で、どちらの口から来たかが分かる。
+//	  ③ **走っている文脈を記録する。** 仕掛けた側がメインスレッドか
+//	     （`pthread_main_np`）、刻みのときに VW が undo イベントを開いているか
+//	     （`IsCurrentlyBuildingAnUndoEvent`。[#206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)
+//	     からの依頼）。
+//
+//	仕掛け: 「コマンドが戻った後」は 1 回の実行では見えないので、**2 回走らせる**。
+//	1 回目が仕掛けて刻みをファイルへ書き溜め、2 回目がそれを読んで報告し、ファイルを
+//	消す（消えたことが古いタイマーへの「店じまい」の合図になる）。**書き溜め先は群ごとに
+//	分ける**——同じ slug のプローブが複数の PR に居るので、1 本の道を共有すると
+//	「どの群が仕掛けた刻みか」が混ざる（実際に混ざった）。
 //
 //	**本体（.vwpayload）は刻みが続く間ピン留めする。** 殻はプローブが終わると本体を
-//	`dlclose` するので、ピン留めしないとタイマーの行き先（この関数）が消えて落ちる。
-//	ピン留めに失敗したら仕掛けない（落とすだけで何も分からないため）。
+//	`dlclose` するので、ピン留めしないとタイマーの行き先が消えて落ちる。ピン留めに
+//	失敗したら仕掛けない（落とすだけで何も分からないため）。
 //
 
 #include "Probe.h"
@@ -34,7 +48,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -43,24 +56,36 @@
 #	include <windows.h>
 #else
 #	include <CoreFoundation/CoreFoundation.h>
+#	include <dispatch/dispatch.h>
 #	include <dlfcn.h>
+#	include <pthread.h>
+#endif
+
+// どの群（main / PR ごと）の本体かはビルドのときに決まる（plugin/CMakeLists.txt が
+// -D で渡す）。構文チェック（ci-debug の compile）では渡らないので既定を置く。
+#ifndef VW_PAYLOAD_GROUP
+#	define VW_PAYLOAD_GROUP "local"
 #endif
 
 namespace
 {
 	// 刻みの間隔。パレットの JS タイマー（250 ms）と同じにしておく。
 	const long long kVwProbeIntervalMs = 250;
-	// 刻みの上限（250 ms × 1200 = 300 秒）。報告を忘れられても勝手に止まるように。
-	const int kVwProbeMaxTicks = 1200;
+	// 刻みの上限と締切。報告を忘れられても勝手に止まるように（口が 2 つあるので倍）。
+	const int kVwProbeMaxTicks = 2400;
+	const long long kVwProbeDeadlineMs = 300000;
+
 	// 1 回目が書き溜めたものを 2 回目が読む。**一時ディレクトリ**に置く（Vectorworks が
-	// 落ちても残るので、落ち方そのものも読み取れる）。
+	// 落ちても残るので、落ち方そのものも読み取れる）。**群ごとに別の名前**にする。
 	std::string VwProbeTickFilePath()
 	{
 		std::error_code ec;
 		std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
 		if (ec)
 			dir = std::filesystem::path(".");
-		return (dir / "VwSdkProbes-runloop-timer-sdk-ticks.txt").string();
+		const std::string name =
+			std::string("VwSdkProbes-runloop-timer-sdk-ticks-") + VW_PAYLOAD_GROUP + ".txt";
+		return (dir / name).string();
 	}
 
 	// -----------------------------------------------------------------------
@@ -70,8 +95,11 @@ namespace
 	{
 		std::string filePath;
 		std::chrono::steady_clock::time_point armedAt;
-		int ticks = 0;
-		long long lastMs = 0;
+		int ticks = 0; // 合計（両方の口）
+		int ticksCF = 0;
+		int ticksDQ = 0;
+		long long lastMsCF = 0;
+		long long lastMsDQ = 0;
 		bool insideProbe = true; // プローブ本体がまだスタックに居るか
 		std::string phase = "pump";
 		bool triedWrite = false;
@@ -83,6 +111,7 @@ namespace
 	UINT_PTR gVwProbeWinTimer = 0;
 #else
 	CFRunLoopTimerRef gVwProbeCFTimer = nullptr;
+	dispatch_source_t gVwProbeDQTimer = nullptr;
 #endif
 
 	// 1 行書いて閉じる。**毎回開き直す**ので、Vectorworks ごと落ちてもそこまでが残る。
@@ -94,7 +123,7 @@ namespace
 		out << line << "\n";
 	}
 
-	// 書き溜めの 1 行は `鍵 ## 値` で組む（値に `##` は現れない）。
+	// 書き溜めの 1 行は `鍵=値` を ` ## ` で継ぐ（値に `##` は現れない）。
 	std::string VwProbeField(const std::string& key, const std::string& value)
 	{
 		return " ## " + key + "=" + value;
@@ -116,7 +145,8 @@ namespace
 	}
 
 	// いまランループが回っているモード。**モーダルの最中かどうかがこれで分かる**
-	// （macOS の alert は `NSModalPanelRunLoopMode` で回す）。
+	// （macOS の alert は `NSModalPanelRunLoopMode` で回す）。主ランループが止まって
+	// いれば nullptr が返る。
 	std::string VwProbeCurrentMode()
 	{
 #if defined(_WIN32)
@@ -126,7 +156,7 @@ namespace
 #else
 		CFStringRef mode = ::CFRunLoopCopyCurrentMode(::CFRunLoopGetMain());
 		if (mode == nullptr)
-			return "(none)";
+			return "(not-running)";
 		char buf[128] = {0};
 		const Boolean ok = ::CFStringGetCString(mode, buf, sizeof(buf), kCFStringEncodingUTF8);
 		::CFRelease(mode);
@@ -168,6 +198,12 @@ namespace
 			::CFRelease(gVwProbeCFTimer);
 			gVwProbeCFTimer = nullptr;
 		}
+		if (gVwProbeDQTimer != nullptr)
+		{
+			::dispatch_source_cancel(gVwProbeDQTimer);
+			::dispatch_release(gVwProbeDQTimer);
+			gVwProbeDQTimer = nullptr;
+		}
 #endif
 		if (st == nullptr || st->disarmed)
 			return;
@@ -176,15 +212,19 @@ namespace
 		if (std::filesystem::exists(st->filePath, ec))
 		{
 			VwProbeAppend(st->filePath, "disarm" + VwProbeField("n", VwProbeNum(st->ticks)) +
+											VwProbeField("cf", VwProbeNum(st->ticksCF)) +
+											VwProbeField("dq", VwProbeNum(st->ticksDQ)) +
 											VwProbeField("t_ms", VwProbeNum(VwProbeElapsedMs())) +
 											VwProbeField("why", why));
 		}
 	}
 
 	// -----------------------------------------------------------------------
-	// 刻み 1 回。**プローブが戻った後も呼ばれる**ので、ここから殻（結果ダイアログ・ログの
-	// 受け口）へは触らない——触れるのは自分のファイルと gSDK だけ。
-	void VwProbeTickBody()
+	// 刻み 1 回。`src` は口の名前（`cf` ＝ CFRunLoopTimer / `dq` ＝ メインキューの
+	// dispatch タイマー / `win` ＝ SetTimer）。**プローブが戻った後も呼ばれる**ので、
+	// ここから殻（結果ダイアログ・ログの受け口）へは触らない——触れるのは自分の
+	// ファイルと gSDK だけ。
+	void VwProbeTickBody(const char* src)
 	{
 		VwProbeTimerState* st = gVwProbeTimerState;
 		if (st == nullptr)
@@ -201,16 +241,28 @@ namespace
 		}
 
 		++st->ticks;
+		const bool isDQ = (std::string(src) == "dq");
 		const long long ms = VwProbeElapsedMs();
-		const long long dt = ms - st->lastMs;
-		st->lastMs = ms;
+		long long dt = 0;
+		if (isDQ)
+		{
+			++st->ticksDQ;
+			dt = ms - st->lastMsDQ;
+			st->lastMsDQ = ms;
+		}
+		else
+		{
+			++st->ticksCF;
+			dt = ms - st->lastMsCF;
+			st->lastMsCF = ms;
+		}
 
-		const std::string head = "tick" + VwProbeField("n", VwProbeNum(st->ticks)) +
-								 VwProbeField("t_ms", VwProbeNum(ms)) +
-								 VwProbeField("dt_ms", VwProbeNum(dt)) +
-								 VwProbeField("phase", st->phase) +
-								 VwProbeField("inside_probe", st->insideProbe ? "yes" : "no") +
-								 VwProbeField("mode", VwProbeCurrentMode());
+		const std::string head =
+			"tick" + VwProbeField("src", src) + VwProbeField("n", VwProbeNum(st->ticks)) +
+			VwProbeField("t_ms", VwProbeNum(ms)) + VwProbeField("dt_ms", VwProbeNum(dt)) +
+			VwProbeField("phase", st->phase) +
+			VwProbeField("inside_probe", st->insideProbe ? "yes" : "no") +
+			VwProbeField("mode", VwProbeCurrentMode());
 
 		// **gSDK を呼ぶ前に「これから呼ぶ」を残す。** 落ちたらこの行が最後に通った場所に
 		// なる（落ち方そのものが知見）。
@@ -219,6 +271,7 @@ namespace
 		long long tickCount = -1;
 		long long docs = -1;
 		long long objs = -1;
+		std::string undoBuilding = "?";
 		std::string trouble;
 		try
 		{
@@ -229,6 +282,10 @@ namespace
 			else
 			{
 				tickCount = (long long)gSDK->TickCount();
+				// **#206 からの依頼**: 刻みが当たった瞬間に VW が undo イベントを
+				// 開いているか。開いた瞬間を知らせる通知は無い（閉じる直前の
+				// `kNotifyUndoEndEvent` だけ）ので、ここで直に問うしかない。
+				undoBuilding = gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no";
 				VectorWorks::TVWArray_OpenFileInformation files;
 				gSDK->GetOpenFilesList(files);
 				docs = (long long)files.GetSize();
@@ -244,17 +301,19 @@ namespace
 			trouble = "不明な例外";
 		}
 
-		VwProbeAppend(st->filePath, head + VwProbeField("tick_count", VwProbeNum(tickCount)) +
+		VwProbeAppend(st->filePath, head + VwProbeField("undo_building", undoBuilding) +
+										VwProbeField("tick_count", VwProbeNum(tickCount)) +
 										VwProbeField("docs", VwProbeNum(docs)) +
 										VwProbeField("objs", VwProbeNum(objs)) +
 										VwProbeField("trouble", trouble.empty() ? "-" : trouble));
 
 		// **プローブの外から 1 度だけ書き込みを試す。** 読めるだけでは足りない——
 		// 受け付けの時計をここへ移すなら、図面を触れなければ意味が無い。
-		if (!st->triedWrite && !st->insideProbe && st->ticks >= 8)
+		if (!st->triedWrite && !st->insideProbe)
 		{
 			st->triedWrite = true;
-			VwProbeAppend(st->filePath, "write" + VwProbeField("n", VwProbeNum(st->ticks)) +
+			VwProbeAppend(st->filePath, "write" + VwProbeField("src", src) +
+											VwProbeField("n", VwProbeNum(st->ticks)) +
 											VwProbeField("step", "about-to-create-locus"));
 			std::string outcome = "作れた";
 			MCObjectHandle locus = nil;
@@ -270,37 +329,47 @@ namespace
 				outcome = "例外で止まった";
 			}
 			VwProbeAppend(st->filePath,
-						  "write" + VwProbeField("n", VwProbeNum(st->ticks)) +
+						  "write" + VwProbeField("src", src) +
+							  VwProbeField("n", VwProbeNum(st->ticks)) +
 							  VwProbeField("locus", outcome) +
 							  VwProbeField("objs_after", VwProbeNum(VwProbeCountObjects())));
 		}
 
 		if (st->ticks >= kVwProbeMaxTicks)
 			VwProbeDisarm("刻みの上限に達した");
+		else if (ms >= kVwProbeDeadlineMs)
+			VwProbeDisarm("締切に達した");
 	}
 
 #if defined(_WIN32)
 	void CALLBACK VwProbeWinTimerProc(HWND, UINT, UINT_PTR, DWORD)
 	{
-		VwProbeTickBody();
+		VwProbeTickBody("win");
 	}
 #else
 	void VwProbeCFTimerProc(CFRunLoopTimerRef, void*)
 	{
-		VwProbeTickBody();
+		VwProbeTickBody("cf");
+	}
+
+	void VwProbeDQTimerProc(void*)
+	{
+		VwProbeTickBody("dq");
 	}
 #endif
 
 	// -----------------------------------------------------------------------
 	// **本体をピン留めする。** 殻はプローブが終わると本体を降ろすので、ピン留めしないと
-	// タイマーの行き先が消える。失敗したら仕掛けてはいけない。
-	std::string VwProbePinSelf()
+	// タイマーの行き先が消える。失敗したら仕掛けてはいけない。成功したら、留めた
+	// ファイルの道を返す（どの群の本体が刻んでいるかが結果から分かるように）。
+	std::string VwProbePinSelf(std::string& outPath)
 	{
 #if defined(_WIN32)
 		HMODULE mod = nullptr;
 		const DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
 		if (::GetModuleHandleExW(flags, (LPCWSTR)&VwProbePinSelf, &mod) == 0)
 			return "GetModuleHandleExW(PIN) が失敗した";
+		outPath = "(windows)";
 		return std::string();
 #else
 		::Dl_info info;
@@ -311,11 +380,12 @@ namespace
 		void* handle = ::dlopen(info.dli_fname, RTLD_NOLOAD | RTLD_LAZY);
 		if (handle == nullptr)
 			return std::string("dlopen(RTLD_NOLOAD) が失敗した: ") + info.dli_fname;
+		outPath = info.dli_fname;
 		return std::string();
 #endif
 	}
 
-	// ランループを自分で回して、刻みが来るのを待つ（① の測り方）。
+	// ランループを自分で回して、刻みが来るのを待つ。
 	void VwProbePump(double seconds)
 	{
 #if defined(_WIN32)
@@ -349,17 +419,31 @@ namespace
 		probe.log("書き溜め: " + path + "（" + std::to_string(lines.size()) + " 行）");
 		probe.log("");
 
-		// 局面ごとに「何回刻んだか」と「刻みの間隔」を畳む。間引かれていれば dt_ms が
-		// 伸びる（JS タイマーは隠れると 60000 ms になった）。
-		struct VwProbePhaseStat
+		// 値を 1 つ切り出す（`鍵=値` を ` ##` で区切った形）。
+		const auto field = [](const std::string& line, const std::string& key)
 		{
-			std::string phase;
+			const std::string needle = key + "=";
+			const size_t at = line.find(needle);
+			if (at == std::string::npos)
+				return std::string();
+			const size_t from = at + needle.size();
+			const size_t end = line.find(" ##", from);
+			return line.substr(from, (end == std::string::npos) ? end : end - from);
+		};
+
+		// 「局面 × 口」ごとに刻みの数と間隔を畳む。間引かれていれば dt_ms が伸びる
+		// （JS タイマーは隠れると 60000 ms になった）。
+		struct VwProbeSliceStat
+		{
+			std::string key;
 			int count = 0;
 			long long minDt = 0;
 			long long maxDt = 0;
 			long long sumDt = 0;
+			int undoYes = 0;
+			std::string modes;
 		};
-		std::vector<VwProbePhaseStat> stats;
+		std::vector<VwProbeSliceStat> stats;
 		int ticksWithSdk = 0;
 		int ticksWithTrouble = 0;
 		for (const std::string& line : lines)
@@ -368,65 +452,60 @@ namespace
 				continue;
 			if (line.find("sdk=about-to-call") != std::string::npos)
 				continue; // 前触れの行は数えない（本行と二重になる）
-			const std::string phase = [&line]()
-			{
-				const size_t at = line.find("phase=");
-				if (at == std::string::npos)
-					return std::string("?");
-				const size_t end = line.find(" ##", at);
-				return line.substr(at + 6, (end == std::string::npos) ? end : end - at - 6);
-			}();
-			const long long dt = [&line]()
-			{
-				const size_t at = line.find("dt_ms=");
-				if (at == std::string::npos)
-					return (long long)-1;
-				return (long long)std::atoll(line.c_str() + at + 6);
-			}();
-			if (line.find("trouble=-") == std::string::npos)
+			const std::string key = field(line, "phase") + " / " + field(line, "src");
+			const long long dt = std::atoll(field(line, "dt_ms").c_str());
+			if (field(line, "trouble") != "-")
 				++ticksWithTrouble;
-			if (line.find("tick_count=-1") == std::string::npos)
+			if (field(line, "tick_count") != "-1")
 				++ticksWithSdk;
 
-			VwProbePhaseStat* found = nullptr;
-			for (VwProbePhaseStat& s : stats)
-				if (s.phase == phase)
+			VwProbeSliceStat* found = nullptr;
+			for (VwProbeSliceStat& s : stats)
+				if (s.key == key)
 					found = &s;
 			if (found == nullptr)
 			{
-				stats.push_back(VwProbePhaseStat{phase, 0, dt, dt, 0});
+				stats.push_back(VwProbeSliceStat{key, 0, dt, dt, 0, 0, std::string()});
 				found = &stats.back();
 			}
 			++found->count;
 			found->minDt = std::min(found->minDt, dt);
 			found->maxDt = std::max(found->maxDt, dt);
 			found->sumDt += dt;
+			if (field(line, "undo_building") == "yes")
+				++found->undoYes;
+			const std::string mode = field(line, "mode");
+			if (found->modes.find(mode) == std::string::npos)
+				found->modes += (found->modes.empty() ? "" : ",") + mode;
 		}
 
-		probe.log("局面ごとの刻み（dt_ms = 前の刻みからの間隔。仕掛けた間隔は 250 ms）:");
-		for (const VwProbePhaseStat& s : stats)
+		probe.log(
+			"局面 / 口ごとの刻み（dt_ms = 同じ口の前の刻みからの間隔。仕掛けた間隔は 250 ms）:");
+		for (const VwProbeSliceStat& s : stats)
 		{
 			const long long avg = (s.count > 0) ? (s.sumDt / s.count) : 0;
-			probe.log("  " + s.phase + ": " + std::to_string(s.count) + " 回, dt 最小 " +
+			probe.log("  " + s.key + ": " + std::to_string(s.count) + " 回, dt 最小 " +
 					  std::to_string(s.minDt) + " / 平均 " + std::to_string(avg) + " / 最大 " +
-					  std::to_string(s.maxDt) + " ms");
+					  std::to_string(s.maxDt) + " ms, undo 中 " + std::to_string(s.undoYes) +
+					  " 回, mode=" + s.modes);
 		}
 		probe.log("gSDK から値が読めた刻み: " + std::to_string(ticksWithSdk) +
 				  " 回 / 異常のあった刻み: " + std::to_string(ticksWithTrouble) + " 回");
 		probe.log("");
 
-		// 要点の行（仕掛け・書き込み・店じまい）は全部出す。刻みの行は多すぎるので、
-		// **最後の 24 行**だけ出す（間引かれたかは上の表で足りる）。
+		// 要点の行（仕掛け・モードの一覧・書き込み・店じまい）は全部出す。刻みの行は
+		// 多すぎるので、**最後の 16 行**だけ出す（間引かれたかは上の表で足りる）。
 		probe.log("--- 要点の行 ---");
 		for (const std::string& line : lines)
 		{
-			if (line.compare(0, 4, "arm ") == 0 || line.compare(0, 6, "write ") == 0 ||
-				line.compare(0, 7, "disarm ") == 0 || line.compare(0, 6, "phase ") == 0)
+			if (line.compare(0, 4, "arm ") == 0 || line.compare(0, 6, "modes ") == 0 ||
+				line.compare(0, 6, "write ") == 0 || line.compare(0, 7, "disarm ") == 0 ||
+				line.compare(0, 6, "phase ") == 0)
 				probe.log(line);
 		}
 		probe.log("");
-		probe.log("--- 刻みの行（最後の 24 行） ---");
-		const size_t from = (lines.size() > 24) ? (lines.size() - 24) : 0;
+		probe.log("--- 刻みの行（最後の 16 行） ---");
+		const size_t from = (lines.size() > 16) ? (lines.size() - 16) : 0;
 		for (size_t i = from; i < lines.size(); ++i)
 			probe.log(lines[i]);
 
@@ -438,7 +517,7 @@ namespace
 } // namespace
 
 VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
-		 "ランループタイマーを仕掛け、モーダル中・裏に回った間・コマンドが戻った後に刻むかを測る")
+		 "ランループタイマーとメインキューのタイマーを仕掛け、どの場面で刻むかを測る")
 {
 	const std::string path = VwProbeTickFilePath();
 	std::error_code ec;
@@ -454,7 +533,8 @@ VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
 	}
 
 	// ---------------------------------------------------------------- 仕掛ける
-	const std::string pinTrouble = VwProbePinSelf();
+	std::string pinnedPath;
+	const std::string pinTrouble = VwProbePinSelf(pinnedPath);
 	if (!pinTrouble.empty())
 	{
 		probe.fail("本体をピン留めできなかったので仕掛けない（" + pinTrouble + "）");
@@ -467,8 +547,25 @@ VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
 	gVwProbeTimerState->armedAt = std::chrono::steady_clock::now();
 	gVwProbeTimerState->phase = "pump";
 
-	VwProbeAppend(path, "arm" + VwProbeField("interval_ms", VwProbeNum(kVwProbeIntervalMs)) +
+	// **走っている文脈を残す。** メニューコマンドがメインスレッドで走っているかは、
+	// 「刻みがプラグインの処理と並走しうるか」に直結する。
+#if defined(_WIN32)
+	const std::string threadNote =
+		std::string("win-thread-") + std::to_string((unsigned long)::GetCurrentThreadId());
+	const std::string loopNote = "(windows)";
+#else
+	const std::string threadNote = (::pthread_main_np() != 0) ? "main" : "worker";
+	const std::string loopNote =
+		(::CFRunLoopGetCurrent() == ::CFRunLoopGetMain()) ? "same-as-main" : "not-main";
+#endif
+	probe.log("走っているスレッド: " + threadNote + " / ランループ: " + loopNote);
+
+	VwProbeAppend(path, "arm" + VwProbeField("group", VW_PAYLOAD_GROUP) +
+							VwProbeField("interval_ms", VwProbeNum(kVwProbeIntervalMs)) +
 							VwProbeField("max_ticks", VwProbeNum(kVwProbeMaxTicks)) +
+							VwProbeField("thread", threadNote) + VwProbeField("runloop", loopNote) +
+							VwProbeField("mode_at_arm", VwProbeCurrentMode()) +
+							VwProbeField("pinned", pinnedPath) +
 							VwProbeField("objs_at_arm", VwProbeNum(VwProbeCountObjects())));
 
 #if defined(_WIN32)
@@ -482,29 +579,74 @@ VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
 	gVwProbeCFTimer =
 		::CFRunLoopTimerCreate(kCFAllocatorDefault, ::CFAbsoluteTimeGetCurrent() + interval,
 							   interval, 0, 0, &VwProbeCFTimerProc, nullptr);
-	const bool armed = (gVwProbeCFTimer != nullptr);
+	bool armed = (gVwProbeCFTimer != nullptr);
 	if (armed)
 	{
-		// **メインのランループの kCFRunLoopCommonModes へ入れる。** AppKit は共通モードに
-		// モーダルパネル・イベント追跡のモードを足しているので、これ 1 つでモーダルの
-		// 最中にも届くはずである（届いたかは刻みの mode= で分かる）。
+		// **共通モードだけでは足りなかった**（前回の計測: 刻みはモーダルループの最中に
+		// しか来ず、コマンドが戻った後は 1 回も来ない）。そこで**主ランループが知っている
+		// モードを全部並べて、その全てに入れる**——VW が私物のモードで回しているなら、
+		// 共通モードでは届かなくてもこちらで届く。
 		::CFRunLoopAddTimer(::CFRunLoopGetMain(), gVwProbeCFTimer, kCFRunLoopCommonModes);
+		std::string modeList;
+		CFArrayRef modes = ::CFRunLoopCopyAllModes(::CFRunLoopGetMain());
+		if (modes != nullptr)
+		{
+			const CFIndex count = ::CFArrayGetCount(modes);
+			for (CFIndex i = 0; i < count; ++i)
+			{
+				CFStringRef mode = (CFStringRef)::CFArrayGetValueAtIndex(modes, i);
+				if (mode == nullptr)
+					continue;
+				::CFRunLoopAddTimer(::CFRunLoopGetMain(), gVwProbeCFTimer, mode);
+				char buf[128] = {0};
+				if (::CFStringGetCString(mode, buf, sizeof(buf), kCFStringEncodingUTF8))
+					modeList += (modeList.empty() ? "" : ",") + std::string(buf);
+			}
+			::CFRelease(modes);
+		}
+		VwProbeAppend(path, "modes" + VwProbeField("all", modeList.empty() ? "(none)" : modeList));
+		probe.log(
+			"CFRunLoopTimer を仕掛けた（250 ms, 主ランループ / CommonModes ＋ 次の全モード）");
+		probe.log("  主ランループが知っているモード: " + (modeList.empty() ? "(none)" : modeList));
 	}
-	probe.log(armed ? "CFRunLoopTimer を仕掛けた（250 ms, メインのランループ / CommonModes）"
-					: "CFRunLoopTimerCreate が nullptr を返した");
+	else
+	{
+		probe.log("CFRunLoopTimerCreate が nullptr を返した");
+	}
+
+	// **別の口を並べる。** メインキューの消化はランループのモードに依らないので、
+	// VW がアイドルでもメインキューを回していれば、こちらだけ刻む。
+	gVwProbeDQTimer =
+		::dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, ::dispatch_get_main_queue());
+	if (gVwProbeDQTimer != nullptr)
+	{
+		const int64_t ns = (int64_t)kVwProbeIntervalMs * 1000000;
+		::dispatch_source_set_timer(gVwProbeDQTimer, ::dispatch_time(DISPATCH_TIME_NOW, ns),
+									(uint64_t)ns, (uint64_t)(50 * 1000000));
+		::dispatch_source_set_event_handler_f(gVwProbeDQTimer, &VwProbeDQTimerProc);
+		::dispatch_resume(gVwProbeDQTimer);
+		armed = true;
+		probe.log("dispatch のタイマーも仕掛けた（250 ms, メインキュー）");
+	}
+	else
+	{
+		probe.log("dispatch_source_create が nullptr を返した");
+	}
 #endif
 	if (!armed)
 	{
-		probe.fail("タイマーを仕掛けられなかった");
+		probe.fail("タイマーを 1 つも仕掛けられなかった");
 		return;
 	}
 
 	// ---------------------------------------------------- ① 自分で回して数える
 	const int before1 = gVwProbeTimerState->ticks;
 	probe.log("");
-	probe.log("① ランループを 1.5 秒ぶん自分で回す（期待: 250 ms で 6 回前後）");
+	probe.log("① ランループを 1.5 秒ぶん自分で回す（期待: 250 ms で 6 回前後 × 口の数）");
 	VwProbePump(1.5);
-	probe.log("  刻んだ回数: " + std::to_string(gVwProbeTimerState->ticks - before1));
+	probe.log("  刻んだ回数: " + std::to_string(gVwProbeTimerState->ticks - before1) + "（CF " +
+			  std::to_string(gVwProbeTimerState->ticksCF) + " / dispatch " +
+			  std::to_string(gVwProbeTimerState->ticksDQ) + "）");
 
 	// ------------------- ①b 同期処理の最中（ランループを回さない間）に割り込まれるか
 	// **ここが「取り消しの記録中・描画の最中に呼ばれるか」の答えになる。** ランループ
@@ -524,7 +666,7 @@ VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
 	probe.log("  （0 なら、こちらの同期処理に割り込まれることは無い）");
 
 	// -------------------- ①c 進捗ダイアログの `DoYield` の最中に刻むか
-	// `DoYield` は VW の再描画とイベント処理へ戻る（[進捗・診断](Progress%20and%20Diagnostics.md)）。
+	// `DoYield` は VW の再描画とイベント処理へ戻る（Findings「進捗・診断」）。
 	// **VW が自分でイベントを回す場面で割り込まれるか**がここで分かる。
 	gVwProbeTimerState->phase = "do-yield";
 	VwProbeAppend(path, std::string("phase") + VwProbeField("name", "do-yield"));
@@ -553,25 +695,16 @@ VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
 	probe.log("② モーダル（alert）が開いている間の刻み: " +
 			  std::to_string(gVwProbeTimerState->ticks - before2) + " 回");
 
-	// ------------------------------------------- ③ 裏に回っている間も刻むか
-	gVwProbeTimerState->phase = "background";
-	const int before3 = gVwProbeTimerState->ticks;
-	VwProbeAppend(path, std::string("phase") + VwProbeField("name", "background"));
-	gSDK->AlertInform("③ Vectorworks が裏に回っている間の刻みを測ります。",
-					  "OK を押す前に、ほかのアプリへ切り替えて 20 秒ほど待ち、"
-					  "それから Vectorworks へ戻って OK を押してください。");
-	probe.log("③ ほかのアプリの裏に回っていた間の刻み: " +
-			  std::to_string(gVwProbeTimerState->ticks - before3) + " 回");
-	probe.log("  （間引かれていなければ 20 秒で 80 回前後。間引かれていれば数回）");
-
-	// ------------------------------------------ ④ コマンドが戻った後も刻むか
+	// ------------------------------------------ ③ コマンドが戻った後も刻むか
 	probe.log("");
-	probe.log("④ ここから先は、このコマンドが戻った後の刻みを書き溜める。");
+	probe.log("③ ここから先は、このコマンドが戻った後の刻みを書き溜める。");
 	probe.log("   **もう一度このプローブを走らせると、その結果が出る。**");
-	probe.log("   走らせるまでに 60 秒ほど、パレットを閉じたり、ほかのアプリへ切り替えたり、");
-	probe.log("   そのまま放っておいたりして構わない（どの間も 250 ms で刻むのが期待値）。");
-	probe.log("   8 回目の刻みで**図面に 2D 基準点を 1 つ作る**ところまで試す。");
-	probe.log("   タイマーは 300 秒（1200 刻み）で自分から止まる。");
+	probe.log("   走らせるまでの 60 秒ほどの間に、できれば次をしてみてください:");
+	probe.log("     ・何もせず放っておく（これが本命——アイドルで刻むかどうか）");
+	probe.log("     ・ほかのアプリへ切り替えて戻る（間引かれないかどうか）");
+	probe.log("     ・図形を 1 つ選んでツールでドラッグする（VW が undo を開いている最中）");
+	probe.log("   戻った後の最初の刻みで**図面に 2D 基準点を 1 つ作る**ところまで試します。");
+	probe.log("   タイマーは 300 秒で自分から止まります。");
 	VwProbeAppend(path, std::string("phase") + VwProbeField("name", "outside"));
 	gVwProbeTimerState->phase = "outside";
 	gVwProbeTimerState->insideProbe = false;
