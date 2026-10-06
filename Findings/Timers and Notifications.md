@@ -19,7 +19,7 @@
 ## 1. ISDK に「暇なとき・周期的に」の口は無い
 
 `ISDK.h`（VW 2026 SDK）で「登録」「タイマー」「アイドル」に関わる宣言を**全部**並べると
-9 本しかなく、周期実行に使えるものは**ダイアログのタイマー 1 種類だけ**である。
+8 本しかなく、周期実行に使えるものは**ダイアログのタイマー 1 種類だけ**である。
 
 ```
 $ grep -nIE 'virtual .*(Register|Unregister|Timer|Idle|Periodic|Tick|Yield)' ISDK.h
@@ -76,7 +76,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - `kNotifyBeforePendingUpdate` / `kNotifyAfterPendingUpdate` のコメントには
   「Many notifications are handed out in a loop (**From OnIdle**)」とあり、**VW 本体には
   アイドルのループがある**ことが読み取れる。しかし**そこへ自分のコードを差し込む口は
-  公開されていない**（上記 1 の 9 本しかない）。
+  公開されていない**（上記 1 の 8 本しかない）。
 
 ## 3. ツール拡張だけは「アイドル」を受け取れる（が、選ばれている間だけ）
 
