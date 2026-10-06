@@ -206,12 +206,18 @@ VW_PROBE("undo-event-timer-tick", "VW の undo イベント中の刻み",
 	probe.log("■ 前提の確認");
 	const bool buildingAtStart = gSDK->IsCurrentlyBuildingAnUndoEvent();
 	probe.log("走り出しの building=" + ProbeI206YesNo(buildingAtStart));
-	if (buildingAtStart)
+	const bool cleanStart = !buildingAtStart;
+	if (!cleanStart)
 	{
-		probe.log("【注意】走り出しから開いている。これは前のコマンドの置き土産で起こる");
+		probe.log("【重大】走り出しから開いている。これは前のコマンドの置き土産で起こる");
 		probe.log("（Findings「Undo」: スクリプトエンジンはイベントを開いたまま返し、");
-		probe.log("コマンドをまたいで残る）。**この回の P1 の判定は濁る**ので、綺麗に");
-		probe.log("測り直すなら VectorWorks を起動し直し、新規の空図面で走らせ直す。");
+		probe.log("コマンドをまたいで残る）。");
+		probe.log("**この回は (3)（混ざるか）を判定できない。** 対照 PRE は「どの undo");
+		probe.log("イベントも開いていないうちに作ったもの」でなければ対照にならないが、");
+		probe.log("すでに開いているので、PRE もその置き土産のイベントに入ってしまう");
+		probe.log("——取り消し 1 回で PRE まで消え、TICK が消えた理由が「VW のイベントに");
+		probe.log("混ざった」なのか「置き土産のイベントごと戻った」なのか割れない。");
+		probe.log("**(1)（刻みが届くか・読めるか）は影響を受けない**ので、そちらは測る。");
 	}
 
 	// --- 対照 PRE を、どの undo イベントも開いていないうちに作る -----------------
@@ -251,23 +257,50 @@ VW_PROBE("undo-event-timer-tick", "VW の undo イベント中の刻み",
 	}
 	else
 	{
-		CFRunLoopAddTimer(CFRunLoopGetCurrent(), timerDefault, kCFRunLoopDefaultMode);
-		CFRunLoopAddTimer(CFRunLoopGetCurrent(), timerCommon, kCFRunLoopCommonModes);
+		// **メインのランループへ入れる**（`CFRunLoopGetCurrent()` ではなく）。メニュー
+		// コマンドが別スレッドで走っていた場合、current だと誰も回さないループへ
+		// 入ってしまう。同じかどうかも記録しておく。
+		CFRunLoopRef mainLoop = CFRunLoopGetMain();
+		probe.log(std::string("current == main か=") +
+				  ProbeI206YesNo(CFRunLoopGetCurrent() == mainLoop));
+		CFRunLoopAddTimer(mainLoop, timerDefault, kCFRunLoopDefaultMode);
+		CFRunLoopAddTimer(mainLoop, timerCommon, kCFRunLoopCommonModes);
 		probe.log("1 本は kCFRunLoopDefaultMode だけに、もう 1 本は kCFRunLoopCommonModes に");
 		probe.log("登録した。**どちらが届くかが (1) の答えになる。**");
+		probe.log(
+			std::string("登録できたか: 既定モードだけ=") +
+			ProbeI206YesNo(CFRunLoopContainsTimer(mainLoop, timerDefault, kCFRunLoopDefaultMode)) +
+			" / 共通モードの 1 本が既定モードにも居るか=" +
+			ProbeI206YesNo(CFRunLoopContainsTimer(mainLoop, timerCommon, kCFRunLoopDefaultMode)));
 	}
 
 	// --- P0 対照: こちらでランループを回す --------------------------------------
 	probe.log("");
-	probe.log("■ P0 対照: こちらでランループを 0.6 秒回す（#204 の 1 と同じ立場）");
+	probe.log("■ P0 対照: こちらでランループを 0.6 秒ぶん回す（#204 の 1 と同じ立場）");
 	gProbeI206Phase = "P0 自分でランループを回した";
 	const int seqBeforeP0 = gProbeI206Seq;
-	CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.6, false);
+	// **1 回の長い `CFRunLoopRunInMode` にしない。** 即座に返る場合（モードに用が無い・
+	// 誰かが `CFRunLoopStop` した）があり、1 回だと「0 回だった」しか残らない。
+	// 12 回に刻んで、**戻り値と実際に費やした時間**を出す。
+	const CFAbsoluteTime p0Start = CFAbsoluteTimeGetCurrent();
+	SInt32 lastResult = 0;
+	for (int i = 0; i < 12; ++i)
+		lastResult = CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+	const double p0Spent = CFAbsoluteTimeGetCurrent() - p0Start;
 	probe.log("P0 で届いた刻み=" + std::to_string(gProbeI206Seq - seqBeforeP0) + " 回");
+	probe.log("  CFRunLoopRunInMode の最後の戻り値=" + std::to_string((int)lastResult) +
+			  "（1=Finished 2=Stopped 3=TimedOut 4=HandledSource）" +
+			  " / 実際に費やした時間=" + std::to_string(p0Spent) + " 秒（0.6 が期待値）");
 	if (gProbeI206Seq == seqBeforeP0)
 	{
-		probe.fail("対照の P0 で刻みが 1 回も届かなかった——タイマー自体が動いていない"
-				   "疑いがあるので、以降の『届かなかった』は読まないこと");
+		// **ここで `probe.fail` を呼ばない。** P0 はあくまで対照であって、本題は P2 で
+		// ある。P2 で刻みが届けば「タイマーは動いている」ことは P2 自身が示すので、
+		// P0 の 0 回は**こちらの回し方の問題**として切り分けられる。最後にまとめて
+		// 判定する（P2 も 0 回だったときだけ失敗にする）。
+		probe.log("  **P0 では 1 回も届かなかった。** ただしこれは失敗ではない——");
+		probe.log("  本題は P2（VW がイベントループを回している最中）であり、そこで");
+		probe.log("  届けばタイマーが動いていることは P2 自身が示す。上の戻り値と");
+		probe.log("  費やした時間を見れば、回し方の問題かどうかが分かる。");
 	}
 
 	// --- P1 VW に undo イベントを開かせる（プローブは開かない）------------------
@@ -384,27 +417,40 @@ VW_PROBE("undo-event-timer-tick", "VW の undo イベント中の刻み",
 		probe.log("取り消した後: TICK=" + ProbeI206YesNo(tickAfterUndo) +
 				  " / PRE=" + ProbeI206YesNo(preAfterUndo));
 		probe.log("");
-		probe.log("── (3) の読み方 ──");
-		if (!tickBeforeUndo)
+		probe.log("── (3) の読み方——**対照を先に見る** ──");
+		// **順序が肝。** 対照（PRE）が成立していないのに TICK だけを読むと、
+		// 「消えた＝混ざった」という結論が独り歩きする（前の回で実際にそうなった）。
+		if (!cleanStart)
 		{
-			probe.log("TICK がそもそも無いので (3) は測れていない（刻みが P2 に届かなかったか、");
-			probe.log("CreateLocus が失敗したか）。P2 の刻み数を見ること。");
+			probe.fail("(3) は判定不能——走り出しから undo イベントが開いていたので、対照 PRE が"
+					   "対照になっていない。**VectorWorks を起動し直し、新規の空図面で**"
+					   "走らせ直すこと（(1) の結果はこの回でも有効）");
+			probe.log("参考値（判定には使わない）: TICK は取り消し後 " +
+					  ProbeI206YesNo(tickAfterUndo) + " / PRE は " + ProbeI206YesNo(preAfterUndo));
+		}
+		else if (!tickBeforeUndo)
+		{
+			probe.fail("(3) は未測——刻みの中で作った TICK がそもそも無い（刻みが P2 に"
+					   "届かなかったか、CreateLocus が失敗した）。P2 の刻み数を見ること");
+		}
+		else if (preBeforeUndo && !preAfterUndo)
+		{
+			probe.fail("(3) は判定不能——**対照 PRE まで消えた。** PRE はどの undo イベントの"
+					   "外で作ったので、取り消し 1 回では残るのが既知の正（Findings「Undo」）。"
+					   "それが消えたということは、この取り消しは想定より広く効いている"
+					   "——TICK が消えたことを『VW のイベントに混ざった』の証拠にできない");
 		}
 		else if (!tickAfterUndo)
 		{
-			probe.log("**TICK が消えた＝刻みの中での書き込みは VW が開いていた undo イベントに");
-			probe.log("混ざった。** 利用者の 1 回の取り消しが、刻みが作ったものまで持っていく。");
+			probe.log("**対照 PRE は残り、TICK だけが消えた。**");
+			probe.log("→ 刻みの中での書き込みは、VW が開いていた undo イベントに**混ざる**。");
+			probe.log("  利用者の 1 回の取り消しが、刻みが作ったものまで持っていく。");
 		}
 		else
 		{
-			probe.log("**TICK は残った＝刻みの中での書き込みは VW が開いていたイベントに");
-			probe.log("混ざらなかった**（1 回の取り消しでは消えない）。");
-		}
-		if (preBeforeUndo && !preAfterUndo)
-		{
-			probe.log("【注意】対照 PRE まで消えている。PRE はどのイベントの外で作ったので");
-			probe.log("残るのが既知の正（Findings「Undo」）——消えたなら、この回の取り消しは");
-			probe.log("想定より広く効いている。TICK の判定もその前提で読むこと。");
+			probe.log("**対照 PRE も TICK も残った。**");
+			probe.log("→ 刻みの中での書き込みは、VW が開いていたイベントには**混ざらない**");
+			probe.log("  （1 回の取り消しでは消えない）。");
 		}
 	}
 
@@ -456,6 +502,18 @@ VW_PROBE("undo-event-timer-tick", "VW の undo イベント中の刻み",
 
 	probe.log("");
 	probe.log("刻みの中で書いた回数=" + std::to_string(gProbeI206Wrote));
+	// **(1) の最終判定。** P0（自分で回した）が 0 回でも、P2（VW が回している最中）で
+	// 届いていれば本題は測れている。両方 0 のときだけ「届かない」として失敗にする。
+	{
+		int p2Ticks = 0;
+		for (size_t i = 0; i < gProbeI206Ticks.size(); ++i)
+			if (gProbeI206Ticks[i].fPhase == "P2 VW のモーダル確認ダイアログの最中")
+				++p2Ticks;
+		if (p2Ticks == 0)
+			probe.fail("(1) は未測——本題の P2（VW が開いた undo イベント ＋ VW のモーダル"
+					   "ループ）で刻みが 1 回も届かなかった。ダイアログが開いていた時間と"
+					   "登録できたかの行を見ること");
+	}
 	probe.log("**この局面で undo イベントは開いたままのはず**——プローブは 1 度も");
 	probe.log("SetUndoMethod / NameUndoEvent / EndUndoEvent を呼んでいない（梃子 1 で VW が");
 	probe.log("開いたものを、そのまま VW に任せて return する）。");
