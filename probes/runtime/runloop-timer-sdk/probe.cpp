@@ -137,11 +137,17 @@ namespace
 	{
 		if (w == nullptr || w[0] == L'\0')
 			return std::string();
+		// 入力長に -1 を渡すと、`need` にも書き出しにも**終端の NUL が含まれる**。
+		// だから器は `need` で取る——`need - 1` にすると
+		// ERROR_INSUFFICIENT_BUFFER で 1 文字も書かれず、**空文字列が黙って返る**。
 		const int need = ::WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
 		if (need <= 1)
 			return std::string();
-		std::string out((size_t)(need - 1), '\0');
-		::WideCharToMultiByte(CP_UTF8, 0, w, -1, &out[0], need - 1, nullptr, nullptr);
+		std::string out((size_t)need, '\0');
+		const int wrote = ::WideCharToMultiByte(CP_UTF8, 0, w, -1, &out[0], need, nullptr, nullptr);
+		if (wrote <= 1)
+			return std::string();
+		out.resize((size_t)(wrote - 1)); // 終端の NUL を落とす
 		return out;
 	}
 #endif
