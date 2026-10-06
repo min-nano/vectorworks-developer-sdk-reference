@@ -506,6 +506,44 @@ VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
 	VwProbePump(1.5);
 	probe.log("  刻んだ回数: " + std::to_string(gVwProbeTimerState->ticks - before1));
 
+	// ------------------- ①b 同期処理の最中（ランループを回さない間）に割り込まれるか
+	// **ここが「取り消しの記録中・描画の最中に呼ばれるか」の答えになる。** ランループ
+	// タイマーはランループが回るときにしか配られないので、こちらが回さずに回し続ける
+	// 処理（＝ふつうのプラグインの処理）の最中には割り込めないはずである。
+	gVwProbeTimerState->phase = "busy-no-runloop";
+	VwProbeAppend(path, std::string("phase") + VwProbeField("name", "busy-no-runloop"));
+	const int beforeBusy = gVwProbeTimerState->ticks;
+	{
+		const std::chrono::steady_clock::time_point until =
+			std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		while (std::chrono::steady_clock::now() < until)
+			(void)gSDK->TickCount(); // 回さずに 3 秒ぶん働く
+	}
+	probe.log("①b ランループを回さず 3 秒ぶん働いた間の刻み: " +
+			  std::to_string(gVwProbeTimerState->ticks - beforeBusy) + " 回");
+	probe.log("  （0 なら、こちらの同期処理に割り込まれることは無い）");
+
+	// -------------------- ①c 進捗ダイアログの `DoYield` の最中に刻むか
+	// `DoYield` は VW の再描画とイベント処理へ戻る（[進捗・診断](Progress%20and%20Diagnostics.md)）。
+	// **VW が自分でイベントを回す場面で割り込まれるか**がここで分かる。
+	gVwProbeTimerState->phase = "do-yield";
+	VwProbeAppend(path, std::string("phase") + VwProbeField("name", "do-yield"));
+	const int beforeYield = gVwProbeTimerState->ticks;
+	{
+		VWFC::Tools::CProgressDlg progress;
+		// 遅延なしで開く（OpenDelayed では 3 秒のあいだ出ないので、測る前に閉じてしまう）。
+		progress.Open("①c DoYield の最中に刻むかを測っています", false);
+		progress.Start(100, 1000);
+		const std::chrono::steady_clock::time_point until =
+			std::chrono::steady_clock::now() + std::chrono::seconds(3);
+		while (std::chrono::steady_clock::now() < until)
+			progress.DoYield(1, true);
+		progress.End();
+		progress.Close();
+	}
+	probe.log("①c 進捗ダイアログの DoYield を 3 秒ぶん回した間の刻み: " +
+			  std::to_string(gVwProbeTimerState->ticks - beforeYield) + " 回");
+
 	// ------------------------------------------------- ② モーダルの最中に刻むか
 	gVwProbeTimerState->phase = "modal-wait";
 	const int before2 = gVwProbeTimerState->ticks;
