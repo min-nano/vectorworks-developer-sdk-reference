@@ -31,8 +31,9 @@
 virtual bool VCOM_CALLTYPE IsCurrentlyBuildingAnUndoEvent() = 0;
 ```
 
-**宣言だけで、コメントが付いていない**（前後の行にも無い。`ci-debug` の `shell` で
-前 6 行まで出して確認。[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/37436354417)）。
+**宣言だけで、コメントが付いていない**（`ci-debug` の `shell` で前 6 行まで出して確認。
+直前は無関係な `CreateSymbolFolderN` / `SetCurrentView` で、この関数に掛かる説明文は
+1 行も無い。[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/37436354417)）。
 つまりこの関数の意味は**実測でしか決まらない**。幸い実測は既にある——
 [Undo](Undo.md) と [Documents](Documents.md) に散っているものを、**刻みの中で使う道具
 として読み直す**と次のようになる。
