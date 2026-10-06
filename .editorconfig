@@ -39,6 +39,10 @@ trim_trailing_whitespace = false
 indent_style = space
 indent_size = 2
 
+# Windows PowerShell 5.1（Windows 同梱の powershell.exe）は BOM の無いスクリプトを
+# システムの ANSI コードページ（日本語環境なら CP932）で読む。日本語の入った .ps1 は
+# BOM 付き UTF-8 でないと読み崩れ、同梱スクリプトが黙って何も返さなくなる。
 [*.ps1]
+charset = utf-8-bom
 indent_style = space
 indent_size = 4
