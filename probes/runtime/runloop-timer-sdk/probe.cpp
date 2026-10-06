@@ -58,8 +58,15 @@
 #	endif
 #	include <windows.h>
 #else
+#	include <Cocoa/Cocoa.h>
 #	include <CoreFoundation/CoreFoundation.h>
 #	include <dlfcn.h>
+#endif
+
+//	本体の素性。ビルドのときに焼かれる（`plugin/CMakeLists.txt`）。**1 回目と 2 回目で
+//	違う本体が走ったかを突き合わせる**のに使う（下記 VwProbeReport）。
+#ifndef VW_PAYLOAD_BUILD_ID
+#	define VW_PAYLOAD_BUILD_ID "local"
 #endif
 
 namespace
@@ -217,8 +224,10 @@ namespace
 		::GetWindowThreadProcessId(fg, &pid);
 		return (pid == ::GetCurrentProcessId()) ? "yes" : "no";
 #else
-		// mac 側は未計装（#204 の範囲なので、こちらでは足さない）。
-		return "?";
+		// mac も前面かどうかを読む（本体は Cocoa をリンクしている）。③ の対照は
+		// プラットフォームを問わず要る——**「間引かれなかった」と「切り替えを
+		// 忘れた」の区別が付かない**のは mac でも同じだからである。
+		return ([[NSRunningApplication currentApplication] isActive] ? "yes" : "no");
 #endif
 	}
 
@@ -442,6 +451,17 @@ namespace
 #endif
 	}
 
+	// 書き溜めの 1 行から `鍵=値` を読む（無ければ空）。
+	std::string VwProbeFieldValue(const std::string& line, const std::string& key)
+	{
+		const size_t at = line.find(key + "=");
+		if (at == std::string::npos)
+			return std::string();
+		const size_t from = at + key.size() + 1;
+		const size_t end = line.find(" ##", from);
+		return line.substr(from, (end == std::string::npos) ? end : end - from);
+	}
+
 	// -----------------------------------------------------------------------
 	// 2 回目の実行（報告）。書き溜めを読んで畳み、**読み終えたら消す**。
 	void VwProbeReport(vwprobe::Report& probe, const std::string& path)
@@ -454,6 +474,25 @@ namespace
 				lines.push_back(line);
 		}
 		probe.log("書き溜め: " + path + "（" + std::to_string(lines.size()) + " 行）");
+
+		// **1 回目と 2 回目で同じ本体が走ったかを突き合わせる。** 仕掛けたのは 1 回目の
+		// 本体なので、入れ替えが 1 回目の**後**に行われていると、報告しているこちらには
+		// 計装があっても**書き溜めの側には無い**——その差を「そういう結果だった」と
+		// 読み違えると、実機確認が 1 回まるごと無駄になる（実際に踏んだ）。
+		std::string armBuild;
+		for (const std::string& line : lines)
+			if (line.compare(0, 4, "arm ") == 0)
+				armBuild = VwProbeFieldValue(line, "build");
+		if (armBuild.empty())
+			probe.fail("**仕掛けたのは計装の無い古い本体です**（arm 行に build= が無い）。"
+					   "この報告の ③⑤ の欄は当てにできません——"
+					   "**先に入れ替えてから、1 回目をもう一度**走らせてください。");
+		else if (armBuild != std::string(VW_PAYLOAD_BUILD_ID))
+			probe.fail("**1 回目と 2 回目で本体が違います**（仕掛けた=" + armBuild +
+					   " / 報告している=" + VW_PAYLOAD_BUILD_ID +
+					   "）。**先に入れ替えてから、1 回目をもう一度**走らせてください。");
+		else
+			probe.log("仕掛けたのも報告しているのも本体 " + armBuild + "（一致）。");
 		probe.log("");
 
 		// 局面ごとに「何回刻んだか」と「刻みの間隔」を畳む。間引かれていれば dt_ms が
@@ -529,6 +568,22 @@ namespace
 					  std::to_string(s.fgNo) + " 回 / モーダルの最中の刻み " +
 					  std::to_string(s.modal) + " 回）");
 		}
+		// **刻みが 0 回だった局面は表に出てこない**（行が 1 本も無いので）。
+		// ①b の答えはまさに「0 回」なので、**無いことを無いと書く**。
+		const char* kVwProbeAllPhases[] = {"pump",		 "busy-no-runloop", "do-yield",
+										   "modal-wait", "background",		"outside"};
+		std::string missing;
+		for (const char* name : kVwProbeAllPhases)
+		{
+			bool seen = false;
+			for (const VwProbePhaseStat& s : stats)
+				if (s.phase == name)
+					seen = true;
+			if (!seen)
+				missing += std::string(missing.empty() ? "" : " / ") + name;
+		}
+		if (!missing.empty())
+			probe.log("**刻みが 1 回も無かった局面: " + missing + "**（表に出ないので明記する）");
 		probe.log("gSDK から値が読めた刻み: " + std::to_string(ticksWithSdk) +
 				  " 回 / 異常のあった刻み: " + std::to_string(ticksWithTrouble) + " 回");
 		probe.log("");
@@ -541,7 +596,8 @@ namespace
 		probe.log("  JS タイマーと同じ間引きに当たっている。");
 		probe.log("・`background` の行で「裏に回っていた刻み」が 0 なら、**切り替えが");
 		probe.log("  行われていないので③は測れていない**（間引きが無いという根拠には");
-		probe.log("  ならない。走らせ直す）。");
+		probe.log("  ならない。走らせ直す）。**ただし上の本体の突き合わせが不一致なら、");
+		probe.log("  仕掛けた側に前面の計装が無かっただけなので、この行は読まない。**");
 #if defined(_WIN32)
 		probe.log("・Windows の WM_TIMER はシステムの時計の刻み（約 15.6 ms）へ丸められる");
 		probe.log("  ので、250 ms で仕掛けても dt は 250〜266 ms に散る。**これは間引きでは");
@@ -618,6 +674,7 @@ VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
 	// キューへ来る**ので、刻みの `mode=thread-<id>` がこれと一致するかが確かめられる。
 	VwProbeAppend(path, "arm" + VwProbeField("interval_ms", VwProbeNum(kVwProbeIntervalMs)) +
 							VwProbeField("max_ticks", VwProbeNum(kVwProbeMaxTicks)) +
+							VwProbeField("build", VW_PAYLOAD_BUILD_ID) +
 							VwProbeField("mode_at_arm", VwProbeCurrentMode()) +
 							VwProbeField("fg_at_arm", VwProbeForeground()) +
 							VwProbeField("pinned", pinnedPath) +
