@@ -293,13 +293,34 @@ VW_PROBE("undo-event-timer-tick", "VW の undo イベント中の刻み",
 	probe.log("待つのはその間に刻みを当てるためで、速く押すと刻みが 1 回も入りません。");
 	gProbeI206Phase = "P2 VW のモーダル確認ダイアログの最中";
 	gProbeI206WantWrite = true; // この局面で届いた最初の刻みが 1 つだけ図形を作る
+	probe.log("AreAlertsAllowed=" + ProbeI206YesNo(gSDK->AreAlertsAllowed()) +
+			  "（no ならダイアログは出ない＝この局面は作れていない）");
 	const int seqBeforeP2 = gProbeI206Seq;
+	const CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
 	const short answer = gSDK->AlertQuestion(
 		"調査 #206: このまま 2〜3 秒待ってから「はい」を押してください。",
 		"その間、ランループタイマーの刻みが VW のイベントループへ届くかを測っています。", 1);
+	const double heldSec = CFAbsoluteTimeGetCurrent() - t0;
 	probe.log("ダイアログの答え=" + std::to_string(static_cast<int>(answer)));
+	probe.log("ダイアログが開いていた時間=" + std::to_string(heldSec) + " 秒");
 	probe.log("**P2 で届いた刻み=" + std::to_string(gProbeI206Seq - seqBeforeP2) + " 回**");
 	gProbeI206WantWrite = false;
+
+	// 「刻みが届かなかった」と「ダイアログがそもそも出ていない／すぐ閉じた」を
+	// 混同させない。開いていた時間が短ければ、刻みの回数は読めない。
+	if (heldSec < 0.5)
+	{
+		probe.fail("ダイアログが開いていたのは " + std::to_string(heldSec) +
+				   " 秒しかない——**P2 の刻みの回数は『届かない』の根拠にならない**" +
+				   "（抑止されて出なかったか、すぐ押されたか）。もう一度走らせ、" +
+				   "出たら 2〜3 秒待ってから押すこと");
+	}
+	else if (gProbeI206Seq == seqBeforeP2)
+	{
+		probe.log("**ダイアログは " + std::to_string(heldSec) +
+				  " 秒開いていたのに、刻みが 1 回も届かなかった**" +
+				  "——これは『届かない』の根拠として読める。");
+	}
 
 	// --- P3 ダイアログを閉じた後の状態 ------------------------------------------
 	probe.log("");
