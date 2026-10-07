@@ -1237,6 +1237,113 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 				   "——P-R の結果は『VW のイベント中』の測定として読めない");
 	}
 
+	// **プローブが開けさせた undo イベントを、ここで閉じる。** 1 回目の実機では開いたまま
+	// 返しており（殻のログの `undo: after building=yes`）、**戻った直後の刻みが
+	// その置き土産のイベントを見て `building=yes` と読んでいた**——しかもそのときの
+	// mode は `NSModalPanelRunLoopMode`（殻の結果ダイアログ）で、ドラッグでも
+	// レンダリングでもない。置き土産を残したままでは、**この先の `building=yes` が
+	// VW のものか自分のものか区別できない**ので、必ず閉じる。
+	probe.log("");
+	probe.log("■ 置き土産の始末: プローブが開けさせた undo イベントを閉じる");
+	int closed = 0;
+	while (gSDK->IsCurrentlyBuildingAnUndoEvent() && closed < 4)
+	{
+		gSDK->EndUndoEvent();
+		++closed;
+	}
+	const bool buildingAtReturn = gSDK->IsCurrentlyBuildingAnUndoEvent();
+	probe.log("  EndUndoEvent を " + std::to_string(closed) +
+			  " 回呼んだ / 残り building=" + DragTickYesNo(buildingAtReturn));
+	probe.log("  ← **ここが no でなければ、この先の building=yes は自分の置き土産かもしれない**");
+	DragTickAppend(path, std::string("phase") + DragTickField("name", "P-D の前に始末") +
+							 DragTickField("closed", DragTickNum(closed)) +
+							 DragTickField("building_at_return", DragTickYesNo(buildingAtReturn)));
+
+	// ------------------------------------------------------------------------
+	// P-F **頼んでから自分でランループを回す**——レンダリング中の刻みはここで取る
+	// ------------------------------------------------------------------------
+	// 4 回目の実機で分かったこと: 重いモードを頼んで `return` する形（P-E）では、
+	// **レンダリング中の刻みだけを切り出せない**。殻の結果ダイアログもピッカーも
+	// 同じ `NSModalPanelRunLoopMode` で回るので、局面が混ざる（249 回の内訳が
+	// 読めなかった）。しかも **`kNotifyRenderModeAboutToChange` / `Changed` は
+	// SDK からの `SetRenderMode` では 1 件も飛ばない**（11 → 14 の変更で 0 件。
+	// 飛んだのは利用者がメニューで変えたときだけ）ので、目印にもならない。
+	//
+	// そこで**局面をこちらの手の内に入れる**: 重いモードを頼んだあと、**自分で
+	// ランループを短く刻んで回す**（`CFRunLoopRunInMode(default, 0.05)` を繰り返す。
+	// [#206 の実測](../../../Findings/Timers%20and%20Notifications.md) で「短く刻めば
+	// 回る」ことが分かっている）。`SetRenderMode` は描画をイベントループへ預けるので、
+	// **こちらが回した瞬間に VW が描き始める**——その間の刻みは、こちらが付けた
+	// 局面の札（`P-F`）を持つので取り違えようがない。
+	probe.log("");
+	probe.log("■ P-F レンダリング中の刻み（重いモードを頼んで、自分でランループを回す）");
+	const int notesBeforeRender = gDragTickState->renderNotes;
+	int requested = -1;
+	if (layer != nil)
+	{
+		// 重い順に頼む。Renderworks が無い環境ではモードが変わらないので落としていく。
+		const TRenderMode kHeavy[] = {renderFinalRenderWorks, renderFinalShaded, renderOpenGL};
+		for (TRenderMode m : kHeavy)
+		{
+			gSDK->SetRenderMode(layer, m, true, true);
+			if ((int)gSDK->GetRenderMode(layer) == (int)m)
+			{
+				requested = (int)m;
+				break;
+			}
+		}
+	}
+	probe.log("  頼んだレンダリングモード=" + std::to_string(requested) +
+			  "（14=仕上げ Renderworks 5=仕上げ 11=OpenGL / -1=どれも通らなかった）");
+	probe.log("  走り出しの building=" + DragTickYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()) +
+			  "（ここが no でないと、この局面の building=yes は自分の置き土産かもしれない）");
+
+	gDragTickState->phase = "P-F レンダリング中（自分で回す）";
+	gDragTickState->wantWriteOnBuilding = true; // この局面で building=yes が来たら 1 つ書く
+	DragTickAppend(path, std::string("phase") + DragTickField("name", "P-F") +
+							 DragTickField("requested_mode", DragTickNum(requested)));
+	const int ticksBeforeSpin = gDragTickState->ticks;
+	const std::chrono::steady_clock::time_point spinFrom = std::chrono::steady_clock::now();
+	// 最大 25 秒ぶん、0.05 秒ずつ回す。**1 回を長く取ってはいけない**（#206: 長い
+	// 1 回は即座に戻る）。
+	for (int i = 0; i < 500; ++i)
+	{
+#if defined(_WIN32)
+		MSG msg;
+		while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE) != 0)
+		{
+			::TranslateMessage(&msg);
+			::DispatchMessageW(&msg);
+		}
+		::Sleep(50);
+#else
+		::CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+#endif
+	}
+	const long long spinMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+								 std::chrono::steady_clock::now() - spinFrom)
+								 .count();
+	gDragTickState->wantWriteOnBuilding = false;
+	const int ticksInSpin = gDragTickState->ticks - ticksBeforeSpin;
+	probe.log("  自分で回した時間=" + std::to_string(spinMs) + " ms（25000 が期待値）");
+	probe.log("  **その間に届いた刻み=" + std::to_string(ticksInSpin) + " 回**");
+	probe.log("  レンダリングモードの通知（RndC / RnMC）がこの間に増えた数=" +
+			  std::to_string(gDragTickState->renderNotes - notesBeforeRender) +
+			  " ← **0 なら、SDK からの SetRenderMode では通知が飛ばない**（4 回目の見込み）");
+	probe.log("  回し終えた後の building=" + DragTickYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()) +
+			  " / GetRenderMode=" +
+			  std::to_string((layer != nil) ? (int)gSDK->GetRenderMode(layer) : -1));
+	probe.log("  刻みの中で作った " + std::string(kDragTickNameRTick) +
+			  " は在るか=" + DragTickYesNo(DragTickExists(kDragTickNameRTick)));
+	probe.log("  （この局面の刻みは報告側で『P-F / 口』の行に出る——mode と building の");
+	probe.log("    内訳はそこを読む。**局面の札はこちらが付けたので取り違えようがない**）");
+	if (ticksInSpin == 0)
+	{
+		probe.fail(
+			"P-F で刻みが 1 回も届かなかった——レンダリング中かどうかに関わらず、"
+			"この局面は測定になっていない（回し方の問題を疑う。自分で回した時間を見ること）");
+	}
+
 	// ------------------------------------------------------------------------
 	// P-U 取り消しを段ごとに掛けて、刻みが作ったものがどの段に居たかを読む
 	// ------------------------------------------------------------------------
@@ -1307,73 +1414,14 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 	// P-D コマンドが戻った後——**ここからが利用者の出番**
 	// ------------------------------------------------------------------------
 	probe.log("");
-	// **プローブが開けさせた undo イベントを、ここで閉じる。** 1 回目の実機では開いたまま
-	// 返しており（殻のログの `undo: after building=yes`）、**戻った直後の刻みが
-	// その置き土産のイベントを見て `building=yes` と読んでいた**——しかもそのときの
-	// mode は `NSModalPanelRunLoopMode`（殻の結果ダイアログ）で、ドラッグでも
-	// レンダリングでもない。置き土産を残したままでは、**この先の `building=yes` が
-	// VW のものか自分のものか区別できない**ので、必ず閉じる。
-	probe.log("");
-	probe.log("■ 置き土産の始末: プローブが開けさせた undo イベントを閉じる");
-	int closed = 0;
-	while (gSDK->IsCurrentlyBuildingAnUndoEvent() && closed < 4)
-	{
-		gSDK->EndUndoEvent();
-		++closed;
-	}
-	const bool buildingAtReturn = gSDK->IsCurrentlyBuildingAnUndoEvent();
-	probe.log("  EndUndoEvent を " + std::to_string(closed) +
-			  " 回呼んだ / 残り building=" + DragTickYesNo(buildingAtReturn));
-	probe.log("  ← **ここが no でなければ、この先の building=yes は自分の置き土産かもしれない**");
-	DragTickAppend(path, std::string("phase") + DragTickField("name", "P-D の前に始末") +
-							 DragTickField("closed", DragTickNum(closed)) +
-							 DragTickField("building_at_return", DragTickYesNo(buildingAtReturn)));
-
-	// ------------------------------------------------------------------------
-	// P-E **戻ってから描かせる**——これが「レンダリング中の刻み」の本筋になった
-	// ------------------------------------------------------------------------
-	// 2 回目の実機で `SetRenderMode(immediate=true)` が**その場では描かない**と分かった
-	// ので、それを逆に使う: **重いモードを頼んでから return する**。VW はイベント
-	// ループへ戻った時点で描き始め、**そのあいだピン留めしたタイマーは刻み続ける**。
-	// しかも `kNotifyRenderModeChanged` が自分の変更でも飛ぶので、**描き始めの時刻が
-	// 書き溜めに残る**（報告側がその窓の刻みを数える）。利用者の操作に依らない。
-	//
-	// **ここは置き土産を閉じた後でなければならない。** そうでないと、描いている最中の
-	// `building=yes` が「VW がレンダリングのために開いたもの」なのか「自分の置き土産」
-	// なのか区別できない。
-	probe.log("");
-	probe.log("■ P-E 戻ってから描かせる（レンダリング中の刻みを取るのはここ）");
-	int requested = -1;
-	if (layer != nil)
-	{
-		// 重い順に頼む。Renderworks が無い環境ではモードが変わらないので OpenGL へ落とす。
-		const TRenderMode kHeavy[] = {renderFinalRenderWorks, renderFinalShaded, renderOpenGL};
-		for (TRenderMode m : kHeavy)
-		{
-			gSDK->SetRenderMode(layer, m, true, true);
-			if ((int)gSDK->GetRenderMode(layer) == (int)m)
-			{
-				requested = (int)m;
-				break;
-			}
-		}
-	}
-	probe.log("  頼んだレンダリングモード=" + std::to_string(requested) +
-			  "（14=仕上げ Renderworks 5=仕上げ 11=OpenGL / -1=どれも通らなかった）");
-	probe.log("  戻った直後に VW が描き始めるので、**そのあいだの刻みが答えになる**");
-	probe.log("  （描き始めの時刻は kNotifyRenderModeChanged の通知として書き溜めに残る）");
-	DragTickAppend(path, std::string("phase") + DragTickField("name", "P-E 遅延レンダリング") +
-							 DragTickField("requested_mode", DragTickNum(requested)));
-
 	probe.log("");
 	probe.log("■ P-D ここから先は、このコマンドが戻った後の刻みを書き溜める");
-	probe.log("  **この結果を閉じると、図面が勝手に描き始めます**（P-E で頼んだもの）。");
-	probe.log("  **描き終わるまで待ってから**、30 秒ほど次をしてみてください:");
+	probe.log("  レンダリングは P-F で済んでいます（まだ描き続けていたら、落ち着くまで待って");
+	probe.log("  ください）。そのあと 30 秒ほど次をしてみてください:");
 	probe.log("    ・ツールでドラッグする（長方形ツールで何度か描く・図形を選んで");
 	probe.log("      ドラッグで動かす）。**ゆっくり、2〜3 秒かけて**動かしてください");
 	probe.log("      （刻みは 250 ms ごとなので、速いと入りません）");
-	probe.log("  （ビュー > レンダリング を自分で選ぶ必要はもうありません——P-E が");
-	probe.log("    勝手に描かせます。選んでも構いません。その窓も数えます）");
+	probe.log("  （ビュー > レンダリング を自分で選んでも構いません。その窓も数えます）");
 	probe.log("  そのあと**もう一度このプローブを走らせる**と、結果が出ます。");
 	probe.log("  （ドラッグしたかどうかは点取りの通知で機械的に押さえるので、");
 	probe.log("    こちらから見て『本当にドラッグされたか』が分かります）");
