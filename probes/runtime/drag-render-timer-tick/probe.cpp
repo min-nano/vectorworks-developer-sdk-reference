@@ -808,7 +808,9 @@ namespace
 		// ---- レンダリングの窓（モード変更の通知のあと 15 秒）------------------
 		if (!renderMarks.empty())
 		{
-			probe.log("■ 利用者のレンダリングの窓（RndC / RnMC の通知のあと 15 秒の刻み）");
+			probe.log("■ レンダリングの窓（RndC / RnMC の通知のあと 30 秒の刻み）");
+			probe.log("  **最後のひと組はプローブ自身が頼んだ遅延レンダリング**（P-E）で、"
+					  "利用者の操作に依らない。");
 			probe.log("  **これはレンダリングの開始通知ではない**（モードの変更）。描き始めの"
 					  "目印として読む。");
 			for (const std::pair<long long, std::string>& mark : renderMarks)
@@ -818,7 +820,7 @@ namespace
 				std::string modes;
 				for (const DragTickRow& r : rows)
 				{
-					if (r.tMs < mark.first || r.tMs > mark.first + 15000)
+					if (r.tMs < mark.first || r.tMs > mark.first + 30000)
 						continue;
 					++inWindow;
 					if (r.building)
@@ -1134,17 +1136,26 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 								 .count();
 		const int ticks = gDragTickState->ticks - ticksBefore;
 		const int now = (int)gSDK->GetRenderMode(layer);
-		const bool worked = (ms >= 150) || (now == (int)t.mode);
+		// **「モードが変わった」と「その場で描いた」は別のこと**（2 回目の実機で判明）:
+		// `SetRenderMode(..., immediate=true, doProgress=true)` は **false を返して 0 ms で
+		// 戻るのに、`GetRenderMode` は狙ったモードに変わっている**——つまり呼び出しは
+		// 効いていて、**描くのは VW がイベントループへ戻ってから**である。だから
+		// 「効いた」の一語で済ませてはいけない。
+		const bool modeChanged = (now == (int)t.mode);
+		const bool drewHere = (ms >= 150);
 		probe.log(std::string("  ") + phaseTag + " " + t.name + " → 戻り=" + ret +
 				  " / 掛かった時間=" + std::to_string(ms) + " ms / 刻み=" + std::to_string(ticks) +
-				  " 回 / 後の GetRenderMode=" + std::to_string(now) + " → " +
-				  (worked ? "**効いた**" : "効かなかった"));
+				  " 回 / 後の GetRenderMode=" + std::to_string(now) + " → モードは" +
+				  (modeChanged ? "変わった" : "変わらなかった") +
+				  " / **その場で描いたか=" + DragTickYesNo(drewHere) + "**");
+		const bool worked = modeChanged || drewHere;
 		DragTickAppend(path, std::string("render") + DragTickField("phase", phaseTag) +
 								 DragTickField("try", t.name) + DragTickField("ret", ret) +
 								 DragTickField("ms", DragTickNum(ms)) +
 								 DragTickField("ticks", DragTickNum(ticks)) +
 								 DragTickField("mode_after", DragTickNum(now)) +
-								 DragTickField("worked", DragTickYesNo(worked)));
+								 DragTickField("mode_changed", DragTickYesNo(modeChanged)) +
+								 DragTickField("drew_here", DragTickYesNo(drewHere)));
 		return worked;
 	};
 
@@ -1208,14 +1219,17 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 	probe.log("");
 	if (chosen != nullptr && !renderWorkedInEvent)
 	{
-		probe.log("  → **イベントの外では効いた経路が、イベント中は効かなかった。**");
-		probe.log("    ＝VW は undo イベントが開いている間はレンダリングを始めない"
-				  "（この梃子では『レンダリング中 ＋ イベント中』は作れない）。");
+		probe.log("  → **イベントの外では効いた呼び出しが、イベント中は効かなかった。**");
+		probe.log("    ＝VW は undo イベントが開いている間はレンダリングモードを変えない。");
 	}
 	else if (renderWorkedInEvent)
 	{
-		probe.log("  → イベント中でもレンダリングは走った。上の『刻み』の回数が"
-				  "「レンダリング中に刻みが届くか」の答えである。");
+		probe.log("  → イベント中でもモードの変更は通った。**ただし上の『その場で描いたか』が"
+				  "no なら、この呼び出しは描いていない**——`SetRenderMode` は");
+		probe.log("    `immediate=true` でも**その場では描かず、VW がイベントループへ"
+				  "戻ってから描く**（2 回目の実機で判明）。");
+		probe.log("    だから**この局面の刻みの回数は「レンダリング中に届くか」の答えでは"
+				  "ない。** その答えは下記 P-E で取る。");
 	}
 	if (!buildingBeforeRender)
 	{
@@ -1315,14 +1329,51 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 							 DragTickField("closed", DragTickNum(closed)) +
 							 DragTickField("building_at_return", DragTickYesNo(buildingAtReturn)));
 
+	// ------------------------------------------------------------------------
+	// P-E **戻ってから描かせる**——これが「レンダリング中の刻み」の本筋になった
+	// ------------------------------------------------------------------------
+	// 2 回目の実機で `SetRenderMode(immediate=true)` が**その場では描かない**と分かった
+	// ので、それを逆に使う: **重いモードを頼んでから return する**。VW はイベント
+	// ループへ戻った時点で描き始め、**そのあいだピン留めしたタイマーは刻み続ける**。
+	// しかも `kNotifyRenderModeChanged` が自分の変更でも飛ぶので、**描き始めの時刻が
+	// 書き溜めに残る**（報告側がその窓の刻みを数える）。利用者の操作に依らない。
+	//
+	// **ここは置き土産を閉じた後でなければならない。** そうでないと、描いている最中の
+	// `building=yes` が「VW がレンダリングのために開いたもの」なのか「自分の置き土産」
+	// なのか区別できない。
+	probe.log("");
+	probe.log("■ P-E 戻ってから描かせる（レンダリング中の刻みを取るのはここ）");
+	int requested = -1;
+	if (layer != nil)
+	{
+		// 重い順に頼む。Renderworks が無い環境ではモードが変わらないので OpenGL へ落とす。
+		const TRenderMode kHeavy[] = {renderFinalRenderWorks, renderFinalShaded, renderOpenGL};
+		for (TRenderMode m : kHeavy)
+		{
+			gSDK->SetRenderMode(layer, m, true, true);
+			if ((int)gSDK->GetRenderMode(layer) == (int)m)
+			{
+				requested = (int)m;
+				break;
+			}
+		}
+	}
+	probe.log("  頼んだレンダリングモード=" + std::to_string(requested) +
+			  "（14=仕上げ Renderworks 5=仕上げ 11=OpenGL / -1=どれも通らなかった）");
+	probe.log("  戻った直後に VW が描き始めるので、**そのあいだの刻みが答えになる**");
+	probe.log("  （描き始めの時刻は kNotifyRenderModeChanged の通知として書き溜めに残る）");
+	DragTickAppend(path, std::string("phase") + DragTickField("name", "P-E 遅延レンダリング") +
+							 DragTickField("requested_mode", DragTickNum(requested)));
+
 	probe.log("");
 	probe.log("■ P-D ここから先は、このコマンドが戻った後の刻みを書き溜める");
-	probe.log("  **このまま 30 秒〜1 分ほど、図面で次をしてみてください:**");
-	probe.log("    ① ツールでドラッグする（長方形ツールで何度か描く・図形を選んで");
-	probe.log("       ドラッグで動かす）——これが (1) の本命です。**ゆっくり、2〜3 秒");
-	probe.log("       かけて**動かしてください（刻みは 250 ms ごとなので、速いと入りません）");
-	probe.log("    ② ビュー > レンダリング で描かせる（OpenGL → Final Quality Renderworks）");
-	probe.log("       ——球を 6 個置いてあるので、少し時間が掛かります");
+	probe.log("  **この結果を閉じると、図面が勝手に描き始めます**（P-E で頼んだもの）。");
+	probe.log("  **描き終わるまで待ってから**、30 秒ほど次をしてみてください:");
+	probe.log("    ・ツールでドラッグする（長方形ツールで何度か描く・図形を選んで");
+	probe.log("      ドラッグで動かす）。**ゆっくり、2〜3 秒かけて**動かしてください");
+	probe.log("      （刻みは 250 ms ごとなので、速いと入りません）");
+	probe.log("  （ビュー > レンダリング を自分で選ぶ必要はもうありません——P-E が");
+	probe.log("    勝手に描かせます。選んでも構いません。その窓も数えます）");
 	probe.log("  そのあと**もう一度このプローブを走らせる**と、結果が出ます。");
 	probe.log("  （ドラッグしたかどうかは点取りの通知で機械的に押さえるので、");
 	probe.log("    こちらから見て『本当にドラッグされたか』が分かります）");
