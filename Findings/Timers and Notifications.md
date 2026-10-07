@@ -220,6 +220,12 @@ Vectorworks が終了していれば、ピン留めした本体ごとタイマ�
 上記 3 で分かったとおり、危ないのは「**VW が undo イベントを開けたまま、VW 自身が
 イベントを回している**」場面だけである。そこを狙って作って測った。
 
+**測ったのは「VW が出したモーダルダイアログの最中」である。** #206 はこの場面のほかに
+**ツールのドラッグ中・レンダリング中**も挙げていたが、そちらは**コマンドが戻った後も
+生きるタイマー**が要るので、この調査では作らなかった
+（→ [issue #213](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/213)）。
+**下記「書くと混ざる」が場面に依らないかどうかは、まだ実測していない。**
+
 **作り方（梃子 2 つ）。プローブは 1 度も `SetUndoMethod` / `NameUndoEvent` を呼ばない:**
 
 1. **VW にイベントを開かせる**——`DeleteObject(h, useUndo=true)` は開いていなければ
@@ -390,6 +396,7 @@ virtual bool VCOM_CALLTYPE IsCurrentlyBuildingAnUndoEvent() = 0;
   1 本である以上どの場面でも同じと見ているが、**そう書けるだけの実測はまだ無い**
   （ドラッグの最中に当てるには、コマンドが戻った後も生きるタイマーが要る。上記 4 の
   ピン留めの作法で作れるが、`probes/runtime/runloop-timer-sdk/` はマージ時に消えている）。
+  → [issue #213](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/213)
 - （**Windows の `SetTimer`** は上記 4 で実機確認が取れたので、ここからは外した。
   [issue #205](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/205)
   はそのための issue だったが、**この調査の実機確認が mac と Windows の両方で取れた**
