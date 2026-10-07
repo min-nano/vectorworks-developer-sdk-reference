@@ -153,16 +153,30 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
   最大 3 秒）。**Windows は 1 回も刻まない。** 進捗を出しながら受け付けを回す設計は、
   Windows では成立しない。
 - **刻みが VW の undo イベント中に当たった例は、この計測では 0 回**
-  （`undo 中 0 回`。刻みごとに `IsCurrentlyBuildingAnUndoEvent()` を記録した）。
-  「当たったら何が起きるか」は
-  [issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206) で続ける。
+  （`undo 中 0 回`。刻みごとに `IsCurrentlyBuildingAnUndoEvent()` を記録した。
+  2 プラットフォーム・計 1304 刻み）。**「当たらなかった」だけで「当たらない」ではない**
+  ——ふつうに 2 分触っている限りでは当たらない、ということである。
+  **狙って当てたときに何が起きるかは下記 6**（[issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)。**答えが出ている**）。
 
 ### 4. プラットフォームごとの作法
 
 - **macOS: メニューコマンドはメインスレッドで走る**（`thread=main` /
-  `runloop=same-as-main`）。**ただし `CFRunLoopRunInMode` でランループを自分で回すことは
-  できない**——即座に戻る（① が 0 回・所要 0 秒）。VW が自前でイベントループを駆動して
-  いるため。**待つ必要があるなら、刻みを待つ（コマンドを戻す）しかない。**
+  `runloop=same-as-main`）。
+- **macOS: `CFRunLoopRunInMode` は「短く刻んで何度も呼べば」回る**（【訂正】。
+  [issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)
+  の実機で判明）。当初ここには「**自分で回すことはできない**——即座に戻る」と書いて
+  いたが、それは**1 回の呼び出しを長く取ったときの話**だった。実測:
+
+  | 回し方 | 結果 |
+  | --- | --- |
+  | `CFRunLoopRunInMode(default, 1.5, false)` を **1 回**（上記 ①） | **0 回**・所要 0 秒（即座に戻る） |
+  | `CFRunLoopRunInMode(default, 0.6, false)` を **1 回**（#206 の 1 回目） | **0 回** |
+  | **`CFRunLoopRunInMode(default, 0.05, false)` を 12 回**（#206 の 2・3 回目） | **8 回届いた**。戻り値 **3 ＝ `kCFRunLoopRunTimedOut`**、実際に費やした時間 **0.611 秒**（0.6 が期待値） |
+
+  **＝短い刻みで呼べば、ちゃんと時間を使って刻みを配ってから `TimedOut` で戻る。**
+  2 回の実機で同じ結果（どちらも 8 回）。**「待ちたいなら 0.05 秒ずつ回す」が使える。**
+  ただし**これはこちらがランループを回している間の話**で、上記 3 のとおり
+  **自分の同期処理が割り込まれるわけではない**（回さなければ 0 回のまま）。
 - **macOS: 主ランループが知っているモードは 13 個**
   （`kCFRunLoopDefaultMode` / `NSEventTrackingRunLoopMode` / `NSModalPanelRunLoopMode` /
   `NSGraphicsRunLoopMode` / `NSAnimationRunLoopMode` / `CoreDragMode` /
@@ -196,6 +210,106 @@ Vectorworks が終了していれば、ピン留めした本体ごとタイマ�
 **教訓: 「仕掛けて、後で報告させる」形の計測は、同じ起動のうちに閉じること。**
 プロセスが終われば仕掛けも消えるので、**刻みが 0 件なのは「刻まない」ではなく
 「もう居ない」**かもしれない。
+
+### 6. **VW が undo イベントを開いたまま回している最中**に当たったら——読むのは安全、**書くと混ざる**
+
+**実測**（VW 2026 / macOS。`probes/runtime/undo-event-timer-tick/` を 3 回。
+ビルド `1d5b70f53506` / `782dd705b13f` / `7fbdbc35d939`。
+[issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)）。
+
+上記 3 で分かったとおり、危ないのは「**VW が undo イベントを開けたまま、VW 自身が
+イベントを回している**」場面だけである。そこを狙って作って測った。
+
+**作り方（梃子 2 つ）。プローブは 1 度も `SetUndoMethod` / `NameUndoEvent` を呼ばない:**
+
+1. **VW にイベントを開かせる**——`DeleteObject(h, useUndo=true)` は開いていなければ
+   自分で開き、**こちらが return するまで開いたまま**（[Undo](Undo.md)）。
+2. **VW にイベントループを回させる**——`ISDK::AlertQuestion`（VW 自身のモーダル確認
+   ダイアログ）。上記 3 のとおり、両プラットフォームで効く唯一の場面である。
+
+#### 刻みは届く。ただし **`kCFRunLoopCommonModes` に登録した 1 本だけ**
+
+| 局面 | 札（登録したモード） | 届いた | うち `building=yes` | 読めた |
+| --- | --- | --- | --- | --- |
+| **VW のモーダル確認ダイアログの最中** | **`kCFRunLoopCommonModes`** | **85 / 44 / 50 回**（3 回ぶん） | **全件** | **全件** |
+| VW のモーダル確認ダイアログの最中 | **`kCFRunLoopDefaultMode` だけ** | **0 / 0 / 0 回** | — | — |
+| 自分でランループを回した（0.05 秒 × 12） | 両方（札ごとに 4 回） | 4 ＋ 4 回 | **回による**（下記） | 全件 |
+
+- **モードは `NSModalPanelRunLoopMode`。** だから**`kCFRunLoopDefaultMode` だけに
+  登録したタイマーは 1 回も届かない**——**同じ図面・同じ瞬間に 2 本並べて**、
+  登録モードだけを変えて測ったので、ここは取り違えようがない。
+  **刻みを VW のループへ当てたいなら `kCFRunLoopCommonModes`（か全モード）が要る。**
+- **刻みの中から `gSDK` を読める。** `IsCurrentlyBuildingAnUndoEvent()` と
+  `GetNamedObject()` が全件成功し、例外も異常も出ていない。
+- **刻みの中の `IsCurrentlyBuildingAnUndoEvent()` は信用できる**——**同じ局面（自分で
+  ランループを回した 4 ＋ 4 回）で、イベントの状態だけを変えて両方の値が出た**:
+
+  | 回 | その局面でイベントは | 刻みの中の `building` |
+  | --- | --- | --- |
+  | 2 回目（`782dd705b13f`） | 開いたまま（`CreateLocus` が開いたものを放置） | **8 回すべて `yes`** |
+  | 3 回目（`7fbdbc35d939`） | `EndUndoEvent` で閉じてある | **8 回すべて `no`** |
+
+  そして同じ 3 回目の中で、**VW が開いている局面（モーダル中）では 50 回すべて `yes`**
+  に戻った。**＝刻みの中で「いま開いているか」を問うことは、ちゃんとできる。**
+
+#### **書くと、そのとき開いていた undo イベントに混ざる**
+
+判定は目視に頼らず、**取り消しを段ごとに掛けて何が消えたかを名前で引いて**読んだ。
+
+| 置いたもの | いつ作ったか | 1 段目の取り消し後 | 2 段目の取り消し後 |
+| --- | --- | --- | --- |
+| 対照 | イベントを**閉じた**後（別の段） | **残った** | 消えた |
+| **刻みが作ったもの** | **VW が開いている最中**（刻みの中） | **消えた** | — |
+
+- **1 段目で刻みが作ったものだけが消え、対照は残った。** → 刻みの中での書き込みは
+  **そのとき開いていた undo イベントに入る**。
+- **2 段目で対照が消えた。** → 2 つは**本当に別の段に居た**。つまり 1 段目の結果は
+  「取り消しが広く効いた」のではない。**推論ではなく段の境目の観測である。**
+- **帰結: 利用者が 1 回取り消すだけで、刻みが作ったものが、刻みとまったく無関係な
+  作業と一緒に消える。** 逆に、刻みが作ったものだけを狙って残すことはできない。
+
+#### 線引き——刻みの中で何をしてよいか
+
+- **読むのはよい。** VW が undo イベントを開いて回している最中でも、`gSDK` の読みは
+  全件通った。
+- **書くのは避ける。** 書けてしまうが、**そのとき開いている記録に混ざる**ので、
+  利用者の 1 回の取り消しが何を持っていくかを**こちらが決められない**。
+- **安全側に倒すなら「`IsCurrentlyBuildingAnUndoEvent()` が `no` のときだけ書く」。**
+  刻みの中でこの判定ができることは上で確かめた。ただし**`yes` の意味は広い**
+  （次項）。
+- **`no` を待つのは現実的である**——上記 3 のとおり、ふつうに触っている限り刻みが
+  イベント中に当たることはほとんど無い（2 プラットフォーム・1304 刻みで 0 件）。
+
+#### 「いま触ってよいか」を問える口は 1 つだけ。しかも `yes` の意味が広い【ヘッダ根拠】
+
+```cpp
+// ISDK.h:2612 —— **コメントが 1 行も付いていない**（前 6 行まで出しても無い）
+virtual bool VCOM_CALLTYPE IsCurrentlyBuildingAnUndoEvent() = 0;
+```
+
+- **`yes` は「利用者が操作中」を意味しない。** [Undo](Undo.md) の実測どおり、
+  **SDK 内部が勝手に開く**（PIO ＋ `ResetObject`・ビューポートの生成と更新・
+  `DeleteObject(useUndo=true)`・**`CreateLocus` 1 つでも**）し、
+  **スクリプトエンジンはコマンドをまたいで `yes` を居座らせる**。しかも
+  **文書ごとの状態**である（[Documents](Documents.md)）。
+  → **`yes` を「触るな」の旗にすると、置き土産ひとつで旗が立ったまま居座り、
+    以後の刻みが永久に何もできなくなる。** 信用できるのは `no` の側である。
+- **通知に「undo イベントが開いた」は無い。** `MCNotification.h` 全体で undo に
+  触れる定数は**1 本だけ**（`grep -i undo` の結果が 1 行）:
+
+  ```cpp
+  // MCNotification.h:179
+  const Sint32 kNotifyUndoEndEvent = 'Udee';	// Send immediatelly before ending an undo event
+  ```
+
+  **閉じる直前しか来ない。** だから「開いた瞬間に旗を立てる」作りは `kNotify*` では
+  **原理的に書けない**（立てられるのは下ろす側だけ）。**刻みの中で毎回問い直すしかない。**
+- **囲める通知があるのはツールの点取りだけ**: `kNotifyBeginToolMode`（`'BTOO'`、
+  "Sent when the current tool begins collecting points"）→ `kNotifyEndToolMode`
+  （`'ETOO'`、"finishes collecting points"）。**レンダリング中と VW のダイアログは
+  囲めない**——`kNotifyRenderModeAboutToChange` / `Changed` は「レンダリング方法の設定が
+  変わった」で「いま描いている最中」ではなく、`kNotifyDialogDisplayImminent`（`'DlgO'`）は
+  開く側だけで閉じたことを知らせる対が無い。
 
 ## 5. ウェブパレットの JS タイマーは、隠れると 60 秒に 1 回まで間引かれる
 
@@ -265,11 +379,17 @@ Vectorworks が終了していれば、ピン留めした本体ごとタイマ�
 
 ## まだ分かっていないこと（別の issue に切り出したもの）
 
-- **VW 自身が undo イベントを開いたまま自分でイベントを回している最中**（ツールのドラッグ中・
-  レンダリング中など）に刻みが当たったら何が起きるか。プローブは undo イベントを自分では
-  開かない決まり（[Undo](Undo.md)・`probes/runtime/README.md`）なので、その場面を狙って
-  作れない。
-  → [issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)
+- （**VW が undo イベントを開いたまま回している最中に当たったら何が起きるか**は
+  [issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)
+  で**実機確認が取れたので、ここからは外した**。答えは上記 6。「プローブは undo イベントを
+  自分では開かない決まりがあるので狙って作れない」と見ていたが、**VW に開かせる梃子が
+  あった**——詳しくは上記 6。）
+- **ツールのドラッグ中・レンダリング中そのものに当たったときの挙動は、まだ測っていない。**
+  上記 6 で測ったのは「**VW が出したモーダルダイアログの最中**」であり、#206 が挙げた
+  3 つの状況のうちの 1 つである。undo の記録に混ざるかどうかは取り消しスタックが文書ごとに
+  1 本である以上どの場面でも同じと見ているが、**そう書けるだけの実測はまだ無い**
+  （ドラッグの最中に当てるには、コマンドが戻った後も生きるタイマーが要る。上記 4 の
+  ピン留めの作法で作れるが、`probes/runtime/runloop-timer-sdk/` はマージ時に消えている）。
 - （**Windows の `SetTimer`** は上記 4 で実機確認が取れたので、ここからは外した。
   [issue #205](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/205)
   はそのための issue だったが、**この調査の実機確認が mac と Windows の両方で取れた**
