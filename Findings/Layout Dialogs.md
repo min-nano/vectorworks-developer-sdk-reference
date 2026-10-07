@@ -207,6 +207,11 @@ popup.AddItems(fList);
 実機（VectorWorks 本体）では未確認。** 実機で開閉・入力・イベント到達を確かめてから
 この注記を外すこと。
 
+**パレットの HTML から周期的に C++ を呼ぶ話は
+[周期実行と通知](Timers%20and%20Notifications.md)へ移した**——`setInterval` は**パレットを
+隠すと 60 秒に 1 回まで間引かれる**（実測）ので、受け付けの時計をパレットの中に置くと
+止まる。SDK 側にそれを止める口は無い。
+
 ### 見つかった場所
 
 - `Include/VWFC/PluginSupport/VWExtensionWebPalette.h` — SDK 基底クラス
