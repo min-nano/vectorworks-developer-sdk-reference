@@ -321,8 +321,12 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 		probe.log(std::string("  見えている範囲=横 ") + RenderSyncNum(halfW * 2.0) + "mm × 縦 " +
 				  RenderSyncNum(halfH * 2.0) + "mm（この 60% に収める）");
 	}
-	// 格子は 6 × 6 ＝ 36 個。重すぎると実機の待ちが長くなるので、まずこの数で測る。
-	const int kRenderSyncGrid = 6;
+	// 格子は 14 × 14 ＝ 196 個。**1 回目・2 回目（球 36 個）は物差しが軽すぎた**
+	// ——ビューポートの更新が 429 ms → 129 ms（同じコード・同じモデル。初回には
+	// RenderWorks の温まりぶんが乗る）で、閾値 400 ms を割って「判定できない」に
+	// 倒れた。**閾値を下げるのではなく、物差しを重くして測り直す**——数字を見てから
+	// 基準を緩めるのは判定ではない。
+	const int kRenderSyncGrid = 14;
 	const double spanX = halfW * 1.2; // 中心から ±60%
 	const double spanY = halfH * 1.2;
 	const double stepX = spanX / (double)kRenderSyncGrid;
@@ -487,6 +491,7 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 	probe.log(std::string("  ビューポートを作った=") + RenderSyncYesNo(viewport != nil));
 	long long emptyMs = -1;
 	long long filledMs = -1;
+	long long warmMs = -1; // 温まってから測り直した 2 度目（初回には温まりぶんが乗る）
 	if (viewport != nil)
 	{
 		// (a) まず #213 と同じ条件——**作りたてのまま**更新して時間を測る。
@@ -503,7 +508,7 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 		try
 		{
 			VWViewportObj vpObj(viewport);
-			vpObj.SetScale(100.0);
+			vpObj.SetScale(50.0);
 			vpObj.SetProjectionType(projectionOrthogonal);
 			vpObj.SetProject2D(false);
 			vpObj.SetViewType(standardViewRightIso);
@@ -513,6 +518,19 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 		catch (...)
 		{
 			probe.log("  **VWViewportObj で下ごしらえできなかった**（例外）");
+		}
+		// **シートの印刷解像度を上げて描画を重くする**（RenderWorks の費用はおおむね
+		// 画素数で決まるので、物差しを閾値より十分上へ持っていく一番素直な梃子）。
+		try
+		{
+			VWLayerObj sheetObj(sheet);
+			sheetObj.SetSheetPrintDPI(300);
+			probe.log(std::string("  シートの印刷解像度=") +
+					  std::to_string((long long)sheetObj.GetSheetPrintDPI()) + " dpi");
+		}
+		catch (...)
+		{
+			probe.log("  **シートの印刷解像度を書けなかった**（既定のまま測る）");
 		}
 		// クラスは既定で全部非表示なので、ゲストを含めて全部表示へ戻す
 		// （Findings「ビューポート」「寸法」）。
@@ -620,12 +638,34 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 				line += " / 外接=取れない";
 			probe.log(line);
 		};
-		probe.log("  **描いた絵の中身**（これが 0 件なら「空枠を 429 ms かけて描いた」の意味）:");
+		probe.log("  **描いた絵の中身**（0 件なら「空枠を描くのにその時間が掛かった」の意味で、"
+				  "issue #215 の問い 2 は no）:");
 		countGroup(kViewportGroupCache, "キャッシュ(3)");
 		countGroup(kViewportGroupSecondaryCache, "第 2 キャッシュ(9)");
 		probe.log("  ← **中身が入ったかの機械判定はこの件数**。ビューポートの外接は"
 				  "`ResetObject` を通すまで動かないので（Findings「ビューポート」）、"
 				  "外接だけでは読めない。");
+
+		// **もう 1 度、温まった状態で測る。** 1 回目の実機は 429 ms、2 回目は 129 ms
+		// だった（同じコード・同じモデル）——**初回には RenderWorks の温まりぶんが
+		// 乗る**。物差しに使うのは長いほうで、両方を残しておけば「429 と 129 の
+		// どちらが本当か」を次に読む人が迷わない。
+		try
+		{
+			VWViewportObj vpObj(viewport);
+			vpObj.SetDirty(true);
+		}
+		catch (...)
+		{
+		}
+		before = gRenderSyncTicks.ticks;
+		t0 = Clock::now();
+		gSDK->UpdateViewport(viewport);
+		warmMs = elapsedMsSince(t0);
+		probe.log(std::string("  (c) **温まってから、もう 1 度の UpdateViewport = ") +
+				  std::to_string(warmMs) + " ms** / 刻み " +
+				  std::to_string(gRenderSyncTicks.ticks - before) + " 回（(b) は " +
+				  std::to_string(filledMs) + " ms）");
 	}
 	if (layerBefore != nil)
 	{
@@ -657,14 +697,19 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 			max2D = s.ms;
 		}
 	}
-	const long long yardstick = (filledMs > emptyMs) ? filledMs : emptyMs;
+	long long yardstick = emptyMs;
+	if (filledMs > yardstick)
+		yardstick = filledMs;
+	if (warmMs > yardstick)
+		yardstick = warmMs;
 
 	probe.log("");
 	probe.log("■ まとめ");
 	probe.log(std::string("  3D での SetRenderMode の最長=") + std::to_string(max3D) + " ms（" +
 			  slowest3D + "） / 2D での最長=" + std::to_string(max2D) + " ms");
 	probe.log(std::string("  物差し（ビューポート更新）= 作りたて ") + std::to_string(emptyMs) +
-			  " ms / 中身あり " + std::to_string(filledMs) + " ms");
+			  " ms / 中身あり " + std::to_string(filledMs) + " ms / 温まってから " +
+			  std::to_string(warmMs) + " ms → 物差しは最長の " + std::to_string(yardstick) + " ms");
 	probe.log(
 		std::string("  刻みは全部で ") + std::to_string(gRenderSyncTicks.ticks) +
 		" 回届いた（うち S3 の測定中が " + std::to_string(ticks3D) + " 回）/ モード=" +
@@ -714,7 +759,7 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 	}
 
 	probe.log("");
-	probe.log("（**物差しとしての 429 ms 級は、キャッシュ群が 0 件でも成立する**"
+	probe.log("（**キャッシュ群が 0 件でも、物差しそのものは成立する**"
 			  "——空枠でも仕上げ Renderworks の同期描画にそれだけ掛かるなら、"
 			  "0 ms は『描いていない』の意味しか持たない。件数は issue #215 の問い 2"
 			  "——『表示レイヤを入れれば中身が入るか』——の答えとして読む。）");
