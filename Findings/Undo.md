@@ -601,6 +601,18 @@ undo イベントの**外**で作った、登録していない呼び出し元�
   開始し、削除が終わったら `EndUndoEvent`（登録するものが無ければ
   `EndAndRemoveUndoEvent`）まで自分で閉じる**——本ファイル冒頭の RAII の作法をそのまま
   レイヤ削除にも適用する。
+  - **【追記】そのまま返すと、コマンドが戻っても閉じない——数十秒開いたままになる。**
+    実測（[issue #213](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/213)。
+    OS のタイマーを併用したプローブ）: `DeleteObject(h, useUndo=true)` が開けた
+    イベントを閉じずにメニューコマンドから返した回では、**`kNotifyUndoEndEvent` が
+    来たのは 53 秒後**で、それまで**刻み 181 回すべてが `IsCurrentlyBuildingAnUndoEvent()`
+    を `yes` と読み**、**その間に作った図形はその置き土産のイベントに入った**
+    （利用者が 1 回取り消せば一緒に消える関係になる）。**戻る直前に `EndUndoEvent` で
+    閉じるようにしたら `yes` は 0 件になった**（3976 刻み）。
+    本ファイル冒頭の「`GS_EndUndoEvent` の説明にある『外部の終了時に自動で閉じる』」は、
+    **少なくとも「コマンドが戻った時点では閉じない」**ということである。
+    周期実行と組み合わせるときの効き方は
+    [周期実行と通知 7 節](Timers%20and%20Notifications.md)。
 - **ビューポートの載ったシートレイヤも `DeleteObject(sheetLayer, true)` で丸ごと消せる**
   （実機。[issue #29](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/29)、
   `probes/runtime/delete-sheet-layer-viewport/`）。ビューポート 2 枚＋注釈空間へ
