@@ -105,9 +105,15 @@ namespace
 	const long long kDragTickDeadlineMs = 900000; // 15 分
 
 	// 図形の名前。**短い名前・ありふれた名前は使わない**（probes/runtime/README.md）。
-	const char kDragTickNamePre[] = "PROBE-I213-PRE";		// イベントの外（対照）
-	const char kDragTickNameRTick[] = "PROBE-I213-RTICK";	// レンダリング中の刻みの中
-	const char kDragTickNameUTick[] = "PROBE-I213-UTICK";	// 利用者の局面の刻みの中
+	const char kDragTickNamePre[] = "PROBE-I213-PRE";	  // イベントの外（対照）
+	const char kDragTickNameRTick[] = "PROBE-I213-RTICK"; // レンダリング中の刻みの中
+	// 利用者の局面の書き込みは**場面ごとに別の名前で 1 つずつ**置く。1 回目の実機で
+	// 「最初の `building=yes` の刻み」がプローブの結果ダイアログ（`NSModalPanelRunLoopMode`）
+	// の最中だったため、ドラッグ・レンダリングの話として読めなかった（#206 のモーダルの
+	// 再現にしかならない）。場面を名前で分けておけば、どの場面で書けたのかが残る。
+	const char kDragTickNameUTool[] = "PROBE-I213-UTOOL"; // 点取りの最中（通知の囲みの中）
+	const char kDragTickNameUTrack[] = "PROBE-I213-UTRACK"; // トラッキング中（mode で判る）
+	const char kDragTickNameUOther[] = "PROBE-I213-UOTHER"; // それ以外（モーダル等）
 	const char kDragTickNameVictim[] = "PROBE-I213-VICTIM"; // 梃子 1 で消す駒
 
 	// 1 回目が書き溜めたものを 2 回目が読む。**一時ディレクトリ**に置く（Vectorworks が
@@ -146,7 +152,9 @@ namespace
 		int renderNotes = 0; // RndC / RnMC
 		bool wantWriteOnBuilding = false; // P-R で building=yes の刻みに 1 つ書く
 		bool wroteRender = false;
-		bool wroteUser = false;
+		bool wroteUTool = false;
+		bool wroteUTrack = false;
+		bool wroteUOther = false;
 		bool quiet = false; // 取り消しを掛けている間は gSDK を触らない
 		bool disarmed = false;
 	};
@@ -449,10 +457,27 @@ namespace
 			st->wroteRender = true;
 			writeName = kDragTickNameRTick;
 		}
-		else if (buildingYes && !st->insideProbe && !st->wroteUser)
+		else if (buildingYes && !st->insideProbe)
 		{
-			st->wroteUser = true;
-			writeName = kDragTickNameUTick;
+			// **場面で名前を分ける。** 同じ「刻みの中の書き込み」でも、ドラッグ中なのか
+			// トラッキング中なのか、ただモーダルが開いているだけなのかで意味が違う。
+			const std::string nowMode = DragTickCurrentMode();
+			if (st->toolDepth > 0 && !st->wroteUTool)
+			{
+				st->wroteUTool = true;
+				writeName = kDragTickNameUTool;
+			}
+			else if (nowMode.find("EventTracking") != std::string::npos && !st->wroteUTrack)
+			{
+				st->wroteUTrack = true;
+				writeName = kDragTickNameUTrack;
+			}
+			else if (st->toolDepth == 0 && nowMode.find("EventTracking") == std::string::npos &&
+					 !st->wroteUOther)
+			{
+				st->wroteUOther = true;
+				writeName = kDragTickNameUOther;
+			}
 		}
 		if (writeName != nullptr)
 		{
@@ -732,21 +757,36 @@ namespace
 		// ---- モードごとの数え上げ（どのモードが刻みを配ったか）----------------
 		probe.log("■ モードごとの刻み（mac。どのランループのモードで配られたか）");
 		{
-			std::vector<std::pair<std::string, int>> hist;
+			struct DragTickModeStat
+			{
+				std::string mode;
+				int count = 0;
+				int building = 0;
+				int tool = 0;
+			};
+			std::vector<DragTickModeStat> hist;
 			for (const DragTickRow& r : rows)
 			{
-				bool found = false;
-				for (std::pair<std::string, int>& h : hist)
-					if (h.first == r.mode)
-					{
-						++h.second;
-						found = true;
-					}
-				if (!found)
-					hist.emplace_back(r.mode, 1);
+				DragTickModeStat* found = nullptr;
+				for (DragTickModeStat& h : hist)
+					if (h.mode == r.mode)
+						found = &h;
+				if (found == nullptr)
+				{
+					hist.push_back(DragTickModeStat{r.mode, 0, 0, 0});
+					found = &hist.back();
+				}
+				++found->count;
+				if (r.building)
+					++found->building;
+				if (r.tool)
+					++found->tool;
 			}
-			for (const std::pair<std::string, int>& h : hist)
-				probe.log("  " + h.first + ": " + std::to_string(h.second) + " 回");
+			for (const DragTickModeStat& h : hist)
+				probe.log("  " + h.mode + ": " + std::to_string(h.count) +
+						  " 回（うち building=yes " + std::to_string(h.building) +
+						  " 回 / 点取りの囲みの中 " + std::to_string(h.tool) + " 回）");
+			probe.log("  ← **どのモードの刻みが undo イベント中に当たったか**がここで分かる。");
 		}
 		probe.log("");
 
@@ -819,8 +859,12 @@ namespace
 		probe.log("");
 		probe.log("■ 刻みの中で作った図形（取り消しは掛けない——利用者の操作の段が上に"
 				  "積まれているので、段の境目が読めない）");
-		probe.log("  " + std::string(kDragTickNameUTick) +
-				  " は在るか=" + DragTickYesNo(DragTickExists(kDragTickNameUTick)));
+		probe.log("  " + std::string(kDragTickNameUTool) +
+				  "（点取りの最中）は在るか=" + DragTickYesNo(DragTickExists(kDragTickNameUTool)));
+		probe.log("  " + std::string(kDragTickNameUTrack) + "（トラッキング中）は在るか=" +
+				  DragTickYesNo(DragTickExists(kDragTickNameUTrack)));
+		probe.log("  " + std::string(kDragTickNameUOther) +
+				  "（それ以外）は在るか=" + DragTickYesNo(DragTickExists(kDragTickNameUOther)));
 		probe.log("  （在れば「利用者の局面の刻みの中で、building=yes のまま書けた」"
 				  "ということ。混ざるかどうかは 1 回目の P-R で段ごとに測ってある）");
 
@@ -1248,6 +1292,29 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 	// ------------------------------------------------------------------------
 	// P-D コマンドが戻った後——**ここからが利用者の出番**
 	// ------------------------------------------------------------------------
+	probe.log("");
+	// **プローブが開けさせた undo イベントを、ここで閉じる。** 1 回目の実機では開いたまま
+	// 返しており（殻のログの `undo: after building=yes`）、**戻った直後の刻みが
+	// その置き土産のイベントを見て `building=yes` と読んでいた**——しかもそのときの
+	// mode は `NSModalPanelRunLoopMode`（殻の結果ダイアログ）で、ドラッグでも
+	// レンダリングでもない。置き土産を残したままでは、**この先の `building=yes` が
+	// VW のものか自分のものか区別できない**ので、必ず閉じる。
+	probe.log("");
+	probe.log("■ 置き土産の始末: プローブが開けさせた undo イベントを閉じる");
+	int closed = 0;
+	while (gSDK->IsCurrentlyBuildingAnUndoEvent() && closed < 4)
+	{
+		gSDK->EndUndoEvent();
+		++closed;
+	}
+	const bool buildingAtReturn = gSDK->IsCurrentlyBuildingAnUndoEvent();
+	probe.log("  EndUndoEvent を " + std::to_string(closed) +
+			  " 回呼んだ / 残り building=" + DragTickYesNo(buildingAtReturn));
+	probe.log("  ← **ここが no でなければ、この先の building=yes は自分の置き土産かもしれない**");
+	DragTickAppend(path, std::string("phase") + DragTickField("name", "P-D の前に始末") +
+							 DragTickField("closed", DragTickNum(closed)) +
+							 DragTickField("building_at_return", DragTickYesNo(buildingAtReturn)));
+
 	probe.log("");
 	probe.log("■ P-D ここから先は、このコマンドが戻った後の刻みを書き溜める");
 	probe.log("  **このまま 30 秒〜1 分ほど、図面で次をしてみてください:**");
