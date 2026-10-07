@@ -1403,9 +1403,9 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 	{
 		probe.log("  → **描けていない見込み**（" + std::to_string(redrawMs) +
 				  " ms しか掛かっていない）。**刻みの回数は根拠にならない。**");
-		probe.fail("P-G の再描画が " + std::to_string(redrawMs) +
-				   " ms しか掛からなかった——レンダリング中の測定になっていない"
-				   "（モードが仕上げ Renderworks になっているか、球が在るかを疑う）");
+		probe.log("    **6 回目の実機で 22 ms だった**——`ReDrawAll` も同期では描かない"
+				  "（`SetRenderMode(immediate=true)` と同じ）。ここは**記録として残すだけ**で、"
+				  "レンダリング中の答えは下記 P-H で取る。");
 	}
 	else if (ticksInRedraw == 0)
 	{
@@ -1418,6 +1418,107 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 		probe.log("  → **判定: レンダリング中にも刻みが届く**（" + std::to_string(ticksInRedraw) +
 				  " 回 / " + std::to_string(redrawMs) + " ms）。");
 		probe.log("    その刻みの building と mode は、報告側の『P-G / 口』の行を読む。");
+	}
+
+	// ------------------------------------------------------------------------
+	// P-H **ビューポートを更新させる**——SDK から同期でレンダリングさせる唯一の道
+	// ------------------------------------------------------------------------
+	// 6 回目の実機で、**SDK から VW にその場で描かせる道は無い**と分かった:
+	// `SetRenderMode(immediate=true)` は 0 ms で戻り（モードだけ変わる）、
+	// `ReDrawAll` も 22 ms で戻る。`ISDK` に「いま描いているか」を問う口も無い
+	// （`Render` で引いて出るのは `GetRenderMode` / `SetRenderMode` /
+	// `RefreshRenderingForSelectedObjects` ほか数本だけ）。
+	//
+	// 残っている道が**ビューポートの更新**である。[Findings「Undo」](../../../Findings/Undo.md)
+	// に「**ビューポートの生成や更新だけで `building=yes` になる**」とあるとおり、
+	// `UpdateViewport` は **VW が自分で undo イベントを開き、進捗を出して描く**
+	// ——issue #213 が言う「VW が進捗を出しながら回している最中」そのものである。
+	// 作り方は [Findings「寸法」](../../../Findings/Dimensions.md) の段取りに従う
+	// （`CreateLayer(..., kLayerSheet)` はアクティブレイヤを変えるので、
+	//  `SetCurrentLayer` で必ず戻す）。
+	probe.log("");
+	probe.log("■ P-H ビューポートを作って更新させる（SDK から同期で描かせる唯一の道）");
+	MCObjectHandle layerBefore = gSDK->GetActiveLayer();
+	MCObjectHandle sheet = gSDK->CreateLayer("PROBE-I213-SHEET", kLayerSheet);
+	probe.log("  シートレイヤを作った=" + DragTickYesNo(sheet != nil) +
+			  "（これでアクティブレイヤが移る。後で戻す）");
+	MCObjectHandle viewport = (sheet != nil) ? gSDK->CreateViewport(sheet) : MCObjectHandle(nil);
+	probe.log("  ビューポートを作った=" + DragTickYesNo(viewport != nil));
+	if (viewport != nil)
+	{
+		// 既定は 1:1（Findings「寸法」）。球が用紙に収まるように 1/50 にして、
+		// 描画モードを**仕上げ Renderworks**にする。VWFC の口が無ければ素の
+		// `SetRenderMode` は使えない（あれはレイヤ用）ので、ここは VWFC を使う。
+		try
+		{
+			VWViewportObj vpObj(viewport);
+			vpObj.SetScale(50.0);
+			vpObj.SetRenderType(renderFinalRenderWorks);
+			probe.log("  縮尺 1/50 ＋ 仕上げ Renderworks を書いた");
+		}
+		catch (...)
+		{
+			probe.log("  **VWViewportObj で書けなかった**（既定のまま更新する）");
+		}
+	}
+	// 置き土産を閉じてから測る（ビューポートを作ったことで開いているはず）。
+	int closedBeforeUpdate = 0;
+	while (gSDK->IsCurrentlyBuildingAnUndoEvent() && closedBeforeUpdate < 4)
+	{
+		gSDK->EndUndoEvent();
+		++closedBeforeUpdate;
+	}
+	probe.log(
+		"  更新の前に EndUndoEvent を " + std::to_string(closedBeforeUpdate) +
+		" 回呼んだ / いまの building=" + DragTickYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()) +
+		" ← **ここが no でないと、更新中の building=yes を VW のものと言えない**");
+
+	gDragTickState->phase = "P-H ビューポート更新（レンダリング）中";
+	DragTickAppend(path, std::string("phase") + DragTickField("name", "P-H"));
+	gDragTickState->wantWriteOnBuilding = true;
+	const int ticksBeforeUpdate = gDragTickState->ticks;
+	const std::chrono::steady_clock::time_point updFrom = std::chrono::steady_clock::now();
+	if (viewport != nil)
+		gSDK->UpdateViewport(viewport);
+	const long long updMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+								std::chrono::steady_clock::now() - updFrom)
+								.count();
+	const int ticksInUpdate = gDragTickState->ticks - ticksBeforeUpdate;
+	gDragTickState->wantWriteOnBuilding = false;
+	probe.log("  **UpdateViewport に掛かった時間=" + std::to_string(updMs) +
+			  " ms / その間に届いた刻み=" + std::to_string(ticksInUpdate) + " 回**");
+	probe.log("  更新の後の building=" + DragTickYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+	probe.log("  刻みの中で作った " + std::string(kDragTickNameRTick) +
+			  " は在るか=" + DragTickYesNo(DragTickExists(kDragTickNameRTick)));
+	DragTickAppend(path, std::string("update") + DragTickField("ms", DragTickNum(updMs)) +
+							 DragTickField("ticks", DragTickNum(ticksInUpdate)));
+	probe.log("");
+	if (updMs < 300)
+	{
+		probe.log("  → **描けていない見込み**（" + std::to_string(updMs) +
+				  " ms）。**刻みの回数は根拠にならない。**");
+		probe.fail("P-H の UpdateViewport が " + std::to_string(updMs) +
+				   " ms しか掛からなかった——レンダリング中の測定になっていない"
+				   "（ビューポートが空か、仕上げ Renderworks を書けていないことを疑う）");
+	}
+	else if (ticksInUpdate == 0)
+	{
+		probe.log("  → **判定: レンダリング中に刻みは入らない。** " + std::to_string(updMs) +
+				  " ms 描いている間、刻みは 1 回も届かなかった——描画は VW の同期処理で、");
+		probe.log("    その間はランループを回していない、ということ。");
+	}
+	else
+	{
+		probe.log("  → **判定: レンダリング中にも刻みが届く**（" + std::to_string(ticksInUpdate) +
+				  " 回 / " + std::to_string(updMs) +
+				  " ms）。その刻みの building と mode は『P-H / 口』の行で読む。");
+	}
+	// アクティブレイヤを戻す（`SetCurrentLayer` が効くことは #175 で実機確認済み）。
+	if (layerBefore != nil)
+	{
+		gSDK->SetCurrentLayer(layerBefore);
+		probe.log("  アクティブレイヤを元へ戻した（元 == いま＝" +
+				  DragTickYesNo(gSDK->GetActiveLayer() == layerBefore) + "）");
 	}
 
 	// ------------------------------------------------------------------------
@@ -1438,50 +1539,51 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 		probe.log("  → **刻みの中で図形を作れていないので、(3) はこの回では測れない**");
 		probe.log("    （レンダリング中に building=yes の刻みが 1 回も来なかった）。");
 	}
+	else if (!engine) // 上の P-R0 で取ったものを使い回す
+	{
+		probe.fail("IVectorScriptEngine を取れなかった（取り消しを掛けられないので (3) は未測）");
+	}
 	else
 	{
-		if (!engine) // 上の P-R0 で取ったものを使い回す
+		// **段を 1 つずつ剥がして、どの段で消えるかを読む。** P-H でシートレイヤと
+		// ビューポートを作ったぶん段が増えているので、「1 段目と 2 段目」では足りない。
+		// 取り消しは VectorScript 経由（Findings「Undo」「間接経路」で実測済み）。
+		int rtickGoneAt = -1;
+		int preGoneAt = -1;
+		for (int step = 1; step <= 6; ++step)
 		{
-			probe.fail(
-				"IVectorScriptEngine を取れなかった（取り消しを掛けられないので (3) は未測）");
+			engine->ExecuteScript("DoMenuTextByName('Undo', 0);");
+			const bool rtickNow = DragTickExists(kDragTickNameRTick);
+			const bool preNow = DragTickExists(kDragTickNamePre);
+			if (!rtickNow && rtickGoneAt < 0)
+				rtickGoneAt = step;
+			if (!preNow && preGoneAt < 0)
+				preGoneAt = step;
+			probe.log("  " + std::to_string(step) + " 段目の取り消しの後: RTICK=" +
+					  DragTickYesNo(rtickNow) + " / PRE=" + DragTickYesNo(preNow));
+			if (rtickGoneAt > 0 && preGoneAt > 0)
+				break;
+		}
+		probe.log("");
+		probe.log("  RTICK が消えた段=" + std::to_string(rtickGoneAt) +
+				  " / PRE が消えた段=" + std::to_string(preGoneAt) + "（-1 は消えなかった）");
+		if (rtickGoneAt > 0 && (preGoneAt < 0 || preGoneAt > rtickGoneAt))
+		{
+			probe.log("  → **判定: 混ざった。** 刻みが作ったものは対照 PRE より**先の段**で"
+					  "消えた＝**そのとき VW が開いていた段に入っていた**。");
+			probe.log("    （PRE は「どのイベントも開いていないうちに作って "
+					  "EndUndoEvent で閉じた」ものなので、別の段に居るのが既知の正）");
+		}
+		else if (rtickGoneAt < 0)
+		{
+			probe.log("  → **判定: 混ざっていない。** 6 段剥がしても刻みが作ったものは"
+					  "消えなかった（＝どの undo イベントにも属していない）。");
 		}
 		else
 		{
-			// 取り消しは VectorScript 経由（Findings「Undo」「間接経路」で実測済み）。
-			engine->ExecuteScript("DoMenuTextByName('Undo', 0);");
-			const bool rtick1 = DragTickExists(kDragTickNameRTick);
-			const bool pre1 = DragTickExists(kDragTickNamePre);
-			probe.log("  **1 段目の取り消しの後**: RTICK=" + DragTickYesNo(rtick1) +
-					  " / PRE=" + DragTickYesNo(pre1));
-			engine->ExecuteScript("DoMenuTextByName('Undo', 0);");
-			const bool rtick2 = DragTickExists(kDragTickNameRTick);
-			const bool pre2 = DragTickExists(kDragTickNamePre);
-			probe.log("  **2 段目の取り消しの後**: RTICK=" + DragTickYesNo(rtick2) +
-					  " / PRE=" + DragTickYesNo(pre2));
-
-			probe.log("");
-			if (!rtick1 && pre1)
-			{
-				probe.log("  → **判定: 混ざった。** 1 段目で、レンダリング中の刻みが作った"
-						  "ものだけが消え、対照 PRE は残った。");
-				if (!pre2)
-					probe.log("    2 段目で PRE が消えたので、2 つは**本当に別の段に居た**"
-							  "——1 段目の結果は『取り消しが広く効いた』ではない。");
-				else
-					probe.log("    ただし 2 段目でも PRE が消えていない（段の境目は読めて"
-							  "いない）。");
-			}
-			else if (rtick1)
-			{
-				probe.log("  → **判定: 混ざっていない。** 1 段目の取り消しで、刻みが作った"
-						  "ものは消えなかった（＝VW が開いていた段には入っていない）。");
-			}
-			else
-			{
-				probe.log("  → **判定不能。** 1 段目で対照 PRE まで消えた——この取り消しは"
-						  "想定より広く効いているので、RTICK が消えたことを『混ざった』の"
-						  "証拠にできない（#206 の 2 回目と同じ形）。");
-			}
+			probe.log("  → **判定不能。** RTICK と PRE が同じ段（" + std::to_string(rtickGoneAt) +
+					  " 段目）で消えた——段の境目が読めない"
+					  "ので、混ざったとは言えない。");
 		}
 	}
 	gDragTickState->quiet = false;
