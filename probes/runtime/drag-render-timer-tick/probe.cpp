@@ -31,6 +31,13 @@
 //	        ドラッグしなかった）——そう結果の見出しに出す。
 //
 //	  (2) **レンダリング中**（VW が進捗を出しながら回している最中）はどうか。
+//	      **1 回目の実機（ビルド 87d374350eda）で、ここの仕掛けが空振りした**——undo
+//	      イベントを開いたまま `SetRenderMode(renderOpenGL, immediate=true,
+//	      doProgress=true)` を呼ぶと **`false` が返り 0 ms で戻る**（＝1 度も描かない）。
+//	      そこでこの版は**「道具が効くか」と「イベント中だから断られたのか」を切り分ける**
+//	      ——イベントの外で経路（SetRenderMode の 3 モード ＋ VectorScript の
+//	      `SetLayerRenderMode`）を順に試し、効いたものを**イベント中にもう一度**呼ぶ。
+//	      外で効いて中で断られるなら、それ自体が知見である。
 //	      → **利用者に頼る部分と、プローブだけで決まる部分の 2 本立てにする。**
 //	        ・P-R（プローブの中）: `SetRenderMode(layer, renderOpenGL, immediate=true,
 //	          doProgress=true)` で**VW にその場でレンダリングさせる**。しかも
@@ -562,6 +569,19 @@ namespace
 		probe.log("書き溜め: " + path + "（" + std::to_string(lines.size()) + " 行）");
 		probe.log("");
 
+		// 刻み 1 行ぶんの素。モードの数え上げと「レンダリングの窓」の突き合わせに使う。
+		struct DragTickRow
+		{
+			long long tMs = 0;
+			std::string mode;
+			std::string phase;
+			bool building = false;
+			bool tool = false;
+			std::string raw;
+		};
+		std::vector<DragTickRow> rows;
+		std::vector<std::pair<long long, std::string>> renderMarks; // RndC / RnMC の時刻
+
 		std::vector<DragTickSlice> slices;
 		int ticksTotal = 0;
 		int ticksTool = 0;		   // 通知で囲まれた中（＝点取りの最中）
@@ -586,7 +606,11 @@ namespace
 				else if (what == "undo-end")
 					++undoEnds;
 				else if (what.compare(0, 11, "render-mode") == 0)
+				{
 					++renderNotes;
+					renderMarks.emplace_back(std::atoll(DragTickReadField(line, "t_ms").c_str()),
+											 what);
+				}
 				continue;
 			}
 			if (line.compare(0, 5, "tick ") != 0)
@@ -618,6 +642,14 @@ namespace
 			}
 			if (mode.find("EventTracking") != std::string::npos)
 				++ticksTracking;
+			DragTickRow row;
+			row.tMs = std::atoll(DragTickReadField(line, "t_ms").c_str());
+			row.mode = mode;
+			row.phase = phase;
+			row.building = buildingYes;
+			row.tool = inTool;
+			row.raw = line;
+			rows.push_back(row);
 
 			const std::string key = phase + " / " + tag;
 			DragTickSlice* found = nullptr;
@@ -697,13 +729,84 @@ namespace
 		}
 		probe.log("");
 
+		// ---- モードごとの数え上げ（どのモードが刻みを配ったか）----------------
+		probe.log("■ モードごとの刻み（mac。どのランループのモードで配られたか）");
+		{
+			std::vector<std::pair<std::string, int>> hist;
+			for (const DragTickRow& r : rows)
+			{
+				bool found = false;
+				for (std::pair<std::string, int>& h : hist)
+					if (h.first == r.mode)
+					{
+						++h.second;
+						found = true;
+					}
+				if (!found)
+					hist.emplace_back(r.mode, 1);
+			}
+			for (const std::pair<std::string, int>& h : hist)
+				probe.log("  " + h.first + ": " + std::to_string(h.second) + " 回");
+		}
+		probe.log("");
+
+		// ---- ドラッグ中の刻みの実物（最大 12 行）------------------------------
+		if (ticksTool > 0)
+		{
+			probe.log("■ ドラッグ中（点取りの通知に囲まれた中）の刻み——実物（最大 12 行）");
+			int shown = 0;
+			for (const DragTickRow& r : rows)
+			{
+				if (!r.tool || shown >= 12)
+					continue;
+				probe.log("  " + r.raw);
+				++shown;
+			}
+			probe.log("");
+		}
+
+		// ---- レンダリングの窓（モード変更の通知のあと 15 秒）------------------
+		if (!renderMarks.empty())
+		{
+			probe.log("■ 利用者のレンダリングの窓（RndC / RnMC の通知のあと 15 秒の刻み）");
+			probe.log("  **これはレンダリングの開始通知ではない**（モードの変更）。描き始めの"
+					  "目印として読む。");
+			for (const std::pair<long long, std::string>& mark : renderMarks)
+			{
+				int inWindow = 0;
+				int buildingYes = 0;
+				std::string modes;
+				for (const DragTickRow& r : rows)
+				{
+					if (r.tMs < mark.first || r.tMs > mark.first + 15000)
+						continue;
+					++inWindow;
+					if (r.building)
+						++buildingYes;
+					if (modes.find(r.mode) == std::string::npos)
+						modes += (modes.empty() ? "" : ",") + r.mode;
+				}
+				probe.log("  " + mark.second + " @" + std::to_string(mark.first) + " ms → 刻み " +
+						  std::to_string(inWindow) + " 回（うち building=yes " +
+						  std::to_string(buildingYes) + " 回）mode=" + modes);
+			}
+			probe.log("");
+		}
+		else
+		{
+			probe.log("■ 利用者のレンダリングの窓: **モード変更の通知が 1 度も来ていない**"
+					  "——この回はレンダリングされていない見込み。");
+			probe.log("");
+		}
+
 		// ---- 要点の行 --------------------------------------------------------
 		probe.log("■ 要点の行（仕掛け・通知・書き込み・店じまい）");
 		for (const std::string& line : lines)
 		{
 			if (line.compare(0, 4, "arm ") == 0 || line.compare(0, 6, "phase ") == 0 ||
 				line.compare(0, 6, "write ") == 0 || line.compare(0, 7, "disarm ") == 0 ||
-				line.compare(0, 6, "modes ") == 0 || line.compare(0, 5, "note ") == 0)
+				line.compare(0, 6, "modes ") == 0 || line.compare(0, 5, "note ") == 0 ||
+				line.compare(0, 7, "render ") == 0)
 				probe.log(line);
 		}
 		probe.log("");
@@ -921,7 +1024,113 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 	// P-R **レンダリング中 ＋ VW が開いた undo イベントの最中**（利用者に依らない測定）
 	// ------------------------------------------------------------------------
 	probe.log("");
-	probe.log("■ P-R VW に undo イベントを開かせたまま、VW にレンダリングさせる");
+	// **1 回目の実機（ビルド 87d374350eda）で分かったこと**: undo イベントを開いたまま
+	// `SetRenderMode(renderOpenGL, true, true)` を呼ぶと **`false` が返って 0 ms で戻る**
+	// ——レンダリングが 1 度も走らなかった。ヘッダのコメントは返り値について何も言わない
+	// （`ci-debug` で確認済み。「immediate なら戻る前に全部描く」だけ）。そこで
+	// **「道具が効くかどうか」と「イベント中だから断られたのか」を切り分ける**:
+	//
+	//   P-R0（対照）… **イベントの外**で、経路と描画モードを順に試して効くものを見つける。
+	//   P-R （本題）… 効いた経路を、**VW にイベントを開かせたまま**もう一度呼ぶ。
+	//
+	// P-R0 が効いて P-R が断られたなら、それ自体が知見である（VW は undo イベント中は
+	// レンダリングを始めない）。両方断られたなら、この梃子では場面を作れないということ
+	// ——そのときは利用者の側のレンダリング（P-D）だけが頼りになる。
+	probe.log("■ P-R0 対照: **undo イベントの外**でレンダリングさせてみる（道具が効くか）");
+	gDragTickState->phase = "P-R0 レンダリング中（イベントの外）";
+	DragTickAppend(path, std::string("phase") + DragTickField("name", "P-R0"));
+	MCObjectHandle layer = gSDK->GetActiveLayer();
+	probe.log("  いまのレンダリングモード GetRenderMode=" +
+			  std::to_string((layer != nil) ? (int)gSDK->GetRenderMode(layer) : -1) +
+			  "（0=ワイヤーフレーム 3=陰線処理（シェイド） 5=仕上げ 11=OpenGL）");
+
+	// 試す経路。**効いた最初のものを本題で使い回す。**
+	struct DragTickRenderTry
+	{
+		const char* name;
+		TRenderMode mode;
+		bool viaScript; // true なら VectorScript の SetLayerRenderMode を使う
+	};
+	const DragTickRenderTry kTries[] = {
+		{"SetRenderMode(renderOpenGL)", renderOpenGL, false},
+		{"SetRenderMode(renderShadedSolid)", renderShadedSolid, false},
+		{"SetRenderMode(renderFinalShaded)", renderFinalShaded, false},
+		{"VectorScript SetLayerRenderMode(renderOpenGL)", renderOpenGL, true},
+	};
+
+	VCOMPtr<VectorWorks::Scripting::IVectorScriptEngine> engine(
+		VectorWorks::Scripting::IID_VectorScriptEngine);
+	if (!engine)
+		probe.log("  （IVectorScriptEngine を取れなかったので、スクリプト経路は試せない）");
+
+	// 1 つ試して「効いたか」を返す。効いた＝**時間が掛かった**か**モードが変わった**か。
+	const auto tryRender = [&](const DragTickRenderTry& t, const char* phaseTag) -> bool
+	{
+		if (layer == nil)
+			return false;
+		const int ticksBefore = gDragTickState->ticks;
+		const std::chrono::steady_clock::time_point from = std::chrono::steady_clock::now();
+		std::string ret = "-";
+		if (t.viaScript)
+		{
+			if (!engine)
+				return false;
+			// 取り消しの段を増やさない呼び方（描画モードの変更そのものは図形を作らない）。
+			const std::string code =
+				"SetLayerRenderMode(ActLayer, " + std::to_string((int)t.mode) + ", TRUE, TRUE);";
+			const VCOMError err = engine->ExecuteScript(code.c_str());
+			ret = std::string("VCOMError=") + std::to_string((int)err);
+		}
+		else
+		{
+			ret = gSDK->SetRenderMode(layer, t.mode, true, true) ? "true" : "false";
+		}
+		const long long ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+								 std::chrono::steady_clock::now() - from)
+								 .count();
+		const int ticks = gDragTickState->ticks - ticksBefore;
+		const int now = (int)gSDK->GetRenderMode(layer);
+		const bool worked = (ms >= 150) || (now == (int)t.mode);
+		probe.log(std::string("  ") + phaseTag + " " + t.name + " → 戻り=" + ret +
+				  " / 掛かった時間=" + std::to_string(ms) + " ms / 刻み=" + std::to_string(ticks) +
+				  " 回 / 後の GetRenderMode=" + std::to_string(now) + " → " +
+				  (worked ? "**効いた**" : "効かなかった"));
+		DragTickAppend(path, std::string("render") + DragTickField("phase", phaseTag) +
+								 DragTickField("try", t.name) + DragTickField("ret", ret) +
+								 DragTickField("ms", DragTickNum(ms)) +
+								 DragTickField("ticks", DragTickNum(ticks)) +
+								 DragTickField("mode_after", DragTickNum(now)) +
+								 DragTickField("worked", DragTickYesNo(worked)));
+		return worked;
+	};
+
+	const DragTickRenderTry* chosen = nullptr;
+	for (const DragTickRenderTry& t : kTries)
+	{
+		// 毎回ワイヤーフレームへ戻してから試す（「すでにそのモードだから一瞬で済んだ」を
+		// 「効かなかった」と読み違えないため）。
+		if (layer != nil)
+			gSDK->SetRenderMode(layer, renderWireFrame, true, false);
+		if (tryRender(t, "P-R0"))
+		{
+			chosen = &t;
+			break;
+		}
+	}
+	if (chosen == nullptr)
+	{
+		probe.log("  → **どの経路でもレンダリングを起こせなかった。** この回は P-R"
+				  "（イベント中のレンダリング）を作れない——利用者の側のレンダリング"
+				  "（P-D ②）だけが頼りになる。");
+	}
+	else
+	{
+		probe.log("  → 効いた経路: " + std::string(chosen->name) + "。本題でこれを使う。");
+	}
+
+	// ------------------------------------------------------------------------
+	probe.log("");
+	probe.log("■ P-R 本題: VW に undo イベントを開かせたまま、同じ経路でレンダリングさせる");
 	probe.log("  梃子 1: DeleteObject(h, useUndo=true) は、開いていなければ自分で開き、");
 	probe.log("  プローブが return するまで開いたまま（Findings「Undo」で実測済み）。");
 	gDragTickState->phase = "P-R レンダリング中（VW のイベント中）";
@@ -937,31 +1146,32 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 	probe.log("  レンダリング前の building=" + DragTickYesNo(buildingBeforeRender) +
 			  " ← **ここが yes でなければ、P-R は『イベント中』の測定として読めない**");
 
-	gDragTickState->wantWriteOnBuilding = true;
-	const int ticksBeforeRender = gDragTickState->ticks;
-	MCObjectHandle layer = gSDK->GetActiveLayer();
-	const std::chrono::steady_clock::time_point renderFrom = std::chrono::steady_clock::now();
-	// immediate=true / doProgress=true ——**その場で、進捗を出して**描かせる。
-	const Boolean rendered =
-		(layer != nil) ? gSDK->SetRenderMode(layer, renderOpenGL, true, true) : false;
-	const long long renderMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-								   std::chrono::steady_clock::now() - renderFrom)
-								   .count();
-	const int ticksInRender = gDragTickState->ticks - ticksBeforeRender;
-	gDragTickState->wantWriteOnBuilding = false;
-	probe.log(std::string("  SetRenderMode(renderOpenGL, immediate, doProgress)=") +
-			  (rendered ? "true" : "false") + " / 掛かった時間=" + std::to_string(renderMs) +
-			  " ms");
-	probe.log("  **レンダリングの最中に届いた刻み=" + std::to_string(ticksInRender) + " 回**");
+	bool renderWorkedInEvent = false;
+	if (chosen != nullptr)
+	{
+		// **ワイヤーフレームへ戻すのもイベントの中でやる**（戻す呼び出しが効くかどうかも
+		// 「イベント中は断られる」の証拠になる）。
+		if (layer != nil)
+			gSDK->SetRenderMode(layer, renderWireFrame, true, false);
+		gDragTickState->wantWriteOnBuilding = true;
+		renderWorkedInEvent = tryRender(*chosen, "P-R");
+		gDragTickState->wantWriteOnBuilding = false;
+	}
 	probe.log("  レンダリング後の building=" +
 			  DragTickYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()));
 	probe.log("  刻みの中で作った " + std::string(kDragTickNameRTick) +
 			  " は在るか=" + DragTickYesNo(DragTickExists(kDragTickNameRTick)));
-	if (renderMs < 300)
+	probe.log("");
+	if (chosen != nullptr && !renderWorkedInEvent)
 	{
-		probe.log("  **レンダリングが " + std::to_string(renderMs) +
-				  " ms しか掛かっていない**——刻みの回数は「届かない」の根拠にならない"
-				  "（250 ms の間隔より短い）。");
+		probe.log("  → **イベントの外では効いた経路が、イベント中は効かなかった。**");
+		probe.log("    ＝VW は undo イベントが開いている間はレンダリングを始めない"
+				  "（この梃子では『レンダリング中 ＋ イベント中』は作れない）。");
+	}
+	else if (renderWorkedInEvent)
+	{
+		probe.log("  → イベント中でもレンダリングは走った。上の『刻み』の回数が"
+				  "「レンダリング中に刻みが届くか」の答えである。");
 	}
 	if (!buildingBeforeRender)
 	{
@@ -989,9 +1199,7 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 	}
 	else
 	{
-		VCOMPtr<VectorWorks::Scripting::IVectorScriptEngine> engine(
-			VectorWorks::Scripting::IID_VectorScriptEngine);
-		if (!engine)
+		if (!engine) // 上の P-R0 で取ったものを使い回す
 		{
 			probe.fail(
 				"IVectorScriptEngine を取れなかった（取り消しを掛けられないので (3) は未測）");
