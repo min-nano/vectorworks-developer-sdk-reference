@@ -47,13 +47,24 @@
 //	     降ろすので、残すと居ない関数が呼ばれる）。所要が短い測定では刻みの回数は
 //	     根拠にならないので、そのことをログに明示する。
 //
+//	  S6 **呼び出しが戻った後にランループを回して、VW の仕事が現れるか。**
+//	     ——**ここが本丸。** 3 回の実機で「所要が閾値を超えるか」で判定しようとして
+//	     2 度しくじった。利用者のスクリーンショットでステータスバーに
+//	     「Viewport-1 の更新 0:16」が出ていて、**`UpdateViewport` は 283 ms で戻って
+//	     いるのに VW はその後も 16 秒以上描き続けていた**ことが分かった。つまり
+//	     **「戻るまでの時間」は描画の量を測っていない**。道具は #213 の 7 節と同じ
+//	     （ランループの 1 周が伸びるか）で、`SetRenderMode` の後と `UpdateViewport`
+//	     の後の両方で測る。
+//
 //	## 判定
 //
-//	  * S3 のどれかが閾値以上 → **3D なら `immediate=true` はその場で描く。**
-//	  * S3 が全部 0 ms 級で、S5（同じモデル・同じモード）が閾値以上
-//	    → **3D でも `immediate=true` は同期では描かない**（描けば時間が掛かることを
-//	      S5 が示しているので、0 ms は「描いていない」の意味しかない）。
-//	  * S3 も S5 も短い → **モデルが軽すぎて判定できない**（`probe.fail`）。
+//	  * S3 のどれかが 400 ms 以上 → **3D なら `immediate=true` はその場で描く。**
+//	  * S3 は 0 ms 級だが、S6 で**戻った後にランループが吸われる**
+//	    → **`immediate=true` でも描画はイベントループへ預けられる**（ヘッダの
+//	      「戻る前に全部描く」ではなく、その次の文「postponed … main event loop」の
+//	      ほうが実際である）。＝**プラグインから「描き直して、終わるまで待つ」はできない。**
+//	  * どちらでもない（戻った後にも仕事が現れない）→ **描画そのものが起きていない疑い**
+//	    （`probe.fail`。図面・ビューの状態を疑う）。
 //
 
 #include "Probe.h"
@@ -76,8 +87,11 @@ namespace
 	// する。
 	const long long kRenderSyncTickMs = 250;
 
-	// 「その場で描いた」と見なす所要時間の下限。#213 の実測（`SetRenderMode`＝0 ms /
-	// `ReDrawAll`＝20〜22 ms / 中身の無いビューポートの更新＝131 ms）より十分上に置く。
+	// 「呼び出しの中で描いた」と見なす所要時間の下限。**これは「その場で描いた」側の
+	// 判定にしか使わない**——「描いていない」側は所要では決めず、**戻った後に
+	// ランループを回して VW の仕事が現れるか**で決める（下記 `RenderSyncSpinLoop`）。
+	// 所要で両側を決めようとして 2 度しくじった: `UpdateViewport` ですら戻った時点では
+	// 描き終わっておらず、**戻るまでの時間は描画の量を測っていない**。
 	const long long kRenderSyncDrewMs = 400;
 
 	// 名前は用途が分かる長さにする（probes/runtime/README.md「短い名前・ありふれた
@@ -251,6 +265,90 @@ namespace
 		default:
 			return std::string("mode(") + std::to_string(mode) + ")";
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// **呼び出しが戻った後に VW がどれだけ仕事をするか**を測る道具。
+	//
+	// 3 回目の実機のあと、利用者のスクリーンショットでステータスバーに
+	// 「Viewport-1 の更新 0:16」が出ていた——**`UpdateViewport` は 283 ms で戻って
+	// いるのに、VW はその後も 16 秒以上描き続けていた**。つまり「戻るまでの時間」は
+	// 描画の量を測っていない。**物差しが軽すぎたのではなく、測っていたものが違った。**
+	//
+	// 道具は #213 の 7 節と同じ——ランループを短い刻みで回し、**1 周が伸びるかどうか**
+	// を見る。伸びれば、その描画は呼び出しの後、イベントループで行われている
+	// （ヘッダの "any rendering that can take place in the background will be postponed
+	//  until program execution re-enters the main event loop"）。伸びなければ、
+	// そこでは何も走っていない。
+	struct RenderSyncSpin
+	{
+		long long totalMs = 0;	  // 回した実時間
+		long long maxSliceMs = 0; // 1 周の最長
+		long long busyMs = 0; // 100 ms を超えた周の合計（＝VW が握っていた時間）
+		int slices = 0;
+		int busySlices = 0;
+	};
+
+	// capMs まで回す。**忙しい周を見たあと静かな周が続いたら早めに切り上げる**
+	// （描き終わったのに回し続けても意味が無い）。静かなまま忙しい周が 1 度も
+	// 来なければ quietCapMs で切り上げる。
+	RenderSyncSpin RenderSyncSpinLoop(long long capMs, long long quietCapMs)
+	{
+		using Clock = std::chrono::steady_clock;
+		RenderSyncSpin out;
+		const Clock::time_point from = Clock::now();
+		int quietRun = 0;
+		while (true)
+		{
+			const Clock::time_point t0 = Clock::now();
+#if defined(_WIN32)
+			// 50 ms ぶん、溜まっているメッセージを捌く。
+			const Clock::time_point until = t0 + std::chrono::milliseconds(50);
+			MSG msg;
+			while (Clock::now() < until)
+			{
+				if (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE) == 0)
+					break;
+				::TranslateMessage(&msg);
+				::DispatchMessageW(&msg);
+			}
+#else
+			::CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+#endif
+			const long long slice =
+				std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t0).count();
+			++out.slices;
+			if (slice > out.maxSliceMs)
+				out.maxSliceMs = slice;
+			if (slice > 100)
+			{
+				out.busyMs += slice;
+				++out.busySlices;
+				quietRun = 0;
+			}
+			else
+			{
+				++quietRun;
+			}
+			out.totalMs =
+				std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - from).count();
+			if (out.totalMs >= capMs)
+				break;
+			if (out.busySlices > 0 && quietRun >= 40) // 2 秒ぶん静かなら終わり
+				break;
+			if (out.busySlices == 0 && out.totalMs >= quietCapMs)
+				break;
+		}
+		return out;
+	}
+
+	std::string RenderSyncSpinLine(const RenderSyncSpin& sp)
+	{
+		return std::string("回した実時間=") + std::to_string(sp.totalMs) +
+			   " ms / 周=" + std::to_string(sp.slices) +
+			   " / **1 周の最長=" + std::to_string(sp.maxSliceMs) +
+			   " ms** / 100 ms 超の周=" + std::to_string(sp.busySlices) + " 回・合計 " +
+			   std::to_string(sp.busyMs) + " ms";
 	}
 
 	// 1 件の測定の記録。
@@ -474,6 +572,53 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 	probe.log(std::string("  測り終えたので 3D のワイヤフレームへ戻した（投影=") +
 			  RenderSyncProjectionName(gSDK->GetProjection(layer)) + "）");
 
+	// 戻った後にランループが吸われた時間（S6 / S5 で埋める。判定で使う）。
+	long long spinAfterRender = 0;
+	long long spinAfterRenderMax = 0;
+	long long spinAfterUpdate = 0;
+	long long spinAfterUpdateMax = 0;
+
+	// -----------------------------------------------------------------------
+	// S6 **呼び出しが戻った後**に VW が描くのか——これが issue #215 の本丸
+	// -----------------------------------------------------------------------
+	// ヘッダは `immediate=true` なら「戻る前に全部描く」、そうでなければ
+	// 「背景で描けるぶんはメインのイベントループへ入り直すまで先送りされる」と書いて
+	// いる。所要が 0 ms なのだから、**先送りされているなら、こちらがランループを
+	// 回したときにその仕事が現れるはず**である。#213 の 7 節は 2D でこれを測って
+	// 「1 周が伸びない＝描いていない」を得たが、**2D には描くものが無かった**。
+	// ここは 3D ＋ 196 個の球で測り直す。
+	probe.log("");
+	probe.log("■ S6 **呼び出しが戻った後**にランループを回して、VW の仕事が現れるか");
+	{
+		// まず静める（前の測定の残りを拾わないように）。
+		const RenderSyncSpin settle = RenderSyncSpinLoop(8000, 1500);
+		probe.log(std::string("  走り出しに静めた: ") + RenderSyncSpinLine(settle));
+
+		gSDK->SetRenderMode(layer, renderWireFrame, true, false);
+		RenderSyncSpinLoop(4000, 800);
+
+		const Clock::time_point t0 = Clock::now();
+		const bool ret = (gSDK->SetRenderMode(layer, renderFinalRenderWorks, true, true) != false);
+		const long long callMs = elapsedMsSince(t0);
+		probe.log(std::string("  3D で SetRenderMode(finalRenderWorks, immediate=true, "
+							  "doProgress=true) = **") +
+				  std::to_string(callMs) + " ms** で戻った / 戻り値=" + RenderSyncYesNo(ret));
+
+		const RenderSyncSpin after = RenderSyncSpinLoop(60000, 5000);
+		probe.log(std::string("  戻った後にランループを回した: ") + RenderSyncSpinLine(after));
+		spinAfterRender = after.busyMs;
+		spinAfterRenderMax = after.maxSliceMs;
+		if (after.busySlices > 0)
+			probe.log("  → **戻った後に VW が仕事をしている**＝描画はイベントループへ"
+					  "預けられている（ヘッダの『postponed』の枝が、`immediate=true` でも"
+					  "起きている）。");
+		else
+			probe.log("  → **戻った後も VW は何もしていない**＝この経路では、そもそも"
+					  "描いていない。");
+		probe.log(std::string("  いまの描画モード=") +
+				  RenderSyncRenderName(gSDK->GetRenderMode(layer)));
+	}
+
 	// -----------------------------------------------------------------------
 	// S5 物差し——ビューポートに**中身を入れて** `UpdateViewport` を測る
 	// -----------------------------------------------------------------------
@@ -666,6 +811,22 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 				  std::to_string(warmMs) + " ms** / 刻み " +
 				  std::to_string(gRenderSyncTicks.ticks - before) + " 回（(b) は " +
 				  std::to_string(filledMs) + " ms）");
+
+		// **ここが肝。** 利用者のスクリーンショットでは、プローブが戻った後も
+		// ステータスバーに「Viewport-1 の更新 0:16」が出ていた——`UpdateViewport` は
+		// 数百 ms で戻るが、**本当の描画はその後も続いている**。ランループを回して、
+		// その仕事を実測する。
+		const RenderSyncSpin afterUpd = RenderSyncSpinLoop(120000, 5000);
+		spinAfterUpdate = afterUpd.busyMs;
+		spinAfterUpdateMax = afterUpd.maxSliceMs;
+		probe.log(std::string("  (d) **UpdateViewport が戻った後**にランループを回した: ") +
+				  RenderSyncSpinLine(afterUpd));
+		if (afterUpd.busySlices > 0)
+			probe.log("  → **`UpdateViewport` も、戻った時点では描き終わっていない。**"
+					  "戻り値も `IsDirty()=no` も完了の合図ではない。");
+		else
+			probe.log("  → `UpdateViewport` が戻った後、VW は何もしていない"
+					  "（＝戻った時点で描き終わっている）。");
 	}
 	if (layerBefore != nil)
 	{
@@ -697,71 +858,87 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 			max2D = s.ms;
 		}
 	}
-	long long yardstick = emptyMs;
-	if (filledMs > yardstick)
-		yardstick = filledMs;
-	if (warmMs > yardstick)
-		yardstick = warmMs;
 
 	probe.log("");
 	probe.log("■ まとめ");
 	probe.log(std::string("  3D での SetRenderMode の最長=") + std::to_string(max3D) + " ms（" +
 			  slowest3D + "） / 2D での最長=" + std::to_string(max2D) + " ms");
-	probe.log(std::string("  物差し（ビューポート更新）= 作りたて ") + std::to_string(emptyMs) +
+	probe.log(std::string("  ビューポート更新= 作りたて ") + std::to_string(emptyMs) +
 			  " ms / 中身あり " + std::to_string(filledMs) + " ms / 温まってから " +
-			  std::to_string(warmMs) + " ms → 物差しは最長の " + std::to_string(yardstick) + " ms");
+			  std::to_string(warmMs) + " ms（いずれも**戻るまで**の時間）");
+	probe.log(std::string("  **戻った後にランループが吸われた時間**: SetRenderMode の後=") +
+			  std::to_string(spinAfterRender) + " ms（1 周の最長 " +
+			  std::to_string(spinAfterRenderMax) +
+			  " ms） / UpdateViewport の後=" + std::to_string(spinAfterUpdate) +
+			  " ms（1 周の最長 " + std::to_string(spinAfterUpdateMax) + " ms）");
 	probe.log(
 		std::string("  刻みは全部で ") + std::to_string(gRenderSyncTicks.ticks) +
 		" 回届いた（うち S3 の測定中が " + std::to_string(ticks3D) + " 回）/ モード=" +
 		(gRenderSyncTicks.modes.empty() ? std::string("(届かなかった)") : gRenderSyncTicks.modes));
 	probe.log("");
 
+	// **判定は「戻るまでの時間」ではなく「戻った後に仕事が現れるか」で行う。**
+	// 3 回の実機で「所要が閾値を超えるか」で判定しようとして 2 度しくじった
+	// ——`UpdateViewport` すら戻った時点では描き終わっておらず（利用者の
+	// スクリーンショットのステータスバー「Viewport-1 の更新 0:16」）、
+	// **戻るまでの時間は描画の量を測っていなかった**。
+	const bool drewDuringCall = (max3D >= kRenderSyncDrewMs);
+	const bool deferredRender = (spinAfterRender >= 500);
+	const bool deferredUpdate = (spinAfterUpdate >= 500);
+
 	if (!in3D)
 	{
 		probe.log("  → **判定できない。** 3D のビューへ切り替えられていないので、この回は"
 				  "#213 の再測にしかなっていない（上の `probe.fail` のとおり）。");
 	}
-	else if (max3D >= kRenderSyncDrewMs)
+	else if (drewDuringCall)
 	{
-		probe.log(
-			std::string("  → **判定: 3D のビューなら `SetRenderMode(…, immediate=true)` はその場で"
-						"描く。** 最長 ") +
-			std::to_string(max3D) + " ms（" + slowest3D +
-			"）掛かって戻った。#213 の『0 ms で戻る』は**上面/平面（2D）ビューでの"
-			"話だった**ということ。2D での最長は " +
-			std::to_string(max2D) + " ms。");
-		probe.log(std::string("    その最中に刻みが届いたか=") + RenderSyncYesNo(ticks3D > 0) +
-				  "（" + std::to_string(ticks3D) + " 回）。");
+		probe.log(std::string("  → **判定: 3D のビューなら `SetRenderMode(…, immediate=true)` は"
+							  "その場で描く。** 最長 ") +
+				  std::to_string(max3D) + " ms（" + slowest3D + "）掛かって戻った。");
 	}
-	else if (yardstick >= kRenderSyncDrewMs)
+	else if (deferredRender)
 	{
-		probe.log(
-			std::string("  → **判定: 3D へ切り替えても `immediate=true` は同期では描かない。** "
-						"3D での最長が ") +
-			std::to_string(max3D) +
-			" ms しかないのに、**同じ図面・同じモデルを"
-			"ビューポートで描かせると " +
-			std::to_string(yardstick) +
-			" ms 掛かる**——つまり『描けば時間が掛かる』ことは示されている。"
-			"0 ms 級で戻るのは『速かった』ではなく『描いていない』の意味である。");
+		probe.log(std::string("  → **判定: `immediate=true` でも描画はイベントループへ"
+							  "預けられる。** 呼び出しは 0 ms 級で戻るのに、**こちらが"
+							  "ランループを回すと VW が ") +
+				  std::to_string(spinAfterRender) + " ms ぶん仕事をした**（1 周が最長 " +
+				  std::to_string(spinAfterRenderMax) +
+				  " ms まで伸びた）——描画はこの後で行われている。");
 		probe.log("    ＝ヘッダの『If immediate is true, then all rendering will take place "
-				  "before the call returns.』は、**少なくともレイヤの画面描画については"
-				  "実際と合わない**。");
+				  "before the call returns.』は**実際と合わない**。実際に起きているのは"
+				  "その次の文（"
+				  "『… will be postponed until program execution re-enters the main event "
+				  "loop』）のほうである。");
+		probe.log(std::string("    **プラグインから『描き直して、終わるまで待つ』はできない。** ") +
+				  (deferredUpdate
+					   ? std::string("`UpdateViewport` も同じで、戻った後に ") +
+							 std::to_string(spinAfterUpdate) + " ms ぶん描き続けた。"
+					   : std::string("ただし `UpdateViewport` は戻った後に仕事が現れなかった"
+									 "（そちらは戻った時点で描き終わっている見込み）。")));
+	}
+	else if (deferredUpdate)
+	{
+		probe.log(std::string("  → **判定: `SetRenderMode` はそもそも描かない（戻った後も"
+							  "何も走らない）。一方 `UpdateViewport` は戻った後に ") +
+				  std::to_string(spinAfterUpdate) +
+				  " ms ぶん描き続けた**——同期で描かせる唯一の道はビューポートだが、"
+				  "それも「戻る＝描き終わり」ではない。");
 	}
 	else
 	{
-		probe.log(std::string("  → **判定できない。** 3D でも 2D でもビューポートでも所要が短く"
-							  "（最長 ") +
-				  std::to_string(yardstick) +
-				  " ms）、『描いていない』と『速かった』を分けられない。");
-		probe.fail(std::string("モデルが軽すぎて判定できない（球 ") + std::to_string(placed) +
-				   " 個では描画に時間が掛からない）——格子を増やして測り直す必要がある");
+		probe.log("  → **判定できない。** `SetRenderMode` も `UpdateViewport` も、戻るまで"
+				  "0 ms 級で、戻った後にランループを回しても VW の仕事が現れない。"
+				  "描画そのものが起きていない疑いがある（図面・ビューの状態を疑う）。");
+		probe.fail(std::string("戻った後にも仕事が現れない（SetRenderMode の後=") +
+				   std::to_string(spinAfterRender) +
+				   " ms / UpdateViewport の後=" + std::to_string(spinAfterUpdate) +
+				   " ms）——描画が起きていないので、この回では同期かどうかを判定できない");
 	}
 
 	probe.log("");
-	probe.log("（**キャッシュ群が 0 件でも、物差しそのものは成立する**"
-			  "——空枠でも仕上げ Renderworks の同期描画にそれだけ掛かるなら、"
-			  "0 ms は『描いていない』の意味しか持たない。件数は issue #215 の問い 2"
-			  "——『表示レイヤを入れれば中身が入るか』——の答えとして読む。）");
+	probe.log("（**「戻るまでの時間」は描画の量を測らない。** 判定に使うのは「戻った後に"
+			  "ランループを回したとき、VW の仕事が現れるか」である。issue #215 の問い 2"
+			  "——『表示レイヤを入れれば中身が入るか』——は S5 のキャッシュ群の件数で読む。）");
 	// タイマーは `timer` のデストラクタで外れる（戻る前に必ず）。
 }
