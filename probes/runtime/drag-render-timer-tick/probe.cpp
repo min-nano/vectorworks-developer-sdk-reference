@@ -1592,6 +1592,33 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 	// P-D コマンドが戻った後——**ここからが利用者の出番**
 	// ------------------------------------------------------------------------
 	probe.log("");
+	// **戻る直前にもう一度始末する。** 置き土産を閉じるのを P-F の前に 1 度だけ置いて
+	// いた版（ビルド `c415caa18616`）では、**利用者の局面の刻み 416 回のうち 36 回が
+	// `building=yes`** になった——P-F / P-G / P-H / P-U のどこかが開けたものが残って
+	// いたということ。**閉じるのは「戻る直前」でなければ意味が無い**（戻った後の刻みが
+	// 見るのは、そのとき開いているイベントだから）。
+	probe.log("");
+	probe.log("■ 置き土産の始末（戻る直前・2 度目）");
+	int closedAtEnd = 0;
+	while (gSDK->IsCurrentlyBuildingAnUndoEvent() && closedAtEnd < 6)
+	{
+		gSDK->EndUndoEvent();
+		++closedAtEnd;
+	}
+	const bool buildingAtExit = gSDK->IsCurrentlyBuildingAnUndoEvent();
+	probe.log("  EndUndoEvent を " + std::to_string(closedAtEnd) +
+			  " 回呼んだ / 残り building=" + DragTickYesNo(buildingAtExit));
+	probe.log("  ← **ここが no でなければ、戻った後の building=yes は自分の置き土産**");
+	DragTickAppend(path, std::string("phase") + DragTickField("name", "戻る直前の始末") +
+							 DragTickField("closed", DragTickNum(closedAtEnd)) +
+							 DragTickField("building_at_exit", DragTickYesNo(buildingAtExit)));
+	if (buildingAtExit)
+	{
+		probe.fail("戻る直前に undo イベントを閉じきれなかった（EndUndoEvent を " +
+				   std::to_string(closedAtEnd) +
+				   " 回呼んでも開いたまま）——この先の building=yes は VW のものとは言えない");
+	}
+
 	probe.log("");
 	probe.log("■ P-D ここから先は、このコマンドが戻った後の刻みを書き溜める");
 	probe.log("  レンダリングは P-F で済んでいます（まだ描き続けていたら、落ち着くまで待って");
