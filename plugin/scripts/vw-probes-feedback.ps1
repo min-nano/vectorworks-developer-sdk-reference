@@ -1,4 +1,4 @@
-<#
+﻿<#
     vw-probes-feedback.ps1 — プローブの結果を、そのプローブが来た PR へ投稿する（Windows）。
     macOS 版 vw-probes-feedback.sh の相方で、仕組みの全体はあちらのヘッダと
     plugin/src/Feedback.h にある。
@@ -217,6 +217,23 @@ function Invoke-IssueState {
     Write-Output 'ok'
 }
 
+# 投稿する JSON（UTF-8 のバイト列）を本文ファイルから作る。
+#
+# **Windows PowerShell 5.1 で踏んだ 2 つの罠を避けるため、Get-Content を使わない**:
+#   1. Get-Content -Raw の戻り値には PSPath などの拡張プロパティが付いていて、5.1 の
+#      ConvertTo-Json はそれごと直列化する——`"body": {"value": "...", "PSPath": ...}` と
+#      **オブジェクト**になり、GitHub は 422 Unprocessable Entity を返す（実機で踏んだ。
+#      pwsh 7 では直っているので CI では出ない）。
+#   2. 5.1 の Get-Content は BOM の無いファイルを ANSI（日本語環境なら CP932）で読む。
+#      本文はプラグインが BOM 無しの UTF-8 で書くので、日本語が化ける。
+# だから .NET で UTF-8 として読み、[string] に固めてから JSON にする。
+function New-CommentPayload {
+    param([string] $BodyFile)
+    $body = [string] [IO.File]::ReadAllText($BodyFile, (New-Object Text.UTF8Encoding $false))
+    $payload = ConvertTo-Json -InputObject @{ body = $body } -Depth 3 -Compress
+    return , ([Text.Encoding]::UTF8.GetBytes($payload))
+}
+
 # post <repo> <pr> <body-file>: PR へコメントを 1 通。本文は UTF-8 のまま送る
 # （ConvertTo-Json が JSON のエスケープを引き受けるので、自前の文字列連結はしない）。
 function Invoke-Post {
@@ -233,9 +250,7 @@ function Invoke-Post {
         return
     }
 
-    $body = Get-Content -LiteralPath $BodyFile -Raw
-    $payload = @{ body = $body } | ConvertTo-Json -Depth 3 -Compress
-    $bytes = [Text.Encoding]::UTF8.GetBytes($payload)
+    $bytes = New-CommentPayload -BodyFile $BodyFile
     $headers = @{
         Accept        = 'application/vnd.github+json'
         Authorization = "Bearer $token"
@@ -247,7 +262,12 @@ function Invoke-Post {
             -Body $bytes -TimeoutSec 60
     } catch {
         # GitHub の言い分をそのまま渡す（権限不足か PR 違いかが、これで切り分けられる）。
+        # 5.1 の例外文は「(422) Unprocessable Entity」止まりなので、応答本文（GitHub の
+        # message）があれば添える。改行は 1 行の `error=` を崩すので潰す。
         $reason = $_.Exception.Message
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $reason = "$reason " + ($_.ErrorDetails.Message -replace '\s+', ' ')
+        }
         Write-Output "error=コメントを投稿できませんでした（$reason）。"
         return
     }

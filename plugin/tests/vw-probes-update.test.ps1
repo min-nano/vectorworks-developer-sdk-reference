@@ -1,4 +1,4 @@
-<#
+﻿<#
     vw-probes-update.test.ps1
 
     同梱スクリプト（plugin/scripts/vw-probes-update.ps1）の単体テスト——Windows 側の

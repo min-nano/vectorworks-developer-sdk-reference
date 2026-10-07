@@ -1794,9 +1794,12 @@ gSDK->UpdateConstraintModel();   // ← これを呼ばないと測点は 1mm �
    `ovViewportDisplay2DComponents`(1059) が入らない。
 2. **クラスをすべて表示へ戻す。** ビューポートは**既定でクラスが全部消えている**
    （`ForEachClass(true, …)` ＋ `SetViewportClassVisibility(vp, GetObjectInternalIndex(cls), 0)`）。
-3. 断面の表示の作法（`ovSectionViewportDisplayObjectsBeyondCutPlane`(1064) /
+3. 断面の表示の作法（`ovSectionViewportDisplayObjectsBeyondCutPlane`(1064) ＋
+   **`ovSectionViewportDisplayObjectsBeforeCutPlane`(1065)** /
    `ovViewportDisplayPlanar`(1035) / `ovViewportDisplay2DComponents`(1059)）を
-   **すべて更新より前に**設定する。
+   **すべて更新より前に**設定する。**1064 だけでは足りない**——切断面が何も切っていない
+   配置では、`1065` が `false` の間は `1064` を立てても断面は空のままである
+   （[Viewports](Viewports.md)「断面に中身が入る条件」。#202 で実測）。
 4. 表示レイヤを表示にする（`SetViewportLayerVisibility`）。
 5. **注釈へ寸法を足した後、もう一度クラスを全部表示へ戻して再更新する。**
    注釈へ**後から**足した図形のクラスは非表示のままだから（[Viewports](Viewports.md)）
