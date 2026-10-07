@@ -20,6 +20,41 @@
 いったん OFF にして**更新を挟み**、再度 ON に戻して最後の更新を行う（表示レイヤを
 絞った後・最後の更新の前に行う）。入ったかは `GetProject2D` で**読み戻して**確かめる。
 
+## `UpdateViewport` は描く——が、**戻った時点では描き終わっていない**（#215）
+
+**実機確認済み**（VW 2026 / macOS。`probes/runtime/render-sync-3d/` を 4 回。
+[issue #215](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/215)。
+プローブは役目を終えたので消してある）。詳しい数字と、レイヤの描画モード
+（`SetRenderMode`）側の話は
+[周期実行と通知](Timers%20and%20Notifications.md) の 7 節「道具について」にある。
+
+- **中身を入れれば、その場で描く。** 表示レイヤを入れて
+  （`SetViewportLayerVisibility(vp, layer, 0)`）`SetDirty(true)` を立ててから
+  `UpdateViewport` を呼ぶと、キャッシュ群（`kViewportGroupCache` = **3**）に中身が
+  入る（球 196 個のモデルで **2 件**・外接 `左-1341.3 上1341.3 右1323.6 下-1323.6`）。
+- **ヘッダの条件は 2 つ**（`APIBase.Legacy.Defs.h:5539`。"Updates the specified
+  viewport: **a dirty viewport, whose render type is other than wireframe or sketch**,
+  will be re-rendered."）——**dirty であること**と、**描画種別がワイヤフレーム／
+  スケッチ以外であること**。**作りたてのビューポートに `UpdateViewport` を呼んでも
+  0 ms で戻り、何も起きない。**
+- **呼び出しが戻っても描き終わっていない。** 戻るまでは 355 ms（初回）/ 68 ms
+  （2 度目）だが、**戻った後にランループを回すと更に 545 ms ぶん**仕事が出てくる
+  （1 周が 301 ms まで伸びる）。利用者の画面では、プローブが戻った後も
+  ステータスバーに「Viewport-1 の更新」が **16 秒**出ていた。
+- **`IsDirty()` は完了の合図ではない。** 更新の直後に読むと **`no`** を返すのに、
+  描画はまだ続いている。**戻り値（`void`）も `IsDirty()` も当てにできない。**
+  → **「更新して、終わるまで待つ」口は無い。** 待つなら「ランループを回して、1 周が
+  伸びなくなるまで」——**信号ではなく当て推量**なので、締切を必ず持つこと。
+- **外接（`GetObjectBounds(viewport)`）は中身が入っても動かない**——更新の前後とも
+  空枠（±26.649mm）のままだった。**中身が入ったかはキャッシュ群の件数で読む**
+  （下記「`GetObjectBounds(viewport)` が何で決まるか」のとおり、外接が動くのは
+  `ResetObject` を通した後だけ）。
+- **`VWViewportObj::SetScale()` は数が大きいほど絵が大きくなる。** 100 → 50 にしたら
+  キャッシュ群の外接が ±2682.5 → ±1341.3 と**半分**になった（縮尺の分母のつもりで
+  小さくすると、絵も小さくなる）。
+- **`VWLayerObj::SetSheetPrintDPI(300)` は効かない**——書いた直後の
+  `GetSheetPrintDPI()` が **72** を返す（シートレイヤに対して。2 回再現）。
+
 ## 断面ビューポート
 
 - **断面ビューポートは `ISDK::CreateSectionViewport` で新規作成できる**
