@@ -1345,6 +1345,82 @@ VW_PROBE("drag-render-timer-tick", "ドラッグ中・レンダリング中の�
 	}
 
 	// ------------------------------------------------------------------------
+	// P-G **描画を強制して、その間の刻みを数える**——これが決め手になる
+	// ------------------------------------------------------------------------
+	// 5 回目の実機で P-F（頼んでから自分で回す）は**刻みが 250 ms ちょうどで 138 回**
+	// 届いたが、**dt の最大が 300 ms しかない**——つまり**その間に VW は重い描画を
+	// していない**（していればランループの 1 周が伸びて、刻みに穴が空く）。頼んだ
+	// だけでは描かないということなので、**描画そのものを呼んで時間を測る**。
+	//
+	// **「いま描いている」を知らせる通知は無い**（`MCNotification.h` を読んだ:
+	// `kNotifyBeforePendingUpdate` / `kNotifyAfterPendingUpdate` は通知の取りまとめ用、
+	// `kNotifyUndrawScrMods` / `kNotifyDrawScrMods` はツールの画面補助線の消し書き、
+	// `kNotifyRenderMode*` はモードの変更）。だから**時間で押さえる**しかない:
+	//
+	//   掛かった時間 ≧ 300 ms ＋ その間の刻み 0 回 → **描画は同期処理で、刻みは入らない**
+	//   掛かった時間 ≧ 300 ms ＋ その間の刻み > 0 回 → **レンダリング中にも刻みが届く**
+	//   掛かった時間 < 300 ms                      → 描いていない見込み（根拠にしない）
+	probe.log("");
+	probe.log("■ P-G 描画を強制して、その間の刻みを数える（レンダリング中の答え）");
+	probe.log("  （「いま描いている」を知らせる通知は SDK に無いので、時間で押さえる）");
+	gDragTickState->phase = "P-G 強制再描画の最中";
+	DragTickAppend(path, std::string("phase") + DragTickField("name", "P-G"));
+	probe.log("  呼ぶ前の building=" + DragTickYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()) +
+			  " / GetRenderMode=" +
+			  std::to_string((layer != nil) ? (int)gSDK->GetRenderMode(layer) : -1));
+	gDragTickState->wantWriteOnBuilding = true;
+	const int ticksBeforeRedraw = gDragTickState->ticks;
+	const std::chrono::steady_clock::time_point redrawFrom = std::chrono::steady_clock::now();
+	std::string redrawHow = "呼べなかった";
+	if (engine)
+	{
+		// VectorScript の `ReDrawAll` は全ビューの再描画を強制する。いまのモードが
+		// 仕上げ Renderworks（14）なら、これが**本物のレンダリング**になる。
+		const VCOMError err = engine->ExecuteScript("ReDrawAll;");
+		redrawHow = std::string("ReDrawAll（VCOMError=") + std::to_string((int)err) + "）";
+	}
+	else if (layer != nil)
+	{
+		gSDK->RedrawRect(WorldRect(-100000, 100000, 100000, -100000));
+		redrawHow = "RedrawRect";
+	}
+	const long long redrawMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+								   std::chrono::steady_clock::now() - redrawFrom)
+								   .count();
+	const int ticksInRedraw = gDragTickState->ticks - ticksBeforeRedraw;
+	gDragTickState->wantWriteOnBuilding = false;
+	probe.log("  呼んだもの=" + redrawHow);
+	probe.log("  **掛かった時間=" + std::to_string(redrawMs) +
+			  " ms / その間に届いた刻み=" + std::to_string(ticksInRedraw) + " 回**");
+	probe.log("  呼んだ後の building=" + DragTickYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+	probe.log("  刻みの中で作った " + std::string(kDragTickNameRTick) +
+			  " は在るか=" + DragTickYesNo(DragTickExists(kDragTickNameRTick)));
+	DragTickAppend(path, std::string("redraw") + DragTickField("how", redrawHow) +
+							 DragTickField("ms", DragTickNum(redrawMs)) +
+							 DragTickField("ticks", DragTickNum(ticksInRedraw)));
+	probe.log("");
+	if (redrawMs < 300)
+	{
+		probe.log("  → **描けていない見込み**（" + std::to_string(redrawMs) +
+				  " ms しか掛かっていない）。**刻みの回数は根拠にならない。**");
+		probe.fail("P-G の再描画が " + std::to_string(redrawMs) +
+				   " ms しか掛からなかった——レンダリング中の測定になっていない"
+				   "（モードが仕上げ Renderworks になっているか、球が在るかを疑う）");
+	}
+	else if (ticksInRedraw == 0)
+	{
+		probe.log("  → **判定: レンダリング中に刻みは入らない。** " + std::to_string(redrawMs) +
+				  " ms 描いている間、刻みは 1 回も届かなかった");
+		probe.log("    ——描画は VW の同期処理であって、ランループを回していないため。");
+	}
+	else
+	{
+		probe.log("  → **判定: レンダリング中にも刻みが届く**（" + std::to_string(ticksInRedraw) +
+				  " 回 / " + std::to_string(redrawMs) + " ms）。");
+		probe.log("    その刻みの building と mode は、報告側の『P-G / 口』の行を読む。");
+	}
+
+	// ------------------------------------------------------------------------
 	// P-U 取り消しを段ごとに掛けて、刻みが作ったものがどの段に居たかを読む
 	// ------------------------------------------------------------------------
 	probe.log("");
