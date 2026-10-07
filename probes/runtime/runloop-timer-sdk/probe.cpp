@@ -71,6 +71,15 @@
 
 namespace
 {
+	// **計装の版。1 回目と 2 回目で突き合わせるのはこれで、ビルド ID ではない。**
+	// ビルド ID は「main のコミット＋各 PR の head」から作られるので、**main に何かが
+	// マージされるだけで変わる**——プローブのコードが 1 文字も変わっていなくても変わる。
+	// それで 2 回目を蹴ると、**取れている実測をまるごと捨てる**ことになる（#205 で実際に
+	// 踏んだ: 仕掛けた 9c7d18d0db43 と報告した 7fbdbc35d939 は、main が #210 / #211 で
+	// 進んだだけで、probes/ と plugin/src/payload/ の差分は 0 だった）。
+	// **書き溜めに出す欄を増やしたり意味を変えたときだけ上げる。**
+	const int kVwProbeInstrumentationVersion = 2;
+
 	// 刻みの間隔。パレットの JS タイマー（250 ms）と同じにしておく。
 	const long long kVwProbeIntervalMs = 250;
 	// 刻みの上限（250 ms × 1200 = 300 秒）。報告を忘れられても勝手に止まるように。
@@ -479,20 +488,31 @@ namespace
 		// 本体なので、入れ替えが 1 回目の**後**に行われていると、報告しているこちらには
 		// 計装があっても**書き溜めの側には無い**——その差を「そういう結果だった」と
 		// 読み違えると、実機確認が 1 回まるごと無駄になる（実際に踏んだ）。
-		std::string armBuild;
+		std::string armBuild, armInstr;
 		for (const std::string& line : lines)
 			if (line.compare(0, 4, "arm ") == 0)
+			{
 				armBuild = VwProbeFieldValue(line, "build");
-		if (armBuild.empty())
-			probe.fail("**仕掛けたのは計装の無い古い本体です**（arm 行に build= が無い）。"
+				armInstr = VwProbeFieldValue(line, "instr");
+			}
+		const std::string here = std::to_string(kVwProbeInstrumentationVersion);
+		if (armInstr.empty())
+			probe.fail("**仕掛けたのは計装の無い古い本体です**（arm 行に instr= が無い）。"
 					   "この報告の ③⑤ の欄は当てにできません——"
 					   "**先に入れ替えてから、1 回目をもう一度**走らせてください。");
-		else if (armBuild != std::string(VW_PAYLOAD_BUILD_ID))
-			probe.fail("**1 回目と 2 回目で本体が違います**（仕掛けた=" + armBuild +
-					   " / 報告している=" + VW_PAYLOAD_BUILD_ID +
+		else if (armInstr != here)
+			probe.fail("**1 回目と 2 回目で計装の版が違います**（仕掛けた=v" + armInstr +
+					   " / 報告している=v" + here +
 					   "）。**先に入れ替えてから、1 回目をもう一度**走らせてください。");
 		else
-			probe.log("仕掛けたのも報告しているのも本体 " + armBuild + "（一致）。");
+		{
+			probe.log("計装の版は一致（v" + here + "）。この報告は有効です。");
+			// **ビルドが違っても計装が同じなら有効。** ここで蹴らないのが肝心で、
+			// ビルド ID は main が進むだけで変わる（上記 kVwProbeInstrumentationVersion）。
+			if (!armBuild.empty() && armBuild != std::string(VW_PAYLOAD_BUILD_ID))
+				probe.log("  （ビルドは違うが計装は同じなので読んでよい: 仕掛けた=" + armBuild +
+						  " / 報告している=" + VW_PAYLOAD_BUILD_ID + "）");
+		}
 		probe.log("");
 
 		// 局面ごとに「何回刻んだか」と「刻みの間隔」を畳む。間引かれていれば dt_ms が
@@ -548,8 +568,15 @@ namespace
 			++found->count;
 			if (line.find("fg=no") != std::string::npos)
 				++found->fgNo;
-			// モーダルの判定は「持ち主の窓が無効」——VwProbeCurrentMode と同じ基準。
+				// モーダルの判定は**プラットフォームごとの印**で行う。Windows は「持ち主の窓が
+				// 無効」、mac は `NSModalPanelRunLoopMode`——どちらも VwProbeCurrentMode が
+				// 書いたもの。片方の印だけを数えると、**もう一方では常に 0 件になって
+				// 「モーダル中は刻まなかった」と誤って読める**（mac で実際にそうなった）。
+#if defined(_WIN32)
 			if (line.find("+ownerdisabled") != std::string::npos)
+#else
+			if (line.find("NSModalPanelRunLoopMode") != std::string::npos)
+#endif
 				++found->modal;
 			// **括って呼ぶ。** windows.h の `min` / `max` マクロが生きていても、
 			// `(std::min)(…)` の形なら関数形式マクロとして展開されない。
@@ -611,6 +638,9 @@ namespace
 		probe.log("  持ち主を無効にしない作りだということなので、クラス名の側で判断する。");
 		probe.log("・`mode=` の `thread-<id>` が `arm` 行の `mode_at_arm` と一致している");
 		probe.log("  ことを確かめる（ウィンドウ無しの SetTimer は仕掛けたスレッドへ来る）。");
+#else
+		probe.log("・②の答えは「モーダルの最中の刻み」の列に出る。mac で数えているのは");
+		probe.log("  `mode=NSModalPanelRunLoopMode` の刻み（AppKit がモーダルを回すモード）。");
 #endif
 		probe.log("");
 
@@ -674,6 +704,7 @@ VW_PROBE("runloop-timer-sdk", "OS のタイマーから gSDK を呼ぶ",
 	// キューへ来る**ので、刻みの `mode=thread-<id>` がこれと一致するかが確かめられる。
 	VwProbeAppend(path, "arm" + VwProbeField("interval_ms", VwProbeNum(kVwProbeIntervalMs)) +
 							VwProbeField("max_ticks", VwProbeNum(kVwProbeMaxTicks)) +
+							VwProbeField("instr", VwProbeNum(kVwProbeInstrumentationVersion)) +
 							VwProbeField("build", VW_PAYLOAD_BUILD_ID) +
 							VwProbeField("mode_at_arm", VwProbeCurrentMode()) +
 							VwProbeField("fg_at_arm", VwProbeForeground()) +
