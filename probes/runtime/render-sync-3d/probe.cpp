@@ -577,8 +577,55 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 				  RenderSyncNum((double)boundsAfter.top) + " 右" +
 				  RenderSyncNum((double)boundsAfter.right) + " 下" +
 				  RenderSyncNum((double)boundsAfter.bottom));
-		probe.log("  ← **中身が入ったかの機械判定**: キャッシュ群が在る、または外接が"
-				  "空枠（±26.649mm）より大きい（Findings「ビューポート」）");
+		// **キャッシュ群の中を数える。** 1 回目の実機（ビルド `230f69515fb9`）では
+		// 「429 ms 掛かった・dirty が落ちた・キャッシュ群が在る」までは取れたのに、
+		// **外接が空枠（±26.649mm）のまま**だったので、**描いた絵に球が入っているのか、
+		// 空枠を 429 ms かけて描いたのかが分からなかった**。issue #215 の問い 2 は
+		// 「**表示レイヤを入れれば**その場で描くか」なので、ここを空けたままにはできない
+		// （CLAUDE.md「PR とマージ」3。目視を頼む前に機械で確かめ直す）。
+		// 数え方は `Findings/Viewports.md`「断面に中身が入る条件」と同じ——群の件数と
+		// その外接で読む（`FirstMemberObj` → `NextObject` で辿る）。
+		const auto countGroup = [&](EViewportGroupType type, const char* label)
+		{
+			MCObjectHandle group = nil;
+			try
+			{
+				VWViewportObj vpObj(viewport);
+				vpObj.GetGroup(type, group);
+			}
+			catch (...)
+			{
+			}
+			if (group == nil)
+			{
+				probe.log(std::string("    ") + label + " 群=nil");
+				return;
+			}
+			int members = 0;
+			WorldRect gb;
+			const bool haveBounds = (gSDK->GetObjectBounds(group, gb) != false);
+			for (MCObjectHandle m = gSDK->FirstMemberObj(group); m != nil; m = gSDK->NextObject(m))
+			{
+				++members;
+				if (members > 5000)
+					break; // 暴走しないための歯止め
+			}
+			std::string line =
+				std::string("    ") + label + " 群=在る / 件数=" + std::to_string(members);
+			if (haveBounds)
+				line += " / 外接=左" + RenderSyncNum((double)gb.left) + " 上" +
+						RenderSyncNum((double)gb.top) + " 右" + RenderSyncNum((double)gb.right) +
+						" 下" + RenderSyncNum((double)gb.bottom);
+			else
+				line += " / 外接=取れない";
+			probe.log(line);
+		};
+		probe.log("  **描いた絵の中身**（これが 0 件なら「空枠を 429 ms かけて描いた」の意味）:");
+		countGroup(kViewportGroupCache, "キャッシュ(3)");
+		countGroup(kViewportGroupSecondaryCache, "第 2 キャッシュ(9)");
+		probe.log("  ← **中身が入ったかの機械判定はこの件数**。ビューポートの外接は"
+				  "`ResetObject` を通すまで動かないので（Findings「ビューポート」）、"
+				  "外接だけでは読めない。");
 	}
 	if (layerBefore != nil)
 	{
@@ -667,8 +714,9 @@ VW_PROBE("render-sync-3d", "3D ビューで同期レンダリングできるか"
 	}
 
 	probe.log("");
-	probe.log("（ビューポートに中身が入ったかは S5 の『キャッシュ群』と『外接』で読む。"
-			  "入っていなければ物差しとして使えないので、判定は上の『判定できない』に"
-			  "倒れる。）");
+	probe.log("（**物差しとしての 429 ms 級は、キャッシュ群が 0 件でも成立する**"
+			  "——空枠でも仕上げ Renderworks の同期描画にそれだけ掛かるなら、"
+			  "0 ms は『描いていない』の意味しか持たない。件数は issue #215 の問い 2"
+			  "——『表示レイヤを入れれば中身が入るか』——の答えとして読む。）");
 	// タイマーは `timer` のデストラクタで外れる（戻る前に必ず）。
 }
