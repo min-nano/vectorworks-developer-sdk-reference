@@ -163,9 +163,26 @@ issue #31 の問い 1〜6 への答えは、すべてこの 1 文からの帰結
 
 ## 打ち切った調査: プラグインから `DoMenuTextByName` 相当（メニューコマンドを名前で起動）を呼ぶ
 
-**結論: できない（ヘッダの記述から確定。[issue #27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)）。**
+> **【訂正】この節の結論は誤りだった。** `ISDK::DoMenuName(const TXString& name,
+> short chunkIndex)`（`ISDK.h:1722`、旧 `GS_DoMenuName`）が `DoMenuTextByName` の
+> SDK 版として**実在し、実機でコマンドが実行されることまで確かめた**
+> （[issue #217](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/217)）。
+> 指すのは内部名（外部メニューファイル名 / MITM リソース名）で、居ないコマンドなら
+> `-3`、実在すれば `0` が返る。**スクリプトエンジンに取り消しスタックへレイヤを 1 枚
+> 積ませてから `DoMenuName("Undo", 0)` を呼ぶと、そのレイヤは消えた**——つまり
+> **プラグインから直に、スクリプトエンジンを介さずに取り消しを起こせる**。
+> そのとき**開いていた undo イベントも終わった**（`building` が `yes` → `no`）ので、
+> 下記「取り消しを実行すると、開きかけのイベントごと終わる」は**この経路でも
+> 成り立つ**。**詳しくは[プラグイン間の呼び出し](Plug-in%20Interop.md)の 2 を読むこと。**
+> 下記の「無い」という記述は、`DoMenuName` という綴りを語の総当たりに入れ忘れたために
+> 出たもので、**以下は取りこぼしの記録として残す**（この節が確かめた「`Kludge` 経由も
+> `IWorkspaceMenuItem` も実行の口を持たない」「`GetMyMenuCommandIndex` は逆方向」は
+> そのまま有効）。
+
+**（以下、当時の結論。[issue #27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)）**
 VectorScript の `DoMenuTextByName('Undo', 0)` のように、**メニューコマンドを名前・識別子・
-ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に存在しない**。
+ID のいずれで指定しても起動できる汎用 API は ISDK / VWFC に存在しない**——**と書いたが、
+`DoMenuName` を見落としていた（上記【訂正】）。**
 
 - `DoMenuText` / `DoMenuTextByName` という名前が SDK 内に現れるのは
   `Include/vs.py`（VectorScript / Python バインディングの宣言だけを集めた、C++ の
