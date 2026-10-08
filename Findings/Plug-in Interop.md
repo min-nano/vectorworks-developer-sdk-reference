@@ -12,13 +12,14 @@
 
 | 経路 | 使えるか | 引数と結果 |
 | --- | --- | --- |
-| **`ISDK::CallPluginLibrary`**（プラグインライブラリルーチンを名前で呼ぶ） | **これが本命。** 相手が `kVLIBScopeUniversal` か `kVLIBScopeSDKOnly` で登録していれば呼べる | **最大 11 本＋結果 1 つ。** 型つき（文字列・数値・点・**ハンドル**・2 次元配列ほか）。`…Var` / `…InOut` の出力・入出力版もある |
-| **`ISDK::DoMenuName`**（メニューコマンドを内部名で起動） | **ある**（長らく「無い」と書いていた。下記【訂正】） | **渡せない。** 名前と chunk 番号だけ、戻りは `short` 1 つ |
+| **`ISDK::CallPluginLibrary`**（プラグインライブラリルーチンを名前で呼ぶ） | **これが本命。モジュールを跨いで実際に呼べた**（実機確認済み）。相手が `kVLIBScopeUniversal` か `kVLIBScopeSDKOnly` で登録していれば呼べる | **最大 11 本＋結果 1 つ。** 文字列・数値・**VAR（出力）引数**が往復するのを実測した。型は点・ハンドル・2 次元配列まである |
+| **`ISDK::DoMenuName`**（メニューコマンドを内部名で起動） | **ある**（長らく「無い」と書いていた。下記【訂正】）。**名前解決が働くことは実測した**（在る名前と無い名前で戻り値が分かれる） | **渡せない。** 名前と chunk 番号だけ、戻りは `short` 1 つ |
 | **スクリプトエンジン**（`IVectorScriptEngine` / `IPythonScriptEngine`） | 使える（[Undo](Undo.md)「間接経路」で実機確認済み） | スクリプトの**文字列を組んで**渡す。結果は Python のロガー経由 |
 | **C の ABI**（`dlsym` / `GetProcAddress`） | 技術的には可能だが**勧めない**（下記 4） | — |
 
 **呼ぶなら `CallPluginLibrary`。** 名前で結ばれるので相手の実装やビルドに縛られず、
 引数と結果が型つきで往復し、相手は `scope` で「誰に呼ばせるか」を選べる。
+**OS タイマーの刻みの中からも呼べる**（下記「呼べる時機」）。
 
 ## 1. `ISDK::CallPluginLibrary` — プラグインライブラリルーチンを名前で呼ぶ
 
@@ -33,7 +34,36 @@ virtual Boolean CallPluginLibrary(const TXString& routineName,
 
 `routineName` は**プラグインライブラリルーチンの名前**である——提供側が
 `SFunctionDef::fName` に書いた名前（または VLIB リソースの名前）で、**プラグインの
-ユニバーサル名でもファイル名でもない**【ソース根拠】。
+ユニバーサル名でもファイル名でもない**。
+
+### 実測: 別々のモジュールの間で、名前だけで呼べた
+
+**呼べる。** 呼ぶ側を**入れ替わる本体モジュール**（`.vwpayload`）に、呼ばれる側を
+**殻**（`.vwlibrary`）に置いて測った。**2 つは別々の dylib で、互いのシンボルを一切
+知らない**——間を取り持つのは VW の名前解決だけである（macOS / VW 2026 /
+Apple Silicon。プローブ全体で 0.19 秒）。
+
+| 呼んだもの | 戻り値 | 結果欄（`functionResult`） | 出力引数 |
+| --- | --- | --- | --- |
+| `VwSdkProbes_NoSuchRoutine_217`（**居ない相手**） | **`false`** | `argType=0`（`kNullArgType`。**何も書かれない**） | — |
+| `VwSdkProbes_Echo("i217")` | `true` | `argType=18`（`kStringArgType`）= `"echo:i217"` | — |
+| `VwSdkProbes_Sum(40, 2)` | `true` | `argType=3`（`kLongArgType`）= `42` | — |
+| `VwSdkProbes_Out("i217", VAR, VAR)` | `true` | `argType=16`（`kBooleanArgType`）= `true` | `args[1]`: `argType=19`（`kStringVarArgType`）= `"out:i217"` / `args[2]`: `argType=4`（`kLongVarArgType`）= `4` |
+
+読み取れること:
+
+- **文字列・数値・真偽が双方向に通る。** 入力は `args[]`、結果は `functionResult`、
+  **VAR（出力）引数は呼ぶ側が渡した `args[]` の欄に書き戻される。**
+- **居ない相手に当てても落ちない。** 戻り値が `false` になり、`functionResult.argType`
+  は `kNullArgType` のまま残る。**呼ぶ側は戻り値だけで安全に失敗を知れる**
+  （事前確認は要らない。下記「相手が居ないとき」）。
+- **成否は戻り値、値は結果欄。** 失敗した呼び出しの結果欄は `kNullArgType` なので、
+  **型を見てから読む**（getter は型が合わないと `VWFC_ASSERT` を踏む）。
+
+実装例（このリポジトリ）: 呼ばれる側が
+[`plugin/src/ProbeLibrary.h`](../plugin/src/ProbeLibrary.h) /
+[`plugin/src/ProbeLibrary.cpp`](../plugin/src/ProbeLibrary.cpp)（登録は
+[`plugin/src/ModuleMain.cpp`](../plugin/src/ModuleMain.cpp)）。
 
 ### 呼べるかは提供側の `scope` 次第
 
@@ -43,13 +73,14 @@ VectorScript のライブラリ関数（関数ライブラリの拡張機能）�
 
 | 定数 | 値 | 誰が呼べるか |
 | --- | --- | --- |
-| `kVLIBScopeUniversal` | 0 | **VS・SDK・VW のどこからでも** |
+| `kVLIBScopeUniversal` | 0 | **VS・SDK・VW のどこからでも**（上の実測はこれで登録した） |
 | `kVLIBScopeVSOnly` | 1 | **VectorScript だけ。SDK からは呼べない** |
 | `kVLIBScopeSDKOnly` | 2 | SDK プラグインだけ |
 | `kVLIBScopeNemetschekOnly` | 255 | VW 本体だけ（VS も SDK も不可） |
 
 **相手が `kVLIBScopeVSOnly` で登録していたら、`CallPluginLibrary` では届かない**——
-そのときに残るのは経路 3（スクリプトエンジンに `vs.` から呼ばせる）だけである。
+そのときに残るのは経路 3（スクリプトエンジンに `vs.` から呼ばせる）だけである
+【ソース根拠。VSOnly の相手を実機で試してはいない】。
 
 ### 引数テーブル（最大 11 本＋結果 1 つ）
 
@@ -80,10 +111,11 @@ struct PluginLibraryArg {
 **整数・長整数・実数・角度・距離・点・グローバル点・3D 点・ベクトル・真偽・文字列・
 文字・文字の動的配列・ハンドル・色・スタイル・`void*`・関数参照・手続き参照・ポインタ・
 2 次元の動的配列**が揃っていて、多くに `…VarArgType`（出力）と
-`…InOutArgType`（入出力）がある【ソース根拠】。
+`…InOutArgType`（入出力）がある【ヘッダ根拠。実機で通したのは文字列・長整数・真偽と、
+その VAR 版】。
 
 **ハンドルが渡せる**（`kHandleArgType` = 25 / `kHandleVarArgType` = 26）のが要点で、
-図面のオブジェクトをそのまま相手へ渡せる。文字列は 255 文字を超えるなら
+図面のオブジェクトをそのまま相手へ渡せる【ヘッダ根拠】。文字列は 255 文字を超えるなら
 `kCharDynarrayArgType` を使う——SDK の実装コメントが
 「`kCharDynarray*` の欄に `SetArgString` を使うと Python 側で落ちる。
 `SetArgDynArrayChar` を使え」と明示している（`VWPluginLibraryArgTable.cpp:298-310`）
@@ -111,13 +143,17 @@ if ( ::GS_CallPluginLibrary( gCBP, TXString("IFC_QueryInterface"),
 ```
 
 と書いている。**仕掛けの読み方としては最良の実例だが、この初期化の仕方は真似しない。**
-（なお、このコードは `#ifdef _VWFC_FOR_VW125x` の中——VW 12.5 時代の互換層で、
-SDK の中で `_VWFC_FOR_VW125x` を定義している場所は無い【ヘッダ根拠】。）
 
 **呼ぶ側は `VWFC::PluginSupport::VWPluginLibraryArgTable` を使う。** 既定
 コンストラクタが 11 本＋結果を `kNullArgType` で埋め、`operator PluginLibraryArgTable*()`
 でそのまま `CallPluginLibrary` へ渡せる（`VWPluginLibraryArgTable.cpp:17`）
-【ソース根拠】。
+【ソース根拠。上の実測もこれで組んだ】。
+
+**参考: `IFC_QueryInterface` はこのビルドでは引けなかった**（戻り値 `false` /
+結果欄 `kNullArgType`）。あのコードは `#ifdef _VWFC_FOR_VW125x` の中——VW 12.5 時代の
+互換層で、SDK の中で `_VWFC_FOR_VW125x` を定義している場所は無い【ヘッダ根拠】。
+**ただし「ルーチンが無い」のか「何にも一致しない IID を渡したから `false` が返った」のかは
+区別できない**（どちらも戻り値 `false`）。issue #217 の範囲外なので、ここは詰めていない。
 
 ### `argType` は setter が立てる（ただし VAR の文字列だけは例外）
 
@@ -131,26 +167,18 @@ SDK の中で `_VWFC_FOR_VW125x` を定義している場所は無い【ヘッ�
 VAR の文字列に setter が無いのは、`SetArgString` が
 「既に `kStringVarArgType` / `kStringInOutArgType` でなければ `kStringArgType` にする」
 作りだから（`VWPluginLibraryArgTable.cpp:311`）——つまり**先に型を立ててから**書けば
-VAR のまま保たれる【ソース根拠】。
-
-### 結果は**型を見てから**読む
-
-失敗した呼び出しでは `functionResult.argType` が `kNullArgType` のまま残る。
-`VWPluginLibraryArgument` の getter は型が合わないと `VWFC_ASSERT` を踏むので、
-**`argType` を見てから読む**こと【ソース根拠】。`GS_CallPluginLibrary` の戻り値
-（`Boolean`）と結果欄は別物で、SDK 自身の用例も**戻り値を見てから、さらに結果が
-nil でないかを確かめている**（上記 `IIFCSupport.h`）。
+VAR のまま保たれる。**この手で実際に `"out:i217"` が返ってきた**（上の実測の 4 行目）。
 
 第 3 引数 `status` の用途は**SDK のどこにも書かれていない**（doc コメントは 1 行だけ、
 `MockSDK.h` の実装も素通し）。**SDK 自身の用例はどれも `0` を渡している**ので、
-`0` を渡す【ソース根拠】。
+`0` を渡す（上の実測も全部 `0`）。
 
 ### 呼ばれる側を C++ で提供する
 
 登録するのは **`IExtensionVSFunctions`**（グループ `GROUPID_ExtensionVSFunctions`。
 `Interfaces/VectorWorks/Extension/IExtensionVSFunctions.h`）で、呼び出しの受け口は
-**`IVSFunctionsEventSink`**（`IID_VSFunctionsEventSink`。`IExtension.h:187`）
-【ソース根拠】。VWFC の足場は 3 つ:
+**`IVSFunctionsEventSink`**（`IID_VSFunctionsEventSink`。`IExtension.h:187`）。
+VWFC の足場は 3 つ:
 
 | 要るもの | VWFC |
 | --- | --- |
@@ -181,29 +209,22 @@ struct SFunctionDef {
 （SDK の `ADD_LIB_FUNCTION_Ex` は `TArr[routineSelector].fName` を `strcmp` する）。
 
 - **`BEGIN_LIB_DISPATCH_MAP_Ex` は添字の上限を見ない**（`routineSelector < 0` だけ）。
-  想定外の添字が来たら表の外を読む。**範囲検査は自分で書く**。
+  想定外の添字が来たら表の外を読む。**範囲検査は自分で書く。**
 - **`Initialize()` が `kExtensionVSFunctionsInitFlag_DontOpenResource` を返せば
   `.vwr` の VLIB リソースが要らない。** 関数の定義はコードの表が持っているので、
-  リソース側に同じものを置かずに済む（既定の `_None` だと VW がリソースを探しにいく）
-  【ソース根拠】。
-
-**最小の実装例**（このリポジトリの実機確認プラグインに置いてある）:
-
-- 呼ばれる側: [`plugin/src/ProbeLibrary.h`](../plugin/src/ProbeLibrary.h) /
-  [`plugin/src/ProbeLibrary.cpp`](../plugin/src/ProbeLibrary.cpp)（登録は
-  [`plugin/src/ModuleMain.cpp`](../plugin/src/ModuleMain.cpp)）
-- 呼ぶ側: `probes/runtime/plugin-call-by-name/probe.cpp`
+  リソース側に同じものを置かずに済む（既定の `_None` だと VW がリソースを探しにいく）。
+  **この形で実機の登録が通った**（上の実測はリソースを 1 行も足していない）。
 
 **登録は殻（起動時に読まれる側）に置くほかない。** VW は `plugin_module_main` で
 受け取った番地を握り続けるので、**入れ替わる本体（`.vwpayload`）には置けない**
 （[プラグインモジュール](Plug-in%20Modules.md)「まだ確かめていないこと」の
-「本体側からイベントを登録する」と同じ話）。呼ぶ側は本体でよい。
+「本体側からイベントを登録する」と同じ話）。**呼ぶ側は本体でよい**（上の実測がそれ）。
 
 ## 2. メニューコマンドを内部名で起動する——`ISDK::DoMenuName`
 
-**【訂正】ある。** このリポジトリは長らく 3 か所で「汎用のメニュー起動 API は
-ISDK / VWFC に無い」と書いていたが、**誤りだった**（[Undo](Undo.md)「打ち切った調査:
-プラグインから `DoMenuTextByName` 相当を呼ぶ」・
+**【訂正】ある。** このリポジトリは長らく 3 か所で「メニューコマンドを名前で起動する
+汎用 API は ISDK / VWFC に無い」と書いていたが、**誤りだった**（[Undo](Undo.md)
+「打ち切った調査: プラグインから `DoMenuTextByName` 相当を呼ぶ」・
 [VectorScript → SDK の対応](VectorScript%20to%20SDK%20Mapping.md)・
 [文書](Documents.md)）。
 
@@ -235,7 +256,26 @@ doc コメント（`APIBase.Legacy.Defs.h:6632-6639`）【ソース根拠】:
 **引数と結果は渡せない。** `name` と `chunkIndex` だけで、戻りは `short` 1 つ。
 引数と結果を往復させたいなら経路 1 を使い、この経路は「とにかくあのコマンドを
 走らせる」専用と考える。**ダイアログを抑える引数も無い**ので、ダイアログを出す
-コマンドはダイアログを出す。
+コマンドはダイアログを出す【ヘッダ根拠】。
+
+### 実測: 名前解決は働く（在る名前と無い名前で戻り値が分かれる）
+
+macOS / VW 2026。メニューコマンドの中（実機確認プラグインの本体）から呼んだ:
+
+| 呼んだもの | 戻り値 |
+| --- | --- |
+| `DoMenuName("VwSdkProbes_NoSuchCommand_217", 0)`（**居ないコマンド**） | **`-3`** |
+| `DoMenuName("Undo", 0)`（実在する内蔵コマンドの内部名） | **`0`** |
+
+- **居ないコマンドでも落ちない。** 固有の負値（`-3`）が返るので、**呼ぶ側は戻り値で
+  失敗を知れる**。
+- **`0` と `-3` が分かれた＝名前で引く仕組みは働いている。**
+- undo の記録は動かなかった（`IsCurrentlyBuildingAnUndoEvent()` は前後とも `no`、
+  直前に undo イベントの外で作った locus も残った）。これは
+  [Undo](Undo.md)「undo イベントの外で作ったものは取り消しスタックに載らない」と
+  **整合する**——が、空図面で取り消すものが無かっただけの可能性もあるので、
+  **「コマンドが実際に走った」ことの確証にはならない**（下記「まだ実機で確かめて
+  いないこと」）。
 
 ### なぜ「無い」と確定してしまったか（取りこぼしの教訓）
 
@@ -281,16 +321,16 @@ doc コメント（`APIBase.Legacy.Defs.h:6632-6639`）【ソース根拠】:
 
 ## 4. 勧めない経路: C の ABI（`dlsym` / `GetProcAddress`）
 
-**技術的には同じプロセス内なので可能だが、設計として選ばない。**【推定】を含む判断で、
-実機で試していない（試す値打ちが無いと判断した。理由は下記）。
+**技術的には同じプロセス内なので可能だが、設計として選ばない。** 実機で試していない
+（試す値打ちが無いと判断した。理由は下記）。
 
 - **相手の殻が公開しているのは `plugin_module_main` と `plugin_module_ver` だけ**
   （SDK の作法。[プラグインモジュール](Plug-in%20Modules.md)）。それ以外の名前は
   C++ のマングリング済みで、**相手のコンパイラ・標準ライブラリ・ビルド設定に縛られる**。
 - **相手の版が上がった瞬間に静かに壊れる。** 名前解決は実行時なので、コンパイルも
   リンクも通る。`CallPluginLibrary` は VW が名前で仲介するので、相手の実装が変わっても
-  署名が同じなら壊れない——**壊れ方が「呼べなかった（戻り値 false）」に収まる**のが
-  決定的な違いである。
+  署名が同じなら壊れない——**壊れ方が「呼べなかった（戻り値 `false`）」に収まる**のが
+  決定的な違いである（上の実測で、居ない相手でも落ちないことを確かめた）。
 - **自分の殻と自分の本体の間で C の ABI を使うのは別の話。** あれは
   **版を揃えて同じ zip で配れる**からで（しかも `VW_PAYLOAD_ABI_VERSION` で食い違いを
   実行時に検出している。[プラグインモジュール](Plug-in%20Modules.md)）、他人の
@@ -316,8 +356,9 @@ issue #217 の候補として挙がっていたが、**手掛かりが無いの�
 
 ## 打ち切った調査: `ISDK::ExternalNameToID` と XCALL
 
-**「ID を取って呼ぶ」経路は SDK に公開されていない。** `ExternalNameToID` の doc
-コメント（`APIBase.Legacy.Defs.h:6664`）は
+**事前確認にも、呼び出しにも使えない。**
+
+`ExternalNameToID` の doc コメント（`APIBase.Legacy.Defs.h:6664`）は
 
 > This returns the ID of an external library file, allowing it to be called by the
 > **XCALL interface** which takes an ID. It is faster than calling an external by
@@ -328,43 +369,68 @@ issue #217 の候補として挙がっていたが、**手掛かりが無いの�
 `// #define XCALL(fn) …`——コールバック表を引くための、この doc とは無関係な同名マクロ）
 【ソース根拠】。**ID を受け取って外部を呼ぶ関数は ISDK にも VWFC にも無い。**
 
-したがって `ExternalNameToID` の使い道は「名前から ID が引けるか＝その外部が
-在るか」の判定に限られる。
+**「在るかどうかの判定」にも使えなかった**（実機。macOS / VW 2026）:
+
+| 呼んだもの | 戻り値 |
+| --- | --- |
+| `ExternalNameToID("VwSdkProbes")`（**実際に読み込まれているプラグイン**） | **`-1`** |
+| `ExternalNameToID("NoSuchExternal217")` | **`-1`** |
+
+**在る名前でも `-1` が返るので、在る / 無いを区別できない。** 相手の有無は
+`CallPluginLibrary` の戻り値で判断する（下記）。
 
 ## 相手が居ないとき・読み込み順・呼べる時機
 
-### 事前確認に `HasPlugin` は使えない
+### 事前確認は要らない——戻り値で足りる
 
-`HasPlugin(itemUniversalName, VAR PaletteName)` は **VectorScript にしか無い**
-（`Include/vs.py:21432`。ISDK に相当する宣言は無い）【ヘッダ根拠】。しかも
-説明は
+**`CallPluginLibrary` は居ない相手に当てても落ちず、`false` を返す**（上の実測）。
+だから「呼んでみて `false` なら相手が居ない（か、相手が失敗した）」で足りる。
+事前に確かめる道具は、次のとおりどれも使えない:
 
-> Returns whether tool item or menu command is **in current workspace**.
+- **`HasPlugin`** は **VectorScript にしか無い**（`Include/vs.py:21432`。ISDK に相当する
+  宣言は無い）【ヘッダ根拠】。しかも説明は
+  > Returns whether tool item or menu command is **in current workspace**.
 
-——**「いまのワークスペースに在るか」**を見るだけで、「そのプラグインが入っているか・
-読み込めたか」ではない【ソース根拠】。ワークスペースに並べていないコマンドを持つ
-プラグインは、入っていても `false` になる。**事前確認の道具としては向かない。**
+  ——**「いまのワークスペースに在るか」**を見るだけで、「そのプラグインが入っているか・
+  読み込めたか」ではない【ソース根拠】。ワークスペースに並べていないコマンドを持つ
+  プラグインは、入っていても `false` になる。
+- **`ExternalNameToID`** は在る名前でも `-1`（上記）。
+
+**`DoMenuName` も同じ**——居ないコマンドでは `-3` が返る（上の実測）。
 
 ### 読み込み順は気にしなくてよい
 
 コンパイル済みプラグインは**起動時に全部読み込まれ、そこで拡張機能の登録も終わる**
 （[プラグインモジュール](Plug-in%20Modules.md)）。呼ぶのが起動後の要求時だけなら、
 呼ぶ側と呼ばれる側のどちらが先に読み込まれていても関係ない【推定】。
+上の実測では、**呼ぶ側（本体モジュール）は呼ばれる側（殻）より後から `dlopen` された**
+——その順でも名前で引けた。
+
+### 呼べる時機: OS タイマーの刻みの中からも呼べる
+
+**呼べる（実機確認済み）。** `CFRunLoopTimer` を `kCFRunLoopCommonModes` に仕掛け、
+その刻みの中から `CallPluginLibrary("VwSdkProbes_Echo", …)` を呼んだところ、
+**戻り値 `true`・結果欄に `"echo:from-timer"`** が返った（macOS / VW 2026）。
+
+つまり**メニューコマンドの中でなくても呼べる**——[周期実行と通知](Timers%20and%20Notifications.md)
+で確かめた「OS のタイマーから `gSDK` を読める・書ける」の延長線上にある。
+**外部からの要求を OS タイマーで受けて、そこからほかのプラグインの機能を呼ぶ**という
+形（CLI ブリッジ）が成り立つ。
+
+undo の記録との関係は経路ごとの話ではなく、**呼ばれた側が何をするか**で決まる。
+刻みが VW の undo イベント中に当たったときの作法は
+[周期実行と通知](Timers%20and%20Notifications.md)「VW が undo イベントを開いたまま
+回している最中」を読む（**読むのは安全・書くと混ざる**）。
 
 ## まだ実機で確かめていないこと
 
-**この節は issue #217 の範囲内**である（プローブ `plugin-call-by-name` で測る）。
-埋まったらこの節を消して、本文の印を外す。
-
-| 確かめること | いまの水準 |
-| --- | --- |
-| 殻が登録したルーチンを、別モジュール（本体）から名前で呼べるか | 【ソース根拠】 |
-| 文字列・数値・VAR 引数が実際に往復するか | 【ソース根拠】 |
-| 実在しないルーチン名のときの戻り値（落ちずに失敗を知れるか） | 【推定】 |
-| `DoMenuName` が実際にコマンドを起動するか・戻り値の意味 | 【ソース根拠】 |
-| `DoMenuName` と undo の記録の関係 | 未確認 |
-| `ExternalNameToID` が「在る / 無い」で分かれるか | 未確認 |
-| **OS タイマーの刻みの中から `CallPluginLibrary` を呼べるか** | 未確認 |
+| 確かめること | いまの水準 | 扱い |
+| --- | --- | --- |
+| **`DoMenuName` が実際にコマンドを「実行」するか** | 名前解決が働くこと（`0` と `-3` の分岐）までは実測。**走ったことの確証は無い** | **issue #217 の範囲内。測り直す**（スクリプトエンジンに取り消しスタックへ積ませてから `DoMenuName("Undo", 0)` を呼び、消えるかを数える） |
+| `kVLIBScopeVSOnly` の相手が本当に弾かれるか | 【ソース根拠】 | 範囲外（相手の登録を変えた版が要る） |
+| `IFC_QueryInterface` が VW 2026 に在るのか | 戻り値 `false` のみ。「無い」とは言えない | 範囲外（参考として測っただけ） |
+| ハンドル・2 次元配列の引数 | 【ヘッダ根拠】 | 範囲外（必要になったときに測る） |
+| Windows での挙動 | 未測定（ビルドは通る） | 範囲外（[プラグインモジュール](Plug-in%20Modules.md)の Windows 未測定と同じ） |
 
 ## 参考
 
