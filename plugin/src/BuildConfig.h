@@ -17,6 +17,10 @@
 // VCOM のユニバーサル名（拡張機能を一意に指す名前）。
 #define PLUGIN_UNIVERSAL_NAME "CExtMenuVwSdkProbes"
 
+// 「呼ばれる側」の拡張機能（プラグインライブラリルーチン。plugin/src/ProbeLibrary.h）の
+// ユニバーサル名。**メニュー拡張とは別の名前**でなければならない。
+#define PLUGIN_LIBRARY_UNIVERSAL_NAME "CExtVSFuncVwSdkProbes"
+
 // ビルドの短い識別子（CI では main の短縮 sha、ローカルでは "local"）。CMake が
 // -DVW_BUILD_VERSION=... で渡す。ピッカーの見出しに出して「いま動かしているのが
 // どのビルドか」を言えるようにする。

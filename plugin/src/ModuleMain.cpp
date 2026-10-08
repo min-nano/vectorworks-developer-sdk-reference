@@ -16,6 +16,7 @@
 
 #include "PluginPrefix.h"
 #include "BuildConfig.h"
+#include "ProbeLibrary.h"
 #include "ProbeMenu.h"
 
 // Vectorworks が実行時にこのプラグインのリソース（.vwr）を引くときの識別子。
@@ -53,9 +54,17 @@ extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_main(Sint32 action, void* modu
 
 	using namespace VWFC::PluginSupport;
 
-	// メニューコマンド 1 つだけ。
+	// メニューコマンド 1 つ。
 	REGISTER_Extension<vwprobe::CExtMenuProbes>(GROUPID_ExtensionMenu, action, moduleInfo, iid,
 												inOutInterface, cbp, reply);
+
+	// **「呼ばれる側」のプラグインライブラリルーチン**（plugin/src/ProbeLibrary.h）。
+	// プローブ（本体モジュール）から `ISDK::CallPluginLibrary` でモジュールを跨いで
+	// 呼べるかを実機で測るために、ここで登録しておく——**登録は殻でしかできない**
+	// （VW が番地を握るので、入れ替わる本体には置けない）。
+	REGISTER_Extension<vwprobe::CExtProbeLibrary>(
+		VectorWorks::Extension::GROUPID_ExtensionVSFunctions, action, moduleInfo, iid,
+		inOutInterface, cbp, reply);
 
 	return reply;
 }

@@ -269,6 +269,7 @@ set(VW_BUNDLE_ID "io.github.min-nano.VwSdkProbes")
 set(VW_PLUGIN_SOURCES
 	src/ModuleMain.cpp
 	src/ProbeMenu.cpp
+	src/ProbeLibrary.cpp
 	src/Update.cpp
 	src/Feedback.cpp
 	src/BundledScript.cpp
