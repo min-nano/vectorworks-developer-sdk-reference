@@ -66,8 +66,9 @@ SDK 全体（`Include` + `Source` の実装ソース）を次のパターンで�
 根拠は誤りだった**——`ISDK::DoMenuName(name, chunkIndex)` が実在する
 （[Plug-in Interop](Plug-in%20Interop.md) の 2。
 [issue #217](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/217)）。
-つまり**「新規」に当たるメニューコマンドの内部名が分かれば、そこから起こせる見込みがある**
-【推定】。**ただし `DoMenuName` には引数を渡す口が無い**ので、「このテンプレートから」を
+`DoMenuName` が実際にコマンドを実行することは実機で確かめてあるので、
+**「新規」に当たるメニューコマンドの内部名が分かれば、そこから起こせる見込みがある**
+（内部名そのものは未調査）。**ただし `DoMenuName` には引数を渡す口が無い**ので、「このテンプレートから」を
 指定する手段はこの経路には無く、下記の `OpenDocumentPath` のほうが扱いやすい。
 
 **唯一実在する「新規文書を開く」経路は `OpenDocumentPath(nullptr, false)`。** 公式ドキュメント
