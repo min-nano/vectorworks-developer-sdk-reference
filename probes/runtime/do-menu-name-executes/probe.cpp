@@ -85,8 +85,9 @@ VW_PROBE("do-menu-name-executes", "DoMenuName は本当にコマンドを実行�
 			return;
 		}
 
-		const TXString script = TXString("Layer('") + kUndoTargetLayer + "');";
-		const VCOMError err = engine->ExecuteScript(script);
+		// **TXString の連結に頼らない**（`+` の多重定義が手元で確かめられないため）。
+		const std::string script = std::string("Layer('") + kUndoTargetLayer + "');";
+		const VCOMError err = engine->ExecuteScript(TXString(script.c_str()));
 		probe.log(std::string("  ExecuteScript(\"Layer('") + kUndoTargetLayer +
 				  "');\") -> VCOMError=" + std::to_string(static_cast<long>(err)));
 	}
