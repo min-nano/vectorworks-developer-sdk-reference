@@ -92,6 +92,25 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
   で実際に踏んだ）。殻と約束事を共有したいときは、**値をプローブ側へ書き写して
   自己完結させる**（`probes/runtime/pio-recalc-env-*` がその形）。**main に既にある**
   ヘッダなら include してよい。
+- **プラットフォームで分けるなら `#if GS_MAC` / `#if GS_WIN`。`#ifdef` で書かない。**
+  SDK の `Kernel/Config.h` は**どちらのプラットフォームでも両方を定義する**（片方が 1、
+  もう片方が 0）ので、**`#ifdef GS_MAC` は Windows でも真になる**。
+
+  ```cpp
+  #if GS_MAC                                  // ◯ 値で分ける
+  #	include <CoreFoundation/CoreFoundation.h>
+  #else
+  #	// Windows 側（<Windows.h> は PluginPrefix.h が入れている）
+  #endif
+  ```
+
+  **`#ifdef` で書くと mac では通り、Windows の群だけが落ちる**——`ci-debug` の
+  `compile` は mac 専用なので**手元の確認も通ってしまい**、気付くのは
+  `Probe auto update / publish` が赤くなったときになる
+  （[#219](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/219)
+  で実際に踏んだ。`error C1083: Cannot open include file:
+  'CoreFoundation/CoreFoundation.h'`）。殻の側（`plugin/src/Update.cpp` ほか）は
+  最初から `#if GS_MAC` で書いてある。
 - **短い名前・ありふれた名前を使わない。** SDK と OS のヘッダは、プローブが使いそうな
   名前をグローバルへ撒いている。**無名名前空間へ入れていても「参照が曖昧」で
   コンパイルが通らない**（どちらも実際に踏んだ）。

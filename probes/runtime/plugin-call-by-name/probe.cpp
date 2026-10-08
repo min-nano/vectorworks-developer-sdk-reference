@@ -24,7 +24,7 @@
 #include <cstring>
 #include <string>
 
-#ifdef GS_MAC
+#if GS_MAC
 #	include <CoreFoundation/CoreFoundation.h>
 #endif
 
@@ -132,7 +132,7 @@ namespace
 		gProbeTimer.result = DescribeResult(raw->functionResult);
 	}
 
-#ifdef GS_MAC
+#if GS_MAC
 	void ProbeTimerCallbackCF(CFRunLoopTimerRef /*timer*/, void* /*info*/)
 	{
 		ProbeTimerTick();
@@ -149,7 +149,7 @@ namespace
 	// （1 回を長く取ると即座に戻る。Findings「周期実行と通知」4）。
 	void PumpUntilTimerFired()
 	{
-#ifdef GS_MAC
+#if GS_MAC
 		CFRunLoopTimerRef timer =
 			CFRunLoopTimerCreate(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 0.1, 0, 0, 0,
 								 &ProbeTimerCallbackCF, nullptr);

@@ -60,11 +60,15 @@ SDK 全体（`Include` + `Source` の実装ソース）を次のパターンで�
 | `ISDK.{0,5}New[A-Za-z]*\(` | 0 件 |
 | `NewFromTemplate\|CreateFromTemplate\|kFileTypeVWTemplate\|SaveAsTemplate\|NewDrawing` | 0 件 |
 
-VectorScript の `DoMenuTextByName('New From Template', ...)` に相当する ISDK / VWFC の
-呼び出しは無い。[issue #27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)
-で確定した「`DoMenuTextByName` 相当の汎用メニュー起動 API 自体が SDK に無い」という結論と
-整合する——テンプレートからの新規作成が Finder / エクスプローラでの `.sta` ダブルクリックや
-ファイルメニューの「新規」相当だとすれば、そもそもそれを起動する手段が無い。
+「テンプレートから新規作成する」専用の ISDK / VWFC の呼び出しは無い。
+
+**【訂正】ただし「メニューコマンドを名前で起動する汎用 API 自体が無い」というかつての
+根拠は誤りだった**——`ISDK::DoMenuName(name, chunkIndex)` が実在する
+（[Plug-in Interop](Plug-in%20Interop.md) の 2。
+[issue #217](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/217)）。
+つまり**「新規」に当たるメニューコマンドの内部名が分かれば、そこから起こせる見込みがある**
+【推定】。**ただし `DoMenuName` には引数を渡す口が無い**ので、「このテンプレートから」を
+指定する手段はこの経路には無く、下記の `OpenDocumentPath` のほうが扱いやすい。
 
 **唯一実在する「新規文書を開く」経路は `OpenDocumentPath(nullptr, false)`。** 公式ドキュメント
 （[`Info/Writing automated tests.md`](../Info/Writing%20automated%20tests.md)）に
