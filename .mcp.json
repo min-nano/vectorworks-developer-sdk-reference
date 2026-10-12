@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "vectorworks": {
+      "command": "python3",
+      "args": ["plugin/mcp/vw-mcp-server.py"],
+      "env": {}
+    }
+  }
+}

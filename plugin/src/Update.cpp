@@ -214,8 +214,8 @@ namespace vwprobe
 			// 再起動を**組み立てられなかった**場合（起動し直す対象が分からない・ヘルパーを
 			// 起動できない）。入れ替え自体は済んでいるので失うものは無いが、黙っていると
 			// 「再起動が効かなかった」と区別が付かない。
-			const std::string command = RestartCommand();
-			if (command.empty() || !SpawnDetachedShell(command))
+			std::string why;
+			if (!RequestRestart(why))
 				Inform("再起動できませんでした。",
 					   "お手数ですが、手動で Vectorworks を再起動してください。\n"
 					   "（入れ替え自体は完了しているので、次回の起動で反映されます）");
@@ -302,6 +302,75 @@ namespace vwprobe
 			return UpdateOutcome::Continue;
 		}
 	} // namespace
+
+	bool RequestRestart(std::string& error)
+	{
+		error.clear();
+		const std::string command = RestartCommand();
+		if (command.empty())
+		{
+			error = "起動し直す対象（Vectorworks 本体）の場所を割り出せませんでした。";
+			return false;
+		}
+		if (!SpawnDetachedShell(command))
+		{
+			error = "再起動のヘルパーを起動できませんでした。";
+			return false;
+		}
+		return true;
+	}
+
+	RemoteUpdateResult RunRemoteUpdate()
+	{
+		RemoteUpdateResult result;
+		try
+		{
+			std::string out;
+			if (!RunBundledScript(kUpdateScript, {"q"}, out))
+			{
+				result.outcome = "check_failed";
+				result.message = "アップデータ（同梱スクリプト）を起動できませんでした。";
+				return result;
+			}
+			const Status status = Evaluate(out);
+			result.installed = status.installed;
+			result.latest = status.latest;
+			result.title = status.title;
+			result.probes = status.probes;
+			result.payloadOnly = status.payloadOnly;
+			if (!status.error.empty())
+			{
+				result.outcome = "check_failed";
+				result.message = status.error;
+				return result;
+			}
+			if (!status.offerUpdate)
+			{
+				result.outcome = "no_new_build";
+				return result;
+			}
+			// **尋ねない。** ここへ来るのは Claude が頼んだときだけ（McpBridge.h）。
+			std::string err;
+			if (!Install(status.payloadOnly ? "do-install-payload" : "do-install", status.url, err))
+			{
+				result.outcome = "failed";
+				result.message = err;
+				return result;
+			}
+			result.outcome = status.payloadOnly ? "installed" : "needs_restart";
+		}
+		catch (const std::exception& error)
+		{
+			result.outcome = "failed";
+			result.message = (error.what() != nullptr) ? error.what() : "例外";
+		}
+		catch (...)
+		{
+			result.outcome = "failed";
+			result.message = "不明な例外";
+		}
+		return result;
+	}
 
 	UpdateOutcome RunManualUpdateCheck()
 	{

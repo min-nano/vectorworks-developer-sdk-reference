@@ -51,6 +51,9 @@ Findings に**無印（＝実機確認済み）**で書ける知見は、ロー�
 **だから実機でする操作は 2 つだけになる**——「入れ替える」と「走らせる」。ログを選択して
 コピーし、チャットへ貼る手間は要らない。
 
+**ローカルの Claude Code からなら、その 2 つも Claude がする**（下記「ローカルの Claude Code
+から操作する（MCP ブリッジ）」）。
+
 **入れ替えは自動でできる。** ピッカーの先頭項目（`＊ 新しいプローブビルドを確認して
 入れ替える…`）を選べば、プラグイン自身がダウンロードから差し替えまでを済ませる
 （下記「自動アップデート」）。zip を落として展開して隔離フラグを外して……を毎回手でやる
@@ -250,6 +253,110 @@ main のワークフローが行う。つまり**まだ open な複数の PR の
 6. **結果を Findings へ**（ここは Claude の仕事）。確かめられたことを `Findings/` の
    該当トピックへ書き、確認水準の印（無印＝実機確認済み）を正す。**役目を終えた
    プローブは消す**（結論は文章で残る。CLAUDE.md「調査のフロー」）。
+
+## ローカルの Claude Code から操作する（MCP ブリッジ）
+
+**Vectorworks が動いている Mac で Claude Code を起動すれば、Claude が自分でプローブを
+入れ替え・走らせ・ログを受け取れる。** 人がするのは Vectorworks を起動しておくこと
+（起動も Claude ができる）と、絵で確かめることだけになり、「ピッカー先頭から入れ替えて
+走らせてください」の往復が無くなる。仕組みは実プラグイン
+（[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)
+の「MCP ブリッジ」）と同じ。
+
+```
+Claude Code ──MCP(stdio)──▶ plugin/mcp/vw-mcp-server.py ──ファイル──▶ Vectorworks（殻の時計）
+                              （リポジトリ直下の .mcp.json が登録）      一時ディレクトリの VwSdkProbes-mcp
+```
+
+> **実機での確認はまだ済んでいない。** 仕組み（OS のタイマーから受け付ける・新規の空図面を
+> 開いて閉じる・再起動のヘルパー）はどれも実機で確かめた部品の組み合わせだが
+> （[Findings「Timers and Notifications」](../Findings/Timers%20and%20Notifications.md)・
+> [「Documents」](../Findings/Documents.md)・下記「自動アップデート」）、ブリッジとして
+> 通したのは CI の代役（`tests/vw-mcp-server.test.py`）までである。
+
+### 用意する（1 度だけ）
+
+1. **ブリッジ入りのビルドを入れる。** 殻に入っているので、ブリッジより古いビルドが入って
+   いるなら入れ替えて再起動する（ピッカー先頭の「入れ替える」でよい。プラグインが無い
+   計算機なら、Claude の `vw_install` が入れる）。
+2. **このリポジトリで Claude Code を起動する。** 直下の `.mcp.json` が
+   `plugin/mcp/vw-mcp-server.py` を登録し、`.claude/settings.json` がそれを有効にする
+   （初回だけ「このサーバを使ってよいか」と尋ねられる）。Python 3.8 以降が要る（macOS には
+   最初から入っている。Windows で `python3` が無ければ `.mcp.json` の `command` を `py` に）。
+3. **iPhone などから操作したいなら**、その Mac で `claude remote-control` を起動する
+   （端末を閉じても残るよう `tmux` の中で。Mac はスリープさせない）。
+
+**クラウドのセッション（claude.ai/code）からは使えない。** 受け渡しは同じ計算機の一時
+ディレクトリのファイルなので、クラウドのコンテナからは届かない。橋をネットワークへ開く
+（トンネル等）こともしない——相手が「同じ計算機の同じ利用者」であることを前提に、
+頼まれれば図面を開き・再起動まで行う作りだからである。実機の要らない作業（Findings の
+執筆・CI・`sdk-grep`）はクラウドで並行してよい。
+
+### 道具
+
+| 道具 | 誰が答えるか | 何をするか |
+| --- | --- | --- |
+| `vw_bridge_status` | サーバ | ブリッジが動いているか（動いていれば道具の一覧、動いていなければ直し方） |
+| `vw_launch` | サーバ | Vectorworks を起動し、ブリッジが受け付けるまで待つ |
+| `vw_install` | サーバ | 公開されているビルドを Plug-Ins へ入れる（**橋が架からないとき用**。同梱スクリプトの `q` → `do-install`。起動していれば `restart=true` で再起動） |
+| `vw_call` | サーバ | 下の道具を名前で呼ぶ（Claude の道具の一覧が古いとき用） |
+| `vw_lock_status` / `vw_lock_release` | サーバ | どのセッションが Vectorworks を占有しているか／片付けて占有を解く |
+| `vw_ping` | プラグイン | 殻と本体の素性・開いている図面の数 |
+| `vw_probes` | プラグイン | プローブの一覧（ピッカーと同じ並び。slug・群・出所・本体の有無） |
+| `vw_run_probe` | プラグイン | 1 件走らせ、結末・所要・**ログ全文**を返す。既定で**新規の空図面を開いてから**走らせる。Vectorworks が居なければ起動してから |
+| `vw_run_all` | プラグイン | 一覧を上から全部走らせる（ピッカーの「すべて順に実行」と同じ） |
+| `vw_probe_log` | プラグイン（橋が落ちていればサーバ） | ログファイル `VwSdkProbes-<slug>.log` を読む |
+| `vw_update` | プラグイン | 公開されている最新ビルドを入れる（**尋ねない**）。本体だけならそのまま効く。殻まで変わったら `restart_if_needed=true` で続けて再起動 |
+| `vw_restart` | プラグイン | Vectorworks を再起動する（ブリッジが開いた図面は先に保存せずに閉じる） |
+| `vw_cleanup` | プラグイン | ブリッジが開いた図面を閉じる（占有を解くときにサーバが呼ぶ） |
+
+**道具の一覧の真実はプラグイン側の表**（`src/McpBridge.cpp` の `kTools`）で、サーバは起動時に
+`vw_tools` で取りに行く。**道具を足すときに直すのはその 1 行と実装 1 つだけ**。
+
+### 1 周の回し方（Claude がすること）
+
+```
+① プローブを書いて push → probe-auto-update が公開する（scripts/ci-wait.sh --pr <番号> で待つ）
+② vw_update（outcome=installed なら再起動なしで効いている。needs_restart なら人に断ってから
+   vw_restart か restart_if_needed=true）
+③ vw_run_probe（probe=<slug>。同じ slug が複数の群にあれば group=pr<番号>）
+④ 返ったログを読む → Findings へ（絵で確かめることがあれば、人に具体的に尋ねる）→ ① へ
+⑤ 当分使わないなら vw_lock_release（ブリッジが開いた図面を閉じて占有を解く）
+```
+
+- **結果の投稿はメニューと同じ**（出所の PR / issue へ自動で投稿される）。ただし**ブリッジは
+  何も尋ねない**ので、自動投稿をまだ設定していなければ投稿せずにその旨を返す（1 度メニューで
+  設定すれば、以後はブリッジからも投稿する）。`post=false` で投稿しない。
+- **図面。** `vw_run_probe` は既定で新規の空図面を開いてから走らせ、**ブリッジが開いた図面は
+  次に走らせる前・`vw_cleanup`・再起動の前に保存せずに閉じる**（人の図面には触れない——
+  閉じるのは、開いた本人であることを fileRef とパスで確かめた 1 枚だけ）。開いている図面で
+  走らせたいときだけ `new_document=false`。
+- **プローブが Vectorworks ごと落としたら**、サーバは待ち切らずに（プロセスの消滅で気付く）
+  **落ちるまでに書けたログ**を添えて返す（`crashed: true`）。結果の控えは次に走らせたとき
+  （またはメニューを開いたとき）に「結末不明」として投稿される。起こし直して同じプローブを
+  勝手に走らせ直すことはしない。
+- **受け付けを見送るとき**: メニュー（ピッカー）が開いている間・undo の記録が開いている間・
+  起動の直後 10 秒。要求はスプールに残り、終われば処理される。
+- **Vectorworks を使えるのは 1 度に 1 つのセッションだけ。** 最初の操作で占有を取り、他の
+  セッションの操作は断られる（`vw_lock_status` の `wait` で空くのを待てる）。最後の操作から
+  60 分で解ける（CI の往復を待てる長さ）。
+- `vw_restart` / `vw_install` / `vw_call` は `.claude/settings.json` で**確認を残してある**
+  （再起動は保存の確認を出しうる——人に断ってから頼む）。
+
+### 仕組みの置き場所
+
+| ファイル | 役割 |
+| --- | --- |
+| `src/McpBridge.{h,cpp}` | 殻の時計（OS のタイマー）・道具の表と実装・ブリッジが開いた図面の管理 |
+| `src/BridgeSpool.h` / `src/BridgeJson.h` / `src/BridgeParse.h` | **純粋な部分**（受け渡しの作法・最小の JSON・ログの詰め方・プローブの引き当て）。`tests/BridgeSpoolTests.cpp` |
+| `mcp/vw-mcp-server.py` | Claude 側の MCP サーバ（標準ライブラリだけ）。`tests/vw-mcp-server.test.py` がプラグインの代役を立てて確かめる |
+| `../.mcp.json` / `../.claude/settings.json` | サーバの登録と、道具の許可 |
+
+**サーバを `plugin/scripts/` に置かない。** そこは殻の ID の材料（`scripts/gather-probes.sh`）で、
+置けばサーバを直すたびに「殻が変わった」ことになって利用者に再起動を強いる（サーバは
+プラグインに入らないのに）。**ブリッジは丸ごと殻にある**（実プラグインは受け付けを本体に
+置いたので更新・再起動を殻へ頼み直す往復が要ったが、こちらの本体は走らせる間しか
+読み込まれないので要らない）。**境界（`src/PayloadAbi.h`）は変えていない。**
 
 ## 一覧のプローブをすべて順に実行する
 
@@ -594,6 +701,9 @@ cmake -S plugin -B build -DVW_SDK_DIR=... \
 | `scripts/vw-probes-update.{sh,ps1}` | 同梱の更新スクリプト（プラグインが非対話で叩く） |
 | `scripts/vw-probes-feedback.{sh,ps1}` | 同梱の投稿スクリプト（同上。トークンもこちらが持つ） |
 | `src/PayloadAbi.h` | **殻と本体の間の C の ABI**（下記「殻と本体」） |
+| `src/McpBridge.{h,cpp}` | **MCP ブリッジ**（ローカルの Claude Code からの操作。上記「ローカルの Claude Code から操作する」） |
+| `src/BridgeSpool.h` / `src/BridgeJson.h` / `src/BridgeParse.h` | その純粋な部分（`tests/BridgeSpoolTests.cpp` が確かめる） |
+| `mcp/vw-mcp-server.py` | その Claude 側（MCP サーバ。`tests/vw-mcp-server.test.py`） |
 | `src/PayloadCatalog.h` | **カタログの読み手**（どの本体に何が入っているか。`tests/PayloadCatalogTests.cpp`） |
 | `cmake/ProbeCatalog.cmake` | その書き手（`tests/probe-catalog-test.cmake` が `cmake -P` で確かめる） |
 | `src/PayloadHost.{h,cpp}` | 殻の側（本体の読み込み・解決・アンロード・複製） |

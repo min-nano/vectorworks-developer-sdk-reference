@@ -16,6 +16,7 @@
 
 #include "PluginPrefix.h"
 #include "BuildConfig.h"
+#include "McpBridge.h"
 #include "ProbeLibrary.h"
 #include "ProbeMenu.h"
 
@@ -65,6 +66,12 @@ extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_main(Sint32 action, void* modu
 	REGISTER_Extension<vwprobe::CExtProbeLibrary>(
 		VectorWorks::Extension::GROUPID_ExtensionVSFunctions, action, moduleInfo, iid,
 		inOutInterface, cbp, reply);
+
+	// **MCP ブリッジの時計を動かす**（McpBridge.h）。ローカルの Claude Code がプローブの
+	// 一覧・実行・ログ・入れ替え・再起動を頼めるようにする受け口で、ネットワークは使わない
+	// （一時ディレクトリのファイルで受け渡す）。最初の刻みは 10 秒後なので、ここでは
+	// 何も待たない。何度呼ばれても 1 度しか動かさない。
+	vwprobe::StartMcpBridgeClock();
 
 	return reply;
 }

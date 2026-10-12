@@ -706,6 +706,8 @@ namespace vwprobe
 			std::string outcome; // 1 行の結末（走らせられなければその理由）
 			std::string advice;	 // 走らせられなかったときの補足
 			std::string note;	 // 投稿の下ごしらえが利用者へ伝えたいこと
+			std::string logPath; // 本体が書いたログファイル（MCP ブリッジが返す）
+			std::vector<std::string> postLines; // 投稿の結末（コメントの URL か失敗の理由）
 			std::vector<std::string> body; // 見出し（単発ならそのままダイアログへ）
 			std::string log;
 		};
@@ -731,7 +733,11 @@ namespace vwprobe
 		// プローブ 1 件を、下ごしらえから投稿まで通す。**本体は session が抱える**ので、
 		// 一括実行では群が変わるまで読み直さない。**降ろすのは呼び出し側**（ダイアログを
 		// 出す前に必ず降ろす）。
-		OneResult RunOne(PayloadSession& session, const Choice& choice, const catalog::Catalog& cat)
+		//
+		// interactive が false なのは MCP ブリッジから走らせるとき（McpBridge.h）——**何も
+		// 尋ねない**。allowPost が false なら投稿しない（下ごしらえもしない）。
+		OneResult RunOne(PayloadSession& session, const Choice& choice, const catalog::Catalog& cat,
+						 bool interactive = true, bool allowPost = true)
 		{
 			if (!choice.available)
 				return Blocked(choice, "この本体は入っていません（" + choice.group.file + "）",
@@ -746,7 +752,8 @@ namespace vwprobe
 			std::string feedbackPr = choice.group.pr;
 			std::string feedbackIssue = choice.probe.issue;
 			const bool posting =
-				PrepareFeedback(feedbackPr, feedbackIssue, choice.group.branch, feedbackNote);
+				allowPost && PrepareFeedback(feedbackPr, feedbackIssue, choice.group.branch,
+											 feedbackNote, interactive);
 
 			// 2. **その群の本体を用意する**（すでに読んでいればそのまま使う）。
 			std::string loadError;
@@ -789,6 +796,7 @@ namespace vwprobe
 			out.failed = report.failed;
 			out.seconds = report.seconds;
 			out.outcome = report.outcome;
+			out.logPath = report.logPath;
 
 			// 4. **投稿する（黙って）。** 結果は行として添えるだけ——ここでアラートを
 			//    増やすと、走らせるたびにクリックが 1 つ増える（一括ならその件数ぶん）。
@@ -807,6 +815,7 @@ namespace vwprobe
 				// 黙っていると「全部 PR に載った」と読めてしまう（控えは残っていて次に
 				// 送り直されるが、それはあとの話である）。
 				out.postFailed = !sent && !posted.empty();
+				out.postLines = posted;
 			}
 			if (!posted.empty() || !feedbackNote.empty())
 				out.body.emplace_back("");
@@ -915,7 +924,111 @@ namespace vwprobe
 			ShowResult(body, log);
 		}
 
+		// -------------------------------------------------------------------
+		// **メニューが動いている間の印**（ProbeMenuActive）。DoInterface が抱える。
+		bool gMenuActive = false;
+
+		class MenuActiveScope
+		{
+		public:
+			MenuActiveScope() : fWas(gMenuActive)
+			{
+				gMenuActive = true;
+			}
+			~MenuActiveScope()
+			{
+				gMenuActive = fWas;
+			}
+			MenuActiveScope(const MenuActiveScope&) = delete;
+			MenuActiveScope& operator=(const MenuActiveScope&) = delete;
+
+		private:
+			bool fWas;
+		};
+
+		QuietProbe ToQuiet(const Choice& choice)
+		{
+			QuietProbe out;
+			out.id = choice.probe.id;
+			out.title = choice.probe.title;
+			out.summary = choice.probe.summary;
+			out.group = choice.group.id;
+			out.pr = choice.group.pr;
+			out.issue = choice.probe.issue;
+			out.commit = choice.group.commit;
+			out.branch = choice.group.branch;
+			out.prTitle = choice.group.prTitle;
+			out.file = choice.group.file;
+			out.available = choice.available;
+			return out;
+		}
 	} // namespace
+
+	// -----------------------------------------------------------------------
+	// MCP ブリッジ向けの口（ProbeMenu.h）。**走らせる道はメニューと同じ RunOne**で、
+	// 違うのは「尋ねない」「ダイアログを出さない」ことだけ。
+	bool ProbeMenuActive()
+	{
+		return gMenuActive;
+	}
+
+	QuietCatalog ListProbesQuietly()
+	{
+		QuietCatalog out;
+		catalog::Catalog cat;
+		const std::vector<Choice> all = ReadChoices(cat, out.error);
+		for (const size_t index : displayOrder(all))
+			out.probes.push_back(ToQuiet(all[index]));
+		out.catalogStamp = catalogStamp(cat);
+		out.shellStamp = shellStamp();
+		out.buildId = cat.buildId;
+		out.skippedLines = cat.skippedLines;
+		return out;
+	}
+
+	std::vector<QuietRun> RunProbesQuietly(const std::vector<QuietTarget>& which, bool post)
+	{
+		std::vector<QuietRun> results;
+		catalog::Catalog cat;
+		std::string catalogError;
+		const std::vector<Choice> all = ReadChoices(cat, catalogError);
+
+		// **群が変わるまで本体を読み直さない**（一括実行と同じ。PayloadSession）。
+		// 抜けるときに降ろす（デストラクタ）——抱えたままにすると Windows で入れ替えが失敗する。
+		PayloadSession session;
+		for (const QuietTarget& target : which)
+		{
+			QuietRun run;
+			run.id = target.id;
+			run.group = target.group;
+			const auto found = std::find_if(
+				all.begin(), all.end(), [&target](const Choice& choice)
+				{ return choice.probe.id == target.id && choice.group.id == target.group; });
+			if (found == all.end())
+			{
+				run.outcome = "カタログにありません（" + target.id + " / 群 " + target.group + "）";
+				run.advice = catalogError;
+				results.push_back(run);
+				continue;
+			}
+			const OneResult one = RunOne(session, *found, cat, /*interactive*/ false, post);
+			run.ran = one.ran;
+			run.failed = one.failed;
+			run.posted = one.posted;
+			run.postFailed = one.postFailed;
+			run.seconds = one.seconds;
+			run.outcome = one.outcome;
+			run.advice = one.advice;
+			run.note = one.note;
+			run.log = one.log;
+			run.logPath = one.logPath;
+			run.body = one.body;
+			run.postLines = one.postLines;
+			results.push_back(run);
+		}
+		session.release();
+		return results;
+	}
 } // namespace vwprobe
 
 // ---------------------------------------------------------------------------
@@ -949,6 +1062,11 @@ vwprobe::CProbeMenu_EventSink::~CProbeMenu_EventSink() = default;
 
 void vwprobe::CProbeMenu_EventSink::DoInterface()
 {
+	// **メニューの最中は MCP ブリッジに受け付けさせない**（McpBridge.h「見送る」）。
+	// Windows の OS タイマーはモーダルダイアログの中でも届くので、ピッカーを出している間や
+	// プローブを走らせている間に、ブリッジが同じ本体・同じ控えへ割り込みうる。
+	const MenuActiveScope menuActive;
+
 	// **ピッカーは繰り返し出す。** 「入れ替える」を選ぶのは、たいてい新しいプローブを
 	// 走らせたいからである。本体だけの入れ替え（＝再起動が要らない道。Update.h）なら
 	// **その場で一覧を読み直して選ばせる**——ここで終わってしまうと、入れ替えるたびに

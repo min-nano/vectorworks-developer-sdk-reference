@@ -469,7 +469,7 @@ namespace vwprobe
 
 	// -----------------------------------------------------------------------
 	bool PrepareFeedback(std::string& pr, std::string& issue, const std::string& branch,
-						 std::string& note)
+						 std::string& note, bool interactive)
 	{
 		note.clear();
 
@@ -511,6 +511,15 @@ namespace vwprobe
 
 		if (pr.empty() && issue.empty())
 			return false; // 宛先が無い（issue 番号も書かれていないプローブ）。黙って投稿しない
+
+		if (!interactive && (settings.consent == feedback::Consent::Unset || !HaveToken()))
+		{
+			// **人がいない場面では尋ねない**（MCP ブリッジ。Feedback.h の PrepareFeedback）。
+			// 状態は変えない——次にメニューから走らせたとき、いつもどおり 1 度だけ尋ねる。
+			note = "結果の自動投稿はまだ設定されていないので投稿しませんでした"
+				   "（Vectorworks のメニューで 1 度設定すると、以後はここからも投稿します）。";
+			return false;
+		}
 
 		if (settings.consent == feedback::Consent::Unset)
 		{

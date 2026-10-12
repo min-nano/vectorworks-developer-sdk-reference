@@ -19,6 +19,8 @@ The SDK https://www.vectorworks.net/en-US/support/custom/sdk/sdkdown provides OS
 - **[実機確認プラグイン — `plugin/`](plugin/README.md)** … 実機の VectorWorks で
   調査コードを走らせるための小さなプラグイン。メニューコマンド 1 つから、**複数の PR の
   調査コード（プローブ）を同居させた 1 本のビルド**を選んで実行できる
+  （ローカルの Claude Code からは **MCP ブリッジ**で、入れ替え・実行・ログの受け取りまで
+  Claude が自分で行える。[説明](plugin/README.md#ローカルの-claude-code-から操作するmcp-ブリッジ)）
 - [`probes/`](probes/README.md) … 調査用のスニペット。構文チェックだけのもの（`probes/*.cpp`）と、
   実機で走らせるプローブ（[`probes/runtime/`](probes/runtime/README.md)）
 - [`CLAUDE.md`](CLAUDE.md) … 調査のフロー（issue → CI 調査 → PR → 実機確認 → 反映）と
