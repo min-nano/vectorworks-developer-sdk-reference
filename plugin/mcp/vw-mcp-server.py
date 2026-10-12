@@ -46,17 +46,17 @@
 # Mac で起動した Claude Code（iOS から操作するなら `claude remote-control`）で使う。
 #
 # 環境変数:
-#   VW_MCP_SPOOL   スプールの場所を明示する（プラグイン側と同じ値にすること）
-#   VW_MCP_PLUGIN  プラグイン名（既定 VwSdkProbes）
-#   VW_MCP_TIMEOUT 1 件あたりの待ち時間（秒。既定 30。道具の表が timeoutSeconds を
+#   VWPROBES_MCP_SPOOL   スプールの場所を明示する（プラグイン側と同じ値にすること）
+#   VWPROBES_MCP_PLUGIN  プラグイン名（既定 VwSdkProbes）
+#   VWPROBES_MCP_TIMEOUT 1 件あたりの待ち時間（秒。既定 30。道具の表が timeoutSeconds を
 #                  持つものはそちらが優先——プローブの実行は長くかかりうる）
-#   VW_MCP_LEASE_IDLE 占有を解くまでの、最後の操作からの秒数（既定 3600）
-#   VW_MCP_LEASE   占有の状態を置く場所（拡張子の前まで。既定はスプールの第 1 候補の隣）
-#   VW_MCP_SESSION_LABEL 占有の表示に使うこのセッションの名前（既定は作業ディレクトリとブランチ）
-#   VW_MCP_APP     vw_launch が起動するもの（macOS は .app のパスかアプリ名、Windows は
+#   VWPROBES_MCP_LEASE_IDLE 占有を解くまでの、最後の操作からの秒数（既定 3600）
+#   VWPROBES_MCP_LEASE   占有の状態を置く場所（拡張子の前まで。既定はスプールの第 1 候補の隣）
+#   VWPROBES_MCP_SESSION_LABEL 占有の表示に使うこのセッションの名前（既定は作業ディレクトリとブランチ）
+#   VWPROBES_MCP_APP     vw_launch が起動するもの（macOS は .app のパスかアプリ名、Windows は
 #                  .exe のパス。既定は Vectorworks 2026 の標準のインストール先）
-#   VW_MCP_PLUGINS_DIR vw_install が入れる Plug-Ins フォルダ（既定は VW 2026 のユーザフォルダ）
-#   VW_MCP_UPDATE_SCRIPT vw_install が叩く同梱スクリプト（既定はこのファイルの隣。テスト用）
+#   VWPROBES_MCP_PLUGINS_DIR vw_install が入れる Plug-Ins フォルダ（既定は VW 2026 のユーザフォルダ）
+#   VWPROBES_MCP_UPDATE_SCRIPT vw_install が叩く同梱スクリプト（既定はこのファイルの隣。テスト用）
 #
 # 【受け渡しの作法はプラグイン側と対になっている】ファイル名の綴り・原子的な書き方
 # （.tmp へ書いてから rename）・生存の印の判定方法は plugin/src/BridgeSpool.h に書いてある。
@@ -184,7 +184,7 @@ def spool_candidates():
     """スプールの候補を、確からしい順に並べて返す。
 
     候補を順に調べ、**有効な生存の印（bridge.json）があるところ**を使う（Bridge.status）。
-    VW_MCP_SPOOL が指定されていれば、それだけを候補にする（両側で同じ値にすること）。
+    VWPROBES_MCP_SPOOL が指定されていれば、それだけを候補にする（両側で同じ値にすること）。
 
     **推測による候補は持たない。** 候補はどれも「プラグイン側が一時ディレクトリを決めるのに
     使うのと同じ仕組み」から出したものだけにする——利用者ごとの一時ディレクトリ（confstr）と、
@@ -192,18 +192,18 @@ def spool_candidates():
     フォールバックや `/var/folders` の総当たりは置かない**: 前者は同じ計算機の誰でも書ける
     場所で、後者は同じ利用者の**別のセッション**のブリッジに接続しうる。どちらも「偶然
     接続できる」ことがあり、そのとき何処へ接続したのかが分かりにくい。**場所が分かって
-    いるなら `VW_MCP_SPOOL` で明示するほうが確実で、分からないなら接続しないほうが良い。**
+    いるなら `VWPROBES_MCP_SPOOL` で明示するほうが確実で、分からないなら接続しないほうが良い。**
 
     理由: スプールを探すのはこちらの役割である。プラグイン側は自分の一時ディレクトリへ
     そのまま置く（`<temp>/<プラグイン名>-mcp`）が、一時ディレクトリは環境変数で決まるので
     **両側で食い違いうる**——macOS の $TMPDIR は利用者ごとの `/var/folders/…` で、Claude の
     デスクトップアプリから起動されたこちらにはそれが無く `/tmp` になる。
     """
-    override = os.environ.get("VW_MCP_SPOOL", "")
+    override = os.environ.get("VWPROBES_MCP_SPOOL", "")
     if override:
         return [override]
 
-    plugin = os.environ.get("VW_MCP_PLUGIN", "") or DEFAULT_PLUGIN
+    plugin = os.environ.get("VWPROBES_MCP_PLUGIN", "") or DEFAULT_PLUGIN
     roots = []
 
     def add(root):
@@ -232,9 +232,28 @@ def spool_candidates():
     return [os.path.join(root, plugin + "-mcp") for root in roots]
 
 
+def expected_plugin():
+    """繋いでよいプラグインの名前（生存の印の plugin と突き合わせる）。"""
+    return os.environ.get("VWPROBES_MCP_PLUGIN", "") or DEFAULT_PLUGIN
+
+
+def foreign_bridges(candidates):
+    """候補の場所に**別のプラグイン**の生存の印があれば、その場所と名前を返す（案内のため）。"""
+    found = []
+    for directory in candidates:
+        try:
+            with open(os.path.join(directory, STATUS_FILE), "r", encoding="utf-8") as handle:
+                status = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if isinstance(status, dict) and status.get("plugin") not in (None, expected_plugin()):
+            found.append({"spool": directory, "plugin": status.get("plugin")})
+    return found
+
+
 def call_timeout():
     try:
-        return float(os.environ.get("VW_MCP_TIMEOUT", "") or DEFAULT_TIMEOUT)
+        return float(os.environ.get("VWPROBES_MCP_TIMEOUT", "") or DEFAULT_TIMEOUT)
     except ValueError:
         return DEFAULT_TIMEOUT
 
@@ -265,7 +284,7 @@ def call_timeout():
 # 開始時に掃除するから（plugin/src/BridgeSpool.h の sweep）。
 LEASE_SUFFIX = ".lease.json"
 LEASE_MUTEX_SUFFIX = ".lease.lock"
-# 最後の操作からこれだけ経てば占有を解く（秒。VW_MCP_LEASE_IDLE で変えられる）。**CI の
+# 最後の操作からこれだけ経てば占有を解く（秒。VWPROBES_MCP_LEASE_IDLE で変えられる）。**CI の
 # 往復（push → dev ビルド → vw_update）を待つ間も占有し続けられる長さにする**——その間に
 # 他のセッションが周を走らせると、待っていた側の図面と報告が置き換わる。続けて使わないなら
 # 持ち主が vw_lock_release で片付けて解放する（運用。plugin/README.md）。
@@ -287,7 +306,7 @@ SHUTDOWN_CLEANUP_TIMEOUT = 20.0
 
 def lease_idle_seconds():
     try:
-        value = float(os.environ.get("VW_MCP_LEASE_IDLE", "") or LEASE_IDLE_SECONDS)
+        value = float(os.environ.get("VWPROBES_MCP_LEASE_IDLE", "") or LEASE_IDLE_SECONDS)
     except ValueError:
         return LEASE_IDLE_SECONDS
     return value if value > 0 else LEASE_IDLE_SECONDS
@@ -348,10 +367,10 @@ def vectorworks_alive(pid):
 def session_label():
     """このセッションを人が見分けるための名前（作業ディレクトリとブランチ）。
 
-    VW_MCP_SESSION_LABEL があればそれを使う。このサーバは Claude Code がリポジトリ（または
+    VWPROBES_MCP_SESSION_LABEL があればそれを使う。このサーバは Claude Code がリポジトリ（または
     worktree）で起動するので、ディレクトリとブランチで「どの作業か」が分かる。
     """
-    override = os.environ.get("VW_MCP_SESSION_LABEL", "")
+    override = os.environ.get("VWPROBES_MCP_SESSION_LABEL", "")
     if override:
         return override
     cwd = os.getcwd()
@@ -659,14 +678,14 @@ class Lease:
 def lease_base(candidates):
     """占有の状態を置く場所（拡張子の前まで）。スプールの第 1 候補の隣。
 
-    VW_MCP_LEASE で明示できる（テストが本物の占有に触れないように使う）。
+    VWPROBES_MCP_LEASE で明示できる（テストが本物の占有に触れないように使う）。
     """
-    override = os.environ.get("VW_MCP_LEASE", "")
+    override = os.environ.get("VWPROBES_MCP_LEASE", "")
     if override:
         return override
     if candidates:
         return candidates[0].rstrip("/\\")
-    plugin = os.environ.get("VW_MCP_PLUGIN", "") or DEFAULT_PLUGIN
+    plugin = os.environ.get("VWPROBES_MCP_PLUGIN", "") or DEFAULT_PLUGIN
     return os.path.join(tempfile.gettempdir(), plugin + "-mcp")
 
 
@@ -716,6 +735,11 @@ class Bridge:
             # 無い（大半はこちら）か、書きかけを読んだ。どちらも「ここではない」。
             return None
         if not isinstance(status, dict):
+            return None
+        # **別のプラグインのブリッジは使わない。** 実プラグイン（import-ifc）も同じ作法の
+        # ブリッジを持ち、受け渡しの版も道具の名前（vw_update / vw_restart …）も重なる。
+        # 場所を取り違えて繋がると、vw_update が別のプラグインを入れ替えてしまう。
+        if status.get("plugin") != expected_plugin():
             return None
         # **プロセスが消えていれば動いていない。** 印は落ちたときのまま残り、長く走る道具の
         # 最中なら busy_until が未来を指したままになる（プローブが Vectorworks ごと落とした）。
@@ -1086,7 +1110,7 @@ LOCAL_TOOLS = [
 def bridge_status_result(bridge, notify=None):
     status = bridge.status()
     if status is None:
-        return {
+        result = {
             "running": False,
             "lock": bridge.lease.snapshot(),
             "searched": bridge.candidates,
@@ -1096,10 +1120,18 @@ def bridge_status_result(bridge, notify=None):
                 "プラグイン（VwSdkProbes）が入っていなければ vw_install で入れてから"
                 "Vectorworks を起動し直してください（ブリッジは殻が持つので、MCP ブリッジより"
                 "古いビルドが入っているときも入れ直しが要ります）。"
-                "それでも見つからないときは、プラグイン名（環境変数 VW_MCP_PLUGIN。既定は"
-                "VwSdkProbes）か、スプールの場所（環境変数 VW_MCP_SPOOL）を確かめてください。"
+                "それでも見つからないときは、プラグイン名（環境変数 VWPROBES_MCP_PLUGIN。既定は"
+                "VwSdkProbes）か、スプールの場所（環境変数 VWPROBES_MCP_SPOOL）を確かめてください。"
             ),
         }
+        foreign = foreign_bridges(bridge.candidates)
+        if foreign:
+            result["ignored"] = foreign
+            result["hint"] += (
+                "探した場所に別のプラグインのブリッジがありました（ignored）。"
+                "VWPROBES_MCP_SPOOL が別のプラグインの場所を指していないか確かめてください。"
+            )
+        return result
     result = {"running": True, "spool": bridge.dir}
     result.update(status)
     result["lock"] = bridge.lease.snapshot()
@@ -1123,21 +1155,21 @@ def launch_command():
 
     **起動の手段は OS の標準の方法にだけ頼る。** macOS は `open -a`（アプリ名でも .app の
     パスでも LaunchServices が解決する。既に動いていれば前面に出すだけで、2 つ目は起動
-    しない）。Windows は既定のインストール先の実行ファイルを探す。VW_MCP_APP で明示できる
+    しない）。Windows は既定のインストール先の実行ファイルを探す。VWPROBES_MCP_APP で明示できる
     ——そのときは macOS でも .app で終わらなければ実行ファイルとしてそのまま起動する
     （テスト用の代替プログラムもこの経路）。
     """
-    override = os.environ.get("VW_MCP_APP", "")
+    override = os.environ.get("VWPROBES_MCP_APP", "")
     if sys.platform == "darwin":
         app = override or DEFAULT_MAC_APP
         if override and not override.rstrip("/").endswith(".app"):
             if not os.path.isfile(override):
-                return None, "VW_MCP_APP が指すファイルがありません: %s" % override
+                return None, "VWPROBES_MCP_APP が指すファイルがありません: %s" % override
             return [override], override
         return ["/usr/bin/open", "-a", app], app
     if override:
         if not os.path.isfile(override):
-            return None, "VW_MCP_APP が指すファイルがありません: %s" % override
+            return None, "VWPROBES_MCP_APP が指すファイルがありません: %s" % override
         return [override], override
     if os.name == "nt":
         for pattern in DEFAULT_WIN_EXE_GLOBS:
@@ -1146,10 +1178,10 @@ def launch_command():
                 return [found[0]], found[0]
         return None, (
             "Vectorworks 2026 が既定の場所（%s）に見つかりません。"
-            "環境変数 VW_MCP_APP に Vectorworks2026.exe のパスを書いてください。"
+            "環境変数 VWPROBES_MCP_APP に Vectorworks2026.exe のパスを書いてください。"
             % os.path.expandvars(r"%ProgramFiles%\Vectorworks 2026")
         )
-    return None, "この OS では Vectorworks を起動できません（VW_MCP_APP で名指ししてください）。"
+    return None, "この OS では Vectorworks を起動できません（VWPROBES_MCP_APP で名指ししてください）。"
 
 
 def windows_process_running(exe_path):
@@ -1371,7 +1403,7 @@ def restart_without_bridge(bridge, notify):
     理由: 殻まで変わったビルドを入れた直後は、新しい本体を古い殻が読めず（ABI の版が
     違う）、ブリッジが停止していることがある——そのときはプラグインに再起動を要求できない。
     """
-    if sys.platform != "darwin" or os.environ.get("VW_MCP_APP", ""):
+    if sys.platform != "darwin" or os.environ.get("VWPROBES_MCP_APP", ""):
         return {
             "restarted": False,
             "error": (
@@ -1542,8 +1574,8 @@ INSTALL_SCRIPT_TIMEOUT = 600.0
 
 
 def update_script_command(mode_args):
-    # VW_MCP_UPDATE_SCRIPT は差し替え口（テストが代役を渡す。plugin/tests/vw-mcp-server.test.py）。
-    override = os.environ.get("VW_MCP_UPDATE_SCRIPT", "")
+    # VWPROBES_MCP_UPDATE_SCRIPT は差し替え口（テストが代役を渡す。plugin/tests/vw-mcp-server.test.py）。
+    override = os.environ.get("VWPROBES_MCP_UPDATE_SCRIPT", "")
     if os.name == "nt":
         script = override or os.path.join(SCRIPT_DIR, "vw-probes-update.ps1")
         return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script] + mode_args
@@ -1553,7 +1585,7 @@ def update_script_command(mode_args):
 def run_update_script(mode_args, tick=None):
     """同梱スクリプトを走らせて標準出力（key=value の行）を返す。走らせられなければ OSError。"""
     env = dict(os.environ)
-    plugins = os.environ.get("VW_MCP_PLUGINS_DIR", "")
+    plugins = os.environ.get("VWPROBES_MCP_PLUGINS_DIR", "")
     if plugins:
         env["VW_PLUGINS_DIR"] = plugins
     process = subprocess.Popen(

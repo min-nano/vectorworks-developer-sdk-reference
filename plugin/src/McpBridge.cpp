@@ -43,7 +43,9 @@
 #include <cstddef>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #if GS_MAC
@@ -113,6 +115,7 @@ namespace vwprobe
 		{
 			Sint32 fileRef = -1; // SwitchToOpenFile の鍵（不透明な値。連番ではない）
 			std::string path; // 無題でも「アプリのある場所＋名称未設定 N」が入る
+			std::string savedPath; // 一時ファイルへ保存したならその場所（閉じたら消す）
 		};
 
 		std::vector<OwnedDocument>& OwnedDocuments()
@@ -152,9 +155,45 @@ namespace vwprobe
 			return out;
 		}
 
+		// 同じファイルを指しているか。**文字列が違っても同じことがある**（macOS の一時
+		// ディレクトリは /var/… と /private/var/… の両方で呼べる）ので、文字列で決まらなければ
+		// std::filesystem に確かめさせる（実プラグイン側の SamePath と同じ）。
+		bool SamePath(const std::string& left, const std::string& right)
+		{
+			if (left.empty() || right.empty())
+				return false;
+			if (left == right)
+				return true;
+			std::error_code ec;
+			return std::filesystem::equivalent(std::filesystem::path(left),
+											   std::filesystem::path(right), ec) &&
+				   !ec;
+		}
+
 		bool IsSameDocument(const OpenFile& file, const OwnedDocument& owned)
 		{
-			return file.fileRef == owned.fileRef && file.path == owned.path;
+			return file.fileRef == owned.fileRef && SamePath(file.path, owned.path);
+		}
+
+		// その図面をアクティブにし、**本当にそれがアクティブになったか**を確かめる。
+		bool ActivateOwned(const OwnedDocument& doc)
+		{
+			if (!gSDK->SwitchToOpenFile(doc.fileRef))
+				return false;
+			for (const OpenFile& file : OpenFiles())
+			{
+				if (file.active && IsSameDocument(file, doc))
+					return true;
+			}
+			return false;
+		}
+
+		void RemoveSavedFile(const OwnedDocument& doc)
+		{
+			if (doc.savedPath.empty())
+				return;
+			std::error_code ec;
+			std::filesystem::remove(std::filesystem::path(doc.savedPath), ec);
 		}
 
 		bool StillOpen(const OwnedDocument& owned)
@@ -179,18 +218,11 @@ namespace vwprobe
 			for (const OwnedDocument& doc : owned)
 			{
 				if (!StillOpen(doc))
-					continue; // 人が閉じた・再起動で消えた
-				bool switched = gSDK->SwitchToOpenFile(doc.fileRef);
-				if (switched)
 				{
-					switched = false;
-					for (const OpenFile& file : OpenFiles())
-					{
-						if (file.active && IsSameDocument(file, doc))
-							switched = true;
-					}
+					RemoveSavedFile(doc); // 人が閉じた・再起動で消えた
+					continue;
 				}
-				if (!switched)
+				if (!ActivateOwned(doc))
 				{
 					stuck.push_back(doc);
 					continue;
@@ -199,7 +231,10 @@ namespace vwprobe
 				if (StillOpen(doc))
 					stuck.push_back(doc);
 				else
+				{
+					RemoveSavedFile(doc);
 					++closed;
+				}
 			}
 			owned = stuck;
 			if (closed == 0 && stuck.empty())
@@ -208,6 +243,85 @@ namespace vwprobe
 				"ブリッジが開いた図面 " + std::to_string(closed) + " 枚を保存せずに閉じました";
 			if (!stuck.empty())
 				note += "（閉じられなかったもの " + std::to_string(stuck.size()) + " 枚）";
+			return note;
+		}
+
+		// 一時ファイルの置き場（**まだ無い名前**を選ぶ。既にあるファイルへの別名保存が
+		// 通らなかった実測が実プラグイン側にある——round 12）。作れなければ空。
+		std::string FreshSavePath()
+		{
+			std::error_code ec;
+			const std::filesystem::path dir =
+				std::filesystem::path(TempDirectory()) / "VwSdkProbes-bridge-docs";
+			std::filesystem::create_directories(dir, ec);
+			if (!std::filesystem::is_directory(dir, ec))
+				return "";
+			const long long stamp = NowSeconds();
+			for (int i = 1; i <= 100; ++i)
+			{
+				std::string name = "bridge-";
+				name += std::to_string(stamp);
+				name += "-";
+				name += std::to_string(i);
+				name += ".vwx";
+				std::filesystem::path candidate = dir / name;
+				if (!std::filesystem::exists(candidate, ec))
+					return candidate.string();
+			}
+			return "";
+		}
+
+		// **ブリッジが開いた図面を一時ファイルへ保存する**（走らせた後に呼ぶ）。未保存の
+		// 変更を残しておくと、**誰が頼んだ再起動でも**（実プラグイン側のブリッジの vw_restart
+		// を含む）保存の確認で止まる——実プラグイン側は自分の実機テストの図面を同じ理由で
+		// 一時ファイルへ保存している（M39）。保存したかは戻り値ではなく、アクティブな図面が
+		// そのパスになったかで確かめる。戻り値は報告の 1 行（何もしなければ空）。
+		std::string SaveOwnedDocuments()
+		{
+			std::size_t saved = 0;
+			std::size_t failed = 0;
+			for (OwnedDocument& doc : OwnedDocuments())
+			{
+				if (!StillOpen(doc))
+					continue;
+				const std::string target = FreshSavePath();
+				if (target.empty() || !ActivateOwned(doc))
+				{
+					++failed;
+					continue;
+				}
+				const VectorWorks::Filing::IFileIdentifierPtr fileID(
+					VectorWorks::Filing::IID_FileIdentifier);
+				if (!fileID || fileID->Set(TXString(target.c_str())) != kVCOMError_NoError ||
+					gSDK->SaveActiveDocumentPath(fileID) != 0)
+				{
+					++failed;
+					continue;
+				}
+				bool confirmed = false;
+				for (const OpenFile& file : OpenFiles())
+				{
+					if (file.active && SamePath(file.path, target))
+					{
+						RemoveSavedFile(doc); // 前の周に保存したもの
+						doc.fileRef = file.fileRef;
+						doc.path = file.path;
+						doc.savedPath = target;
+						confirmed = true;
+					}
+				}
+				if (confirmed)
+					++saved;
+				else
+					++failed;
+			}
+			if (saved == 0 && failed == 0)
+				return "";
+			std::string note = "ブリッジが開いた図面を一時ファイルへ保存しました（" +
+							   std::to_string(saved) + " 枚）";
+			if (failed > 0)
+				note += "。保存できなかったもの " + std::to_string(failed) +
+						" 枚（再起動のときに保存の確認が出ることがあります）";
 			return note;
 		}
 
@@ -360,6 +474,9 @@ namespace vwprobe
 			const std::size_t maxBytes = MaxBytesArg(args);
 			const std::vector<QuietRun> runs =
 				RunProbesQuietly(targets, BoolArg(args, "post", true));
+			const std::string saved = SaveOwnedDocuments();
+			if (!saved.empty())
+				notes.push_back(saved);
 			Json list = Json::array();
 			std::size_t ok = 0;
 			std::size_t failed = 0;
@@ -719,7 +836,7 @@ namespace vwprobe
 
 		std::string SpoolDirectory()
 		{
-			const char* const chosen = std::getenv("VW_MCP_SPOOL");
+			const char* const chosen = std::getenv("VWPROBES_MCP_SPOOL");
 			if (chosen != nullptr && *chosen != '\0')
 				return {chosen};
 			return bridge::SpoolDir(TempDirectory(), PLUGIN_VWR_ID);

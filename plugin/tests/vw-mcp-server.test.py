@@ -11,7 +11,7 @@
 #   * 応答が返らない・ブリッジが動いていないときに**待ち切らずに理由を返す**こと、
 #   * 送った順に処理されること（要求ファイル名の連番）、
 #   * vw_launch が Vectorworks を起こし、橋が架かるまで待って一覧の取り直しを促すこと
-#     （起こすものは VW_MCP_APP で代役に差し替える）、
+#     （起こすものは VWPROBES_MCP_APP で代役に差し替える）、
 #   * vw_restart のあと、橋が一度居なくなってまた架かるのを確認すること（M38）、
 #   * 長く走る道具の最中（busy_until）は、印が古びていても「生きている」とみなすこと、
 #   * プラグインの表の待ち時間（timeoutSeconds）を Claude へ見せないこと、
@@ -157,23 +157,23 @@ def drive(spool, messages, timeout="30", by_tmpdir=False, extra_env=None, with_n
     with_notes=True のときは (応答, 通知のメソッド名の列) を返す。通知は応答の間に挟まるので、
     既定では除いて、応答だけを添字で参照できるようにする。
 
-    by_tmpdir=True のときは VW_MCP_SPOOL を渡さず、**TMPDIR から自力で探させる**
+    by_tmpdir=True のときは VWPROBES_MCP_SPOOL を渡さず、**TMPDIR から自力で探させる**
     （プラグイン側と Claude 側が別々に場所を決める、本番と同じ経路）。
     """
     env = dict(os.environ)
     if by_tmpdir:
-        env.pop("VW_MCP_SPOOL", None)
+        env.pop("VWPROBES_MCP_SPOOL", None)
         env["TMPDIR"] = os.path.dirname(spool.rstrip("/"))
         env["TMP"] = env["TMPDIR"]
         env["TEMP"] = env["TMPDIR"]
-        # **VW_MCP_PLUGIN を渡さない**——既定のプラグイン名（開発版）で探し当てることも確かめる。
-        env.pop("VW_MCP_PLUGIN", None)
+        # **VWPROBES_MCP_PLUGIN を渡さない**——既定のプラグイン名（開発版）で探し当てることも確かめる。
+        env.pop("VWPROBES_MCP_PLUGIN", None)
     else:
-        env["VW_MCP_SPOOL"] = spool
-    env["VW_MCP_TIMEOUT"] = timeout
+        env["VWPROBES_MCP_SPOOL"] = spool
+    env["VWPROBES_MCP_TIMEOUT"] = timeout
     # **本物の占有に触れない。** 既定の置き場所は利用者ごとの一時ディレクトリで、この PC で
     # 動いている本物のセッションと共有している（M42）。
-    env["VW_MCP_LEASE"] = lease_base_for(spool)
+    env["VWPROBES_MCP_LEASE"] = lease_base_for(spool)
     env.update(extra_env or {})
     text = "".join(json.dumps(m) + "\n" for m in messages)
     done = subprocess.run(
@@ -242,17 +242,17 @@ def check_launch(root):
     replies = drive(
         spool,
         [call("vw_launch", {"timeout": 1}, request_id=1)],
-        extra_env={"VW_MCP_APP": os.path.join(root, "no-such-app")},
+        extra_env={"VWPROBES_MCP_APP": os.path.join(root, "no-such-app")},
     )
     check(replies[0]["result"]["isError"] is True, "起こすものが無ければエラー")
-    check("VW_MCP_APP" in content_text(replies[0]), "何が無いのかを言う")
+    check("VWPROBES_MCP_APP" in content_text(replies[0]), "何が無いのかを言う")
 
     # 起こしても橋が架からなければ、待つのを諦めて理由を返す。
     silent = os.path.join(root, "silent-vectorworks")
     write_fake_app(silent, spool, body="#!/bin/sh\nexit 0\n")
     started = time.time()
     replies = drive(
-        spool, [call("vw_launch", {"timeout": 1}, request_id=1)], extra_env={"VW_MCP_APP": silent}
+        spool, [call("vw_launch", {"timeout": 1}, request_id=1)], extra_env={"VWPROBES_MCP_APP": silent}
     )
     result = json.loads(content_text(replies[0]))
     check(replies[0]["result"]["isError"] is True, "橋が架からなければエラー")
@@ -270,7 +270,7 @@ def check_launch(root):
         ],
         # 代役は印を書くだけで応えないので、終了のときの片付けを長く待たせない。
         timeout="2",
-        extra_env={"VW_MCP_APP": app},
+        extra_env={"VWPROBES_MCP_APP": app},
         with_notes=True,
     )
     check(
@@ -287,7 +287,7 @@ def check_launch(root):
         spool,
         [call("vw_launch", request_id=1)],
         timeout="2",
-        extra_env={"VW_MCP_APP": os.path.join(root, "no-such-app")},
+        extra_env={"VWPROBES_MCP_APP": os.path.join(root, "no-such-app")},
     )
     result = json.loads(content_text(replies[0]))
     check(replies[0]["result"]["isError"] is False, "受け付けていれば成功")
@@ -346,14 +346,14 @@ def check_launch_on_demand(root):
 
     # 図面を読むだけの道具では起こさない（橋が落ちた理由を覆い隠さない）。
     replies = drive(spool, [call("vw_ping", request_id=1)], timeout="1",
-                    extra_env={"VW_MCP_APP": app})
+                    extra_env={"VWPROBES_MCP_APP": app})
     check(replies[0]["result"]["isError"] is True, "読む道具では起こさない")
     check(not os.path.exists(os.path.join(spool, "bridge.json")), "起こしていない")
 
     # 実機テストは起こしてから頼む。引数はそのまま届き、起こしたことも返る。
     args = {"ifc": "/repo/tests/fixtures/a.ifc", "template": "/repo/tests/fixtures/Default.sta"}
     replies = drive(spool, [call("vw_run_probe", args, request_id=1)], timeout="1",
-                    extra_env={"VW_MCP_APP": app})
+                    extra_env={"VWPROBES_MCP_APP": app})
     check(replies[0]["result"]["isError"] is False, "起こしてから実機テストを頼める")
     result = json.loads(content_text(replies[0]))
     check_eq(result["args"], args, "引数がそのまま届く")
@@ -391,7 +391,7 @@ def check_spool_search(module, root):
             "利用者ごとの一時ディレクトリを引ける (%r)" % user_temp,
         )
         env = dict(os.environ)
-        for name in ("VW_MCP_SPOOL", "TMPDIR", "TMP", "TEMP"):
+        for name in ("VWPROBES_MCP_SPOOL", "TMPDIR", "TMP", "TEMP"):
             env.pop(name, None)
         saved = os.environ.copy()
         os.environ.clear()
@@ -428,6 +428,8 @@ def check_spool_search(module, root):
         # **長く走る道具の最中は、印が古びていても生きている**（busy_until。M38）。
         now = int(time.time())
         def write_status(payload):
+            payload = dict(payload)
+            payload.setdefault("plugin", "VwSdkProbes")
             with open(os.path.join(mine, "bridge.json"), "w", encoding="utf-8") as handle:
                 json.dump(payload, handle)
         write_status({"protocol": 1, "beat": now - 100})
@@ -438,6 +440,15 @@ def check_spool_search(module, root):
         write_status({"protocol": 1, "beat": now - 100, "busy": "vw_run_probe",
                       "busy_until": now - 1})
         check(module.Bridge._read_status(mine) is None, "busy_until を過ぎたら動いていない")
+
+        # **別のプラグインのブリッジには繋がない**（import-ifc も同じ作法・同じ道具名を持つ）。
+        write_status({"protocol": 1, "beat": now})
+        check(module.Bridge._read_status(mine) is not None, "自分のプラグインの印なら使う")
+        write_status({"plugin": "min-nano_structureDev", "protocol": 1, "beat": now})
+        check(module.Bridge._read_status(mine) is None, "別のプラグインの印は使わない")
+        check_eq(module.foreign_bridges([mine]),
+                 [{"spool": mine, "plugin": "min-nano_structureDev"}],
+                 "別のプラグインの印があったことは案内に出す")
         os.remove(os.path.join(mine, "bridge.json"))
 
 
@@ -456,10 +467,10 @@ class Session:
 
     def __init__(self, spool, label, extra_env=None):
         env = dict(os.environ)
-        env["VW_MCP_SPOOL"] = spool
-        env["VW_MCP_TIMEOUT"] = "5"
-        env["VW_MCP_LEASE"] = lease_base_for(spool)
-        env["VW_MCP_SESSION_LABEL"] = label
+        env["VWPROBES_MCP_SPOOL"] = spool
+        env["VWPROBES_MCP_TIMEOUT"] = "5"
+        env["VWPROBES_MCP_LEASE"] = lease_base_for(spool)
+        env["VWPROBES_MCP_SESSION_LABEL"] = label
         env.update(extra_env or {})
         self.proc = subprocess.Popen(
             [sys.executable, SERVER],
@@ -589,7 +600,7 @@ def check_lease(root):
 
         # 最後の操作から一定時間で解く（相手が手を止めたまま）。
         is_error, _ = a.call("vw_ping")
-        c = Session(spool, "session-C", extra_env={"VW_MCP_LEASE_IDLE": "1"})
+        c = Session(spool, "session-C", extra_env={"VWPROBES_MCP_LEASE_IDLE": "1"})
         try:
             time.sleep(1.5)
             is_error, text = c.call("vw_ping")
@@ -625,7 +636,7 @@ def check_lease(root):
         # Vectorworks が居なければ片付けられない。解放はして、片付けは次へ引き継ぐ。
         fake.stop_flag.set()
         fake.join(timeout=5)
-        e = Session(spool, "session-E", extra_env={"VW_MCP_TIMEOUT": "1"})
+        e = Session(spool, "session-E", extra_env={"VWPROBES_MCP_TIMEOUT": "1"})
         try:
             e.call("vw_ping")  # 届かないが、占有は取る
             is_error, text = e.call("vw_lock_release")
@@ -747,7 +758,7 @@ def check_install(root):
     with open(script, "w", encoding="utf-8") as handle:
         handle.write(FAKE_UPDATE_SCRIPT)
     plugins = os.path.join(base, "Plug-Ins")
-    env = {"VW_MCP_UPDATE_SCRIPT": script, "VW_MCP_PLUGINS_DIR": plugins}
+    env = {"VWPROBES_MCP_UPDATE_SCRIPT": script, "VWPROBES_MCP_PLUGINS_DIR": plugins}
 
     replies = drive(spool, [call("vw_install", {"launch": False}, request_id=1)],
                     timeout="1", extra_env=env)
@@ -962,7 +973,7 @@ def main():
         # **本番はこの経路。** プラグイン側は自分の一時ディレクトリへ置き、こちらは
         # 候補を順に確認して生きた印のある場所を使う（両側で $TMPDIR が食い違いうるため）。
         # スプールは <一時ディレクトリ>/VwSdkProbes-mcp でなければならない
-        # （VW_MCP_PLUGIN を渡さないので、既定＝開発版の名前で探す）。
+        # （VWPROBES_MCP_PLUGIN を渡さないので、既定＝開発版の名前で探す）。
         found = os.path.join(root, "VwSdkProbes-mcp")
         os.rename(spool, found)
         found_fake = FakeVectorworks(found)
@@ -971,7 +982,7 @@ def main():
         replies = drive(found, [call("vw_ping", request_id=1)], by_tmpdir=True)
         check(
             replies[0]["result"]["isError"] is False,
-            "VW_MCP_SPOOL 無しでも一時ディレクトリから探し当てる",
+            "VWPROBES_MCP_SPOOL 無しでも一時ディレクトリから探し当てる",
         )
         found_fake.stop_flag.set()
         found_fake.join(timeout=5)
