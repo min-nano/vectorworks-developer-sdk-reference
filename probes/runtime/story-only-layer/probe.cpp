@@ -120,8 +120,11 @@ namespace
 		return hMember;
 	}
 
-	// 構造材 1 本の「解決された絶対Z」と「実体の幾何」を 1 行に畳む。
-	void LogMemberState(vwprobe::Report& probe, const std::string& tag, MCObjectHandle hMember)
+	// 構造材 1 本の「解決された絶対Z」と「実体の幾何」を 1 行に畳む。**乗っているレイヤの
+	// 高さも併せて出す**——実体が正しい絶対Zへ落ちているかは、レイヤ高さを足して初めて
+	// 突き合わせられる（Findings「オブジェクトの絶対Z は『生まれたレイヤの高さ＋ローカルZ』」）。
+	void LogMemberState(vwprobe::Report& probe, const std::string& tag, MCObjectHandle hMember,
+						MCObjectHandle hLayer)
 	{
 		if (hMember == nil)
 		{
@@ -134,9 +137,13 @@ namespace
 		gSDK->GetObjectCube(hMember, cube);
 		VWFC::VWObjects::VWParametricObj memberObj(hMember);
 		VWFC::Math::VWPoint3D insertion = memberObj.GetObjectModelPos();
+		double layerElevation =
+			(hLayer == nil) ? 0.0 : VWFC::VWObjects::VWLayerObj(hLayer).GetElevation();
 		probe.log(tag + ": 解決Z 下端(ID0)=" + ProbeNum(bottom) + " 上端(ID1)=" + ProbeNum(top) +
 				  " 差=" + ProbeNum(top - bottom) + " / 挿入点Z=" + ProbeNum(insertion.z) +
-				  " 外接Z=" + ProbeNum(cube.MinZ()) + "〜" + ProbeNum(cube.MaxZ()));
+				  " 外接Z=" + ProbeNum(cube.MinZ()) + "〜" + ProbeNum(cube.MaxZ()) +
+				  " / レイヤ高さ=" + ProbeNum(layerElevation) +
+				  " 挿入点Z＋レイヤ高さ=" + ProbeNum(insertion.z + layerElevation));
 	}
 
 	// いまのデザインレイヤの並び（図面のオブジェクト列の順）を全部出す。
@@ -288,11 +295,11 @@ VW_PROBE("story-only-layer", "レベル無しのレイヤを階に結ぶ",
 	probe.log("===== S5 構造材を置く（ID0=自階・ID1=上階の横架材天端相当）=====");
 	MCObjectHandle hMemberRef =
 		MakeBoundMember(probe, "基準(レベル付き)", hLevelLayer1, kLevelType, 0.0);
-	LogMemberState(probe, "基準(レベル付き)", hMemberRef);
+	LogMemberState(probe, "基準(レベル付き)", hMemberRef, hLevelLayer1);
 	MCObjectHandle hMemberA = MakeBoundMember(probe, "A(レベル無し)", hPlainA, kLevelType, 2000.0);
-	LogMemberState(probe, "A(レベル無し)", hMemberA);
+	LogMemberState(probe, "A(レベル無し)", hMemberA, hPlainA);
 	MCObjectHandle hMemberB = MakeBoundMember(probe, "B(レベル無し)", hPlainB, kLevelType, 4000.0);
-	LogMemberState(probe, "B(レベル無し)", hMemberB);
+	LogMemberState(probe, "B(レベル無し)", hMemberB, hPlainB);
 
 	// ===== S6 階を動かしたら追随するか（調べたいこと 2・3 の後半） =====
 	probe.log("===== S6 SetStoryElevation(試験1階, 1800) で階を動かす =====");
@@ -302,15 +309,31 @@ VW_PROBE("story-only-layer", "レベル無しのレイヤを階に結ぶ",
 	LogLayerState(probe, "基準(レベル付き) 階を動かした後", hLevelLayer1);
 	LogLayerState(probe, "A 階を動かした後", hPlainA);
 	LogLayerState(probe, "B 階を動かした後", hPlainB);
-	LogMemberState(probe, "基準 階を動かした後", hMemberRef);
-	LogMemberState(probe, "A 階を動かした後", hMemberA);
+	LogMemberState(probe, "基準 階を動かした後", hMemberRef, hLevelLayer1);
+	LogMemberState(probe, "A 階を動かした後", hMemberA, hPlainA);
 	probe.log("作り直してから読み直す（ResetObject）");
 	if (hMemberRef != nil)
 		gSDK->ResetObject(hMemberRef);
 	if (hMemberA != nil)
 		gSDK->ResetObject(hMemberA);
-	LogMemberState(probe, "基準 ResetObject 後", hMemberRef);
-	LogMemberState(probe, "A ResetObject 後", hMemberA);
+	LogMemberState(probe, "基準 ResetObject 後", hMemberRef, hLevelLayer1);
+	LogMemberState(probe, "A ResetObject 後", hMemberA, hPlainA);
+
+	// ===== S6b レベル無しのレイヤの高さを自分で動かせるか（B で試す） =====
+	//	レベル付きのレイヤへ SetElevation を掛けてはいけない（階とレベルが取り残される。
+	//	Findings「ストーリに属するレイヤへ SetElevation を掛けてはいけない」）。
+	//	**レベルが無いレイヤには、高さを動かす口が他に無い**ので、ここで挙動を見る。
+	probe.log("===== S6b レベル無しのレイヤへ SetElevation(2500) =====");
+	if (hPlainB != nil)
+	{
+		VWFC::VWObjects::VWLayerObj(hPlainB).SetElevation(2500.0);
+		LogLayerState(probe, "B SetElevation(2500) の後", hPlainB);
+		probe.log("B の階の高さ=" + ProbeNum(gSDK->GetStoryElevation(hStory1)) +
+				  "（レイヤだけ動いていないかを見る）");
+		if (hMemberB != nil)
+			gSDK->ResetObject(hMemberB);
+		LogMemberState(probe, "B SetElevation の後（ResetObject 済み）", hMemberB, hPlainB);
+	}
 
 	// ===== S7 重ね順（調べたいこと 4） =====
 	probe.log("===== S7 レイヤの重ね順 =====");
