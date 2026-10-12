@@ -1,0 +1,25 @@
+{
+  "enabledMcpjsonServers": ["vwprobes"],
+  "permissions": {
+    "allow": [
+      "mcp__vwprobes__vw_bridge_status",
+      "mcp__vwprobes__vw_launch",
+      "mcp__vwprobes__vw_lock_status",
+      "mcp__vwprobes__vw_lock_release",
+      "mcp__vwprobes__vw_ping",
+      "mcp__vwprobes__vw_probes",
+      "mcp__vwprobes__vw_run_probe",
+      "mcp__vwprobes__vw_run_all",
+      "mcp__vwprobes__vw_probe_log",
+      "mcp__vwprobes__vw_update",
+      "mcp__vwprobes__vw_cleanup",
+      "Bash(scripts/ci-wait.sh:*)",
+      "Bash(scripts/ci-debug.sh:*)"
+    ],
+    "ask": [
+      "mcp__vwprobes__vw_restart",
+      "mcp__vwprobes__vw_install",
+      "mcp__vwprobes__vw_call"
+    ]
+  }
+}

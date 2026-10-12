@@ -18,7 +18,8 @@ Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https
 | `Info/` / `Versions/` | **上流（公式）由来のリファレンス** | **原則書き換えない**（上流の更新を取り込めるように保つ。誤りを見つけたら Findings 側に注記を書く） |
 | `SDK Index/` | **SDK の宣言索引**（生成物）。シグネチャ・enum の値・宣言位置を `Grep` で引く（[説明](SDK%20Index/README.md)） | **手で書き換えない**（週次の `sdk-index` が作り直して PR を立てる） |
 | `Findings/` | **実測知見**。トピック別のファイル＋[索引と規約](Findings/README.md) | ここが本体。知見はここへ足す |
-| `plugin/` | **実機確認プラグイン**（VwSdkProbes）。メニュー 1 つから、複数の PR の調査コードを同居させて実機で走らせる（[説明](plugin/README.md)） | 仕組みを変えるときだけ |
+| `plugin/` | **実機確認プラグイン**（VwSdkProbes）。メニュー 1 つから、複数の PR の調査コードを同居させて実機で走らせる（[説明](plugin/README.md)）。**ローカルの Claude Code からは MCP ブリッジで操作できる**（`plugin/mcp/`。下記「ローカルセッションから実機確認を回す」） | 仕組みを変えるときだけ |
+| `.mcp.json` / `.claude/settings.json` | MCP ブリッジのサーバ（`plugin/mcp/vw-mcp-server.py`）の登録と、道具の許可 | 道具の許可を変えるときだけ |
 | `probes/` | 調査用のコンパイルスニペット（[規約](probes/README.md)） | 調査中だけ。役目を終えたら消す |
 | `probes/runtime/` | **実機で走らせる調査（プローブ）**。1 調査 1 ディレクトリ（[規約](probes/runtime/README.md)） | 調査中だけ。役目を終えたら消す |
 | `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`。Sync fork 相当）・SDK の宣言索引の作り直し（`sdk-index`）・プローブの自動公開（`probe-auto-update`）・公開済みリリースの点検（`probe-release-guard`）・issue を webhook へ流す（`issue-webhook`） | — |
@@ -263,9 +264,11 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
   `plugin/resources/**` / `plugin/scripts/**` / `plugin/CMakeLists.txt`——を触った PR で
   自動的に走る）。
   「ディスパッチしたらコンパイルエラーだった」を防ぐ門。
-- **実機で走らせるのはユーザー。** AI はビルドが公開されたことを伝えるところまで
-  （自動更新に任せる／必要ならディスパッチする）。結果（ログ）を受け取ってから
-  `Findings/` へ反映する。
+- **実機で走らせるのはユーザー——ただしローカルセッションなら AI が自分で走らせる。**
+  クラウドのセッションの AI はビルドが公開されたことを伝えるところまで（自動更新に任せる／
+  必要ならディスパッチする）。結果（ログ）を受け取ってから `Findings/` へ反映する。
+  Vectorworks が動いている Mac で起動したセッションは、MCP ブリッジで**入れ替え・実行・
+  ログの受け取りまで自分で行う**（下記「ローカルセッションから実機確認を回す」）。
 - **結果は PR コメント（PR が無ければ、プローブ先頭の `[issue #N]` が指す issue への
   コメント）として自動で返ってくる**（`plugin/README.md`「結果を PR / issue へ自動で
   返す」）。次の行で始まるコメントは**利用者の Vectorworks が自動生成したもの**で、
@@ -323,6 +326,45 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
   `probe-release-guard.yml` が PR の close で受ける（上記）。
 - **プローブは undo イベントを自分では開かない**（[Findings「Undo」](Findings/Undo.md) の
   半端な記録を避けるため）。図面が戻らない前提で、新規の空図面で走らせる。
+
+## ローカルセッションから実機確認を回す（MCP ブリッジ）
+
+**Vectorworks が動いている Mac で、このリポジトリから起動した Claude Code**は、プローブの
+入れ替え・実行・ログの受け取り・再起動を自分で行える。直下の `.mcp.json` が
+`plugin/mcp/vw-mcp-server.py` を MCP サーバとして登録し、プラグインの殻（`plugin/src/McpBridge.cpp`）が
+一時ディレクトリのファイルで応える。仕組み・道具の一覧・決めごとは
+[`plugin/README.md`「ローカルの Claude Code から操作する」](plugin/README.md)。
+
+**クラウドのセッション（claude.ai/code）からは使えない**（受け渡しが同じ計算機のファイル
+なので届かない）。橋をネットワークへ開くこともしない。iPhone から回したいときは、その Mac で
+`claude remote-control` を起動したセッションを操作する。実機の要らない作業はクラウドで並行してよい。
+
+1 周の流れは **push → `scripts/ci-wait.sh --pr <番号>` で公開を待つ → `vw_update`
+（殻まで変わったら人に断ってから `vw_restart`）→ `vw_run_probe` → 返ったログを読む**。
+
+- **返ったログは、ユーザーが走らせて PR に返ってきたログと同じ水準の実測**である
+  （走る道はメニューと同じ `RunOne`）。数字とログで答えが出る項目は、それで無印にしてよい。
+- **目視でしか分からないことは、引き続き人に尋ねる**（「PR とマージ」3）。ブリッジは
+  絵を返さない。尋ねる前に、プローブへ 1 行足して機械で確かめられないかを考えるのも同じ。
+- **`vw_restart` を頼む前に人へ一言断る**（`.claude/settings.json` で確認を残してある）。
+  ブリッジが開いた図面は走らせた後に一時ファイルへ保存し、再起動の前に閉じるので、
+  ふつうは保存の確認は出ない。出たら、人が開いている図面の確認なので、応答は人に任せる。
+- **import-ifc のブリッジと同居しうる**（同じ Vectorworks に開発版が入っていれば）。登録名
+  （`vwprobes` / `vectorworks`）・スプール・環境変数（`VWPROBES_MCP_*` / `VW_MCP_*`）を分けて
+  あり、サーバは相手が `VwSdkProbes` であることを確かめてから繋ぐ。**占有は別々**なので、
+  `vw_restart` の前には import-ifc 側のセッションが走らせていないかも人に確かめる。
+- **`vw_run_probe` は既定で新規の空図面を開いてから走らせる**（プローブは図面を変える）。
+  人の図面で走らせない。
+- **プローブが Vectorworks ごと落としたら**（`crashed: true`）、落ちるまでのログが返る。
+  それ自体が知見なので Findings へ（`recovered=yes` のコメントと同じ扱い）。起動し直して
+  同じプローブを黙って走らせ直さない。
+- **Vectorworks を使えるのは 1 度に 1 つのセッションだけ。** 断られたら
+  `vw_lock_status` の `wait` で待つ（相手の周を人に確かめずに上書きしない）。続けて使わない
+  なら `vw_lock_release` で片付けて解放する。
+- **ブリッジそのもの（`plugin/src/McpBridge.cpp` など）を直したら、殻が変わる。** 公開ビルドの
+  殻は main のものなので、PR の段階では PR の成果物を手で入れてもらう（「実機確認プラグイン」の
+  `plugin/src/**` の項と同じ）。`plugin/mcp/` のサーバだけの変更は殻を変えない（**サーバを
+  `plugin/scripts/` に置かない**——そこは殻の ID の材料）。
 
 ## CI の完了を待つ（待機は必ず `ci-wait` / `ci-debug` で行う）
 

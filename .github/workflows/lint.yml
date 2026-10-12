@@ -12,7 +12,8 @@ name: Lint
 #                     本体のパスの組み立て＝plugin/src/PayloadHost.h、本体が殻から受け取った
 #                     ものを写しているか＝plugin/src/PayloadHostHolder.h、ダイアログに出す
 #                     文字列の長さ＝plugin/src/ProbeMenuText.h、結果を PR へ投稿する形＝
-#                     plugin/src/FeedbackParse.h とその同梱スクリプト）と、調査 CI 側の
+#                     plugin/src/FeedbackParse.h とその同梱スクリプト、MCP ブリッジの
+#                     受け渡し＝plugin/src/BridgeSpool.h と plugin/mcp/vw-mcp-server.py）と、調査 CI 側の
 #                     スクリプト（scripts/tests/）。SDK にも
 #                     プラットフォームにも依存しないので普通のコンパイラで走る。**壊れても
 #                     静かに壊れる**（更新が来ない／常に来る／再起動が空振りする／実機でだけ
@@ -112,6 +113,9 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
             plugin/tests/FeedbackParseTests.cpp -o /tmp/feedback-parse-tests
           /tmp/feedback-parse-tests
+          g++ -std=c++20 -Wall -Wextra -Werror -I plugin/src \
+            plugin/tests/BridgeSpoolTests.cpp -o /tmp/bridge-spool-tests
+          /tmp/bridge-spool-tests
 
       # 結果を PR へ投稿する同梱スクリプト（plugin/scripts/vw-probes-feedback.sh）。
       # source して curl / plutil / security だけを差し替えるので、**引数の順序も
@@ -121,6 +125,13 @@ jobs:
         run: |
           bash plugin/tests/vw-probes-feedback.test.sh
           bash plugin/tests/vw-probes-update.test.sh
+
+      # MCP ブリッジの Claude 側（plugin/mcp/vw-mcp-server.py）。**プラグインと同じ作法で
+      # スプールに応える代役**を立てて、握手・一覧・占有・起動と再起動の見届け・プローブが
+      # Vectorworks ごと落としたときの後始末・vw_install を確かめる。受け渡しの綴りは
+      # plugin/src/BridgeSpool.h と対なので、どちらかを変えればここが落ちる。
+      - name: Run the MCP server tests
+        run: python3 plugin/tests/vw-mcp-server.test.py
 
       # 調査 CI 側のスクリプトの単体テスト。**どちらも「静かに間違う」場所**なので、
       # 網の境目（api_json）だけ差し替えて振る舞いを固定してある。

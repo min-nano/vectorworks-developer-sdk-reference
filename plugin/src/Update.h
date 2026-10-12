@@ -38,6 +38,8 @@
 
 #pragma once
 
+#include <string>
+
 namespace vwprobe
 {
 	// 確認の結末。**呼び出し側が知りたいのは「この後も続けられるか」の 1 点**なので、
@@ -57,4 +59,29 @@ namespace vwprobe
 	// **最新だったときも・失敗したときも必ず結果を見せる**——利用者が自分で選んだ以上、
 	// 無言で終わるのは「効かなかった」と区別が付かない。
 	UpdateOutcome RunManualUpdateCheck();
+
+	// -----------------------------------------------------------------------
+	// **MCP ブリッジから頼まれた入れ替え**（McpBridge.h の `vw_update`）。ダイアログを
+	// 1 枚も出さず、結末を値で返す。**入れ替えの経路は手で押したときと同じ 1 本**
+	// （同梱スクリプトの `q` → Evaluate → `do-install-payload` / `do-install`）で、
+	// 違うのは「尋ねない」ことだけ。
+	struct RemoteUpdateResult
+	{
+		// no_new_build / installed（本体だけ。再起動は要らない）/ needs_restart（殻まで
+		// 入れ替えた）/ failed（入れ替えに失敗）/ check_failed（確認できなかった）
+		std::string outcome;
+		std::string installed; // 入っていた本体のビルド ID
+		std::string latest;	   // 公開されている本体のビルド ID
+		std::string title;	   // リリースの名前
+		std::string probes;	   // 公開されているビルドに入っているプローブ
+		std::string message;   // 失敗の理由（あれば）
+		bool payloadOnly = false;
+	};
+	RemoteUpdateResult RunRemoteUpdate();
+
+	// **Vectorworks の再起動を頼む**（切り離したヘルパーから OS の通常の終了要求を投げ、
+	// 終了を待って起動し直す。UpdateParse.h「入れ替えたあとの再起動」）。開いている図面に
+	// 未保存の変更があれば、Vectorworks の保存の確認は通常どおり出る。組み立てられなければ
+	// false と理由。
+	bool RequestRestart(std::string& error);
 } // namespace vwprobe

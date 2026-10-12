@@ -66,8 +66,13 @@ namespace vwprobe
 	// 開いていることを確かめたうえでそのまま使う。閉じていれば空にする（宛先が無い扱い）。
 	// branch は動いているビルドのブランチ。note には利用者へ伝えたいことが入る
 	// （呼び出し側が結果ダイアログへ添える）。
+	//
+	// interactive が false なら**何も尋ねない**（MCP ブリッジから走らせるとき。McpBridge.h）。
+	// まだ尋ねていない・トークンが無いときは投稿せず、その旨を note に入れて返す——
+	// 人がいない場面でダイアログを出すと、Claude の要求がそこで止まる。設定は人がメニューで
+	// 済ませる（初回に尋ねられたとき、またはピッカーの「結果の自動投稿を設定…」）。
 	bool PrepareFeedback(std::string& pr, std::string& issue, const std::string& branch,
-						 std::string& note);
+						 std::string& note, bool interactive = true);
 
 	// **走行中の控え**（落ちたときに次で拾うためのもの。Feedback.h 冒頭）。
 	//   Arm    … 走らせる直前にファイルを作る（**投稿する周でだけ呼ぶ**）
