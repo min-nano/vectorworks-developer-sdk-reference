@@ -366,6 +366,15 @@ VW_PROBE("story-layer-recipe", "レベル無しで階に結ぶ手順",
 	probe.log("CreateSectionViewport=" + std::string(hViewport == nil ? "nil" : "有"));
 	if (hViewport != nil)
 	{
+		// 何も映らないと比べられないので、どの配置でも映る倒し方にする
+		// （Findings「Viewports」: 隠線消去が先・1064=false / 1065=true）。
+		VWFC::VWObjects::VWViewportObj(hViewport).SetRenderType(renderFinalHiddenLine);
+		probe.log("1064=false: " +
+				  ProbeFlag(gSDK->SetObjectVariable(hViewport, 1064,
+													TVariableBlock(Boolean(false))) != 0) +
+				  " 1065=true: " +
+				  ProbeFlag(gSDK->SetObjectVariable(hViewport, 1065,
+													TVariableBlock(Boolean(true))) != 0));
 		int visibleCount = 0;
 		gSDK->ForEachLayerN(
 			[&](MCObjectHandle hLayer)
@@ -394,7 +403,7 @@ VW_PROBE("story-layer-recipe", "レベル無しで階に結ぶ手順",
 					  " 表示=" + ProbeInt(visibility) + "（0=表示 / -1=非表示 / 2=グレー）");
 		}
 		gSDK->UpdateViewport(hViewport);
-		probe.log("UpdateViewport を呼んだ（シート『試験シート』。断面の見え方は目視）");
+		probe.log("UpdateViewport を呼んだ（シート『試験シート』。材は x=0 基準・2000 X・4000 Y・6000 Z。見え方は目視）");
 	}
 
 	// ===== U6 別の階へ結び直す =====
