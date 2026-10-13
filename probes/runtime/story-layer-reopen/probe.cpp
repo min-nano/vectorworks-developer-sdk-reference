@@ -76,12 +76,11 @@ VW_PROBE("story-layer-reopen", "開き直した図面で階の結び付きを読
 			std::string(storyName) + ": " +
 			(hStory == nil ? "見つからない" : "高さ=" + ProbeNum(gSDK->GetStoryElevation(hStory))));
 	}
-	if (gSDK->GetNamedObject("試験-柱X") == nil)
-	{
-		probe.fail(
-			"試験-柱X が無い。story-layer-recipe を走らせて保存した図面を前面にしてから走らせる");
-		return;
-	}
+	// GetNamedObject でレイヤが引けるかも記録する（1 回目はここで nil だった）。
+	const char* layerNames[] = {"試験-柱X", "試験-柱Y", "試験-柱Z", "試験天端雛形-t1"};
+	for (const char* layerName : layerNames)
+		probe.log(std::string("GetNamedObject(") + layerName +
+				  ")=" + (gSDK->GetNamedObject(layerName) == nil ? "nil" : "有"));
 	probe.log("デザインレイヤの並び（前面から）");
 	int position = 0;
 	for (MCObjectHandle hObject = VWFC::VWObjects::VWDocument::GetDrawingHeaderFristMember();
