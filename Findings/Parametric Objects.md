@@ -971,7 +971,7 @@ Z の差だけが span（3000）へ書き換わった:
 | `GetStoryObjectDataBoundHeight(data, hContainer)` | **オブジェクトを作らずに**解決先の絶対Zを得る |
 | `AddStoryLevel(story, levelType, 階内相対Z, layerName)` / `AddStoryLevelFromTemplate` / `RemoveStoryLevel` / `SetStoryLevelElevation` / `ResetDefaultStoryLevels` | 階へレベル（＝レイヤ）を足す |
 | `CreateLayerLevelType(name)` / `CreateStoryLevelTemplate(...)` / `CreateStoryLayerTemplate(...)` | レベル種別と雛形の登録 |
-| 【ヘッダ根拠】`AssociateLayerWithStory(layer, story)` / `SetLayerLevelType(layer, levelType)` | **既にあるレイヤを階へ結び付ける / レベル種別を付け替える。** `AddStoryLevel` で生やす以外の道がここにある（`ISDK.h`。実機未確認） |
+| `AssociateLayerWithStory(layer, story)` / `SetLayerLevelType(layer, levelType)` | **既にあるレイヤを階へ結び付ける / レベル種別を付け替える。** 結べるのは**その階で未使用のレベル種別を持つレイヤだけ**（素のレイヤ＝種別 `''` は `false`）。**仮の種別を与えて結び、`SetLayerLevelType(layer, "")` で外すと「階あり・レベルなし」になる**（実機確認済み。[Layers and Stories](Layers%20and%20Stories.md)「レベルを持たないレイヤを階に結ぶ」） |
 | `HasObjectStoryBound(h, id)` / `GetObjectStoryBound` / `SetObjectStoryBound` / `DelObjectStoryBound(h, id)` / `DelObjectStoryBounds(h)` | オブジェクトのバウンドを ID 単位で読み書き・削除する |
 | `GetObjectStoryBoundsCount(h)` / `GetObjectStoryBoundsAt(h, index)` | **実際に並んでいるバウンド ID を数えて引く。** 書けたかどうかはこれで確かめる（上記） |
 | `GetObjectBoundElevation(h, id)` | その ID のバウンドを**解決した絶対Z**。潰れの検知はここ |
