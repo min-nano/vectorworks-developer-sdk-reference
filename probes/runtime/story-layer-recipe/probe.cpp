@@ -403,7 +403,8 @@ VW_PROBE("story-layer-recipe", "レベル無しで階に結ぶ手順",
 					  " 表示=" + ProbeInt(visibility) + "（0=表示 / -1=非表示 / 2=グレー）");
 		}
 		gSDK->UpdateViewport(hViewport);
-		probe.log("UpdateViewport を呼んだ（シート『試験シート』。材は x=0 基準・2000 X・4000 Y・6000 Z。見え方は目視）");
+		probe.log("UpdateViewport を呼んだ（シート『試験シート』。材は x=0 基準・2000 X・4000 "
+				  "Y・6000 Z。見え方は目視）");
 	}
 
 	// ===== U6 別の階へ結び直す =====
