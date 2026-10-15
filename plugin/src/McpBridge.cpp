@@ -34,6 +34,7 @@
 #include "Feedback.h"
 #include "PayloadHost.h"
 #include "ProbeMenu.h"
+#include "StartupRecord.h"
 #include "Update.h"
 
 #include "Interfaces/VectorWorks/Filing/IFileIdentifier.h"
@@ -969,6 +970,9 @@ namespace vwprobe
 				return; // 入れ子で入らない（走らせている最中にイベントが処理されうる）
 			try
 			{
+				// 起動直後の記録（頼まれたときだけ。StartupRecord.h）は、下の 10 秒の待ちより
+				// 前に置く——測りたいのがまさに起動直後の刻みなので。
+				StartupRecordTick();
 				if (gSDK == nullptr || NowSeconds() < ClockStartedAt() + kClockFirstTickSeconds)
 					return;
 				if (ProbeMenuActive())
