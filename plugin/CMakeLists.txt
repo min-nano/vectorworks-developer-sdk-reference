@@ -274,8 +274,7 @@ set(VW_PLUGIN_SOURCES
 	src/Feedback.cpp
 	src/BundledScript.cpp
 	src/PayloadHost.cpp
-	src/McpBridge.cpp
-	src/StartupRecord.cpp)
+	src/McpBridge.cpp)
 
 # MODULE: 実行時に読み込まれるプラグイン（リンク対象ではない）。macOS ではバンドル、
 # Windows では DLL（下で .vlb にリネームする）。
