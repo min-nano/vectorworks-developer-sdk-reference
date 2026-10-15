@@ -374,9 +374,16 @@ namespace
 		ProbeNames names = MakeNames();
 		probe.log("===== 2 回目: 別のコマンドから取り消す =====");
 		LogAllWithClass(probe, "取り消す前", names);
-		short undoResult = gSDK->DoMenuName("Undo", 0);
-		probe.log("DoMenuName(Undo)=" + ProbeInt(undoResult) + " 後 building=" + ProbeBuilding());
-		LogAllWithClass(probe, "取り消し後", names);
+		// 階 1 が消えるまで最大 3 段。間に別の段が挟まっていれば 2 段目以降で消える。
+		for (int step = 1; step <= 3; ++step)
+		{
+			short undoResult = gSDK->DoMenuName("Undo", 0);
+			probe.log(ProbeInt(step) + " 段目 DoMenuName(Undo)=" + ProbeInt(undoResult) +
+					  " 後 building=" + ProbeBuilding());
+			LogAllWithClass(probe, "取り消し " + ProbeInt(step) + " 段目の後", names);
+			if (gSDK->GetNamedObject(names.story1.c_str()) == nil)
+				break;
+		}
 	}
 } // namespace
 

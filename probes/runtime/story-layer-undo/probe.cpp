@@ -17,6 +17,13 @@
 //	  V1 作ったレイヤを全部登録する（import-ifc の作法どおり。レベル無しのレイヤは
 //	     `CreateLayer` の直後に登録）
 //	  V2 レベル無しのレイヤ**だけ**登録しない（レイヤが残る場合、階・種別がどう戻るか）
+//	  V4 V1 と同じものを作って閉じ、**取り消す前に別名保存する**（`SaveActiveDocumentPath`。
+//	     MCP ブリッジは走らせた後に図面をこれで一時ファイルへ保存する。別のコマンドから
+//	     取り消した `story-layer-undo-later` で何も戻らなかったので、保存が取り消しの履歴を
+//	     消すのかを同じコマンドの中で切り分ける）
+//
+//	取り消しは、階 1 が消えるまで最大 3 段掛け、段ごとに読む（間に別の段が挟まっていれば
+//	2 段目で消える。何段掛けても消えなければ、履歴そのものが無い）。
 //
 //	各回とも、階 2 つ（1000 / 4000）・レベル種別 2 つ（天端・仮）・レベルテンプレート 1 つを
 //	**イベントの中で**作り、レベル付きのレイヤ（テンプレート経由）とレベル無しのレイヤ X
@@ -27,7 +34,11 @@
 
 #include "Probe.h"
 
+#include "Interfaces/VectorWorks/Filing/IFileIdentifier.h"
+
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -265,9 +276,27 @@ namespace
 		return hStory;
 	}
 
+	// 一時ディレクトリへ別名保存する（まだ無い名前で）。戻り値は報告の 1 行。
+	std::string ProbeSaveAsTemp()
+	{
+		std::error_code ec;
+		std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
+		if (ec)
+			return "一時ディレクトリが引けない";
+		std::filesystem::path target =
+			dir / ("VwSdkProbes-223-" + std::to_string((long long)std::time(nullptr)) + ".vwx");
+		const VectorWorks::Filing::IFileIdentifierPtr fileID(
+			VectorWorks::Filing::IID_FileIdentifier);
+		if (!fileID || fileID->Set(TXString(target.string().c_str())) != kVCOMError_NoError)
+			return "IFileIdentifier を作れない";
+		short saved = gSDK->SaveActiveDocumentPath(fileID);
+		return "SaveActiveDocumentPath=" + ProbeInt(saved) +
+			   "（0 が成功） 保存先に在る=" + ProbeFlag(std::filesystem::exists(target, ec));
+	}
+
 	// 1 回分。registerLayerX が false なら、レベル無しのレイヤ X だけ登録しない。
 	void RunVariant(vwprobe::Report& probe, const std::string& key, const std::string& suffixHead,
-					bool registerLayerX)
+					bool registerLayerX, bool saveBeforeUndo)
 	{
 		ProbeNames names;
 		names.key = key;
@@ -279,7 +308,8 @@ namespace
 		names.layerX = key + "-柱X";
 
 		probe.log("===== " + key + "（レベル無しのレイヤ X を" +
-				  (registerLayerX ? "登録する" : "登録しない") + "） =====");
+				  (registerLayerX ? "登録する" : "登録しない") +
+				  (saveBeforeUndo ? "・取り消す前に別名保存" : "") + "） =====");
 		LogResources(probe, key + " 開く前", names);
 
 		// ---- イベントを開く（import-ifc の ImportUndoScope と同じ）
@@ -349,12 +379,20 @@ namespace
 		probe.log(key + ": EndUndoEvent=" + ProbeFlag(ended) +
 				  " 閉じた後 building=" + ProbeBuilding());
 
-		// ---- 取り消す（⌘Z と同じコマンド）
-		short undoResult = gSDK->DoMenuName("Undo", 0);
-		probe.log(key + ": DoMenuName(Undo)=" + ProbeInt(undoResult) +
-				  " 後 building=" + ProbeBuilding());
+		if (saveBeforeUndo)
+			probe.log(key + ": 取り消す前に別名保存: " + ProbeSaveAsTemp() +
+					  " 後 building=" + ProbeBuilding());
 
-		LogAll(probe, key + " 取り消し後", names);
+		// ---- 取り消す（⌘Z と同じコマンド）。階 1 が消えるまで最大 3 段。
+		for (int step = 1; step <= 3; ++step)
+		{
+			short undoResult = gSDK->DoMenuName("Undo", 0);
+			probe.log(key + ": " + ProbeInt(step) + " 段目 DoMenuName(Undo)=" +
+					  ProbeInt(undoResult) + " 後 building=" + ProbeBuilding());
+			LogAll(probe, key + " 取り消し " + ProbeInt(step) + " 段目の後", names);
+			if (gSDK->GetNamedObject(names.story1.c_str()) == nil)
+				break;
+		}
 	}
 } // namespace
 
@@ -370,8 +408,9 @@ VW_PROBE("story-layer-undo", "レベル無しのレイヤと undo", "自分の u
 				  " 後 building=" + ProbeBuilding());
 	}
 
-	RunVariant(probe, "V1", "a", true);
-	RunVariant(probe, "V2", "b", false);
+	RunVariant(probe, "V1", "a", true, false);
+	RunVariant(probe, "V2", "b", false, false);
+	RunVariant(probe, "V4", "d", true, true);
 
 	probe.log("===== おわり（最後に building=" + ProbeBuilding() + "） =====");
 }
