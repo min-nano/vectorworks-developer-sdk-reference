@@ -3,12 +3,21 @@
 //
 //	BundledScript.h の実装。**プラットフォーム依存はここに閉じる**:
 //	  * 自分のバイナリの場所（mac: dladdr / win: GetModuleHandleExW）
-//	  * スクリプトの起動と標準出力の取り込み（popen / _popen）
+//	  * スクリプトの起動と標準出力の取り込み（mac: popen / win: CreateProcessW）
 //	パスの組み立てそのものは UpdateParse.h（純粋）にあり、単体テストが押さえている。
 //
 //	【出どころ】もとは Update.cpp の中にあった。結果の自動投稿（Feedback.cpp）でも
 //	同じ道が要るので、**2 つ目の呼び出し元ができた時点で**切り出した——同じ popen の
 //	作法を 2 か所に書くと、片方だけ直す事故が必ず起きる。
+//
+//	【Windows で _popen を使わない理由】_popen は `cmd.exe /c …` を立てる。Vectorworks は
+//	コンソールを持たない GUI アプリなので、そのたびに**新しいコンソール（黒い窓）が開き**、
+//	入れ替えやプローブの結果投稿のあいだ前面に居座っていた。CreateProcessW に
+//	CREATE_NO_WINDOW を付けて直接 powershell を起動し、標準出力だけを自前のパイプで
+//	受ける（標準入力とエラーは NUL）。パイプの書き込み口は PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+//	で**子へ渡すハンドルを限定**して継承させる——Vectorworks が開いている継承可能な
+//	ハンドルまで子へ漏らさないため。ついでにコマンドラインが UTF-16 で渡るので、
+//	ANSI コードページに無い文字（日本語のユーザ名を含むパスなど）も壊れない。
 //
 
 #include "PluginPrefix.h"
@@ -90,6 +99,87 @@ namespace vwprobe
 			buf.resize(len);
 			return Narrow(buf);
 		}
+
+		// コマンドを**ウィンドウ無しで**走らせ、標準出力を out に取り込む（終わるまで待つ）。
+		// 標準入力とエラーは NUL。起動できなければ false。理由は冒頭の【Windows で _popen を
+		// 使わない理由】。
+		bool RunHidden(std::wstring cmdLine, std::string& out)
+		{
+			SECURITY_ATTRIBUTES sa{};
+			sa.nLength = sizeof(sa);
+			sa.bInheritHandle = TRUE;
+
+			HANDLE readEnd = nullptr;
+			HANDLE writeEnd = nullptr;
+			if (::CreatePipe(&readEnd, &writeEnd, &sa, 0) == 0)
+				return false;
+			// 読み口は親だけが持つ（子へ渡すと、子が終わってもパイプが閉じない）。
+			::SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0);
+
+			HANDLE nul =
+				::CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+							  FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+			if (nul == INVALID_HANDLE_VALUE)
+			{
+				::CloseHandle(readEnd);
+				::CloseHandle(writeEnd);
+				return false;
+			}
+
+			// 子へ渡すハンドルをこの 2 つに限る（属性リストが作れない古い環境では、限定せずに
+			// 継承させる——出力が受け取れないよりはよい）。
+			HANDLE inherit[2] = {writeEnd, nul};
+			SIZE_T attrSize = 0;
+			::InitializeProcThreadAttributeList(nullptr, 1, 0, &attrSize);
+			std::vector<unsigned char> attrBuf(attrSize);
+			auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attrBuf.data());
+			bool attrsReady = ::InitializeProcThreadAttributeList(attrs, 1, 0, &attrSize) != 0;
+			if (attrsReady &&
+				::UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherit,
+											sizeof(inherit), nullptr, nullptr) == 0)
+			{
+				::DeleteProcThreadAttributeList(attrs);
+				attrsReady = false;
+			}
+
+			STARTUPINFOEXW si{};
+			si.StartupInfo.cb = attrsReady ? sizeof(STARTUPINFOEXW) : sizeof(STARTUPINFOW);
+			si.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+			si.StartupInfo.wShowWindow = SW_HIDE;
+			si.StartupInfo.hStdInput = nul;
+			si.StartupInfo.hStdOutput = writeEnd;
+			si.StartupInfo.hStdError = nul;
+			si.lpAttributeList = attrsReady ? attrs : nullptr;
+
+			PROCESS_INFORMATION pi{};
+			const DWORD flags = CREATE_NO_WINDOW | (attrsReady ? EXTENDED_STARTUPINFO_PRESENT : 0);
+			const BOOL started = ::CreateProcessW(nullptr, cmdLine.data(), nullptr, nullptr, TRUE,
+												  flags, nullptr, nullptr, &si.StartupInfo, &pi);
+
+			if (attrsReady)
+				::DeleteProcThreadAttributeList(attrs);
+			// 書き口は子に渡したので親の分は閉じる（閉じないと、子が終わっても ReadFile が
+			// EOF を返さない）。
+			::CloseHandle(writeEnd);
+			::CloseHandle(nul);
+			if (started == 0)
+			{
+				::CloseHandle(readEnd);
+				return false;
+			}
+			::CloseHandle(pi.hThread);
+
+			out.clear();
+			std::array<char, 4096> buf{};
+			DWORD n = 0;
+			while (::ReadFile(readEnd, buf.data(), (DWORD)buf.size(), &n, nullptr) != 0 && n > 0)
+				out.append(buf.data(), n);
+
+			::WaitForSingleObject(pi.hProcess, INFINITE);
+			::CloseHandle(pi.hProcess);
+			::CloseHandle(readEnd);
+			return true;
+		}
 #endif
 	} // namespace
 
@@ -136,22 +226,18 @@ namespace vwprobe
 		const std::string pluginsDir = BundlePluginsDir();
 
 #if defined(_WIN32)
-		// 読み込み元のフォルダを教える（そこから読み、そこへ入れる）。
-		if (!pluginsDir.empty())
-			::SetEnvironmentVariableW(L"VW_PLUGINS_DIR", Widen(pluginsDir).c_str());
-
 		std::string cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File " + CmdQuote(script);
 		for (const std::string& a : args)
 			cmd += " " + CmdQuote(a);
-		cmd += " 2>NUL";
 
-		FILE* pipe = ::_popen(cmd.c_str(), "r");
-		if (pipe == nullptr)
-		{
-			if (!pluginsDir.empty())
-				::SetEnvironmentVariableW(L"VW_PLUGINS_DIR", nullptr);
-			return false;
-		}
+		// 読み込み元のフォルダを教える（そこから読み、そこへ入れる）。子は親の環境を
+		// 受け継ぐので、起動の間だけ自分の環境に置く。
+		if (!pluginsDir.empty())
+			::SetEnvironmentVariableW(L"VW_PLUGINS_DIR", Widen(pluginsDir).c_str());
+		const bool ok = RunHidden(Widen(cmd), out);
+		if (!pluginsDir.empty())
+			::SetEnvironmentVariableW(L"VW_PLUGINS_DIR", nullptr);
+		return ok;
 #else
 		std::string env;
 		if (!pluginsDir.empty())
@@ -166,7 +252,6 @@ namespace vwprobe
 		FILE* pipe = ::popen(cmd.c_str(), "r");
 		if (pipe == nullptr)
 			return false;
-#endif
 
 		out.clear();
 		std::array<char, 4096> buf{};
@@ -174,13 +259,8 @@ namespace vwprobe
 		while ((n = ::fread(buf.data(), 1, buf.size(), pipe)) > 0)
 			out.append(buf.data(), n);
 
-#if defined(_WIN32)
-		::_pclose(pipe);
-		if (!pluginsDir.empty())
-			::SetEnvironmentVariableW(L"VW_PLUGINS_DIR", nullptr);
-#else
 		::pclose(pipe);
-#endif
 		return true;
+#endif
 	}
 } // namespace vwprobe
