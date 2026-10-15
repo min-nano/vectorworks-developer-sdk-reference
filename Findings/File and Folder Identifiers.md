@@ -3,7 +3,8 @@
 ディスク上の場所を指す 2 つの識別子そのものの話——**属性（`GetAttributes` / `SetAttributes`）・
 実在の確認（`ExistsOnDisk`）・中身の列挙（`EnumerateContents`）が、実機で何を返すか**
 （[issue #87](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/87)、
-[issue #91](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/91)）。
+[issue #91](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/91)、
+[issue #93](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/93)）。
 
 識別子の作り方・`Set` の使い分け・相対パスの組み立ては公式リファレンスにある
 （[`Info/Working with File Identifiers.md`](../Info/Working%20with%20File%20Identifiers.md)、
@@ -15,11 +16,12 @@
 
 | 問い | 答え |
 | --- | --- |
-| `fbDirectory` で「フォルダかファイルか」を判定できるか | **できない。フォルダでもファイルでも常に `false`。** 掴み方・場所を変えた 34 件すべてで `false` だった（下記） |
+| `fbDirectory` で「フォルダかファイルか」を判定できるか | **できない。フォルダでもファイルでも常に `false`。** macOS で掴み方・場所を変えた 34 件、Windows でもフォルダ 10 件・ファイル 14 件のすべてで `false` だった（下記） |
 | `SAttributes` は埋まっていないのか | **埋まってはいる。** `fbReadOnly` / `fbCanRead` / `fbCanWrite` の 3 つは標本の中で実際に値が変わった。使えないのは `fbDirectory` である |
 | `GetAttributes` の戻り値は実在の判定に使えるか | **使える**（実在しない場所では失敗する）。ただし**フォルダとファイルで返るエラー番号が違う**ので、特定の定数と比べず `VCOM_SUCCEEDED` で見る |
 | `ExistsOnDisk` の戻り値で実在が分かるか | **分からない。** 実在しなくても戻り値は `0`（成功）で、**答えは出力引数のほうにある** |
-| `SetAttributes` で属性を書き戻せるか | **フォルダは不可**（`kVCOMError_NotImplemented`）。**ファイルは「権限だけ」書ける**——`fbReadOnly` / `fbCanWrite` / `fbCanExecute` / `fbCanRead` が POSIX の権限ビットへ届き、**残り 7 つは成功を返して完全に捨てられる**（下記） |
+| `SetAttributes` で属性を書き戻せるか | **フォルダは両 OS とも不可**（`kVCOMError_NotImplemented`）。**ファイルは書けるが、書ける旗が OS で違う**——macOS では `fbReadOnly` / `fbCanWrite` / `fbCanExecute` / `fbCanRead` が POSIX の権限ビットへ届き、Windows では `fbReadOnly` / `fbCanWrite` / `fbHidden` / `fbSystem` / `fbTemporary` / `fbArchive` がファイル属性（`FILE_ATTRIBUTE_*`）へ届く。**それ以外は成功を返して捨てられる**（下記） |
+| `fbHidden` / `fbSystem` / `fbArchive` / `fbTemporary` / `fbEncrypted` は使えるか | **Windows でだけ生きている。** Windows では `FILE_ATTRIBUTE_*` をそのまま映し（`fbEncrypted` は読むだけ）、macOS では常に `no`。**プラットフォーム差として確定した**（下記「macOS と Windows の比較」） |
 | 書いた `fbCanRead` を読み戻せるか | **読み戻せない。書けるのに読めない。** 権限ビットは実際に変わるのに、`GetAttributes` は `yes` を返し続ける（下記） |
 | では種類の判定はどうするか | **判定しなくて済むように書く。** `IFolderIdentifier` を持っている時点でフォルダ、`IFileIdentifier` を持っている時点でファイルである。どうしても混在を捌くなら `EnumerateContents` の振り分け（`OnFolderContent` / `OnFileContent`）を使う——**SDK 自身の分類はそちらに出ている** |
 
@@ -74,7 +76,8 @@ struct SAttributes
 （`FILE_ATTRIBUTE_HIDDEN` / `_SYSTEM` / `_ARCHIVE` / `_ENCRYPTED`）そのものの名前だが、
 **その対応を書いたものは SDK の側に 1 行も無い**——値を詰めるのは Vectorworks 本体で、
 本体は SDK に付いてこないからである。**プラットフォーム差は Windows 実機で測るしかなく、
-`sdk-grep` / `sdk-ls` を引き直しても答えは出ない**（[issue #93](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/93)）。
+`sdk-grep` / `sdk-ls` を引き直しても答えは出ない**（[issue #93](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/93)。
+実機で測った結果は下記「Windows で確かめたこと」）。
 
 ## 実機で確かめたこと（VW 2026 / macOS / Apple Silicon）
 
@@ -122,8 +125,12 @@ Google ドライブ配下のフォルダについて観測された `fbDirectory
 話ではなかった**。同じ実行の中で `~/Library/CloudStorage/` 配下も測っており、ローカルと
 差は出ていない。
 
-> **【未確認】Windows では測っていない。** 上はすべて macOS の実測である
-> （[issue #93](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/93)）。
+**Windows でも同じ。** #93 のプローブ（`sattributes-windows`）で、フォルダ 10 件
+（作った作業フォルダ・`C:\`・`C:\WINDOWS\`・`System32\`・`Program Files\`・
+`ProgramData\`・`System Volume Information\`・`$Recycle.Bin\`・`%USERPROFILE%\AppData\` など。
+OS 側では `FILE_ATTRIBUTE_DIRECTORY` が立っている）とファイル 14 件のすべてで `fbDirectory=no`。
+`SetAttributes` で `true` を書いても読み戻しもディスクも動かない（下記「Windows で
+確かめたこと」）。**`fbDirectory` は両 OS で死んでいる。**
 
 ### 他の 10 項目——`fbReadOnly` / `fbCanRead` / `fbCanWrite` は生きている
 
@@ -326,6 +333,142 @@ VW 2026 / macOS / Apple Silicon）。
   `/System/Library/CoreServices/SystemVersion.plist` `/usr/bin/true` の **8 件すべてで
   `no`**（どれも `fbReadOnly=yes` は正しく返っている＝属性自体は読めている）。
 
+## Windows で確かめたこと（Windows 11 / NTFS）
+
+[issue #93](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/93) の
+プローブ `sattributes-windows` で、上の macOS の測り方（#91 の `sattributes-write`）を
+Windows の API に置き換えて同じ順に測った。実行環境はログの冒頭のとおり
+**Windows 11 25H2（build 26200）Pro・`C:\` は NTFS（`FILE_SUPPORTS_ENCRYPTION=yes`）**
+（レジストリの `ProductName` は `Windows 10 Pro` を返すが、これは Windows 11 の既知の癖）。
+ディスク側は `stat` の代わりに `GetFileAttributesW` で前後を比べ、「立つはずの標本」は
+`chmod` / `chflags` の代わりに `SetFileAttributesW` と `EncryptFileW`（EFS）で作った。
+落ちていない（所要 2.13 秒）。
+
+### `SetAttributes`——フォルダは未実装のまま、ファイルは「ファイル属性」を書く
+
+| 対象 | 戻り値 | ディスク（`GetFileAttributesW`） |
+| --- | --- | --- |
+| `IFolderIdentifier` | **`6` = `kVCOMError_NotImplemented`**（macOS と同じ） | **1 ビットも動かない**（11 旗すべて・まとめて全部 `true` / 全部 `false` でも同じ） |
+| `IFileIdentifier` | **`0`（成功）** | **`FILE_ATTRIBUTE_*` が動く** |
+
+ファイル（`case.txt`。作った直後は `ARCHIVE` だけが立っている）で 11 旗を 1 つずつ
+反転して書いた結果:
+
+| 書いた旗 | ディスク | 読み戻し |
+| --- | --- | --- |
+| `fbReadOnly = true` | `ARCHIVE` → **`READONLY\|ARCHIVE`** | `fbReadOnly=yes` `fbCanWrite=no` |
+| `fbCanWrite = false` | `ARCHIVE` → **`READONLY\|ARCHIVE`** | `fbReadOnly=yes` `fbCanWrite=no` |
+| `fbHidden = true` | → **`HIDDEN\|ARCHIVE`** | `fbHidden=yes` |
+| `fbSystem = true` | → **`SYSTEM\|ARCHIVE`** | `fbSystem=yes` |
+| `fbTemporary = true` | → **`ARCHIVE\|TEMPORARY`** | `fbTemporary=yes` |
+| `fbArchive = false` | `ARCHIVE` → **`NORMAL`** | `fbArchive=no` |
+| `fbEncrypted = true` | **動かない** | 変わらない |
+| `fbDirectory` / `fbCanRead = false` / `fbCanExecute = true` / `fbCanBrowse` | **動かない**（属性ビットは） | 変わらない |
+
+- **6 つが書けて、6 つとも読み戻せる。** macOS（書けるのは権限の 4 つ、読み戻せるのは 3 つ）
+  とは**書ける旗の顔ぶれがまるで違う**。
+- **書き込みの可否は macOS と同じく AND で決まる。** まとめて全部 `true` を書くと
+  `READONLY|HIDDEN|SYSTEM|ARCHIVE|TEMPORARY`（`fbReadOnly=true` が勝つ）、全部 `false` を
+  書くと **`READONLY` だけ**が残る（`fbCanWrite=false` が勝つ）。
+- **構造体まるごとで置き換わる。** 全部 `false` を書くと `HIDDEN` / `SYSTEM` / `ARCHIVE` /
+  `TEMPORARY` がすべて落ちた。1 つだけ変えたいときも、**必ず `GetAttributes` で読んだ値を
+  書き換えて渡す**（`{}` から作って渡すと、立っていた属性を消す）。
+- **本当に書けなくなる。** `fbReadOnly=true`（または `fbCanWrite=false` だけ）を書いた後、
+  1 バイト追記しようとすると**開くところで拒まれる**（`err=5` アクセスが拒否されました）。
+  初期値を書き戻すと `ARCHIVE` に戻り、また追記できる。
+- **`fbEncrypted` は書けない。** 平文へ `true` を書いても、EFS で暗号化したファイルへ
+  `false` を書いても、**成功が返るだけで暗号化の状態は変わらない**（下記 6d）。
+- `fbCanRead` / `fbCanExecute` を書いたときに**ACL が変わったかは見ていない**
+  （見たのは属性ビットだけ）。読み戻しは変わらない。
+
+フォルダを読み取り専用にしようとしても `6` が返るだけで、**その中へ `CreateOnDisk()`
+するとふつうに作れる**（macOS と同じ）。実在しない対象への `SetAttributes` も
+macOS と同じで、フォルダ `6`・ファイル `1`（`GetAttributes` はフォルダ `51`・ファイル `1`）。
+
+**`SetAttributesTimeDateReference` は 4 つとも `6`**（macOS と同じ）。読むほうは
+**macOS と食い違う**:
+
+| 参照 | macOS の `Get…` | Windows の `Get…` |
+| --- | --- | --- |
+| `Created` | `0` | `0` |
+| `LastWritten` | `0` | `0` |
+| `LastAccessed` | **`1`** | **`0`**（成功） |
+| `LastBackup` | `1` | `1` |
+
+### `GetAttributes`——`FILE_ATTRIBUTE_*` をそのまま映す
+
+`SetFileAttributesW` で属性を 1 つずつ立てて読んだ（基準はファイル `NORMAL`・フォルダ
+`DIRECTORY` だけ）。
+
+| 立てた属性 | ファイルでの差 | フォルダでの差 |
+| --- | --- | --- |
+| `READONLY` | `fbReadOnly=yes` `fbCanWrite=no` | **差なし** |
+| `HIDDEN` | `fbHidden=yes` | `fbHidden=yes` |
+| `SYSTEM` | `fbSystem=yes` | `fbSystem=yes` |
+| `HIDDEN\|SYSTEM` | `fbHidden=yes` `fbSystem=yes` | （測っていない） |
+| `ARCHIVE` | `fbArchive=yes` | `fbArchive=yes` |
+| `TEMPORARY` | `fbTemporary=yes` | （フォルダには立てられないので測っていない） |
+| `NOT_CONTENT_INDEXED`（対応物の無い対照） | 差なし | 差なし |
+
+- **`fbArchive` はふつうに書き込んだだけで立つ。** `ARCHIVE` を落として（`fbArchive=no`）
+  1 バイト追記すると、OS が `ARCHIVE` を立て直し、`fbArchive=yes` になった。特権は要らない。
+- **`fbEncrypted` は EFS の標本で立つ。** `EncryptFileW` が成功し（`FileEncryptionStatusW=1`、
+  OS 側は `ARCHIVE|ENCRYPTED`）、**差は `fbEncrypted=yes` だけ**だった。
+- **フォルダの `READONLY` 属性は `fbReadOnly` に出ない。** Windows ではフォルダの `READONLY` は
+  「中へ書けない」という意味ではない（Explorer の表示用の印）ので、映さないほうが正しい
+  とも言える。ただ、フォルダの `fbReadOnly` が何を見ているのかは分からなかった（次項）。
+
+### システム領域の標本（読むだけ）
+
+| 標本 | OS の属性 | `SAttributes`（`yes` の旗だけ） |
+| --- | --- | --- |
+| `C:\` | `HIDDEN\|SYSTEM\|DIRECTORY` | `fbHidden` `fbSystem` `fbCanRead` `fbCanWrite` |
+| `C:\WINDOWS\` / `System32\` | `DIRECTORY` | `fbCanRead` `fbCanWrite` |
+| `C:\Program Files\` | **`READONLY`**`\|DIRECTORY` | `fbCanRead` `fbCanWrite`（`fbReadOnly=no`） |
+| `C:\ProgramData\` | `HIDDEN\|DIRECTORY\|NOT_CONTENT_INDEXED` | `fbHidden` `fbCanRead` `fbCanWrite` |
+| `C:\System Volume Information\` | `HIDDEN\|SYSTEM\|DIRECTORY` | **`fbReadOnly`** `fbHidden` `fbSystem` `fbCanRead`（**`fbCanWrite=no`**） |
+| `C:\$Recycle.Bin\` | `HIDDEN\|SYSTEM\|DIRECTORY` | `fbHidden` `fbSystem` `fbCanRead` `fbCanWrite` |
+| `%USERPROFILE%\AppData\` | `HIDDEN\|DIRECTORY` | `fbHidden` `fbCanRead` `fbCanWrite` |
+| `System32\kernel32.dll` / `cmd.exe` / `drivers\etc\hosts` | `ARCHIVE` | `fbArchive` `fbCanRead` `fbCanWrite` |
+| `%USERPROFILE%\NTUSER.DAT` | `HIDDEN\|ARCHIVE\|NOT_CONTENT_INDEXED` | `fbHidden` `fbArchive` `fbCanRead` `fbCanWrite` |
+| `C:\pagefile.sys` | 読めない（`GetFileAttributesW` が `err=32` 使用中） | **`GetAttributes=1`（失敗）**。`ExistsOnDisk` は `yes` |
+
+- **`fbReadOnly` / `fbCanWrite` は ACL を見ていない。** `cmd.exe` や `kernel32.dll`、
+  `C:\WINDOWS\` は一般ユーザーには書けない（ACL で守られている）のに `fbCanWrite=yes`。
+  ファイルについては「`READONLY` 属性が立っているか」だけである。**書けるかどうかの
+  当たりとしては、macOS（権限ビットを映す）より弱い。**
+- **`System Volume Information` だけフォルダで `fbReadOnly=yes` `fbCanWrite=no` になった。**
+  `READONLY` 属性は立っていないので、属性ビットではない何か（このフォルダは管理者でも
+  開けない）を見ているらしいが【推定】、`C:\Program Files\`（`READONLY` 属性あり・
+  一般ユーザーは書けない）が `no` / `yes` なので、規則は分からない。**フォルダの
+  `fbReadOnly` / `fbCanWrite` は Windows では当てにしない。**
+- **`fbCanExecute` は Windows では常に `no`。** `cmd.exe`・`kernel32.dll` でも、作った
+  `.exe` / `.bat` / `.cmd` / `.com` / `.ps1` / `.vbs` / `.dll` でも `no`（拡張子では決まらない）。
+  macOS ではファイルの実行権ビットを映していたので、**これもプラットフォーム差**である。
+- **`fbCanRead` は Windows でも常に `yes`**（`System Volume Information` でも）。
+- **使用中のファイルでは `GetAttributes` が失敗する。** `pagefile.sys` は `ExistsOnDisk=yes`
+  なのに `GetAttributes=1`。同じ場所で `GetFileAttributesW` も `err=32` で失敗しているので、
+  中で同じ口を使っているのだろう【推定】。「`GetAttributes` が失敗したら実在しない」とは
+  読まない。
+
+## macOS と Windows の比較
+
+| 旗 | macOS 読む | macOS 書く | Windows 読む | Windows 書く |
+| --- | --- | --- | --- | --- |
+| `fbReadOnly` / `fbCanWrite` | **生きている**（権限ビット・`UF_IMMUTABLE`） | **生きている**（権限ビット） | **ファイルは生きている**（`READONLY` 属性だけ。ACL は見ない）。フォルダは不明瞭 | **生きている**（`READONLY` 属性） |
+| `fbHidden` | 死んでいる | 死んでいる | **生きている**（`HIDDEN`） | **生きている** |
+| `fbSystem` | 死んでいる | 死んでいる | **生きている**（`SYSTEM`） | **生きている** |
+| `fbArchive` | 死んでいる（標本を作れない） | 死んでいる | **生きている**（`ARCHIVE`） | **生きている** |
+| `fbTemporary` | 死んでいる | 死んでいる | **生きている**（`TEMPORARY`） | **生きている** |
+| `fbEncrypted` | 死んでいる（標本を作れない） | 死んでいる | **生きている**（EFS の `ENCRYPTED`） | **死んでいる**（成功が返るだけ） |
+| `fbCanExecute` | **ファイルでは生きている**（実行権ビット）。フォルダは常に `no` | **生きている** | 死んでいる（常に `no`） | 死んでいる（属性ビットは動かない） |
+| `fbCanRead` | 死んでいる（常に `yes`） | **生きている**（読み取りビットが落ちる） | 死んでいる（常に `yes`） | 死んでいる（属性ビットは動かない） |
+| `fbDirectory` / `fbCanBrowse` | 死んでいる | 死んでいる | 死んでいる | 死んでいる |
+
+書くのは**ファイルだけ**（フォルダは両 OS とも `kVCOMError_NotImplemented`）。
+**両 OS で同じ意味に使えるのは `fbReadOnly` / `fbCanWrite` だけ**で、それも macOS は
+権限ビット、Windows は `READONLY` 属性という**別のもの**を見ている。
+
 ## 実務上どう書くか
 
 ```cpp
@@ -355,6 +498,15 @@ if (VCOM_SUCCEEDED(folder->GetAttributes(attrs)) && !attrs.fbReadOnly && attrs.f
 // ✗ フォルダの属性は書き戻せない（kVCOMError_NotImplemented が返るだけ）
 folder->SetAttributes(attrs);          // 何も起きない
 
+// ✗ SAttributes を {} から作って書かない（Windows では構造体まるごとで属性が置き換わり、
+//    立っていた HIDDEN / SYSTEM / ARCHIVE / TEMPORARY を消す）
+SAttributes fresh = {};
+fresh.fbReadOnly = true;
+file->SetAttributes(fresh);            // Windows: READONLY だけが残り、ARCHIVE などが落ちる
+
+// ✗ fbHidden / fbSystem / fbArchive / fbTemporary / fbEncrypted / fbCanExecute を
+//    両 OS 共通の判定に使わない（前の 5 つは Windows でだけ、fbCanExecute は macOS でだけ生きている）
+
 // ✗ fbReadOnly と fbCanWrite を同時に指定しない（衝突して「書けない」側が勝つ）
 attrs.fbReadOnly = false;
 attrs.fbCanWrite = false;              // ← こちらが効いて読み取り専用になる
@@ -364,7 +516,7 @@ file->SetAttributes(attrs);
 SAttributes attrs = {};
 if (VCOM_SUCCEEDED(file->GetAttributes(attrs)))
 {
-    attrs.fbReadOnly = true;           // 実際に chmod 0444 相当まで届く
+    attrs.fbReadOnly = true;           // macOS: chmod 0444 相当 / Windows: READONLY 属性
     file->SetAttributes(attrs);
 }
 
@@ -390,7 +542,7 @@ public:
 ### `fbArchive` / `fbEncrypted` を立てた標本は、macOS では作れない
 
 「`no` を返す」ところまでは測ってあるが、**「立つはずの標本」を作る手段が macOS に
-無い**ので、この 2 つだけは「読めない」と言い切らずに止めてある。
+無い**ので、この 2 つは macOS では「読めない」と言い切らずに止めてある。
 
 - **`fbArchive`** … macOS の対応物 `SF_ARCHIVED` は**スーパーユーザでないと立てられない**
   （実測: `chflags` が `errno=1 Operation not permitted`）。プラグインは利用者の権限で
@@ -399,23 +551,6 @@ public:
   ボリューム単位で、個々のファイルに旗は立たない）。**そもそも作れない。**
 
 どちらも `SetAttributes` で書いても**ディスクは 1 ビットも動かなかった**ので、
-「Vectorworks 側がこの 2 つを扱っていない」ことまでは言える。残っているのは
-**「OS が立てた旗なら読めるのか」**だけで、それは Windows でなければ確かめられない
-（次項）。
-
-### Windows では測っていない
-
-上はすべて macOS の実測である。**`fbArchive` / `fbSystem` / `fbHidden` / `fbEncrypted`
-は、どれも Windows のファイル属性そのものの名前**（`FILE_ATTRIBUTE_ARCHIVE` /
-`_SYSTEM` / `_HIDDEN` / `_ENCRYPTED`）なので、**あちらでは埋まる見込みがある**【推定】。
-Windows 実機が要るため
-[issue #93](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/93)
-へ切り出した（**Windows 実機が手に入るまで着手できない**）。
-
-ここが確かめられると、「この 4 つは Windows 専用の概念で、macOS では死んでいる」と
-**プラットフォーム差として言い切れる**ようになる。
-
-**ヘッダ側の道は潰してある。** Windows 版 SDK と macOS 版 SDK は**配られるファイルとして
-同一**なので（上記「`SAttributes` の中身（ヘッダ）」）、**`sdk-grep` / `sdk-ls` を
-`--platform windows` で引き直しても答えは出ない——引き直さないこと。** 残っているのは
-**Windows 実機でプローブを 1 つ走らせる 1 手だけ**である。
+「macOS の Vectorworks はこの 2 つを扱っていない」ことまでは言える。
+**Windows では 2 つとも OS が立てた旗を読めた**（上記「Windows で確かめたこと」。
+#93 で解決）。macOS で特権を取ってまで測り直す意味は無いので、ここで打ち切る。
