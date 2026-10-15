@@ -374,7 +374,6 @@ Claude Code ──MCP(stdio)──▶ plugin/mcp/vw-mcp-server.py ──ファ�
 | ファイル | 役割 |
 | --- | --- |
 | `src/McpBridge.{h,cpp}` | 殻の時計（OS のタイマー）・道具の表と実装・ブリッジが開いた図面の管理 |
-| `src/StartupRecord.{h,cpp}` | **起動直後の記録**。頼み札（一時ディレクトリの `VwSdkProbes-startup-record.request`。プローブが置く）があるときだけ、殻の時計の最初の刻みから図面の件数と `GetCurrentLayer()` を `VwSdkProbes-startup-record.txt` へ書く（図面が無いとプローブを走らせられないので、起動直後の SDK の様子はここでしか取れない。[issue #224](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/224)） |
 | `src/BridgeSpool.h` / `src/BridgeJson.h` / `src/BridgeParse.h` | **純粋な部分**（受け渡しの作法・最小の JSON・ログの詰め方・プローブの引き当て）。`tests/BridgeSpoolTests.cpp` |
 | `mcp/vw-mcp-server.py` | Claude 側の MCP サーバ（標準ライブラリだけ）。`tests/vw-mcp-server.test.py` がプラグインの代役を立てて確かめる |
 | `../.mcp.json` / `../.claude/settings.json` | サーバの登録と、道具の許可 |
