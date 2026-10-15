@@ -149,7 +149,7 @@ Modules](Plug-in%20Modules.md) の `CloseAllFilesAndQuitVectorworks`（プラグ
 - **図面が 1 枚も無ければ `GetCurrentLayer()` は `nullptr`**（落ちない。全部閉じた後も起動
   直後も。件数と常に一致した）。**閉じた文書のレイヤと後で開いた文書のレイヤが同じアドレスで
   返った**ので、ハンドルの値で文書を同定しない（[Timers and Notifications](Timers%20and%20Notifications.md)
-  の 4 の 8。mac / Windows で実測。Windows の起動直後だけ【未確認】）。
+  の 4 の 8。mac / Windows で実測）。
 
 ### `GetOpenFilesList` と `fileRef`
 
