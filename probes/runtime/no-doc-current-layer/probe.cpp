@@ -81,7 +81,14 @@ VW_PROBE("no-doc-current-layer", "図面が無いときの GetCurrentLayer",
 		}
 		in.close();
 		if (!ended)
-			probe.log("  （end の行が無い——記録の途中で終わった。まだ記録中か、落ちたか）");
+		{
+			// **消さない**——殻はまだ書いている（図面が開いてから 20 刻み＝5 秒ほどで閉じる）。
+			// 消すと、残りの行だけで記録が作り直される（実際に踏んだ）。
+			probe.log("");
+			probe.log("end の行がまだ無い——殻は記録中（図面を開いてから 5 秒ほどで閉じる）。");
+			probe.log("数秒待ってから、もう一度走らせる。（落ちていた場合は、このまま残る）");
+			return;
+		}
 		std::filesystem::remove(record, ec);
 		probe.log("");
 		probe.log("記録を消した。");
@@ -104,6 +111,7 @@ VW_PROBE("no-doc-current-layer", "図面が無いときの GetCurrentLayer",
 	probe.log("このあと:");
 	probe.log("  1. Vectorworks を終了する（開いている図面は閉じてよい）");
 	probe.log("  2. **図面を開かずに**起動し、20 秒ほどそのまま待つ");
-	probe.log("  3. 図面を新規に開いて、もう一度このプローブを走らせる（それが報告になる）");
+	probe.log(
+		"  3. 図面を新規に開き、5 秒ほど待ってから、もう一度このプローブを走らせる（それが報告）");
 	probe.log("※ 殻が StartupRecord を持つ版（main に入った後のビルド）でないと記録されない。");
 }
