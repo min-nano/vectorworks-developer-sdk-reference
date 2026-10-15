@@ -77,6 +77,22 @@ namespace
 		return (NdclDir() / "VwSdkProbes-no-doc-current-layer-counts.txt").string();
 	}
 
+	// **刻みの持ち主の札。** 殻は実行のたびに本体を別の名前で複製して読み込む
+	// （`VwSdkProbes-<番号>-…vwpayload`）ので、**報告した実行と刻みは別の像**で、静的変数を
+	// 共有しない。止める合図はファイルで渡す——札が消えたか、別の札に書き換わったら止まる。
+	std::string NdclOwnerPath()
+	{
+		return (NdclDir() / "VwSdkProbes-no-doc-current-layer-owner.txt").string();
+	}
+
+	std::string NdclReadOwner()
+	{
+		std::ifstream in(NdclOwnerPath());
+		std::string id;
+		std::getline(in, id);
+		return id;
+	}
+
 	long long NdclWallMs()
 	{
 		return (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -163,6 +179,7 @@ namespace
 	// 刻みが持ち越す状態。**意図して leak する**（タイマーはプローブより長生き）。
 	struct NdclTimerState
 	{
+		std::string owner;
 		std::string events;
 		std::string counts;
 		std::chrono::steady_clock::time_point armedAt;
@@ -249,15 +266,13 @@ namespace
 			st->maxGapMs = now - st->lastMs;
 		st->lastMs = now;
 
-		// 報告された（書き溜めが消された）なら止まる。
-		if (st->ticks % 10 == 0)
+		// **毎刻み、何かを書く前に**札を確かめる（以前は 10 刻みに 1 回で、その間に
+		// 報告で消された書き溜めを作り直していた。実際に踏んだ）。
+		if (NdclReadOwner() != st->owner)
 		{
-			std::error_code ec;
-			if (!std::filesystem::exists(st->events, ec))
-			{
-				NdclDisarm("reported");
-				return;
-			}
+			st->disarmed = true; // 書き溜めはもう別の持ち主のもの。何も書かずに止まる
+			NdclDisarm("owner-changed");
+			return;
 		}
 		if (now > kNdclMaxMs)
 		{
@@ -374,8 +389,9 @@ namespace
 	// 書き溜めを報告して消す。刻みがまだ生きていれば、消えたのを見て止まる。
 	void NdclReport(vwprobe::Report& probe, bool alive)
 	{
-		// 同じ本体の刻みならここで止まる（違う本体の刻みは、書き溜めが消えたのを見て止まる）。
-		NdclDisarm("reported");
+		// 札を消す——刻みは次の刻みでそれを見て、何も書かずに止まる。
+		std::error_code ec0;
+		std::filesystem::remove(NdclOwnerPath(), ec0);
 		probe.log(alive
 					  ? "■ 仕掛けた刻みの報告（刻みはまだ生きている。報告の後に止まる）"
 					  : "■ 前の仕掛けの書き溜め（心拍が古い＝Vectorworks が終わって刻みは居ない）");
@@ -415,8 +431,6 @@ namespace
 
 	bool NdclArm(vwprobe::Report& probe)
 	{
-		// 同じ本体（ピン留めで残った像）にまだ生きている刻みがあれば、先に止める。
-		NdclDisarm("rearm");
 		std::string pinnedPath;
 		const std::string trouble = NdclPinSelf(pinnedPath);
 		if (!trouble.empty())
@@ -427,11 +441,19 @@ namespace
 		probe.log("本体をピン留めした: " + pinnedPath);
 
 		gNdclState = new NdclTimerState();
+		gNdclState->owner = std::to_string(NdclWallMs()) + "-" + VW_PAYLOAD_BUILD_ID;
 		gNdclState->events = NdclEventsPath();
 		gNdclState->counts = NdclCountsPath();
 		gNdclState->armedAt = std::chrono::steady_clock::now();
-		NdclAppend(gNdclState->events, std::string("arm interval_ms=") +
-										   std::to_string(kNdclIntervalMs) +
+		{
+			// 札を書き換えた時点で、前に仕掛けた刻み（別の像でも）は止まる。
+			std::ofstream out(NdclOwnerPath(), std::ios::trunc);
+			out << gNdclState->owner << "\n";
+		}
+		std::error_code ec;
+		std::filesystem::remove(gNdclState->events, ec);
+		NdclAppend(gNdclState->events, std::string("arm owner=") + gNdclState->owner +
+										   " interval_ms=" + std::to_string(kNdclIntervalMs) +
 										   " build=" + VW_PAYLOAD_BUILD_ID);
 		NdclWriteCounts(*gNdclState);
 
