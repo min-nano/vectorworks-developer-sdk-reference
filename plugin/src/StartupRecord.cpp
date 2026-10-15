@@ -17,6 +17,31 @@
 
 namespace vwprobe
 {
+	void StartupTrace(const char* line)
+	{
+		static int sLines = 0;
+		if (line == nullptr || ++sLines > 300)
+			return;
+#if GS_WIN
+		wchar_t dir[MAX_PATH + 1] = {0};
+		const DWORD n = ::GetTempPathW(MAX_PATH, dir);
+		if (n == 0 || n > MAX_PATH - 40)
+			return;
+		::lstrcatW(dir, L"VwSdkProbes-startup-trace.txt");
+		HANDLE h = ::CreateFileW(dir, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+								 OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (h == INVALID_HANDLE_VALUE)
+			return;
+		char buf[256];
+		const int len = ::wsprintfA(buf, "%lu %s\r\n", (unsigned long)::GetTickCount(), line);
+		DWORD written = 0;
+		::WriteFile(h, buf, (DWORD)len, &written, nullptr);
+		::CloseHandle(h);
+#else
+		(void)line;
+#endif
+	}
+
 	namespace
 	{
 		// 図面が開いてから何刻み記録するか、と、記録の上限（ミリ秒）。
@@ -87,12 +112,16 @@ namespace vwprobe
 		void Decide(RecordState& st)
 		{
 			st.decided = true;
+			StartupTrace("decide: before temp_directory_path");
 			const std::filesystem::path dir = Dir();
+			StartupTrace(dir.empty() ? "decide: temp dir empty" : "decide: got temp dir");
 			if (dir.empty())
 				return;
 			const std::filesystem::path request = dir / "VwSdkProbes-startup-record.request";
 			std::error_code ec;
-			if (!std::filesystem::exists(request, ec))
+			const bool has = std::filesystem::exists(request, ec);
+			StartupTrace(has ? "decide: request exists" : "decide: no request");
+			if (!has)
 				return;
 			// **SDK を呼ぶ前に札を消す**（落ちても次の起動で繰り返さない）。消せなければ
 			// 記録しない——消せないまま落ちれば、起動のたびに落ちる。
@@ -165,18 +194,32 @@ namespace vwprobe
 	// NOLINTBEGIN(bugprone-empty-catch): OS のタイマーのコールバックへ例外を漏らさない。
 	void StartupRecordTick()
 	{
+		static int sCalls = 0;
+		const bool trace = (++sCalls <= 3);
+		if (trace)
+			StartupTrace("srt: enter (before State())");
 		RecordState& st = State();
+		if (trace)
+			StartupTrace("srt: after State()");
 		try
 		{
 			if (!st.decided)
+			{
+				StartupTrace("srt: before Decide");
 				Decide(st);
+				StartupTrace(st.active ? "srt: after Decide active=1"
+									   : "srt: after Decide active=0");
+			}
 			if (st.active && gSDK != nullptr)
 				Record(st);
 		}
 		catch (...)
 		{
+			StartupTrace("srt: caught C++ exception");
 			st.active = false;
 		}
+		if (trace)
+			StartupTrace("srt: leave");
 	}
 	// NOLINTEND(bugprone-empty-catch)
 } // namespace vwprobe

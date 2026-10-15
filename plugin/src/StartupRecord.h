@@ -27,4 +27,8 @@ namespace vwprobe
 	// 殻の時計の刻みごとに呼ぶ（McpBridge.cpp の ClockTick。起動直後の待ちより前）。
 	// 札が無ければ最初の 1 回で止まり、以後は何もしない。例外は外へ出さない。
 	void StartupRecordTick();
+
+	// 【診断用・マージしない】起動時のどこまで進んだかを、標準ライブラリを使わずに
+	// 一時ディレクトリの VwSdkProbes-startup-trace.txt へ 1 行ずつ書く（最大 300 行）。
+	void StartupTrace(const char* line);
 } // namespace vwprobe

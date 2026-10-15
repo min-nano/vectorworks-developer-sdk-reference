@@ -19,6 +19,9 @@
 #include "McpBridge.h"
 #include "ProbeLibrary.h"
 #include "ProbeMenu.h"
+#include "StartupRecord.h"
+
+#include <cstdio>
 
 // Vectorworks が実行時にこのプラグインのリソース（.vwr）を引くときの識別子。
 // パッケージされる .vwr の基底名と一致していなければならない（BuildConfig.h）。
@@ -44,6 +47,12 @@ extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_main(Sint32 action, void* modu
 {
 	// VCOM（Vectorworks Component Object Model）の初期化。
 	::GS_InitializeVCOM(cbp);
+	{
+		// 【診断用・マージしない】
+		char line[64];
+		std::snprintf(line, sizeof(line), "module_main action=%ld", (long)action);
+		vwprobe::StartupTrace(line);
+	}
 
 	// **ここでは更新を確認しない。** 起動のたびにネットワークを叩けば、その待ちが
 	// Vectorworks の起動に乗る（オフラインなら尚更）。入れ替えは日常だが、**入れ替えたく

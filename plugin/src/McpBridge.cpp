@@ -972,7 +972,17 @@ namespace vwprobe
 			{
 				// 起動直後の記録（頼まれたときだけ。StartupRecord.h）は、下の 10 秒の待ちより
 				// 前に置く——測りたいのがまさに起動直後の刻みなので。
+				{
+					static int sTraced = 0;
+					if (++sTraced <= 3)
+						StartupTrace("clock: tick, calling StartupRecordTick");
+				}
 				StartupRecordTick();
+				{
+					static int sAfter = 0;
+					if (++sAfter <= 3)
+						StartupTrace("clock: after StartupRecordTick");
+				}
 				if (gSDK == nullptr || NowSeconds() < ClockStartedAt() + kClockFirstTickSeconds)
 					return;
 				if (ProbeMenuActive())
@@ -1004,6 +1014,7 @@ namespace vwprobe
 
 	void StartMcpBridgeClock()
 	{
+		StartupTrace("StartMcpBridgeClock: enter");
 		static bool sStarted = false;
 		if (sStarted)
 			return;
