@@ -17,7 +17,7 @@
 //	    **前の刻みと何かが変わったときだけ**書き溜めへ 1 行足す。件数が変わった刻みでは
 //	    **呼ぶ前に**「これから呼ぶ」行を書く（落ちたら、その行が最後に残る）。
 //	  * その間に **図面を全部閉じる → 新規を開く**（人でもブリッジでもよい）。
-//	  * 2 回目が書き溜めを読んで報告し、書き溜めを消す（消えたのを見て刻みが止まる）。
+//	  * 刻みが「0 枚 → 1 枚以上」を見届けた後の実行が書き溜めを読んで報告し、書き溜めを消す（消えたのを見て刻みが止まる）。
 //	  * 書き溜めの心拍が古い（＝Vectorworks が終わって刻みが居ない）ときは、それを報告して
 //	    から**その場で仕掛け直す**——再起動直後の 1 回目がそのまま仕掛けになる。
 //
@@ -394,6 +394,25 @@ namespace
 		std::filesystem::remove(NdclCountsPath(), ec);
 	}
 
+	// 刻みが「図面 0 枚 → 1 枚以上」を見届けたか。**ブリッジは図面を開いてすぐ同じ刻みの中で
+	// プローブを走らせる**ので、その実行で報告すると「開いた後」を刻みが 1 度も見ていない
+	// （実際に踏んだ）。見届けるまでは報告せずに刻みを続ける。
+	bool NdclSawReopen()
+	{
+		bool sawZero = false;
+		for (const std::string& line : NdclReadLines(NdclEventsPath()))
+		{
+			if (line.rfind("state ", 0) != 0)
+				continue;
+			const bool zero = line.find(" docs=0 ") != std::string::npos;
+			if (zero)
+				sawZero = true;
+			else if (sawZero)
+				return true;
+		}
+		return false;
+	}
+
 	bool NdclArm(vwprobe::Report& probe)
 	{
 		// 同じ本体（ピン留めで残った像）にまだ生きている刻みがあれば、先に止める。
@@ -439,7 +458,7 @@ namespace
 		probe.log("このあと:");
 		probe.log("  1. 開いている図面を**全部閉じる**（数秒そのまま置く）");
 		probe.log("  2. **新規の図面を開く**");
-		probe.log("  3. もう一度このプローブを走らせる（それが報告になる）");
+		probe.log("  3. 数秒置いてから、もう一度このプローブを走らせる（それが報告になる）");
 		return true;
 	}
 } // namespace
@@ -468,6 +487,12 @@ VW_PROBE("no-doc-current-layer", "図面が無いときの GetCurrentLayer",
 		const long long age = NdclWallMs() - beat;
 		const bool alive = beat > 0 && age >= 0 && age < kNdclStaleMs;
 		probe.log("書き溜めがある（心拍 " + std::to_string(age) + " ms 前）");
+		if (alive && !NdclSawReopen())
+		{
+			probe.log("刻みはまだ「図面 0 枚 → 1 枚以上」を見届けていないので、報告せずに続ける。");
+			probe.log("（図面を開いて数秒置いてから、もう一度走らせると報告になる）");
+			return;
+		}
 		NdclReport(probe, alive);
 		if (alive)
 			return; // 報告で 1 周が閉じる
