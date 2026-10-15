@@ -146,6 +146,11 @@ Modules](Plug-in%20Modules.md) の `CloseAllFilesAndQuitVectorworks`（プラグ
 - 新規文書の名前は「名称未設定 2」ではなく**「名称未設定 3」**だった。無題の連番は VW の
   セッション全体で進むので、**名前から文書を同定しない**。
 
+- **図面が 1 枚も無ければ `GetCurrentLayer()` は `nullptr`**（落ちない。全部閉じた後も起動
+  直後も。件数と常に一致した）。**閉じた文書のレイヤと後で開いた文書のレイヤが同じアドレスで
+  返った**ので、ハンドルの値で文書を同定しない（[Timers and Notifications](Timers%20and%20Notifications.md)
+  の 4 の 8。mac / Windows で実測）。
+
 ### `GetOpenFilesList` と `fileRef`
 
 ```
