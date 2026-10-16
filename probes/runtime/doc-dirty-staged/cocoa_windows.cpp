@@ -29,6 +29,7 @@ namespace
 	using BoolFn = signed char (*)(id, SEL);
 	using CStrFn = const char* (*)(id, SEL);
 	using VoidFn = void (*)(id, SEL);
+	using BoolIdFn = signed char (*)(id, SEL, id);
 
 	id DirtyStagedSend(id target, const char* sel)
 	{
@@ -61,7 +62,7 @@ namespace
 	{
 		if (view == nullptr || depth > 6)
 			return;
-		if (reinterpret_cast<BoolFn>(objc_msgSend)(
+		if (reinterpret_cast<BoolIdFn>(objc_msgSend)(
 				view, sel_registerName("isKindOfClass:"),
 				reinterpret_cast<id>(objc_getClass("NSTextField"))) != 0)
 		{
@@ -69,7 +70,7 @@ namespace
 			if (!text.empty())
 				out += (out.empty() ? "" : " / ") + text;
 		}
-		if (reinterpret_cast<BoolFn>(objc_msgSend)(
+		if (reinterpret_cast<BoolIdFn>(objc_msgSend)(
 				view, sel_registerName("isKindOfClass:"),
 				reinterpret_cast<id>(objc_getClass("NSButton"))) != 0)
 		{
