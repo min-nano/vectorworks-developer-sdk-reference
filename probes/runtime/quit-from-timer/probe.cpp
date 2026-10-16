@@ -416,8 +416,12 @@ namespace
 				// **刻みの中で汚す。** ブリッジは走らせた後に図面を保存するので、コマンドの
 				// 中で汚しても未保存の変更が残らない。
 				MCObjectHandle h = gSDK->CreateLine(WorldPt(0.0, 0.0), WorldPt(1000.0, 1000.0));
+				// **刻みの中の `CreateLine` だけでは「未保存の変更」にならない**（最初の版は
+				// 保存の確認が出ずに終わった）。変更の印は明示して立てる。
+				gSDK->MarkCurrentDocChanged();
 				QftAppend(st->events, "prep " + QftStamp(*st) +
-										  " CreateLine=" + (h == nullptr ? "nullptr" : "ok"));
+										  " CreateLine=" + (h == nullptr ? "nullptr" : "ok") +
+										  " MarkCurrentDocChanged");
 			}
 			else if (step == "clean")
 			{
