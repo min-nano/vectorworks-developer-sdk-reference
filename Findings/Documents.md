@@ -19,7 +19,7 @@ Vectorworks 本体側（SDK に同梱されていない）の実装に依存す�
 | --- | --- |
 | `bool OpenDocumentPath(IFileIdentifier* pFileID, bool bShowErrorMessages)` | `pFileID` の指すパスの文書を開く。`GS_OpenDocumentPath` の説明: 「Opens the document specified by inPath. Set inShowErrorMessages to false if you want to make sure no dialogs come up.」 |
 | `bool CloseDocument()` | 現在の文書を閉じる。引数は無く、**保存の要否を指定する口が無い**（後述） |
-| `bool GetActiveDocument(IFileIdentifier** ppOutFileID, bool& outSaved)` | 現在アクティブな文書のパスと、保存済みかどうかを返す |
+| `bool GetActiveDocument(IFileIdentifier** ppOutFileID, bool& outSaved)` | 現在アクティブな文書のパスと、**ディスクに保存されたことがあるか**を返す（**未保存の変更があるかではない**。下記「[未保存の変更ありは読めない](#未保存の変更ありは読めない)」） |
 | `void GetOpenFilesList(TVWArray_OpenFileInformation& outInformation)` | 現在開いている**すべての**文書の一覧を返す（後述） |
 | `bool SwitchToOpenFile(Sint32 fileRef)` | 開いている別の文書へアクティブを切り替える。`fileRef` は `GetOpenFilesList` から取る |
 | `GSError SaveActiveDocumentPath(IFileIdentifier* pFileID)` | アクティブな文書を、ダイアログを出さずに指定パスへ保存する（エラー時のアラートを除く） |
@@ -226,8 +226,9 @@ B で見た `no` は「イベントが終わった」ではなく「**B には�
   観測している）。**未保存の変更は黙って捨てられる。**
 - したがって **`bShowErrorMessages` に相当する引数が無いのは困らない**——ダイアログが
   そもそも出ない。逆に言えば、**利用者に「保存しますか」を尋ねる機会も無い**ので、
-  **人の作りかけを消しうる**。呼ぶ前に `GetActiveDocument` の `outSaved` を見るなり、
-  自分が開いた文書だけを閉じるなりの判断は**呼び出し側の責任**になる。
+  **人の作りかけを消しうる**。自分が開いた文書だけを閉じるなりの判断は**呼び出し側の
+  責任**になる（`GetActiveDocument` の `outSaved` は**未保存の変更を表さない**ので、
+  この判断には使えない。下記「未保存の変更ありは読めない」）。
 - 「保存してから閉じる」も通る（`SaveActiveDocumentPath` が `GSError=0`、その後
   件数が減る）。ただし**保存しなくても閉じられる**ので、捨ててよい文書のためにわざわざ
   保存する必要は無い。
@@ -268,6 +269,102 @@ G3: 開いた後のアクティブ文書: /Applications/VW2026/名称未設定 7
   （実際この調査の 1 度目で踏んで、`.sta` の判定を 1 周やり直した。）
 - **失敗は速い**（20ms）。時間が掛かっていないことも、ダイアログではなく即座の拒否で
   あることの裏づけになる。
+
+## 未保存の変更ありは読めない
+
+**問い**（[issue #240](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/240)）:
+開いている図面のうち、**保存済みの図面を変更した状態（未保存の変更あり）**を SDK から
+取れるか。[vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)
+の `quit` が、終了を頼む前にダイアログなしで「未保存の変更がある図面」を見つけたい。
+
+**答え: 取れない。** 読める手掛かりは `GetActiveDocument` の `outSaved` と
+`GetOpenFilesList` の `fIsInMemoryOnly` の 2 つだけで、**どちらも「ディスクに保存された
+ことがあるか」を表す**。保存済みの図面を変更しても値は変わらない。
+
+### 読む口は 2 つしか無く、どちらも「ディスクにあるか」【ヘッダ根拠】
+
+- **SDK に「変更あり」を読む宣言は無い。** `SDK Index/` を `Modified` / `Dirty` / `Changed` /
+  `Saved` で引いて、文書の状態として見つかるのは**変更ありに「する」側**の
+  `ISDK::MarkCurrentDocChanged()`（`ISDK.h:1386`。`kcbMarkCurrentDocChanged`）と、
+  メニューの有効条件 `EMenuEnableFlags::DocChanged`（`MiniCadCallBacks.h:4950`）だけ。
+  `IApplication::GetActiveDocument(IDocument**)` で取れる `IDocument` は設定ダイアログを
+  出す 4 つの関数しか持たない（`IDocument.h:16-19`）。
+- `outSaved` の意味は旧 API の説明文に書いてある（`APIBase.Legacy.Defs.h`、
+  `GS_GetActiveDocumentN`）: 「The saved parameter indicates whether the document has been
+  **saved to disk**. If it has not, then activeDocumentPath is only a file name.」
+  ——**ディスクにあるか**であって、変更の有無ではない。
+
+### 実測: 変更しても、変更ありにしても、値は動かない
+
+**実測**（VW 2026 / macOS arm64。`probes/runtime/doc-dirty-state/` をローカルの Claude Code
+から MCP ブリッジで回した＝**OS タイマーの刻みの中**（殻の `CFRunLoopTimer`）から呼んだ。
+ビルド `2e76551d4c4d`。プローブは役目を終えたので削除済み）。作業用の図面を自分で開き、
+局面ごとに両方を読んだ:
+
+| 局面 | `outSaved` | アクティブの `fIsInMemoryOnly` | 図形数 |
+| --- | --- | --- | --- |
+| 新規（無変更） | `no` | `yes` | 1 |
+| 新規に矩形（undo の外） | `no` | `yes` | 2 |
+| 新規に `MarkCurrentDocChanged()` | `no` | `yes` | 2 |
+| `SaveActiveDocumentPath` で保存した直後（`GSError=0`・33 ms） | **`yes`** | **`no`** | 2 |
+| 保存済みに矩形（undo の外） | `yes` | `no` | 3 |
+| **保存済みに `MarkCurrentDocChanged()`** | **`yes`** | **`no`** | 3 |
+| 同じパスへ上書き保存した直後（`GSError=0`・21 ms） | `yes` | `no` | 3 |
+| undo イベントの中で矩形（閉じる前・`building=yes`） | `yes` | `no` | 4 |
+| 同上、`EndUndoEvent` で閉じた後 | `yes` | `no` | 4 |
+| `DoMenuName("Undo", 0)`（戻り値 0） | `yes` | `no` | 4 |
+| `DoMenuName("Redo", 0)`（戻り値 0） | `yes` | `no` | 4 |
+| `MarkCurrentDocChanged()` してから裏へ回した（別の図面をアクティブに） | — | `no`（裏の項目） | — |
+| 表へ戻した | `yes` | `no` | 4 |
+
+- **全 14 局面で `outSaved == !fIsInMemoryOnly`。** 2 つは同じことを言っている。
+  変わったのは**保存した瞬間だけ**（`no`/`yes` → `yes`/`no`）。
+- **`MarkCurrentDocChanged()` の後も `outSaved=yes`。** この呼び出しで文書が本当に
+  「変更あり」になることは [Timers and Notifications](Timers%20and%20Notifications.md)
+  の 4 の 9（#230）で確かめてある——それを足すと `CloseAllFilesAndQuitVectorworks(true)` で
+  保存の確認が**出る**ようになった。**＝保存の確認が出る状態でも `outSaved` は `yes`。**
+- **裏に回っている図面の状態も読めない。** `GetOpenFilesList` の項目には
+  `fIsInMemoryOnly` しか無く、`outSaved` はアクティブな図面のものしか取れない。
+- **取り消しで保存時点へ戻る局面は作れなかった。** `DoMenuName("Undo", 0)` を 1 回呼んでも
+  図形数は 4 のまま（undo で入れた矩形が消えていない）。上書き保存が取り消しの段を 1 つ
+  積む（[Undo](Undo.md)。#223）ので、その段が戻っただけと読める【推定】。ただし
+  **値は変更でも保存済みへの変更でも動かない**ので、取り消しで動く道理も無い——この局面を
+  取り直しても答えは変わらない。
+- **刻みの中から呼んでよい。** 上の表はすべて OS タイマーの刻みの中で読んだもので、
+  落ちず、`GetActiveDocument` は 1 回 7〜94 µs。**図面 0 枚・起動直後の刻みでも
+  `GetOpenFilesList()` は落ちない**（[Timers and Notifications](Timers%20and%20Notifications.md)
+  の 4 の 1・4 の 8）。
+- **同じパスへの上書き保存は通る**（`GSError=0`・パスも変わらない）。殻のブリッジの
+  「既にあるファイルへの**別名**保存は通らなかった」（`plugin/src/McpBridge.cpp`）とは別の
+  場面で、**その文書自身のファイルへの保存**は通る。
+- Windows では測っていない。**値の意味は SDK の説明文どおり**なので変わらないと見るが【推定】。
+
+### `quit` の事前確認への帰結
+
+- **ダイアログなしで分かるのは「一度も保存していない図面がある」までである。**
+  `GetOpenFilesList` の `fIsInMemoryOnly=yes`（無題の新規）を拾えば、その図面は確実に
+  保存の確認を出す。**保存済みの図面に未保存の変更があるかは、事前に知る口が無い。**
+- **未保存の変更が無いときの `CloseAllFilesAndQuitVectorworks(true, false)` は、確認なしで
+  終わる。** 確認があるときは**キャンセルされても呼び出しから戻り、図面は残る**（件数で
+  分かる）。どちらも #230 で実測済み（下記「[呼んだ後の振る舞い](#呼んだ後の振る舞いmac--windows-で実測)」）。
+  **issue #240 の 5・6 はこれで答えが出ている**——確認は呼び出しの時点の状態で決まるので、
+  「確かめてから呼ぶまでの間に変更ができた」場合も、ふつうに確認が出て、キャンセルなら戻る。
+- したがって「確認を出さない」を保証する手は、事前確認ではなく次のどれかになる:
+  1. **保存してから終える**——開いている保存済みの図面を順に `SwitchToOpenFile` →
+     `SaveActiveDocumentPath(<その図面自身のパス>)` で上書き保存すれば、変更の有無に
+     関わらず確認の種は消える（上書き保存が通ることは上記のとおり実測）。**人の変更を
+     黙ってディスクへ書く**ので、明示の指定（`--save` など）を要する設計になる。
+  2. **捨てて終える**——`CloseAllFilesAndQuitVectorworks(false, …)`（確認なしで閉じる）。
+     **人の変更を黙って捨てる**ので、同じく明示の指定（`--force` など）でだけ使う。
+  3. **確認を出す前提で呼ぶ**——ダイアログが出うることを受け入れ、キャンセルされたら
+     （戻った後も図面が残っていたら）エラーで応える。
+  事前確認で拾えるのは無題の新規だけなので、それを「未保存の一覧」として返すなら
+  **「保存済みの図面の変更は含まれない」**ことを利用者に言わなければならない。
+- **自分で数えて持つ【推定・未検証】。** `kNotifyDocPostSaved` / `kNotifyDocOpen` で「保存
+  時点」を記録し、`kNotifyUndoEndEvent` で「変更あり」を立てる作りは考えられる。しかし
+  **刻みの中で undo イベントの外に書いても文書は変更ありにならず**（4 の 9）、逆に
+  **`MarkCurrentDocChanged()` は通知なしに変更ありにする**——どちらの方向にも
+  ずれる。取り消しで保存時点へ戻ったかも追えない。**正確な代わりにはならない。**
 
 ## `CloseAllFilesAndQuitVectorworks`（終了）
 
@@ -328,7 +425,10 @@ SDK の説明文は「Closes all files and then gracefully quits Vectorworks」�
   閉じたいなら `CloseDocument()` で閉じられる——**未保存でも閉じられる**。
 - **【危険】`CloseDocument()` は確認せずに捨てる。** 保存確認ダイアログは出ず、未保存の
   変更は黙って消える。**人が編集中の文書を閉じない**こと——自分が開いた文書だけを対象に
-  するか、`GetActiveDocument` の `outSaved` を見て判断する。
+  する（`outSaved` は「ディスクにあるか」でしかなく、**保存済みの文書の変更は見えない**）。
+- **「未保存の変更があるか」は SDK から読めない。** 分かるのは「一度もディスクへ保存されて
+  いない」（`fIsInMemoryOnly` / `outSaved`）までで、保存済みの文書を変更した状態は
+  どちらにも現れない（上記「未保存の変更ありは読めない」）。
 - **成否を戻り値で判定しない。** `CloseDocument()` も `SetObjectName()` も、成功しながら
   `false` を返す。**`GetOpenFilesList` の件数**や**読み戻した値**で確かめる。
 - **「保存 → そのパスを開く」は続けて書かない。** 保存した時点でその文書自身がその
