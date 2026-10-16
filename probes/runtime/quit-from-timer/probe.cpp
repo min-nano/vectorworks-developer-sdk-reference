@@ -30,6 +30,9 @@
 //	  * mac は 2 本とも `kCFRunLoopCommonModes`、Windows は `SetTimer(nullptr, …)`。
 //	  * `kNotifyBeforeApplicationQuit`（'BApQ'）と `kNotifyDocClose`（'DCLS'）を登録し、
 //	    届いたら 1 行書く。`std::atexit` も登録する（プロセスが exit() で終わるか）。
+//	  * 殻に頼み札を置き、VW が殻へ渡す `plugin_module_main` の action を時刻付きで書いて
+//	    もらう（`kPluginModuleDeinit`＝-2 が終了の時に届くか・atexit と比べていつか）。
+//	    札を読まない古い殻なら記録が空になるだけ。
 //	  * 終了を呼んだ後は、心拍（数のファイル）を**毎刻み**書き直す——最後の刻みの時刻が残る。
 //	  * 本体はピン留めする（殻はプローブが終わると本体を降ろすため）。止める合図は札
 //	    （持ち主のファイル）で渡す（殻は実行のたびに本体を別名で読み込むので、静的変数を
@@ -124,6 +127,16 @@ namespace
 		return (QftDir() / "VwSdkProbes-quit-from-timer-owner.txt").string();
 	}
 	// 次に仕掛ける段の番号。消せば 0 からやり直す。
+	// **殻への頼み札と、殻が書く module_main の記録**（plugin/src/ModuleMain.cpp）。
+	// `kPluginModuleDeinit`（-2）は VW が読み込む殻にしか届かないので、殻に書いてもらう。
+	std::string QftModuleRequestPath()
+	{
+		return (QftDir() / "VwSdkProbes-module-actions.request").string();
+	}
+	std::string QftModuleActionsPath()
+	{
+		return (QftDir() / "VwSdkProbes-module-actions.txt").string();
+	}
 	std::string QftStepPath()
 	{
 		return (QftDir() / "VwSdkProbes-quit-from-timer-step.txt").string();
@@ -254,9 +267,11 @@ namespace
 			.count();
 	}
 
+	// wall_ms は殻の module_main の記録と突き合わせるため。
 	std::string QftStamp(const QftState& st)
 	{
-		return "t_ms=" + std::to_string(QftElapsedMs(st)) + " depth=" + std::to_string(st.depth);
+		return "t_ms=" + std::to_string(QftElapsedMs(st)) + " depth=" + std::to_string(st.depth) +
+			   " wall_ms=" + std::to_string(QftWallMs());
 	}
 
 	void QftWriteCounts(const QftState& st)
@@ -639,6 +654,38 @@ namespace
 			probe.log("  last_tick_to_heartbeat_ms " + std::to_string(beat - lastTick));
 		std::filesystem::remove(QftEventsPath(), ec);
 		std::filesystem::remove(QftCountsPath(), ec);
+
+		// 殻の module_main の記録（終了の回なら、終了と次の起動の分が入っている）。
+		// -3 / -4 / -5（インタフェースの登録・問い合わせ・解放）は数が多いので数だけにする。
+		probe.log("  -- 殻の module_main（wall_ms。-1 初期化 / -2 後始末）--");
+		const std::vector<std::string> actions = QftReadLines(QftModuleActionsPath());
+		if (actions.empty())
+			probe.log("  （記録なし——殻が古い（札を読まない）か、module_main が呼ばれなかった）");
+		long long others = 0;
+		std::string lastOther;
+		for (const std::string& line : actions)
+		{
+			const bool initDeinit = line.find("action=-1 ") != std::string::npos ||
+									line.find("action=-2 ") != std::string::npos;
+			if (initDeinit)
+			{
+				if (others > 0)
+					probe.log("  （その他の action " + std::to_string(others) +
+							  " 回。最後: " + lastOther + "）");
+				others = 0;
+				probe.log("  " + line);
+			}
+			else
+			{
+				++others;
+				lastOther = line;
+			}
+		}
+		if (others > 0)
+			probe.log("  （その他の action " + std::to_string(others) + " 回。最後: " + lastOther +
+					  "）");
+		std::filesystem::remove(QftModuleRequestPath(), ec);
+		std::filesystem::remove(QftModuleActionsPath(), ec);
 		for (const std::string& line : events)
 		{
 			if (line.rfind("abort ", 0) == 0)
@@ -673,6 +720,11 @@ namespace
 		}
 		std::error_code ec;
 		std::filesystem::remove(st->events, ec);
+		std::filesystem::remove(QftModuleActionsPath(), ec);
+		{
+			std::ofstream out(QftModuleRequestPath(), std::ios::trunc);
+			out << st->owner << "\n";
+		}
 		QftAppend(st->events, std::string("arm step=") + kQftSteps[step].name +
 								  " owner=" + st->owner + " build=" + VW_PAYLOAD_BUILD_ID +
 								  " pinned=" + pinnedPath);
