@@ -369,8 +369,9 @@ namespace
 	}
 	void QftAtExit()
 	{
+		// 刻みを止めた後でも、書き溜めがまだこの像のものなら書く（gSDK は呼ばない）。
 		QftState* st = gQftState;
-		if (st == nullptr || st->disarmed)
+		if (st == nullptr || QftReadFirstLine(QftOwnerPath()) != st->owner)
 			return;
 		QftWriteCounts(*st);
 		QftAppend(st->events, "atexit " + QftStamp(*st) + " observe_ticks=" +
@@ -485,7 +486,10 @@ namespace
 			return;
 		}
 
-		if (st->phase == kQftPhaseReturned && now - st->returnedAt >= kQftAfterReturnMs)
+		// **終わっていく回（図面が 0 枚で戻った）では止めない**——止めると atexit も書かない
+		// ので、殻の -2 と atexit の前後が分からなくなる（実際に踏んだ）。
+		if (st->phase == kQftPhaseReturned && now - st->returnedAt >= kQftAfterReturnMs &&
+			(QftDocCount() != 0 || now - st->returnedAt >= 60000))
 		{
 			st->phase = kQftPhaseDone;
 			QftDisarm("observed-after-return");
