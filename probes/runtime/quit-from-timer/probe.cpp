@@ -8,7 +8,7 @@
 //	一時ファイルへ書き（書くたびに閉じる）、次に走らせたときにそれを報告する。** だから
 //	このプローブは**同じものを何度も走らせて段を進める**作りになっている:
 //
-//	    走らせる → 前の段の書き溜めを報告 → 次の段を仕掛けて戻る → 1.5 秒後に刻みが呼ぶ
+//	    走らせる → 前の段の書き溜めを報告 → 次の段を仕掛けて戻る → 刻みが呼ぶ（mac 1.5 秒後・Windows 10 秒後）
 //
 //	段（`kQftSteps`）:
 //	  0 cancel    図面を汚してから呼ぶ。**人が保存の確認で「キャンセル」を押す**。
@@ -90,7 +90,13 @@ namespace
 
 	const long long kQftObserveMs = 50;
 	const long long kQftDriveMs = 100;
-	const long long kQftPrepAtMs = 1500;	  // 仕掛けてから図面を準備するまで
+	// 仕掛けてから図面を準備するまで。**メニューから走らせると結果ダイアログが出る**ので、
+	// それを閉じる間を取る（ブリッジから走らせる mac は待たなくてよい）。
+#if GS_WIN
+	const long long kQftPrepAtMs = 10000;
+#else
+	const long long kQftPrepAtMs = 1500;
+#endif
 	const long long kQftCallAfterMs = 600;	  // 準備してから終了を呼ぶまで
 	const long long kQftNestedAtMs = 1500;	  // 確認の最中、2 度目を呼ぶまで
 	const long long kQftAfterReturnMs = 4000; // 戻った後に見続ける時間
@@ -605,12 +611,21 @@ namespace
 		const long long beat = QftCountValue(counts, "heartbeat_wall_ms");
 		const long long age = QftWallMs() - beat;
 		const bool alive = beat > 0 && age >= 0 && age < kQftStaleMs;
+		const std::vector<std::string> events = QftReadLines(QftEventsPath());
+		bool exited = false; // atexit まで届いた＝Vectorworks は終わった
+		bool stopped = false; // 刻みが自分で止まった（Vectorworks は終わっていない）
+		for (const std::string& line : events)
+		{
+			exited = exited || line.rfind("atexit ", 0) == 0;
+			stopped = stopped || line.rfind("disarm ", 0) == 0;
+		}
 		probe.log(std::string("■ 前の段の書き溜め（心拍 ") + std::to_string(age) + " ms 前・" +
-				  (alive ? "刻みはまだ生きている——Vectorworks は終わっていない"
-						 : "刻みは居ない——Vectorworks は終わった（か、刻みが止まった）") +
+				  (exited ? "atexit まで届いた——Vectorworks は終わった"
+				   : stopped ? "刻みは自分で止まった——Vectorworks は終わっていない"
+				   : alive ? "刻みはまだ生きている"
+						   : "刻みが途中で消えた——atexit も無い（落ちた見込み）") +
 				  "）");
 		probe.log("  -- 経過 --");
-		const std::vector<std::string> events = QftReadLines(QftEventsPath());
 		const std::size_t kMax = 300;
 		for (std::size_t i = 0; i < events.size() && i < kMax; ++i)
 			probe.log("  " + events[i]);
@@ -700,8 +715,10 @@ namespace
 		probe.log("");
 		probe.log(std::string("■ 段 ") + std::to_string(step) + "/" +
 				  std::to_string(kQftStepCount - 1) + " 「" + kQftSteps[step].name +
-				  "」を仕掛けた。1.5 秒後に刻みが図面を準備し、その 0.6 秒後に終了を呼ぶ。");
-		probe.log(std::string("このあと: ") + kQftSteps[step].howTo);
+				  "」を仕掛けた。刻みが図面を準備し、その 0.6 秒後に終了を呼ぶ。");
+		probe.log(std::string("このあと: 結果ダイアログを閉じて待つ（") +
+				  std::to_string(kQftPrepAtMs / 1000) + " 秒ほどで刻みが動く）。" +
+				  kQftSteps[step].howTo);
 	}
 } // namespace
 
