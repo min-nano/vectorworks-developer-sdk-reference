@@ -60,7 +60,7 @@
 | [TXString](TXString.md) | 文字列型。`const char*` / `std::string` からの暗黙変換・**リテラルで多重定義が曖昧になる**・UTF-8 の出し入れ |
 | [Plug-in Interop](Plug-in%20Interop.md) | **プラグイン間の呼び出し**。ほかのプラグインの機能を名前で呼ぶ 4 つの経路（`CallPluginLibrary` / `DoMenuName` / スクリプトエンジン / C の ABI）・引数と結果の受け渡し・呼ばれる側の作り方。**`DoMenuName` の【訂正】を含む** |
 | [Plug-in Modules](Plug-in%20Modules.md) | プラグインモジュールの読み込みと入れ替え。起動時にしか読まれない・VCOM の初期化はモジュールごと・SDK をリンクするモジュールが必ず定義する 2 つ・**本体を外部モジュールへ出せば再起動なしで入れ替えられる**（mac 実測） |
-| [Documents](Documents.md) | 図面（文書）を開く・作る。**コマンド実行中に空の新規文書を開いて描画先を移せる**（実機確認済み）・複数文書を `SwitchToOpenFile` で行き来できる・**テンプレートからの新規作成専用 API は無い**・**`CloseDocument()` は未保存の変更を確認なしに捨てる**（`false` を返しながら閉じる）・**`CloseAllFilesAndQuitVectorworks` は戻ってから終わる**（キャンセルなら図面は残る。プラグインの読み込み中には呼べない）・**「未保存の変更あり」は読めない**（`outSaved` も `fIsInMemoryOnly` も「ディスクにあるか」で、保存済みの図面を変更しても `MarkCurrentDocChanged()` しても動かない。事前に分かるのは無題の新規だけ） |
+| [Documents](Documents.md) | 図面（文書）を開く・作る。**コマンド実行中に空の新規文書を開いて描画先を移せる**（実機確認済み）・複数文書を `SwitchToOpenFile` で行き来できる・**テンプレートからの新規作成専用 API は無い**・**`CloseDocument()` は未保存の変更を確認なしに捨てる**（`false` を返しながら閉じる）・**`CloseAllFilesAndQuitVectorworks` は戻ってから終わる**（キャンセルなら図面は残る。プラグインの読み込み中には呼べない）・**「未保存の変更あり」は読めない**（`outSaved` も `fIsInMemoryOnly` も「ディスクにあるか」で、保存済みの図面に保存の確認が出る状態でも動かない。macOS の窓の「編集済み」も確認と食い違う。VW の変更ありは undo 付きの変更と `MarkCurrentDocChanged()` で立ち、**取り消しでは消えず保存でだけ消える**・undo の外の書き込みでは立たない・**無題の図面は無変更でも確認が出る**） |
 | [Investigation Techniques](Investigation%20Techniques.md) | 調査の作法。読み戻す・測る・正解と差分を取る・setter の戻り値を信じない |
 
 ## 知見を足すときの決まり
