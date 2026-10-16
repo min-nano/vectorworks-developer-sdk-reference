@@ -20,12 +20,43 @@
 #include "ProbeLibrary.h"
 #include "ProbeMenu.h"
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <system_error>
+
 // Vectorworks が実行時にこのプラグインのリソース（.vwr）を引くときの識別子。
 // パッケージされる .vwr の基底名と一致していなければならない（BuildConfig.h）。
 const char* DefaultPluginVWRIdentifier()
 {
 	return PLUGIN_VWR_ID;
 }
+
+//------------------------------------------------------------------
+// **頼まれたときだけ、VW が渡してきた action を書き残す**（issue #230）。
+//
+// `kPluginModuleDeinit`（-2）が終了の時に届くか・いつ届くかは、**VW が読み込む殻にしか
+// 見えない**（本体は殻が自分で読み込むので、VW から module_main は呼ばれない）。プローブが
+// 一時ディレクトリに頼み札（VwSdkProbes-module-actions.request）を置いている間だけ、
+// 1 行ずつ書いて閉じる。札が無ければ exists を 1 度見るだけで何もしない。
+// ここでは gSDK を呼ばない（-2 のときに生きている保証が無い）。
+namespace
+{
+	void RecordModuleAction(Sint32 action)
+	{
+		std::error_code ec;
+		const std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
+		if (ec || !std::filesystem::exists(dir / "VwSdkProbes-module-actions.request", ec))
+			return;
+		std::ofstream out(dir / "VwSdkProbes-module-actions.txt", std::ios::app);
+		if (!out)
+			return;
+		const long long wallMs = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
+									 std::chrono::system_clock::now().time_since_epoch())
+									 .count();
+		out << "module_main action=" << action << " wall_ms=" << wallMs << "\n";
+	}
+} // namespace
 
 //------------------------------------------------------------------
 // コンパイル時の SDK 版を申告する（VW が読み込んでよいか判断する）。
@@ -42,6 +73,8 @@ extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_main(Sint32 action, void* modu
 													   const VWIID& iid,
 													   IVWUnknown*& inOutInterface, CallBackPtr cbp)
 {
+	RecordModuleAction(action);
+
 	// VCOM（Vectorworks Component Object Model）の初期化。
 	::GS_InitializeVCOM(cbp);
 
