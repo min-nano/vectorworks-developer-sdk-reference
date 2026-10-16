@@ -302,8 +302,8 @@ SDK の説明文は「Closes all files and then gracefully quits Vectorworks」�
 詳細と数値は [Timers and Notifications](Timers%20and%20Notifications.md) の 4 の 9。ここには
 文書の側から見た要点だけを置く。
 
-- **呼び出しは戻る。** 図面を閉じ終えてから戻り（保存済み・図面 0 枚なら 115〜196 ms）、
-  **プロセスはその 4〜5 秒後、イベントループの中で正常に終わる**（`atexit` まで届く）。
+- **呼び出しは戻る。** 図面を閉じ終えてから戻り（保存済み・図面 0 枚なら 99〜196 ms）、
+  **プロセスはその 4〜8 秒後、イベントループの中で正常に終わる**（`atexit` まで届く）。
 - **保存の確認は「未保存の変更」がある文書にだけ出る**（`bAskForSave=true`）。
   保存済みの文書・図面 0 枚なら確認なしで終わる。
 - **確認で「キャンセル」すると、呼び出しはそのまま戻り、図面は開いたまま残る。**
@@ -311,7 +311,8 @@ SDK の説明文は「Closes all files and then gracefully quits Vectorworks」�
   `GetOpenFilesList()` の件数（減っていない）か、プロセスが生きていることで知る。**
 - **確認の最中にもう一度呼ぶと、確認が 2 つ重なって出る。** 落ちはしない。
 - **`kNotifyBeforeApplicationQuit` は確認の前に届き、キャンセルされても届く。**
-  「本当に終わる」合図にはならない。
+  「本当に終わる」合図にはならない。本当に終わるときは、最後に `plugin_module_main` へ
+  `kPluginModuleDeinit`（-2）が届く（`atexit` の約 0.1 秒前）。
 
 ## 結論（プラグイン開発への示唆）
 
