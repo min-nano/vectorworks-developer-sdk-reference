@@ -24,6 +24,11 @@ namespace vwprobe
 		}
 
 		// 登録する関数の表。**最後の要素は `fName == nullptr`**（終端）。
+		// **`fHasReturnValue = true` の関数は、`fParams` の最後の欄が戻り値の型になる**
+		// ——`IExtensionVSFunctions` には戻り値の型を渡す口が無く、VW は最後の欄を
+		// 戻り値として読む（Plug-ins 直下に書き出す VWPluginLibraryRoutines.h / .p で実測。
+		// issue #233）。以前はこの欄を足しておらず、最後の引数が戻り値に化けていた。
+		// 実装（下の Echo / Sum / Out）が読む `GetArgument(i)` の添字は変わらない。
 		// fParams は 11 個の固定長なので、使う分だけ書けば残りは {} で埋まる
 		// （= fName が nullptr になり、引数の数の数え方と揃う）。
 		const SFunctionDef kFunctions[] = {
@@ -33,14 +38,14 @@ namespace vwprobe
 			 1,
 			 kVLIBScopeUniversal,
 			 true,
-			 {{"input", kStringArgType}}},
+			 {{"input", kStringArgType}, {"result", kStringArgType}}},
 			{kLibSumName,
 			 "VwSdkProbes",
 			 "2 つの整数の和を返す（#217）",
 			 1,
 			 kVLIBScopeUniversal,
 			 true,
-			 {{"a", kLongArgType}, {"b", kLongArgType}}},
+			 {{"a", kLongArgType}, {"b", kLongArgType}, {"result", kLongArgType}}},
 			{kLibOutName,
 			 "VwSdkProbes",
 			 "VAR 引数へ書き戻して true を返す（#217）",
@@ -49,7 +54,8 @@ namespace vwprobe
 			 true,
 			 {{"input", kStringArgType},
 			  {"outText", kStringVarArgType},
-			  {"outCount", kLongVarArgType}}},
+			  {"outCount", kLongVarArgType},
+			  {"result", kBooleanArgType}}},
 			{nullptr, nullptr, nullptr, 0, kVLIBScopeUniversal, false, {}},
 		};
 
