@@ -124,9 +124,10 @@ gSDK->CloseDocument();
 ### コマンド実行中に呼んでよい
 
 `gSDK->OpenDocumentPath(nullptr, false)` をコマンド実行中に呼んで **`true`**。落ちない。
-`SwitchToOpenFile` / `CloseDocument` も同じ文脈で呼べた。[Plug-in
-Modules](Plug-in%20Modules.md) の `CloseAllFilesAndQuitVectorworks`（プラグイン読み込み中に
-呼ぶと落ちる）のような「呼べる場面」の制約は、**少なくともコマンド実行中については無い**。
+`SwitchToOpenFile` / `CloseDocument` も同じ文脈で呼べた。下記
+「[`CloseAllFilesAndQuitVectorworks`](#closeallfilesandquitvectorworks終了)」の
+**プラグイン読み込み中には呼べない**のような「呼べる場面」の制約は、**少なくとも
+コマンド実行中については無い**。
 
 ### カレント文書とカレントレイヤは即座に新しい文書へ移る
 
@@ -267,6 +268,50 @@ G3: 開いた後のアクティブ文書: /Applications/VW2026/名称未設定 7
   （実際この調査の 1 度目で踏んで、`.sta` の判定を 1 周やり直した。）
 - **失敗は速い**（20ms）。時間が掛かっていないことも、ダイアログではなく即座の拒否で
   あることの裏づけになる。
+
+## `CloseAllFilesAndQuitVectorworks`（終了）
+
+```cpp
+// ISDK.h:3799
+virtual void CloseAllFilesAndQuitVectorworks(bool bAskForSave = true, bool bRestart = false) = 0;
+```
+
+SDK の説明文は「Closes all files and then gracefully quits Vectorworks」。`bAskForSave` が
+偽なら確認せずに閉じてそのまま終了、`bRestart` が真なら終了後に起動し直す。**戻り値は無く、
+キャンセルされたときどうなるかも書かれていない**。SDK 自身のシステムテストは
+`CloseAllFilesAndQuitVectorworks(false)` で呼んでいる（`VWFC/Tools/CatchSystemTest.cpp:87`）。
+
+### プラグインの読み込み中には呼べない（import-ifc の実測・macOS）
+
+[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)
+の [#48](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/48)
+（アップデート後の再起動）で踏んだ。更新の確認が**起動中——スプラッシュの表示中、
+`plugin_module_main` の中**——に走っていた頃、そこから呼ぶと **`bRestart` が真でも偽でも
+「サポートファイルの読み込みに失敗しました。」が出て異常終了した**。**このリポジトリでは
+再現させていない**（出所は上記のとおり実測だが、ここの記述はその転記）。
+
+- 同じ呼び出しは**メニューコマンドの中**からも、**パレットの時計（ウェブパレットの JS
+  タイマーから呼ばれる C++）の中**からも機能した（import-ifc の M23 / M38）。
+- **OS のタイマーの刻みの中からも呼べる**（mac で実測。[Timers and
+  Notifications](Timers%20and%20Notifications.md) の 4 の 9）。
+- 以前このページは、この制約の出典を「Plug-in Modules」としていたが、**Plug-in Modules に
+  その節があったことは一度も無い**（`git log -S` で確認）。
+
+### 呼んだ後の振る舞い（mac で実測。Windows は未確認）
+
+詳細と数値は [Timers and Notifications](Timers%20and%20Notifications.md) の 4 の 9。ここには
+文書の側から見た要点だけを置く。
+
+- **呼び出しは戻る。** 図面を閉じ終えてから戻り（保存済み・図面 0 枚なら 115〜196 ms）、
+  **プロセスはその 4〜5 秒後、イベントループの中で正常に終わる**（`atexit` まで届く）。
+- **保存の確認は「未保存の変更」がある文書にだけ出る**（`bAskForSave=true`）。
+  保存済みの文書・図面 0 枚なら確認なしで終わる。
+- **確認で「キャンセル」すると、呼び出しはそのまま戻り、図面は開いたまま残る。**
+  Vectorworks は動き続け、`gSDK` もふつうに呼べる。**戻り値が無いので、キャンセルされたことは
+  `GetOpenFilesList()` の件数（減っていない）か、プロセスが生きていることで知る。**
+- **確認の最中にもう一度呼ぶと、確認が 2 つ重なって出る。** 落ちはしない。
+- **`kNotifyBeforeApplicationQuit` は確認の前に届き、キャンセルされても届く。**
+  「本当に終わる」合図にはならない。
 
 ## 結論（プラグイン開発への示唆）
 
