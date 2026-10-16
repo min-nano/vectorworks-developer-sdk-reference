@@ -20,6 +20,8 @@
 **呼ぶなら `CallPluginLibrary`。** 名前で結ばれるので相手の実装やビルドに縛られず、
 引数と結果が型つきで往復し、相手は `scope` で「誰に呼ばせるか」を選べる。
 **OS タイマーの刻みの中からも呼べる**（下記「呼べる時機」）。
+**提供側は戻り値の型を `fParams` の最後の欄で伝える**——書かないと Windows で殻を
+差し替えたときに Vectorworks が起動しなくなる（下記【罠】）。
 
 ## 1. `ISDK::CallPluginLibrary` — プラグインライブラリルーチンを名前で呼ぶ
 
@@ -199,7 +201,8 @@ struct SFunctionDef {
     Sint32            fVersion;
     Sint8             fScope;           // kVLIBScope…（上記の表）
     bool              fHasReturnValue;
-    SFunctionParamDef fParams[11];      // { 名前, 型 }。こちらも nullptr 終端
+    SFunctionParamDef fParams[11];      // { 名前, 型 }。こちらも nullptr 終端。
+                                        // fHasReturnValue なら最後の欄が戻り値（下記【罠】）
 };
 ```
 
@@ -219,6 +222,50 @@ struct SFunctionDef {
 受け取った番地を握り続けるので、**入れ替わる本体（`.vwpayload`）には置けない**
 （[プラグインモジュール](Plug-in%20Modules.md)「まだ確かめていないこと」の
 「本体側からイベントを登録する」と同じ話）。**呼ぶ側は本体でよい**（上の実測がそれ）。
+
+### 【罠】戻り値の型は `fParams` の**最後の欄**で伝える——書かないと Windows で起動時に落ちる
+
+**実測**（VW 2026。mac / Windows。[issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233) /
+[PR #237](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/237)）。
+
+**`fHasReturnValue = true` の関数は、`fParams` の最後に戻り値の欄（名前と型）を足す。**
+`IExtensionVSFunctions` が VW に渡すのは「戻り値があるか」（`GetFunctionHasReturnValue`）と
+「引数の並び」（`GetFunctionParamsCount` / `Name` / `Type`）だけで、**戻り値の型を渡す口が
+無い**（`IExtensionVSFunctions.h` / `VWExtensionVSFunctions.cpp:164-205`。SDK に使用例は
+無い）【ソース根拠】。**VW は並びの最後の欄を戻り値として読む。**
+
+```cpp
+{kLibSumName, "VwSdkProbes", "2 つの整数の和を返す", 1, kVLIBScopeUniversal,
+ /*fHasReturnValue*/ true,
+ {{"a", kLongArgType}, {"b", kLongArgType}, {"result", kLongArgType}}},  // ← 最後が戻り値
+```
+
+- **欄を足さないと、最後の引数が戻り値に化ける。** VW は起動時に Plug-ins 直下へ
+  `VWPluginLibraryRoutines.h` / `.p`（と `WorksheetFunctionOptionsRegistry`）を書き出す
+  ——そこに載った定義で、ずれがそのまま見える:
+
+  | 実際の署名 | 欄を足す前の書き出し（`.p`） | 足した後 |
+  | --- | --- | --- |
+  | `Echo(input: STRING): STRING` | `VwSdkProbes_Echo() : STRING` | `VwSdkProbes_Echo(input: STRING) : STRING` |
+  | `Sum(a, b: LONGINT): LONGINT` | `VwSdkProbes_Sum(a: LONGINT) : LONGINT` | `VwSdkProbes_Sum(a: LONGINT; b: LONGINT) : LONGINT` |
+  | `Out(input; VAR outText; VAR outCount): BOOLEAN` | `VwSdkProbes_Out(input: STRING; VAR outText: STRING) VAR : LONGINT` | `VwSdkProbes_Out(input: STRING; VAR outText: STRING; VAR outCount: LONGINT) : BOOLEAN` |
+
+- **`ISDK::CallPluginLibrary` での受け渡しは、どちらでも同じに通る**（欄を足す前の #217 の
+  実測も、足した後の mac / Windows の実測も、`Echo` → `"echo:i233"`・`Sum(40, 2)` → `42`・
+  `Out` → `true` と VAR 引数の書き戻し）。結果は `GetResult()` の欄に入り、実装が読む
+  `GetArgument(i)` の添字は変わらない。**だから SDK から呼んでいるだけでは、ずれに気付けない。**
+- **Windows では、ずれたまま `.vlb` を差し替えると、Vectorworks が起動画面で毎回落ちる。**
+  `Vectorworks2026.exe` / 障害モジュール `KERNELBASE.dll` / **例外コード `0xe0000001`**。
+  プラグインの `module_main` が action −1 / −3 / −4 / −5 … と呼ばれている途中（プラグインの
+  コードがまだ何も走っていない段）で落ち、そのとき上の 3 ファイルが書き直されていた。
+  **3 ファイルを退けると起動する**（VW が作り直す）。mac では同じずれのまま差し替えても
+  落ちなかった。
+- **欄を足した殻どうしの差し替えでは落ちなかった**（Windows で 1 回。3 ファイルを退けずに
+  別のビルドの殻へ差し替え、起動して 3 ファイルが書き直された）。**ずれた定義が書き出しに
+  残っている状態から、直した殻へ最初に入れ替えるときだけは、3 ファイルを 1 度退ける。**
+- 帰結: 実プラグインでライブラリ関数を足すときは、**書き出された `VWPluginLibraryRoutines.p`
+  を 1 度開いて、署名が意図どおりかを見る**。ずれは呼び出しでは見えず、Windows の利用者が
+  更新したときに初めて「起動しない」として現れる。
 
 ## 2. メニューコマンドを内部名で起動する——`ISDK::DoMenuName`
 
