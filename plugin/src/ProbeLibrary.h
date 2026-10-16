@@ -25,6 +25,9 @@
 //	| `VwSdkProbes_Sum`   | `(a: LONG, b: LONG): LONG`                            | 数値を複数渡して数値を受け取れるか |
 //	| `VwSdkProbes_Out`   | `(input: STRING, VAR outText: STRING, VAR outCount: LONG): BOOLEAN` | **VAR（出力）引数**で返せるか |
 //
+//	**戻り値は `fParams` の最後の欄で型を伝える**（`fHasReturnValue = true` のとき。VW は
+//	最後の欄を戻り値として読む。issue #233。ProbeLibrary.cpp の表を参照）。
+//
 //	scope は `kVLIBScopeUniversal`——**VectorScript からも SDK からも**呼べる
 //	（`Kernel/API/MiniCadCallBacks.h`。`kVLIBScopeVSOnly` にすると
 //	`ISDK::CallPluginLibrary` から呼べなくなる）。
