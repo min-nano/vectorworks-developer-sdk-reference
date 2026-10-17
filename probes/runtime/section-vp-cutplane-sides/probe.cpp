@@ -44,6 +44,9 @@
 
 #include "Probe.h"
 
+#include <filesystem>
+#include <fstream>
+
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -321,7 +324,20 @@ namespace
 	}
 } // namespace
 
-VW_PROBE("section-vp-cutplane-sides", "断面の奥/手前と1052", "1064/1065 がどちら側を出すか")
+namespace
+{
+	// #245: 2 回目の走行で引き直すための記録（名前 → 1 回目の読み）。
+	std::vector<std::pair<std::string, std::string>> gI245Made;
+
+	std::filesystem::path I245StatePath()
+	{
+		std::error_code ec;
+		return std::filesystem::temp_directory_path(ec) /
+			   "VwSdkProbes-section-vp-cutplane-sides.i245";
+	}
+} // namespace
+
+static void ProbeI202Body(vwprobe::Report& probe)
 {
 	// ---- 1. モデル。レイヤ 1 枚につき箱 1 つ（表示を切り替えて測るため）----------
 	probe.log("■ 1. 箱を 3 つ、別々のデザインレイヤへ置く");
@@ -437,6 +453,16 @@ VW_PROBE("section-vp-cutplane-sides", "断面の奥/手前と1052", "1064/1065 �
 				probe.log(std::string("    ★出たのは: ") + ProbeI202SideText(side));
 				probe.log("    群 " + cacheLine + " / 中身の外接（注釈座標） " +
 						  (hasContent ? ProbeI202RectText(content) : std::string("無し")));
+				{
+					// #245: 名前を付けて、2 回目で引き直す
+					const std::string nm = std::string("i245-") + (dirPlusX ? "px" : "mx") +
+										   (pt3MinusY ? "-mY-" : "-pY-") + (beyond ? "T" : "F") +
+										   (before ? "T" : "F");
+					TXString tx(nm.c_str());
+					(void)gSDK->SetObjectName(vp, tx);
+					gI245Made.emplace_back(nm, std::string(ProbeI202SideText(side)) + " | " +
+												   cacheLine);
+				}
 				ProbeI202Result rec;
 				rec.dirPlusX = dirPlusX;
 				rec.pt3MinusY = pt3MinusY;
@@ -650,4 +676,69 @@ VW_PROBE("section-vp-cutplane-sides", "断面の奥/手前と1052", "1064/1065 �
 	}
 
 	probe.log("■ 終わり。図面は壊れたままでよい（新規の空図面で走らせる前提）");
+}
+
+// [issue #245] 旧 #202 のプローブそのものを 2 回走らせる形にしたもの。1 回目は旧プローブの
+// 本体をそのまま走らせ、16 枚に名前を付け、自動で開いた undo イベントを閉じて戻る。
+// 2 回目（同じ図面を前にしたまま。ブリッジなら new_document=false）で名前から引き直し、
+// 1 回目の読み（同じ呼び出しの中）と並べる。
+VW_PROBE("section-vp-cutplane-sides", "断面の奥/手前（2 回走らせる）",
+		 "1 回目で作り 2 回目で読み直す")
+{
+	std::ifstream in(I245StatePath());
+	if (!in)
+	{
+		gI245Made.clear();
+		ProbeI202Body(probe);
+		probe.log("■ #245: undo イベントを閉じる（building=" +
+				  std::string(gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no") + "）");
+		if (gSDK->IsCurrentlyBuildingAnUndoEvent())
+			(void)gSDK->EndUndoEvent();
+		int changedTe = 0;
+		std::ofstream out(I245StatePath(), std::ios::trunc);
+		for (const auto& [nm, first] : gI245Made)
+		{
+			MCObjectHandle vp = gSDK->GetNamedObject(TXString(nm.c_str()));
+			WorldRect content;
+			bool has = false;
+			const std::string line = vp ? ProbeI202Caches(vp, content, has) : "(nil)";
+			const std::string now =
+				std::string(ProbeI202SideText(ProbeI202WhichBox(has, content))) + " | " + line;
+			if (now != first)
+				++changedTe;
+			out << nm << "\t" << first << "\t" << now << "\n";
+		}
+		probe.log("■ #245: 閉じた直後に読み直して違った枚: " + std::to_string(changedTe) + " / " +
+				  std::to_string(gI245Made.size()) +
+				  "。もう一度走らせると戻った後の読みを並べる。");
+		return;
+	}
+	probe.log("■ #245 の 2 回目: 1 回目に作った 16 枚を、VW へ戻った後に読み直す");
+	std::string row;
+	int changed = 0, total = 0;
+	while (std::getline(in, row))
+	{
+		const size_t t1 = row.find('\t');
+		const size_t t2 = row.find('\t', t1 + 1);
+		if (t1 == std::string::npos || t2 == std::string::npos)
+			continue;
+		const std::string nm = row.substr(0, t1);
+		const std::string first = row.substr(t1 + 1, t2 - t1 - 1);
+		const std::string te = row.substr(t2 + 1);
+		MCObjectHandle vp = gSDK->GetNamedObject(TXString(nm.c_str()));
+		WorldRect content;
+		bool has = false;
+		const std::string line = vp ? ProbeI202Caches(vp, content, has) : "(nil)";
+		const std::string now =
+			std::string(ProbeI202SideText(ProbeI202WhichBox(has, content))) + " | " + line;
+		const bool diff = (now != first) || (te != first);
+		changed += diff ? 1 : 0;
+		++total;
+		probe.log(std::string(diff ? "★ " : "   ") + nm + "  T0=" + first +
+				  (te == first ? "" : "  Te=" + te) + (now == first ? "" : "  T2=" + now));
+	}
+	probe.log("差のあった枚: " + std::to_string(changed) + " / " + std::to_string(total));
+	in.close();
+	std::error_code ec;
+	std::filesystem::remove(I245StatePath(), ec);
 }
