@@ -11,8 +11,12 @@
 //	     保存が掛からない——読み直しに保存が混ざらない）。
 //	  2. 各ケースの setup() で書き、すぐに measure() で読む ……………… T0（同じ呼び出しの中）
 //	  3. 呼び出しの中でランループを 1.5 秒回してから、もう一度読む ……… T1（入れ子のランループ）
-//	  4. 1 秒後に OS のタイマーで自分の図面を前へ戻す（ブリッジの保存が別の図面を前へ
-//	     出すため。前に出ていない図面は描かれない）。
+//	  4. 何もせずに戻る。**戻った後に呼ばれるもの（OS のタイマー・dispatch・通知）を
+//	     仕掛けてはいけない**——殻は走らせた直後に本体を dlclose するので、後から呼ばれた
+//	     コールバックは解放済みのコードへ飛んで VW ごと落ちる（実際に落とした。#245）。
+//	     ブリッジで回すときは、1 回目の後に vw_cleanup でブリッジの図面を閉じる——
+//	     ブリッジは走らせた後に自分の図面を前へ出して保存するので、閉じれば自分の図面が
+//	     前に残る（前に出ていない図面は描かれない）。
 //	2 回目（状態ファイルがあるとき）:
 //	  5. 自分の図面へ切り替えて読む ……………………………………………… T2（VW のイベントループの後）
 //	  6. T0 / T1 / T2 を並べて出し、自分の図面を閉じて（保存しない）状態ファイルを消す。
@@ -39,7 +43,6 @@
 
 #if GS_MAC
 #	include <CoreFoundation/CoreFoundation.h>
-#	include <dispatch/dispatch.h>
 #endif
 
 namespace
@@ -260,39 +263,6 @@ namespace
 		}
 	}
 
-	Sint32& DfFrontRef()
-	{
-		static Sint32 sRef = 0;
-		return sRef;
-	}
-
-#if GS_MAC
-	void DfBringFront(void*)
-	{
-		if (gSDK != nullptr && DfIsOpen(DfFrontRef()))
-			(void)gSDK->SwitchToOpenFile(DfFrontRef());
-	}
-#else
-	void CALLBACK DfBringFrontWin(HWND, UINT, UINT_PTR id, DWORD)
-	{
-		KillTimer(nullptr, id);
-		if (gSDK != nullptr && DfIsOpen(DfFrontRef()))
-			(void)gSDK->SwitchToOpenFile(DfFrontRef());
-	}
-#endif
-
-	// 呼び出しが戻った後に 1 度だけ、自分の図面を前へ戻す。
-	void DfScheduleBringFront(Sint32 ref)
-	{
-		DfFrontRef() = ref;
-#if GS_MAC
-		dispatch_after_f(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC),
-						 dispatch_get_main_queue(), nullptr, &DfBringFront);
-#else
-		(void)SetTimer(nullptr, 0, 1500, &DfBringFrontWin);
-#endif
-	}
-
 	// いまどの時点を読んでいるか（0=T0 / 1=T1 / 2=T2）。T2 でだけ書き込みを伴う読み
 	// （例: データタグの更新手順を掛け直してから読む）をしたいケースのため。T0 / T1 で
 	// 書くと、後の時点の読みが「VW が自分で変えたのか」を表さなくなる。
@@ -405,10 +375,9 @@ namespace
 			}
 			probe.log("building(T1 の後)=" + DfBool(gSDK->IsCurrentlyBuildingAnUndoEvent()));
 			DfSave(slug, st);
-			DfScheduleBringFront(st.fileRef);
 			probe.log("状態を保存した: " + DfStatePath(slug).string());
-			probe.log("→ 何秒か置いてから、**同じ図面のまま**もう一度走らせる"
-					  "（ブリッジなら new_document=false）。2 回目で T2 を読んで比べる。");
+			probe.log("→ 何秒か置いてから、**この図面を前にしたまま**もう一度走らせる。"
+					  "ブリッジなら vw_cleanup（ブリッジの図面を閉じる）→ new_document=false。");
 			return;
 		}
 

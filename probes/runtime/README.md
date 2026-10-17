@@ -148,6 +148,14 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
     取り消しは `DoMenuName("Undo", 0)` で起こせる（[Findings「Plug-in Interop」](../../Findings/Plug-in%20Interop.md)
     の 2）。読み戻しは**名前で引き直す**——取り消しの後の手元のハンドルは消えたものを
     指しているかもしれない（#223 の `story-layer-undo` がこの形だった）。
+- **戻った後に呼ばれるものを仕掛けない。** 殻は**走らせた直後に本体を降ろす**
+  （mac は `dlclose`。`plugin/src/ProbeMenu.cpp`）ので、プローブが OS のタイマー
+  （`CFRunLoopTimer` / `SetTimer`）・`dispatch_after`・通知手続きなどに**本体の中の関数**を
+  登録したまま戻ると、後で呼ばれたときに解放済みのコードへ飛んで **VectorWorks ごと落ちる**
+  （#245 で `dispatch_after_f` を 1.5 秒後に仕掛けて実際に落とした。クラッシュレポートの
+  メインスレッドが `_dispatch_client_callout` から所属イメージの無いアドレスへ飛んでいる）。
+  **呼び出しの中で回す**（ランループを短く刻んで回す——`probes/runtime/deferred-*/Deferred.h`
+  の `DfPump`）か、**2 回走らせて状態を一時ファイルで受け渡す**（同 `RunDeferred`）。
 - **落ちてもよいが、落ちる前に書く。** `probe.log()` は 1 行ごとにファイルへ flush
   するので、VectorWorks ごと落ちてもそこまでの行は残る。**知りたいことは、それを
   引き起こす呼び出しの前にログへ出しておく。** 落ちた回のログも、次にメニューを
