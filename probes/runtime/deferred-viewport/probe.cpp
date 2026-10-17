@@ -602,6 +602,60 @@ namespace
 		{"dv1-TT", true, true},
 	};
 
+	// c0: 旧プローブ（#202）と一字一句同じ順序で 1 枚だけ作る切り分け用。
+	// デザインレイヤ 3 枚 → 箱 → **最後に**シートレイヤ（アクティブになる）→ 断面 (F,T)。
+	DeferredCase VpCase0()
+	{
+		DeferredCase c;
+		c.id = "c0";
+		c.what = "切り分け: 旧 #202 と同じ順序で (F,T) を 1 枚（レイヤ→箱→シート→断面）";
+		c.setup = [](vwprobe::Report& probe)
+		{
+			MCObjectHandle ls = gSDK->CreateLayer("c0-S", static_cast<short>(kLayerDesign));
+			MCObjectHandle ln = gSDK->CreateLayer("c0-N", static_cast<short>(kLayerDesign));
+			MCObjectHandle lx = gSDK->CreateLayer("c0-X", static_cast<short>(kLayerDesign));
+			if (ls == nullptr || ln == nullptr || lx == nullptr)
+			{
+				probe.fail("c0: CreateLayer が nil");
+				return;
+			}
+			gSDK->SetCurrentLayer(ls);
+			MCObjectHandle bs = VpMakeBox(kVpBoxX0, kVpBoxX1, -3000.0, -2000.0, 0.0, 3000.0);
+			gSDK->SetCurrentLayer(ln);
+			MCObjectHandle bn = VpMakeBox(kVpBoxX0, kVpBoxX1, 7000.0, 8000.0, 5000.0, 3000.0);
+			gSDK->SetCurrentLayer(lx);
+			MCObjectHandle bx = VpMakeBox(kVpBoxX0, kVpBoxX1, 2000.0, 3000.0, 0.0, 3000.0);
+			probe.log("  c0 箱: S=" + DfBounds(bs) + " N=" + DfBounds(bn) + " X=" + DfBounds(bx));
+			MCObjectHandle sheet = gSDK->CreateLayer("c0-用紙", static_cast<short>(kLayerSheet));
+			if (sheet == nullptr)
+			{
+				probe.fail("c0: シートを作れない");
+				return;
+			}
+			const WorldPt pt1(kVpLineX0, kVpLineY);
+			const WorldPt pt2(kVpLineX1, kVpLineY);
+			const WorldPt pt3((kVpLineX0 + kVpLineX1) * 0.5, kVpLineY - kVpPt3Off);
+			MCObjectHandle vp =
+				gSDK->CreateSectionViewport(pt1, pt2, pt3, 0.0, kVpStartH, kVpEndH, sheet);
+			if (vp == nullptr)
+			{
+				probe.fail("c0: CreateSectionViewport が nil");
+				return;
+			}
+			VpShowOnly(vp, {ls, ln});
+			VpPrepSection(vp, false, true);
+			gSDK->UpdateViewport(vp);
+			(void)DfSetName(probe, vp, "dv0-FT");
+		};
+		c.measure = []()
+		{
+			DeferredReadings rs;
+			VpReadSection(rs, "FT", "dv0-FT");
+			return rs;
+		};
+		return c;
+	}
+
 	DeferredCase VpCase1()
 	{
 		DeferredCase c;
@@ -948,6 +1002,7 @@ namespace
 VW_PROBE("deferred-viewport", "ビューポート系の遅延の測り直し",
 		 "断面・注釈外接・図面ラベルを T0/T1/T2 で")
 {
-	const std::vector<DeferredCase> cases = {VpCase1(), VpCase2(), VpCase3(), VpCase4(), VpCase5()};
+	const std::vector<DeferredCase> cases = {VpCase0(), VpCase1(), VpCase2(),
+											 VpCase3(), VpCase4(), VpCase5()};
 	RunDeferred(probe, "deferred-viewport", cases, true, true);
 }
