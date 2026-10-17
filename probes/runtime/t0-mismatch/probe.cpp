@@ -5,7 +5,10 @@
 //	腕ごとに自分用の新しい図面を開き（空＝OpenDocumentPath(nullptr) か、既定のテンプレート
 //	Default.sta か）、終わったら保存せずに閉じる。前の腕の状態を持ち越さないため。
 //
-//	2 巡目（1 巡目の結果は PR のコメント）:
+//	3 巡目（1・2 巡目の結果は PR のコメント）:
+//	  V … ラベルが写すのは選択されている VP の 1032 か。作った VP は選択されたまま残るか。
+//	  W … 関連付けは表示範囲で決まる。表示を寄せる・縮小すれば成立するか。
+//	2 巡目:
 //	  R … 図面ラベルは Title が空で生まれるとは限らない。生まれたときの Title がどこから来るか
 //	      （どの VP の 1032 か・前のラベルか・アクティブレイヤ・選択・置く位置）を振る。
 //	  S … 空の図面で関連付けが成立しないのは置いた座標による（1 巡目で y=0〜8000 は成立、
@@ -212,13 +215,6 @@ namespace
 		return vp;
 	}
 
-	void TmSetDescription(MCObjectHandle vp, const char* value)
-	{
-		TVariableBlock descVar;
-		descVar = TXString(value);
-		gSDK->SetObjectVariable(vp, ovViewportDescription, descVar);
-	}
-
 	// ラベルを 1 本作って（どこにも入れない）、生まれたときの Title を出し、消す。
 	void TmBornTitle(vwprobe::Report& probe, const std::string& what, const WorldPt& at)
 	{
@@ -230,16 +226,6 @@ namespace
 		}
 		probe.log("    " + what + " → " + TmLabelParams(h));
 		gSDK->DeleteObject(h);
-	}
-
-	// シートレイヤ上のビューポートを並び順に出す（どれが「先頭」か）。
-	std::string TmVpOrder(MCObjectHandle sheet)
-	{
-		std::string out;
-		for (MCObjectHandle m = gSDK->FirstMemberObj(sheet); m != nullptr; m = gSDK->NextObject(m))
-			if (gSDK->GetObjectTypeN(m) == kViewportNode)
-				out += " " + TmText(m, ovViewportDescription);
-		return out.empty() ? " (無し)" : out;
 	}
 
 	struct TmBornSet
@@ -263,85 +249,6 @@ namespace
 		gSDK->CreateRectangleN(WorldPt(0, 0), Vector2(1, 0), 10000.0, 10000.0);
 		gSDK->SetCurrentLayer(s.sheet);
 		return true;
-	}
-
-	// R: ラベルが生まれたときの Title はどこから来るか。
-	void TmRunBorn(vwprobe::Report& probe)
-	{
-		const WorldPt at(0, 0);
-		{
-			probe.log("");
-			probe.log("=== R1（テンプレート）: VP を作る前・A・B の順に作った後 ===");
-			const Sint32 ref = TmOpen(probe, true);
-			TmBornSet s;
-			if (ref != 0 && TmBornSetup(probe, s, "tm-s1"))
-			{
-				TmBornTitle(probe, "VP が 1 枚も無い", at);
-				MCObjectHandle a = TmMakeVp(probe, s.sheet, s.design, "A", 0.0);
-				TmBornTitle(probe, "A だけ", at);
-				MCObjectHandle b = TmMakeVp(probe, s.sheet, s.design, "B", 300.0);
-				probe.log("    並び:" + TmVpOrder(s.sheet));
-				TmBornTitle(probe, "A → B", at);
-				TmBornTitle(probe, "A → B・B の上（300,0）に作る", WorldPt(300, 0));
-				TmBornTitle(probe, "A → B・遠く（50000,50000）に作る", WorldPt(50000, 50000));
-				TmSetDescription(a, "A2");
-				TmBornTitle(probe, "A の 1032 を A2 へ書き換えた後", at);
-				gSDK->DeselectAll();
-				gSDK->SelectObject(b, true);
-				TmBornTitle(probe, "B だけ選択した後", at);
-				gSDK->DeselectAll();
-				gSDK->DeleteObject(a);
-				probe.log("    A を消した後の並び:" + TmVpOrder(s.sheet));
-				TmBornTitle(probe, "A を消した後", at);
-				MCObjectHandle s2 = gSDK->CreateLayer("tm-s2", kLayerSheet);
-				if (s2 != nullptr)
-				{
-					gSDK->SetCurrentLayer(s2);
-					TmBornTitle(probe, "VP の無い別のシートがアクティブ", at);
-					(void)TmMakeVp(probe, s2, s.design, "C", 0.0);
-					TmBornTitle(probe, "別のシートに C を作った後（そこがアクティブ）", at);
-					gSDK->SetCurrentLayer(s.sheet);
-					TmBornTitle(probe, "元のシートへ戻った後", at);
-				}
-				gSDK->SetCurrentLayer(s.design);
-				TmBornTitle(probe, "デザインレイヤがアクティブ", at);
-			}
-			TmClose(probe, ref);
-		}
-		{
-			probe.log("");
-			probe.log("=== R2（テンプレート）: 空の VP の後に B ===");
-			const Sint32 ref = TmOpen(probe, true);
-			TmBornSet s;
-			if (ref != 0 && TmBornSetup(probe, s, "tm-s1"))
-			{
-				(void)TmMakeVp(probe, s.sheet, s.design, nullptr, 0.0);
-				(void)TmMakeVp(probe, s.sheet, s.design, "B", 300.0);
-				probe.log("    並び:" + TmVpOrder(s.sheet));
-				TmBornTitle(probe, "空 → B", at);
-			}
-			TmClose(probe, ref);
-		}
-		{
-			probe.log("");
-			probe.log("=== R3（テンプレート）: 前のラベルが Title を持つが、どの VP も空 ===");
-			const Sint32 ref = TmOpen(probe, true);
-			TmBornSet s;
-			if (ref != 0 && TmBornSetup(probe, s, "tm-s1"))
-			{
-				MCObjectHandle h = gSDK->CreateCustomObject(kTmLabel, at, 0.0, false);
-				if (h != nullptr)
-				{
-					VWFC::VWObjects::VWParametricObj(h).SetParamValue("Title", "ラベルに書いた題");
-					gSDK->ResetObject(h);
-					probe.log("    注釈へ入れないラベルに Title を書いた → " + TmLabelParams(h));
-				}
-				TmBornTitle(probe, "VP 無し・前のラベルが題を持つ", at);
-				(void)TmMakeVp(probe, s.sheet, s.design, nullptr, 0.0);
-				TmBornTitle(probe, "空の VP を作った後", at);
-			}
-			TmClose(probe, ref);
-		}
 	}
 
 	// ---------------------------------------------------------------------------
@@ -383,74 +290,105 @@ namespace
 				  TmLayerStr(gSDK->GetActiveLayer()));
 	}
 
-	void TmScan(vwprobe::Report& probe, const char* label, const std::vector<double>& ys, double x)
+	std::string TmSel(MCObjectHandle h)
 	{
-		probe.log("  -- " + std::string(label));
-		TmAssocView(probe);
-		for (double y : ys)
-			TmAssocAt(probe, "y", x, y);
+		return h != nullptr && gSDK->IsSelected(h) ? "選択" : "非選択";
 	}
 
-	// S: 関連付けが成立する範囲。
-	void TmRunScan(vwprobe::Report& probe)
+	// V: ラベルが写すのは「選択されている VP」の 1032 か。
+	void TmRunSel(vwprobe::Report& probe)
 	{
-		const std::vector<double> ys = {0,	   2000,  4000,	 6000,	8000,  9000,
-										10000, 11000, 12000, 16000, 20000, 60000};
+		probe.log("");
+		probe.log("=== V（テンプレート）: 作った VP は選択されたまま残るか・どの VP を写すか ===");
+		const Sint32 ref = TmOpen(probe, true);
+		TmBornSet s;
+		if (ref != 0 && TmBornSetup(probe, s, "tm-s1"))
 		{
-			probe.log("");
-			probe.log("=== S1（空の図面・1/1）: y を振る ===");
-			const Sint32 ref = TmOpen(probe, false);
-			if (ref != 0)
-			{
-				TmScan(probe, "x=0", ys, 0.0);
-				TmScan(probe, "x=-20000（左へ外す）", {0, 4000}, -20000.0);
-				TmScan(probe, "x=20000（右へ外す）", {0, 4000}, 20000.0);
-				gSDK->SetViewCenter(WorldPt(1500.0, 60000.0));
-				TmScan(probe, "表示の中心を (1500,60000) へ動かした後", {0, 4000, 60000, 61000},
-					   0.0);
-			}
-			TmClose(probe, ref);
+			gSDK->DeselectAll();
+			MCObjectHandle a = TmMakeVp(probe, s.sheet, s.design, "A", 0.0);
+			probe.log("    A を作った直後: A=" + TmSel(a));
+			MCObjectHandle b = TmMakeVp(probe, s.sheet, s.design, "B", 300.0);
+			probe.log("    B を作った直後: A=" + TmSel(a) + " B=" + TmSel(b));
+			gSDK->DeselectAll();
+			TmBornTitle(probe, "全部の選択を外した", WorldPt(0, 0));
+			gSDK->SelectObject(a, true);
+			TmBornTitle(probe, "A だけ選択", WorldPt(0, 0));
+			gSDK->SelectObject(b, true);
+			TmBornTitle(probe, "A と B を選択（A を先に）", WorldPt(0, 0));
+			gSDK->DeselectAll();
+			gSDK->SelectObject(b, true);
+			gSDK->SelectObject(a, true);
+			TmBornTitle(probe, "A と B を選択（B を先に）", WorldPt(0, 0));
+			gSDK->DeselectAll();
+			MCObjectHandle rect =
+				gSDK->CreateRectangleN(WorldPt(0, 0), Vector2(1, 0), 100.0, 100.0);
+			gSDK->DeselectAll();
+			gSDK->SelectObject(rect, true);
+			TmBornTitle(probe, "VP ではない矩形だけ選択", WorldPt(0, 0));
+			gSDK->DeselectAll();
+			gSDK->SelectObject(b, true);
+			gSDK->SetCurrentLayer(s.design);
+			TmBornTitle(probe, "B を選択したままデザインレイヤをアクティブに", WorldPt(0, 0));
+			gSDK->SetCurrentLayer(s.sheet);
+			gSDK->DeselectAll();
+			// 置いたラベルの Title が、注釈へ入れて ResetObject したときに VP へ押し込まれるのを
+			// 選択で防げるか（#177 の pre の再現と、その手当て）。
+			MCObjectHandle c = TmMakeVp(probe, s.sheet, s.design, "C の題", 600.0);
+			gSDK->DeselectAll();
+			MCObjectHandle d = TmMakeVp(probe, s.sheet, s.design, nullptr, 900.0);
+			MCObjectHandle e = TmMakeVp(probe, s.sheet, s.design, "E の題", 1200.0);
+			gSDK->DeselectAll();
+			gSDK->SelectObject(d, true);
+			MCObjectHandle h = gSDK->CreateCustomObject(kTmLabel, WorldPt(0, 0), 0.0, false);
+			probe.log("    空の VP（d）を選択して作った → " + TmLabelParams(h));
+			gSDK->DeselectAll();
+			gSDK->AddViewportAnnotationObject(e, h);
+			gSDK->ResetObject(h);
+			probe.log("    E の題の VP へ入れて ResetObject → " + TmLabelParams(h) +
+					  " / E の 1032=" + TmText(e, ovViewportDescription));
+			gSDK->DeselectAll();
+			MCObjectHandle h2 = gSDK->CreateCustomObject(kTmLabel, WorldPt(0, 0), 0.0, false);
+			probe.log("    選択を外して作った → " + TmLabelParams(h2));
+			gSDK->AddViewportAnnotationObject(c, h2);
+			gSDK->ResetObject(h2);
+			probe.log("    C の題の VP へ入れて ResetObject → " + TmLabelParams(h2) +
+					  " / C の 1032=" + TmText(c, ovViewportDescription));
 		}
+		TmClose(probe, ref);
+	}
+
+	// W: 関連付けは表示範囲で決まる。表示を寄せれば（または縮小すれば）成立するか。
+	void TmRunView(vwprobe::Report& probe)
+	{
+		probe.log("");
+		probe.log("=== W（空の図面・1/1）: 表示を寄せる・縮小する ===");
+		const Sint32 ref = TmOpen(probe, false);
+		if (ref != 0)
 		{
-			probe.log("");
-			probe.log("=== S2（空の図面）: 先にレイヤを 1/50 にしてから y を振る ===");
-			const Sint32 ref = TmOpen(probe, false);
-			if (ref != 0)
-			{
-				gSDK->SetLayerScaleN(gSDK->GetActiveLayer(), 50.0);
-				TmScan(probe, "1/50", ys, 0.0);
-			}
-			TmClose(probe, ref);
+			TmAssocView(probe);
+			TmAssocAt(probe, "そのまま", 0.0, 60000.0);
+			WorldPt keep;
+			gSDK->GetViewCenter(keep);
+			gSDK->SetViewCenter(WorldPt(1500.0, 60000.0 + 2000.0));
+			TmAssocAt(probe, "表示の中心を寸法へ寄せて", 0.0, 62000.0);
+			gSDK->SetViewCenter(keep);
+			TmAssocView(probe);
+			TmAssocAt(probe, "戻した表示で 66000（対照）", 0.0, 66000.0);
+			gSDK->SetZoomFactorN(0.01);
+			TmAssocView(probe);
+			TmAssocAt(probe, "SetZoomFactorN(0.01) の後", 0.0, 70000.0);
+			TmAssocAt(probe, "SetZoomFactorN(0.01) の後・遠く", 0.0, 400000.0);
+			gSDK->SetZoomFactorN(1.0);
+			TmAssocAt(probe, "SetZoomFactorN(1) に戻した後", 0.0, 74000.0);
 		}
-		{
-			probe.log("");
-			probe.log("=== S3（空の図面・1/1）: 用紙を広げてから y を振る ===");
-			const Sint32 ref = TmOpen(probe, false);
-			if (ref != 0)
-			{
-				WorldRect page;
-				gSDK->GetPageBounds(page);
-				WorldRect big(WorldPt(-100000.0, 100000.0), WorldPt(100000.0, -100000.0));
-				gSDK->SetPageBounds(big);
-				TmScan(probe, "用紙を ±100000 に", ys, 0.0);
-			}
-			TmClose(probe, ref);
-		}
-		{
-			probe.log("");
-			probe.log("=== S4（テンプレート）: y を振る ===");
-			const Sint32 ref = TmOpen(probe, true);
-			if (ref != 0)
-				TmScan(probe, "そのまま", {0, 60000, 100000, 200000, 400000, 1000000}, 0.0);
-			TmClose(probe, ref);
-		}
+		TmClose(probe, ref);
 	}
 } // namespace
 
 VW_PROBE("t0-mismatch", "T0 の食い違い（#245）", "ラベル・文字スタイル・関連付けを振り分ける")
 {
-	TmRunBorn(probe);
-	TmRunScan(probe);
+	TmRunSel(probe);
+	TmRunView(probe);
 	(void)gSDK->EndUndoEvent();
 	probe.log("");
 	probe.log("おわり");
