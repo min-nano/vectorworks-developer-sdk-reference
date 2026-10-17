@@ -159,6 +159,7 @@ namespace
 	struct DfState
 	{
 		Sint32 fileRef = 0;
+		std::string stage; // "prepared"（図面を開いただけ）か "written"（書いて T0〜Te を読んだ）
 		std::string startedAt;
 		std::map<std::string, std::string> t0;
 		std::map<std::string, std::string> t1;
@@ -178,6 +179,7 @@ namespace
 	{
 		std::ofstream f(DfStatePath(slug), std::ios::trunc);
 		f << "ref\t" << st.fileRef << "\n";
+		f << "stage\t" << st.stage << "\n";
 		f << "at\t" << st.startedAt << "\n";
 		for (const std::string& k : st.keyOrder)
 		{
@@ -205,6 +207,8 @@ namespace
 				cols.push_back(col);
 			if (cols.size() >= 2 && cols[0] == "ref")
 				st.fileRef = static_cast<Sint32>(std::stol(cols[1]));
+			else if (cols.size() >= 2 && cols[0] == "stage")
+				st.stage = cols[1];
 			else if (cols.size() >= 2 && cols[0] == "at")
 				st.startedAt = cols[1];
 			else if (cols.size() >= 4 && cols[0] == "v")
@@ -303,16 +307,17 @@ namespace
 			probe.log("  " + tag + " " + k + " = " + v);
 	}
 
+	// prepareFirst=true なら「図面を開くだけ」の回を先に 1 回挟む（開いた同じ呼び出しの中で
+	// 書くと、まだ一度もイベントループを通っていない図面になる——ビューポートの描画などが
+	// それで変わるかを切り分けるため。#245）。
 	void RunDeferred(vwprobe::Report& probe, const std::string& slug,
-					 const std::vector<DeferredCase>& cases)
+					 const std::vector<DeferredCase>& cases, bool prepareFirst = false)
 	{
 		DfState st;
-		if (!DfLoad(slug, st))
+		const bool loaded = DfLoad(slug, st);
+		if (!loaded && prepareFirst)
 		{
-			// ===================== 1 回目 =====================
-			probe.log(
-				"【1 回目】書いて、同じ呼び出しの中で読む（T0）→ ランループを回して読む（T1）");
-			probe.log("building(走り出し)=" + DfBool(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+			// ===================== 準備の回 =====================
 			const size_t before = DfOpenFiles().size();
 			(void)gSDK->OpenDocumentPath(nullptr, false);
 			if (DfOpenFiles().size() != before + 1)
@@ -321,8 +326,48 @@ namespace
 				return;
 			}
 			st.fileRef = DfActiveRef();
+			st.stage = "prepared";
 			st.startedAt = DfNow();
-			probe.log("自分用の図面 fileRef=" + std::to_string(st.fileRef));
+			DfSave(slug, st);
+			probe.log(
+				"【準備】自分用の図面を開いただけで戻る（fileRef=" + std::to_string(st.fileRef) +
+				"）。この図面を前にしたまま、もう一度走らせると書いて読む。");
+			return;
+		}
+		if (!loaded || st.stage == "prepared")
+		{
+			// ===================== 1 回目 =====================
+			probe.log(
+				"【1 回目】書いて、同じ呼び出しの中で読む（T0）→ ランループを回して読む（T1）");
+			probe.log("building(走り出し)=" + DfBool(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+			if (loaded)
+			{
+				std::error_code ec;
+				if (!DfIsOpen(st.fileRef))
+				{
+					std::filesystem::remove(DfStatePath(slug), ec);
+					probe.fail(
+						"準備の回の図面が見つからない。状態を消したので、次は準備からやり直し");
+					return;
+				}
+				(void)gSDK->SwitchToOpenFile(st.fileRef);
+				probe.log("準備の回（" + st.startedAt +
+						  "）に開いた図面で書く fileRef=" + std::to_string(st.fileRef));
+			}
+			else
+			{
+				const size_t before = DfOpenFiles().size();
+				(void)gSDK->OpenDocumentPath(nullptr, false);
+				if (DfOpenFiles().size() != before + 1)
+				{
+					probe.fail("自分用の新規図面を開けなかった");
+					return;
+				}
+				st.fileRef = DfActiveRef();
+				probe.log("自分用の図面 fileRef=" + std::to_string(st.fileRef));
+			}
+			st.stage = "written";
+			st.startedAt = DfNow();
 
 			DfPhase() = 0;
 			for (const DeferredCase& c : cases)

@@ -940,5 +940,5 @@ VW_PROBE("deferred-viewport", "ビューポート系の遅延の測り直し",
 		 "断面・注釈外接・図面ラベルを T0/T1/T2 で")
 {
 	const std::vector<DeferredCase> cases = {VpCase1(), VpCase2(), VpCase3(), VpCase4(), VpCase5()};
-	RunDeferred(probe, "deferred-viewport", cases);
+	RunDeferred(probe, "deferred-viewport", cases, true);
 }

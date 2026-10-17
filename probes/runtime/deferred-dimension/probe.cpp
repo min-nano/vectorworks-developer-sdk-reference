@@ -626,7 +626,13 @@ namespace
 		else
 		{
 			DmSetBool(dim, ovDimShowValue, true);
+			// 関連付ける相手は**選択で渡す**（旧プローブ dim-association の手順。選ばずに
+			// 呼ぶと関連付けが成立しない——#245 の 1 巡目で HasConstraint=no だった）。
+			gSDK->DeselectAll();
+			gSDK->SelectObject(lineA, true);
+			gSDK->SelectObject(lineB, true);
 			gSDK->AssociateLinearDimension(dim, false);
+			gSDK->DeselectAll();
 			DfSetName(probe, lineA, "dm-c5la");
 			DfSetName(probe, lineB, "dm-c5lb");
 			DfSetName(probe, dim, "dm-c5d");
