@@ -14,6 +14,8 @@
 #include <chrono>
 #include <string>
 
+using namespace VectorWorks;
+
 VW_PROBE("doc-close-front", "前面の図面を閉じる", "手で開いた図面に DoMenuName の Close を呼ぶ")
 {
 	TVWArray_OpenFileInformation files;
