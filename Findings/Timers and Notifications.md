@@ -494,6 +494,10 @@ projectionOrthogonal, false, true)` ＋ VectorScript の `SetView(-60,0,30,0,0,0
 **測っていないこと**: **コマンドが終わって VW が自分のイベントループへ戻ってから
 描くのかどうか**は、プローブの中からは追えないので測っていない。
 **プラグインの用途——「描き直して、終わるまで待つ」——には、どちらでも答えは変わらない。**
+（「戻った後に VW が何をするか」は [#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)
+で一部を測った——**ランループで連続寸法が作り直され、undo イベントの終わりで PIO の外接と
+ビューポートの dirty の印が更新される**。断面の中身は戻った後も変わらなかった。
+[Investigation Techniques](Investigation%20Techniques.md)「いつ読むか」。）
 
 ##### 1. `SetRenderMode` は **`immediate=true` でも描かない**——先送りですらない
 

@@ -218,10 +218,19 @@ virtual MCObjectHandle CreateLinearDimension(
 測点を足元へ落とし直さなくても、**測点はそのままで `ovDimDirection` に `(1,0)` を
 書けばよい**（伏図・軸組図の寸法で効く）。
 
-**表示値は SDK から読めない。** 寸法（型 63）の中身を `FirstMemberObj` で歩いても
-文字を持つ要素は無く（5 つ歩いて 0 件）、`GetTextChars` では取れなかった。
-VectorScript には `GetDimText(h)` があるが、**`ISDK` に対応するものは無い**。
-値を確かめたいときは、上の射影を自分で計算する（実測 3 例はすべてそれと一致した）。
+**表示値は、寸法の中の群（型 11）の中の文字（型 10）として読める。**
+VectorScript の `GetDimText(h)` に対応する `ISDK` の口は無いが、要らない。
+
+- 【訂正】以前は「表示値は SDK から読めない」と書いていた。根拠は「`FirstMemberObj` で
+  5 つ歩いて文字を持つ要素は 0 件」だったが、**直下しか見ていなかった**。直下の子は
+  `[0:1 2:5 11:1]`（線 5 本と群 1 つ）で、**文字は群（型 11）の中に 1 つある**。
+  作った直後に `ResetObject` 無しで読んでも `'1100'` / `'1200'` / `'1300'`（作った長さ
+  そのまま）が取れ、undo イベントを閉じても VW へ戻った後も同じだった
+  （[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。
+  **遅れて出てくるのではなく、最初から在った。** 歩き方は
+  [Investigation Techniques](Investigation%20Techniques.md) の「絵で読める大きさか」は
+  目視に頼らず測れる（再帰して型 10 を拾い、`GetTextChars` で文字列も読める）。
+- 射影を自分で計算する方法も引き続き使える（実測 3 例はすべてそれと一致した）。
 
 #### `AssociateLinearDimension` が効かなかったのは、解く段を呼んでいなかったから
 
@@ -681,6 +690,10 @@ for (short index = 9; index >= -8; --index)
 
 #### ③ ところが、その規格を当てた寸法は 1 mm も動かない（これが答え）
 
+（**VW へ戻った後に読み直しても同じ**——[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。規格が指す文字スタイル資源の大きさを
+6pt → 24pt に書き換えた後も、その規格・その文字スタイルを持つ寸法 5 本（`ResetObject`
+あり／なし）の描かれた文字は元の大きさのまま、undo イベントを閉じても戻った後も動かない。）
+
 **狙いは「1/50 のビューポートの注釈で紙の上 6pt」。** #155 の式
 （「規格が紙で決めた大きさ × 繋ぐときのアクティブレイヤの縮尺」）を信じるなら、
 **規格の紙の大きさを `300pt`（＝ 6pt × 50）にしておけば、1:1 がアクティブなままでも
@@ -934,6 +947,16 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 > スタイル**だけである。**文字スタイルの出どころを知るためにこの口を読んではいけない**
 > ——クラスを見に行っても（`GetClTextStyleRef`）、規格を見に行っても
 > （`dimStdTextStyle`）、この値とは合わないことがある。
+
+- **描かれた大きさは、クラスの文字スタイルを差し替えても VW へ戻った後まで変わらない**
+  （[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。専用のクラスへ入れて by-class にした寸法 4 本（2 本は `ResetObject` あり）で、
+  クラスの文字スタイルを 30pt のものへ差し替えた。描かれた文字は 4 本とも元の大きさ
+  （空の図面で 4.2333 / 3.1750、テンプレートの図面で 211.6667 / 317.5000）のまま、
+  undo イベントを閉じても、VW へ戻って数十秒置いても動かなかった。
+  - ただしこの回では、**`GetTextStyleRef` は差し替えた直後から新しい番号を返した**
+    （2 の「`30` のまま」と違う）。2 は作った時点のアクティブクラスのまま測っており、
+    この回は寸法を専用クラスへ移してから測っている。**作り方の違いか、別の理由かは
+    切り分けていない。**（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)）
 
 ### 文字スタイルを当てる 2 つの口は、`ovDimFontSize` の扱いが違う
 
@@ -1223,8 +1246,20 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 - **掛けるのは型 86。中の型 63 へ掛けてはいけない**（H2）——掛けた直後は効くのに、
   連続寸法を引き直した時点で捨てられる。**「直った」と見えるところで止めると、
   次に何かが `ResetObject` を呼んだ瞬間に消える。**
-- **`ResetObject` は要る**（H0 / H1 の 3 列目）。`SetTextStyleRef(型 86)` だけでは
-  **型 86 自身の文字しか書き換わらず、中の型 63 は古い大きさのまま**である。
+- **同じ呼び出しの中で中の大きさを読むなら `ResetObject` が要る**（H0 / H1 の 3 列目）。
+  `SetTextStyleRef(型 86)` だけでは、**その場では型 86 自身の文字しか書き換わらず、
+  中の型 63 は古い大きさのまま**である。
+  - 【訂正】以前は「`ResetObject` は要る」とだけ書いていたが、**VW は連続寸法を後から
+    自分で作り直す**（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。
+    新規図面の 1:1 で、`ResetObject` を呼ばずに `SetTextStyleRef(型 86, 24pt)`）。
+    中の型 63 の `ovDimFontSize` と描かれた文字は、書いた直後は `4.2333`（古い）だったが、
+    **同じ呼び出しの中でランループを 1.5 秒回しただけで `8.4667`（新しい）になり**、
+    undo イベントを閉じた後も VW へ戻った後もそのままだった。**引き金はランループ**
+    （呼び出しから VW へ戻れば回る）なので、**利用者の図面では `ResetObject` 無しでも
+    揃う**。それでも呼んでおくのは、同じ呼び出しの中で大きさを読んで後の処理に使うとき。
+  - 同じ回で、**中の型 63 へ直接書いた `ovDimFontSize = 12.7` は、ランループを回した
+    時点で `4.2333` へ戻された**（K2 の「呼ばない」行も、放っておけば K1 と同じく
+    捨てられる）。
 - **アクティブレイヤの縮尺は関係が無い**（H0 ＝ H1）。**1:1 のシートレイヤがアクティブな
   ままでも直る**——注釈の中の寸法は**そのビューポートの縮尺**で焼かれるため（上記
   「[文字スタイルを当てる 2 つの口は、`ovDimFontSize` の扱いが違う](#文字スタイルを当てる-2-つの口はovdimfontsize-の扱いが違う)」の注記）。
@@ -1606,6 +1641,16 @@ if (!gSDK->UpdateConstraintModel())       // ③ 解く
 **#134 が呼んだのは `MoveObject` と `ResetObject` だけ**なので、③ が一度も走っていない。
 
 ### こう呼べば効く——関連付けは成立していて、足りなかったのは「解く段」だった
+
+**「解く段を呼ばないと追随しない」は、VW へ戻った後に読み直しても同じ**だった
+（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。関連付けた寸法の線を `MoveObject` で +1200 動かし、`ResetObject` だけで
+`UpdateConstraintModel` を呼ばない——測点は undo イベントを閉じても、戻って数十秒置いても
+0 のまま）。VW が後から解いてくれることはない。
+
+- **`OpenDocumentPath(nullptr)` で開いた空の図面では、関連付け自体が成立しなかった**
+  （[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。`varAssociateDims`=1 で、線 2 本を選択して渡しても渡さなくても
+  `HasConstraint`=no）。**利用者の既定のテンプレート（`Default.sta`）から開いた図面では
+  成立した**（`HasConstraint`=yes）。テンプレートの何が効いているのかは切り分けていない（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)）。
 
 **`AssociateLinearDimension` はちゃんと関連付けていた。** [#134](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/134)
 の「8 通り空振り」は関連付けの失敗ではなく、**制約を解く段を一度も呼んでいなかった**

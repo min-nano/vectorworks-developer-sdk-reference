@@ -61,7 +61,7 @@
 | [Plug-in Interop](Plug-in%20Interop.md) | **プラグイン間の呼び出し**。ほかのプラグインの機能を名前で呼ぶ 4 つの経路（`CallPluginLibrary` / `DoMenuName` / スクリプトエンジン / C の ABI）・引数と結果の受け渡し・呼ばれる側の作り方。**`DoMenuName` の【訂正】を含む** |
 | [Plug-in Modules](Plug-in%20Modules.md) | プラグインモジュールの読み込みと入れ替え。起動時にしか読まれない・VCOM の初期化はモジュールごと・SDK をリンクするモジュールが必ず定義する 2 つ・**本体を外部モジュールへ出せば再起動なしで入れ替えられる**（mac 実測） |
 | [Documents](Documents.md) | 図面（文書）を開く・作る。**コマンド実行中に空の新規文書を開いて描画先を移せる**（実機確認済み）・複数文書を `SwitchToOpenFile` で行き来できる・**テンプレートからの新規作成専用 API は無い**・**`CloseDocument()` は未保存の変更を確認なしに捨てる**（`false` を返しながら閉じる）・**`CloseAllFilesAndQuitVectorworks` は戻ってから終わる**（キャンセルなら図面は残る。プラグインの読み込み中には呼べない）・**「未保存の変更あり」は読めない**（`outSaved` も `fIsInMemoryOnly` も「ディスクにあるか」で、保存済みの図面を変更しても `MarkCurrentDocChanged()` しても動かない。事前に分かるのは無題の新規だけ） |
-| [Investigation Techniques](Investigation%20Techniques.md) | 調査の作法。読み戻す・測る・正解と差分を取る・setter の戻り値を信じない |
+| [Investigation Techniques](Investigation%20Techniques.md) | 調査の作法。読み戻す・測る・正解と差分を取る・setter の戻り値を信じない・**いつ読むか**（同じ呼び出しの中で読んだ値は利用者の図面に残る値と限らない。**ランループで後から作り直されるもの**（連続寸法）と**undo イベントの終わりで更新されるもの**（PIO の外接・ビューポートの `IsDirty`）がある。それ以外の「効かない」は戻った後も同じだった——#245） |
 
 ## 知見を足すときの決まり
 

@@ -32,7 +32,8 @@
   [Parametric Objects](Parametric%20Objects.md) の「構造材 PIO の子を消すのは…」）。
   - **undo イベントが開いていても積もる。** 「イベントを開かない経路だから残る」ではない。
   - **消せない。** 型 90 の子へ `DeleteObject(h, useUndo=false)` を呼んでも 1 つも減らず、
-    `ClearUndoTableDueToUnsupportedAction()` でも減らない。**掃除する口は見つかっていない**
+    `ClearUndoTableDueToUnsupportedAction()` でも減らない。**undo イベントを閉じても、VW へ
+    戻った後も減らない**（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。**掃除する口は見つかっていない**
     ので、**数が増えること自体を異常と読まない**こと。
 - **`SetUndoMethod(kUndoSwapObjects)` ＋ `NameUndoEvent(...)` が開始も兼ねる**（ISDK に開始
   専用の呼び出しは無い）。RAII で包み、破棄で `EndUndoEvent()` するのが安全。
