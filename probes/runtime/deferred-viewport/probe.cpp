@@ -202,9 +202,7 @@ namespace
 		sc.layerS = VpEnsureLayer(probe, "dvL-S", static_cast<short>(kLayerDesign));
 		sc.layerN = VpEnsureLayer(probe, "dvL-N", static_cast<short>(kLayerDesign));
 		sc.layerX = VpEnsureLayer(probe, "dvL-X", static_cast<short>(kLayerDesign));
-		sc.sheet = VpEnsureLayer(probe, "dvL-sec", static_cast<short>(kLayerSheet));
-		if (sc.layerS == nullptr || sc.layerN == nullptr || sc.layerX == nullptr ||
-			sc.sheet == nullptr)
+		if (sc.layerS == nullptr || sc.layerN == nullptr || sc.layerX == nullptr)
 			return false;
 		if (fresh)
 		{
@@ -219,9 +217,16 @@ namespace
 				probe.fail("箱を作れなかった（VWExtrudeObj が nil）");
 				return false;
 			}
+			probe.log("  箱の親レイヤ: S=" + DfName(gSDK->ParentObject(s)) + " N=" +
+					  DfName(gSDK->ParentObject(n)) + " X=" + DfName(gSDK->ParentObject(x)));
 			probe.log("  断面の場面を作った: S 箱 Z0〜3000（−Y 側）/ N 箱 Z5000〜8000（+Y 側）/ "
 					  "X 箱（切断面 y=2500 を切る）");
 		}
+		// **シートは箱の後で作る**（先に作ってアクティブにしたまま箱を作ると、箱が
+		// デザインレイヤに載らず断面が空になった——#245。旧 #202 も最後に作っていた）。
+		sc.sheet = VpEnsureLayer(probe, "dvL-sec", static_cast<short>(kLayerSheet));
+		if (sc.sheet == nullptr)
+			return false;
 		return true;
 	}
 
