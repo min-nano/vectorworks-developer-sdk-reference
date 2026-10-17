@@ -265,8 +265,10 @@ namespace
 			probe.fail("CreateSectionViewport が nil: " + name);
 			return nullptr;
 		}
-		if (!DfSetName(probe, vp, name))
-			return nullptr;
+		// 名前はここでは付けない（呼び出し側が UpdateViewport の後で付ける）。作った直後に
+		// 付けた版では断面に中身が入らなかったので、旧プローブ（名前を付けない）と順序を
+		// 揃えて切り分ける（#245）。
+		(void)name;
 		return vp;
 	}
 
@@ -619,6 +621,7 @@ namespace
 				VpShowOnly(vp, showSN);
 				VpPrepSection(vp, arm.beyond, arm.before);
 				gSDK->UpdateViewport(vp);
+				(void)DfSetName(probe, vp, arm.name);
 			}
 			probe.log("  過去の実測（T0 相当）: FF/TF は群 3/5/6/7/15 が全部 nil（何も出ない）、"
 					  "FT は 5=9（S+N）、TT は 5=7（N＝奥だけ）");
@@ -688,6 +691,7 @@ namespace
 				}
 				VpWriteBool(vp, ovSectionViewportDisplayObjectsBeyondCutPlane, true);
 				gSDK->UpdateViewport(vp);
+				(void)DfSetName(probe, vp, arm.name);
 			}
 			probe.log("  過去の実測（T0 相当）: 両方を表示にした枚（LC）だけ 1050 が 1055 と一致、"
 					  "他は単位行列");
@@ -760,6 +764,7 @@ namespace
 				VpShowOnly(vp, arm.content ? showSN : showNone);
 				VpPrepSection(vp, false, true); // (F,T) ＝ 両側が出る
 				gSDK->UpdateViewport(vp);
+				(void)DfSetName(probe, vp, arm.name);
 				probe.log("  " + std::string(arm.name) + " 更新後・注釈を足す前の外接 " +
 						  DfBounds(vp));
 				WorldRect want;
