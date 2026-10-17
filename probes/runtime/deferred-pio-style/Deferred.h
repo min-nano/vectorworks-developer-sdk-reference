@@ -111,10 +111,12 @@ namespace
 		WorldRect r;
 		if (!gSDK->GetObjectBounds(h, r))
 			return "(false)";
-		if (r.Right() < r.Left())
-			return "(空)";
-		return "L" + DfNum(r.Left(), 1) + " T" + DfNum(r.Top(), 1) + " R" + DfNum(r.Right(), 1) +
-			   " B" + DfNum(r.Bottom(), 1);
+		// Left() などは空の矩形で 0 を返すので、生の欄を読む（何も描いていない PIO は
+		// 「反転した空矩形」±DBL_MAX を返す。Findings「Investigation Techniques」）。
+		if (r.right < r.left)
+			return "(空 L" + DfNum(r.left, 1) + " R" + DfNum(r.right, 1) + ")";
+		return "L" + DfNum(r.left, 1) + " T" + DfNum(r.top, 1) + " R" + DfNum(r.right, 1) + " B" +
+			   DfNum(r.bottom, 1);
 	}
 
 	// 直下の子の数（型ごとの内訳つき。例 "9 [3:2 84:1 90:6]"）。
@@ -291,6 +293,15 @@ namespace
 #endif
 	}
 
+	// いまどの時点を読んでいるか（0=T0 / 1=T1 / 2=T2）。T2 でだけ書き込みを伴う読み
+	// （例: データタグの更新手順を掛け直してから読む）をしたいケースのため。T0 / T1 で
+	// 書くと、後の時点の読みが「VW が自分で変えたのか」を表さなくなる。
+	int& DfPhase()
+	{
+		static int sPhase = 0;
+		return sPhase;
+	}
+
 	std::string DfNow()
 	{
 		const auto t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -299,9 +310,13 @@ namespace
 		return buf;
 	}
 
-	std::string DfShort(const std::string& s, size_t n = 70)
+	std::string DfShort(const std::string& s, size_t n = 90)
 	{
-		return s.size() <= n ? s : s.substr(0, n) + "…";
+		if (s.size() <= n)
+			return s;
+		while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80)
+			--n; // UTF-8 の途中で切らない
+		return s.substr(0, n) + "…";
 	}
 
 	// ---------------------------------------------------------------------------
@@ -334,6 +349,7 @@ namespace
 			st.startedAt = DfNow();
 			probe.log("自分用の図面 fileRef=" + std::to_string(st.fileRef));
 
+			DfPhase() = 0;
 			for (const DeferredCase& c : cases)
 			{
 				probe.log("[" + c.id + "] " + c.what);
@@ -372,6 +388,7 @@ namespace
 			DfPump(1500);
 			if (DfActiveRef() != st.fileRef)
 				(void)gSDK->SwitchToOpenFile(st.fileRef);
+			DfPhase() = 1;
 			for (const DeferredCase& c : cases)
 			{
 				DeferredReadings rs;
@@ -411,6 +428,7 @@ namespace
 		(void)gSDK->SwitchToOpenFile(st.fileRef);
 
 		std::map<std::string, std::string> t2;
+		DfPhase() = 2;
 		for (const DeferredCase& c : cases)
 		{
 			DeferredReadings rs;
