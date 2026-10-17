@@ -112,6 +112,10 @@
   `varAssociateDims`(28) ただ 1 つ**で、これが off だと `AssociateLinearDimension` は
   何もしない（`varAutoAssociateDims`(134) は関与しない）。**新規図面の既定は on** なので、
   ふつうは読んで確かめるだけでよい。
+- **関連付くのは、画面に表示されている範囲の中にある寸法だけ**（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)）。
+  範囲の外では黙って何もしない（`HasConstraint`=no）。表示の外へ置く可能性があるなら、
+  呼ぶ前に `SetViewCenter` で寸法へ寄せ、呼んだ後に戻す（下記
+  「[関連付くのは表示範囲の中だけ](#関連付くのは表示範囲の中だけ249-で確定)」）。
 
 ## `CreateLinearDimension` の引数
 
@@ -714,11 +718,14 @@ for (short index = 9; index >= -8; --index)
   **元からの**カスタム規格 `min-nano` が指す `寸法(6pt)`——**新しく当てた規格が指す
   `113` / `114` ではない。** 規格を差し替えても、**寸法に当たっている文字スタイルは
   付いて来ない。**
-- これは #157 の「[作った直後は〈クラスの文字スタイル〉——`GetTextStyleRef` はクラスを
-  見ていない](#作った直後はクラスの文字スタイルgettextstyleref-はクラスを見ていない)」で
+- これは #157 の「[作った直後は〈クラスの文字スタイル〉——`GetTextStyleRef` は寸法が
+  入ったクラスを見る](#作った直後はクラスの文字スタイルgettextstyleref-は寸法が入ったクラスを見る249-で訂正)」で
   測った 4 点目（**規格を替えても寸法の文字スタイルは外れない**）と同じ現象で、
   **今回は「規格を替える」だけでなく「規格を文書の既定にしてから作る」道でも同じ**
   だと分かった。**作る前に既定を差し替えても駄目である。**
+  - **`30` が動かない理由は規格ではなくクラスにある**【推定】——by-class の寸法が追うのは
+    寸法が入ったクラス（「寸法」クラス）の文字スタイルで、この図面の「寸法」クラスは
+    `寸法(6pt)`（`30`）を持っている（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。下記「[寸法はどのクラスへ入り…](#寸法はどのクラスへ入りgettextstyleref-はどのクラスを追うか249)」）。
 - **描かれている文字図形（型 `10`）の大きさも終始 `2.11667mm`** で、読み戻した値と
   絵は食い違っていない。**目視は要らない**（#155 のような「値は動いたが絵は古い」は
   起きていない——値そのものが動かないため）。
@@ -818,9 +825,11 @@ for (short index = 9; index >= -8; --index)
   書いていない）。pt で指定したいなら **`pt / 72`** を書く。
 - **作った直後の寸法は〈クラスの文字スタイル〉**（`GetTextStyleByClass` = `true`、
   `ovDimTextStyle` = **`-2`**）。**`-2` は「クラス由来」を表す番兵で、ref number ではない。**
-- **その状態でも `GetTextStyleRef` は番号を返す。ただしその番号はクラスにも、いま
-  当たっている寸法規格にも追随しない**（一致したのは**作った時点**の規格の文字スタイル）。
-  **文字スタイルの出どころを知る用途に使ってはいけない。**
+- **その状態で `GetTextStyleRef` が返すのは、寸法が入っているクラスの文字スタイル**
+  である。**寸法はアクティブクラスではなく「寸法」クラスへ入る**（文書の
+  `varCreateDimsInDimClass`(44) が `1` のとき。既定のテンプレートでも空の図面でも `1`）
+  ので、**アクティブクラスを書き換えても動かない**——#157 はそれを見て「クラスに
+  追随しない」と書いたが、誤りだった（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。下記「作った直後は…」の訂正の記録）。
 - **注釈で値を出したいなら `ISDK::SetTextStyleRef(dim, ref)` を呼ぶ。これだけが効く。**
   〈クラスの文字スタイル〉のままでは `ovDimFontSize` を正しく書いても**値が出ない**し、
   **`ovDimTextStyle`(1248) へ番号を書く道も絵には効かない**——しかも
@@ -918,7 +927,17 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 
 > **pt で指定したいなら `ovTextStyleSize` へ `pt / 72` を書く。** 6pt なら `0.08333`。
 
-### 作った直後は〈クラスの文字スタイル〉——`GetTextStyleRef` はクラスを見ていない
+### 作った直後は〈クラスの文字スタイル〉——`GetTextStyleRef` は寸法が入ったクラスを見る（#249 で訂正）
+
+> **【訂正の記録】** この節は最初「`GetTextStyleRef` はクラスを見ていない」と結論していた
+> （#157）。**クラスは見ている——#157 が書き換えたのが、寸法の入っていないクラスだった。**
+> 寸法は作られたときに**「寸法」クラス**へ入る（`varCreateDimsInDimClass`(44)=`1`）。
+> #157 が書き換えたのは**アクティブクラス `一般`** で、寸法はそこにいなかった。そして
+> **利用者のテンプレートの「寸法」クラスは、もともと `寸法(6pt)`（`30`）を持っていた**——
+> 規格 `min-nano` の文字スタイルと**同じ番号**だったので、「作った時点の規格を覚えている」
+> ように見えた。下の 1〜4 は観察としては正しく、**読み方だけが違っていた**。
+> 測り直し（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。VW 2026 / mac・`probes/runtime/t0-mismatch`）は下記
+> 「[寸法はどのクラスへ入り、`GetTextStyleRef` はどのクラスを追うか](#寸法はどのクラスへ入りgettextstyleref-はどのクラスを追うか249)」。
 
 作った直後の寸法（型 63）は:
 
@@ -942,21 +961,59 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
    替えても、`GetTextStyleRef` は `30` のまま**、`ovDimTextStyle` も `-2` のままだった
    （読み戻しで規格が `JIS` になったことは確認済み）。
 
-> **つまり by-class の寸法について `GetTextStyleRef` が返す番号は、クラスにも、
-> いま当たっている規格にも追随しない。** 一致したのは**作った時点の規格の文字
-> スタイル**だけである。**文字スタイルの出どころを知るためにこの口を読んではいけない**
-> ——クラスを見に行っても（`GetClTextStyleRef`）、規格を見に行っても
-> （`dimStdTextStyle`）、この値とは合わないことがある。
+> ~~つまり by-class の寸法について `GetTextStyleRef` が返す番号は、クラスにも、
+> いま当たっている規格にも追随しない。~~ **（誤り。上の訂正の記録）** 1〜4 で `30` が
+> 動かなかったのは、書き換えたのが寸法の入っていない `一般` だったからで、寸法の入った
+> 「寸法」クラスが最初から `30` を持っていたからである。**`GetTextStyleRef` は、寸法が
+> 入っているクラスの `GetClTextStyleRef` と一致する**（by-class のとき）。
 
 - **描かれた大きさは、クラスの文字スタイルを差し替えても VW へ戻った後まで変わらない**
   （[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。専用のクラスへ入れて by-class にした寸法 4 本（2 本は `ResetObject` あり）で、
   クラスの文字スタイルを 30pt のものへ差し替えた。描かれた文字は 4 本とも元の大きさ
   （空の図面で 4.2333 / 3.1750、テンプレートの図面で 211.6667 / 317.5000）のまま、
   undo イベントを閉じても、VW へ戻って数十秒置いても動かなかった。
-  - ただしこの回では、**`GetTextStyleRef` は差し替えた直後から新しい番号を返した**
-    （2 の「`30` のまま」と違う）。2 は作った時点のアクティブクラスのまま測っており、
-    この回は寸法を専用クラスへ移してから測っている。**作り方の違いか、別の理由かは
-    切り分けていない。**（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)）
+  - この回では **`GetTextStyleRef` は差し替えた直後から新しい番号を返した**。上の
+    2 と違って見えたのは、こちらは寸法を入れたクラスそのものを書き換えたからである
+    （[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。すぐ下）。
+
+### 寸法はどのクラスへ入り、`GetTextStyleRef` はどのクラスを追うか（#249）
+
+**実機確認済み**（VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。腕ごとに図面を新しく開いた）。
+`CreateLinearDimension` で作ったままの寸法（#157 の作り方）と、専用クラスへ移した寸法
+（#245 の作り方）を、既定のテンプレート（`Default.sta`）と `OpenDocumentPath(nullptr)` の
+空の図面で並べた。
+
+| | テンプレートの図面 | 空の図面 |
+| --- | --- | --- |
+| `varCreateDimsInDimClass`(44) | `1` | `1` |
+| 文書の規格（`varDimStandard`） | `0`「min-nano」・規格の文字スタイル `30(寸法(6pt))` | `1`「Arch」・`0` |
+| アクティブクラス | `一般`（文字スタイル無し） | `一般`（文字スタイル無し） |
+| 寸法クラス（`GetDimensionClassID`） | `寸法`（**`use=yes ref=30(寸法(6pt))`**） | `寸法`（文字スタイル無し） |
+| 作った直後の寸法 | **クラス `寸法`**・`ref=30`・by-class・`font=211.6667` | **クラス `寸法`**・`ref=0`・**明示**（by-class でない）・`font=4.2333` |
+| アクティブクラス `一般` へ別の文字スタイルを当てる | `30` のまま | `0` のまま |
+| **寸法の入った `寸法` クラス**へ別の文字スタイルを当てる | **その場で新しい番号**（`131`） | `0` のまま（by-class でないので） |
+| その後に作った寸法 | クラス `寸法`・`ref=131`・by-class・`font=1058.3333` | クラス `寸法`・**`ref=7`・by-class**・`font=10.5833` |
+| 専用クラスへ `SetObjectClass`（文字スタイルを持たないクラス） | `ref=0`・by-class | `ref=0`・by-class |
+| そのクラスへ文字スタイルを当てる | **その場で新しい番号**（`SetTextStyleByClass` を呼んでも呼ばなくても同じ） | 同左 |
+
+- **寸法はアクティブクラスではなく「寸法」クラスへ入る**（`varCreateDimsInDimClass`=`1`）。
+  クラスの文字スタイルを当てたいなら、**寸法が入ったクラス（`GetObjectClass(dim)`）を
+  書き換える**。
+- **by-class の寸法の `GetTextStyleRef` は、入っているクラスの `GetClTextStyleRef` と同じ値を
+  その場で返す。** `SetObjectClass` で移せば移した先の値になり、クラスを書き換えれば
+  書き換えた値になる。`SetTextStyleByClass` を呼ぶかどうかは関係しなかった。
+- **ただし描かれた大きさは付いて来ない**——クラスを書き換えた後も `ovDimFontSize` と
+  描いた文字は元のまま（`ResetObject` を挟んでも。上記の #245 の項）。**番号と絵は別**
+  である。**新しく作る寸法は、作った時点のクラスの文字スタイルの大きさで生まれる**
+  （テンプレート 1/100 で 30pt → `1058.3333` ＝ 30 × 25.4 / 72 × 100）。
+- **空の図面では、作った寸法は by-class ですらない**（`GetTextStyleByClass`=`false`・
+  `ref=0`）。「寸法」クラスが文字スタイルを持っていないためと見ている【推定】（持たせた後に
+  作った寸法は by-class で生まれた）。**「作った直後は〈クラスの文字スタイル〉」（上記）は、
+  寸法クラスが文字スタイルを持つ図面での話**である。
+- **#163 の「規格を差し替えても `GetTextStyleRef` が `30` のまま」**
+  （「[④ 既にある連続寸法も追随しない](#-既にある連続寸法も追随しない3-つの道すべて)」の上）も
+  同じ仕掛けで読める——by-class の寸法が見ているのはクラスで、規格ではない【推定】
+  （#163 の図面でクラスを読み直してはいない）。
 
 ### 文字スタイルを当てる 2 つの口は、`ovDimFontSize` の扱いが違う
 
@@ -1647,10 +1704,10 @@ if (!gSDK->UpdateConstraintModel())       // ③ 解く
 `UpdateConstraintModel` を呼ばない——測点は undo イベントを閉じても、戻って数十秒置いても
 0 のまま）。VW が後から解いてくれることはない。
 
-- **`OpenDocumentPath(nullptr)` で開いた空の図面では、関連付け自体が成立しなかった**
-  （[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。`varAssociateDims`=1 で、線 2 本を選択して渡しても渡さなくても
-  `HasConstraint`=no）。**利用者の既定のテンプレート（`Default.sta`）から開いた図面では
-  成立した**（`HasConstraint`=yes）。テンプレートの何が効いているのかは切り分けていない（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)）。
+- **`AssociateLinearDimension` は、画面に表示されている範囲の外にある寸法を関連付けない**
+  （下記「[関連付くのは表示範囲の中だけ](#関連付くのは表示範囲の中だけ249-で確定)」）。#245 で
+  「`OpenDocumentPath(nullptr)` の空の図面では成立しない」と見えたのは、1/1 の空の図面で
+  y=60000 に置いた寸法が表示範囲の外だったためで、**図面の出どころは関係しない**。
 
 **`AssociateLinearDimension` はちゃんと関連付けていた。** [#134](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/134)
 の「8 通り空振り」は関連付けの失敗ではなく、**制約を解く段を一度も呼んでいなかった**
@@ -1685,6 +1742,34 @@ gSDK->UpdateConstraintModel();   // ← これを呼ばないと測点は 1mm �
   とおり `dimType` は追従に関与しない。
 - **`UpdateConstraintModel` は 4 通りとも `true`（解けた）を返した。** 4 行目が追わない
   のは「解けなかった」からではない（下記）。
+
+#### 関連付くのは表示範囲の中だけ（#249 で確定）
+
+**実機確認済み**（VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。
+`probes/runtime/t0-mismatch`）。測点 `(x, y)`→`(x+3000, y)` の寸法と、両端に端点を重ねた
+縦棒 2 本を立て、選択せずに `AssociateLinearDimension(dim, false)` を呼んで `HasConstraint(dim)` を読んだ。
+`varAssociateDims`=`1`。
+
+| 図面・表示 | 成立した | 成立しなかった |
+| --- | --- | --- |
+| 空の図面・1/1・表示の中心 (0,0)・用紙 ±99×±138 | y = 0 / 2000 / 4000 | y = 6000 以上（〜60000）、x = ±20000 |
+| 同じ図面で**用紙を ±100000 へ広げた** | y = 0〜4000 | y = 6000 以上（**用紙は関係しない**） |
+| 同じ図面で**表示の中心を (1500, 60000) へ動かした** | **y = 60000 / 61000** | **y = 0 / 4000**（今度は原点側が外れる） |
+| 空の図面・**1/50** | y = 0〜60000（振った全部） | — |
+| 空の図面・1/1 で **`SetZoomFactorN(0.01)`** | y = 70000 | y = 400000 |
+| テンプレートの図面・1/100・中心 (4099, −5904) | y = 0〜400000 | y = 1000000 |
+
+- **決めているのは「いま画面に見えている範囲」である。** 図面の出どころ・用紙・レイヤ数・
+  `varCreateDimsInDimClass`・選択の有無は効かなかった（#245 の「空の図面では成立しない」は、
+  1/1 の空の図面で y=60000 に置いたから）。縮尺を上げる（1/50）か縮小表示にすると見える範囲が
+  広がり、成立する範囲もそれに付いて広がる。境目の正確な形（ウインドウの大きさに対する比など）は
+  測っていない。
+- **確実に関連付けたいなら、呼ぶ前に表示の中心を寸法へ寄せる。** `GetViewCenter` で控え、
+  `SetViewCenter(寸法の中ほど)` → `AssociateLinearDimension` → `SetViewCenter(控え)`。
+  実測で、寄せて関連付けた後に表示を戻した対照（y=66000）は成立しなかった——**寄せたときだけ
+  効く**。`SetZoomFactorN` で縮小する手もあるが、利用者の表示倍率を変えてしまう。
+- 自動で付く関連付け（ツールで描くとき）が「画面で見えているものに吸着する」作りなので、
+  その判定を流用しているのだろう【推定】。
 
 #### 関連付いたかは `HasConstraint` で読める
 
