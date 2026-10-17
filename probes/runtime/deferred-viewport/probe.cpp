@@ -661,6 +661,55 @@ namespace
 		return c;
 	}
 
+	// c0 と同じ手順で、腕ごとに場面を丸ごと作り、断面を 1 枚返す（#245）。
+	// 共有の場面（VpEnsureScene）で作った断面には、理由が分からないまま中身が入らなかった
+	// ——旧 #202 と同じ順序で作った c0 だけが再現した——ので、確実に再現する手順を使い回す。
+	MCObjectHandle VpC0Section(vwprobe::Report& probe, const std::string& prefix, bool showContent,
+							   bool beyond, bool before)
+	{
+		MCObjectHandle ls =
+			gSDK->CreateLayer(TXString((prefix + "-S").c_str()), static_cast<short>(kLayerDesign));
+		MCObjectHandle ln =
+			gSDK->CreateLayer(TXString((prefix + "-N").c_str()), static_cast<short>(kLayerDesign));
+		MCObjectHandle lx =
+			gSDK->CreateLayer(TXString((prefix + "-X").c_str()), static_cast<short>(kLayerDesign));
+		if (ls == nullptr || ln == nullptr || lx == nullptr)
+		{
+			probe.fail(prefix + ": CreateLayer が nil");
+			return nullptr;
+		}
+		gSDK->SetCurrentLayer(ls);
+		(void)VpMakeBox(kVpBoxX0, kVpBoxX1, -3000.0, -2000.0, 0.0, 3000.0);
+		gSDK->SetCurrentLayer(ln);
+		(void)VpMakeBox(kVpBoxX0, kVpBoxX1, 7000.0, 8000.0, 5000.0, 3000.0);
+		gSDK->SetCurrentLayer(lx);
+		(void)VpMakeBox(kVpBoxX0, kVpBoxX1, 2000.0, 3000.0, 0.0, 3000.0);
+		MCObjectHandle sheet = gSDK->CreateLayer(TXString((prefix + "-用紙").c_str()),
+												 static_cast<short>(kLayerSheet));
+		if (sheet == nullptr)
+		{
+			probe.fail(prefix + ": シートを作れない");
+			return nullptr;
+		}
+		const WorldPt pt1(kVpLineX0, kVpLineY);
+		const WorldPt pt2(kVpLineX1, kVpLineY);
+		const WorldPt pt3((kVpLineX0 + kVpLineX1) * 0.5, kVpLineY - kVpPt3Off);
+		MCObjectHandle vp =
+			gSDK->CreateSectionViewport(pt1, pt2, pt3, 0.0, kVpStartH, kVpEndH, sheet);
+		if (vp == nullptr)
+		{
+			probe.fail(prefix + ": CreateSectionViewport が nil");
+			return nullptr;
+		}
+		if (showContent)
+			VpShowOnly(vp, {ls, ln});
+		else
+			VpShowOnly(vp, {});
+		VpPrepSection(vp, beyond, before);
+		gSDK->UpdateViewport(vp);
+		return vp;
+	}
+
 	DeferredCase VpCase1()
 	{
 		DeferredCase c;
@@ -668,19 +717,12 @@ namespace
 		c.what = "#202 切っていない断面: (1064,1065) 4 通りのキャッシュ群・中身・IsDirty・1052";
 		c.setup = [](vwprobe::Report& probe)
 		{
-			VpScene sc;
-			if (!VpEnsureScene(probe, sc))
-				return;
-			const std::vector<MCObjectHandle> showSN = {sc.layerS, sc.layerN};
 			for (const VpFlagArm& arm : kVpFlagArms)
 			{
-				MCObjectHandle vp = VpMakeSection(probe, sc.sheet, arm.name);
-				if (vp == nullptr)
-					continue;
-				VpShowOnly(vp, showSN);
-				VpPrepSection(vp, arm.beyond, arm.before);
-				gSDK->UpdateViewport(vp);
-				(void)DfSetName(probe, vp, arm.name);
+				MCObjectHandle vp = VpC0Section(probe, std::string("c1") + (arm.name + 4), true,
+												arm.beyond, arm.before);
+				if (vp != nullptr)
+					(void)DfSetName(probe, vp, arm.name);
 			}
 			probe.log("  過去の実測（T0 相当）: FF/TF は群 3/5/6/7/15 が全部 nil（何も出ない）、"
 					  "FT は 5=9（S+N）、TT は 5=7（N＝奥だけ）");
@@ -810,19 +852,13 @@ namespace
 		c.what = "#200 注釈に遠くの矩形を足して ResetObject しないと、外接は動かないか";
 		c.setup = [](vwprobe::Report& probe)
 		{
-			VpScene sc;
-			if (!VpEnsureScene(probe, sc))
-				return;
-			const std::vector<MCObjectHandle> showSN = {sc.layerS, sc.layerN};
-			const std::vector<MCObjectHandle> showNone;
 			for (const VpAnnotArm& arm : kVpAnnotArms)
 			{
-				MCObjectHandle vp = VpMakeSection(probe, sc.sheet, arm.name);
+				// (F,T) ＝ 両側が出る
+				MCObjectHandle vp = VpC0Section(probe, std::string("c3") + (arm.name + 4),
+												arm.content, false, true);
 				if (vp == nullptr)
 					continue;
-				VpShowOnly(vp, arm.content ? showSN : showNone);
-				VpPrepSection(vp, false, true); // (F,T) ＝ 両側が出る
-				gSDK->UpdateViewport(vp);
 				(void)DfSetName(probe, vp, arm.name);
 				probe.log("  " + std::string(arm.name) + " 更新後・注釈を足す前の外接 " +
 						  DfBounds(vp));
