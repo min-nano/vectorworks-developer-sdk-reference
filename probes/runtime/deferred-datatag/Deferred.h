@@ -11,6 +11,7 @@
 //	     保存が掛からない——読み直しに保存が混ざらない）。
 //	  2. 各ケースの setup() で書き、すぐに measure() で読む ……………… T0（同じ呼び出しの中）
 //	  3. 呼び出しの中でランループを 1.5 秒回してから、もう一度読む ……… T1（入れ子のランループ）
+//	  3b. 自動で開いた undo イベントを EndUndoEvent で閉じて、もう一度読む … Te
 //	  4. 何もせずに戻る。**戻った後に呼ばれるもの（OS のタイマー・dispatch・通知）を
 //	     仕掛けてはいけない**——殻は走らせた直後に本体を dlclose するので、後から呼ばれた
 //	     コールバックは解放済みのコードへ飛んで VW ごと落ちる（実際に落とした。#245）。
@@ -161,6 +162,7 @@ namespace
 		std::string startedAt;
 		std::map<std::string, std::string> t0;
 		std::map<std::string, std::string> t1;
+		std::map<std::string, std::string> te; // undo イベントを閉じた直後
 		std::vector<std::string> keyOrder;
 	};
 
@@ -181,8 +183,10 @@ namespace
 		{
 			const auto a = st.t0.find(k);
 			const auto b = st.t1.find(k);
+			const auto e = st.te.find(k);
 			f << "v\t" << DfEscape(k) << "\t" << (a != st.t0.end() ? DfEscape(a->second) : "-")
-			  << "\t" << (b != st.t1.end() ? DfEscape(b->second) : "-") << "\n";
+			  << "\t" << (b != st.t1.end() ? DfEscape(b->second) : "-") << "\t"
+			  << (e != st.te.end() ? DfEscape(e->second) : "-") << "\n";
 		}
 	}
 
@@ -208,6 +212,7 @@ namespace
 				st.keyOrder.push_back(cols[1]);
 				st.t0[cols[1]] = cols[2];
 				st.t1[cols[1]] = cols[3];
+				st.te[cols[1]] = cols.size() >= 5 ? cols[4] : "-";
 			}
 		}
 		return true;
@@ -374,6 +379,30 @@ namespace
 					st.t1[c.id + "." + k] = v;
 			}
 			probe.log("building(T1 の後)=" + DfBool(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+
+			// **自動で開いた undo イベントを閉じて戻る**（実プラグインは自分のイベントを閉じて
+			// 戻る。閉じずに戻ると、利用者が何か操作するまで開いたまま残り、その間ブリッジが
+			// 受け付けを見送って止まる——#245 で 7 分止まった）。閉じた直後にも読む（Te）。
+			if (gSDK->IsCurrentlyBuildingAnUndoEvent())
+				probe.log("EndUndoEvent()=" + DfBool(gSDK->EndUndoEvent()));
+			probe.log("building(閉じた後)=" + DfBool(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+			for (const DeferredCase& c : cases)
+			{
+				DeferredReadings rs;
+				try
+				{
+					rs = c.measure();
+				}
+				catch (...)
+				{
+					probe.fail("[" + c.id + "] measure(Te) で例外");
+				}
+				for (const auto& [k, v] : rs)
+					st.te[c.id + "." + k] = v;
+			}
+			probe.log("building(Te の後)=" + DfBool(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+			if (gSDK->IsCurrentlyBuildingAnUndoEvent())
+				(void)gSDK->EndUndoEvent(); // 読みでまた開いていたら閉じ直す
 			DfSave(slug, st);
 			probe.log("状態を保存した: " + DfStatePath(slug).string());
 			probe.log("→ 何秒か置いてから、**この図面を前にしたまま**もう一度走らせる。"
@@ -419,12 +448,13 @@ namespace
 		{
 			const std::string a = st.t0[k];
 			const std::string b = st.t1[k];
+			const std::string e = st.te[k];
 			const std::string c = t2.count(k) ? t2[k] : "(読めない)";
-			const bool diff = (a != b) || (a != DfEscape(c));
+			const bool diff = (a != b) || (a != e) || (a != DfEscape(c));
 			if (diff)
 				++changed;
 			probe.log(std::string(diff ? "★ " : "   ") + k + "  T0=" + DfShort(a) +
-					  (a == b ? "" : "  T1=" + DfShort(b)) +
+					  (a == b ? "" : "  T1=" + DfShort(b)) + (a == e ? "" : "  Te=" + DfShort(e)) +
 					  (a == DfEscape(c) ? "" : "  T2=" + DfShort(c)));
 		}
 		probe.log("差のあった欄: " + std::to_string(changed) + " / " +
