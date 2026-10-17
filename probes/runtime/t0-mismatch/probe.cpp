@@ -5,16 +5,11 @@
 //	腕ごとに自分用の新しい図面を開き（空＝OpenDocumentPath(nullptr) か、既定のテンプレート
 //	Default.sta か）、終わったら保存せずに閉じる。前の腕の状態を持ち越さないため。
 //
-//	  L … 図面ラベル（#177）。空の Title のラベルが 1032 を消すか、ラベルが 1032 を拾うか。
-//	      #177 の手順（クラスを戻さない・SetPointObjectPos しない・名前を付けない・空の枚が先）
-//	      と #245 の手順を 1 つずつ入れ替える。各段で Title / Link State / 1032 を出す。
-//	      腕の最後に、どこにも入れないラベルを 1 本作って Title を読む（引き継ぎの有無）。
-//	  D … 寸法のクラスの文字スタイル（#157）。寸法が作られたときにどのクラスへ入ったか
-//	      （varCreateDimsInDimClass・寸法クラス）と、どのクラスを書き換えれば
-//	      GetTextStyleRef が動くか。#157 の手順（作ったまま）と #245 の手順
-//	      （SetObjectClass + SetTextStyleByClass）を並べる。
-//	  A … 寸法の関連付け（#138）。空の図面で AssociateLinearDimension が成立しない件。
-//	      図面の診断（レイヤ・縮尺・環境設定・寸法のクラス）と、置き方の変種。
+//	2 巡目（1 巡目の結果は PR のコメント）:
+//	  R … 図面ラベルは Title が空で生まれるとは限らない。生まれたときの Title がどこから来るか
+//	      （どの VP の 1032 か・前のラベルか・アクティブレイヤ・選択・置く位置）を振る。
+//	  S … 空の図面で関連付けが成立しないのは置いた座標による（1 巡目で y=0〜8000 は成立、
+//	      12000 以上は不成立）。y・x・レイヤの縮尺・用紙・表示の中心を振り、境目を探す。
 //
 
 #include "Probe.h"
@@ -63,25 +58,6 @@ namespace
 		return std::to_string(static_cast<long long>(ref)) + "(" + TmIndexName(ref) + ")";
 	}
 
-	std::string TmBoolPref(short selector)
-	{
-		union
-		{
-			Boolean asBoolean;
-			Sint32 asWide;
-		} u;
-		u.asWide = 0;
-		if (!gSDK->GetProgramVariable(selector, &u))
-			return "(読めない)";
-		return u.asBoolean ? "1" : "0";
-	}
-
-	void TmSetBoolPref(short selector, bool on)
-	{
-		Boolean v = on ? 1 : 0;
-		gSDK->SetProgramVariable(selector, &v);
-	}
-
 	std::string TmText(MCObjectHandle h, short selector)
 	{
 		if (h == nullptr)
@@ -92,30 +68,6 @@ namespace
 		TXString s;
 		block.GetTXString(s);
 		return "「" + TmStr(s) + "」";
-	}
-
-	bool TmSetReal(MCObjectHandle h, short selector, double value)
-	{
-		TVariableBlock block;
-		block = static_cast<Real64>(value);
-		return h != nullptr && gSDK->SetObjectVariable(h, selector, block) != 0;
-	}
-
-	std::string TmReal(MCObjectHandle h, short selector)
-	{
-		TVariableBlock block;
-		Real64 v = 0.0;
-		if (h == nullptr || !gSDK->GetObjectVariable(h, selector, block) || !block.GetReal64(v))
-			return "(読めない)";
-		return TmNum(v);
-	}
-
-	std::string TmClassStr(InternalIndex cls)
-	{
-		if (cls == 0)
-			return "(0)";
-		return TmIndexName(cls) + " use=" + TmYes(gSDK->GetClUseTextStyle(cls)) +
-			   " ref=" + TmRef(gSDK->GetClTextStyleRef(cls));
 	}
 
 	std::string TmLayerStr(MCObjectHandle layer)
@@ -223,7 +175,6 @@ namespace
 
 	const char* const kTmLabel = "Drawing Label2";
 	const double kTmScale = 50.0;
-	const double kTmTenPt = 10.0 * 25.4 / 72.0; // 3.52778
 
 	std::string TmLabelParams(MCObjectHandle h)
 	{
@@ -235,352 +186,174 @@ namespace
 			   " style=" + (ok ? TmRef(static_cast<InternalIndex>(style)) : std::string("(false)"));
 	}
 
-	void TmCountTexts(MCObjectHandle container, MCObjectHandle layout, int depth, int& count,
-					  std::string& first)
+	// ラベルを置かずに平面ビューポートだけ作る（1032 を preset で入れる）。
+	MCObjectHandle TmMakeVp(vwprobe::Report& probe, MCObjectHandle sheet, MCObjectHandle design,
+							const char* preset, double moveX)
 	{
-		if (container == nullptr || depth > 4)
-			return;
-		for (MCObjectHandle m = gSDK->FirstMemberObj(container); m != nullptr;
-			 m = gSDK->NextObject(m))
-		{
-			if (m == layout)
-				continue;
-			if (gSDK->GetObjectTypeN(m) == 10)
-			{
-				if (++count == 1)
-					first = "「" + TmStr(gSDK->GetTextChars(m)) + "」";
-			}
-			TmCountTexts(m, layout, depth + 1, count, first);
-		}
-	}
-
-	std::string TmDrawn(MCObjectHandle h)
-	{
-		int count = 0;
-		std::string first;
-		TmCountTexts(h, gSDK->GetCustomObjectProfileGroup(h), 0, count, first);
-		return "描いた文字 " + std::to_string(count) + " " + first;
-	}
-
-	// #177 / #245 と同じ: 既定のレイアウトからテキストと線を 1 つずつ複製し、10pt を与える。
-	void TmRebuildLayout(vwprobe::Report& probe, const std::string& tag, MCObjectHandle h)
-	{
-		MCObjectHandle hOld = gSDK->GetCustomObjectProfileGroup(h);
-		MCObjectHandle hGroup = (hOld != nullptr) ? gSDK->CreateGroup(false) : nullptr;
-		if (hGroup == nullptr)
-		{
-			probe.log("    " + tag + ": レイアウトを組み直せない（元のレイアウトが nil）");
-			return;
-		}
-		bool tookText = false;
-		bool tookLine = false;
-		for (MCObjectHandle m = gSDK->FirstMemberObj(hOld); m != nullptr; m = gSDK->NextObject(m))
-		{
-			const short type = gSDK->GetObjectTypeN(m);
-			const bool wantText = (type == 10 && !tookText);
-			const bool wantLine = (type == 2 && !tookLine);
-			if (!wantText && !wantLine)
-				continue;
-			MCObjectHandle dup = gSDK->DuplicateObject(m);
-			if (dup == nullptr)
-				continue;
-			gSDK->AddObjectToContainer(dup, hGroup);
-			if (wantText)
-			{
-				tookText = true;
-				const Sint32 len = gSDK->GetTextLength(dup);
-				gSDK->SetTextSize(dup, 0, len > 0 ? len : 1, static_cast<WorldCoord>(kTmTenPt));
-			}
-			else
-				tookLine = true;
-		}
-		if (!tookText)
-			probe.log("    " + tag + ": 元のレイアウトにテキストが無かった");
-		gSDK->SetCustomObjectProfileGroup(h, hGroup);
-	}
-
-	struct TmPlace
-	{
-		const char* tag;
-		const char* preset; // 置く前に 1032 へ入れる値（nullptr なら入れない）
-		const char* title;	// ラベルの Title へ書く値（nullptr なら書かない）
-		bool showClasses; // ビューポートのクラスを全部表示へ戻す（#245 の手順）
-		bool setPos;	  // 注釈へ入れた後に SetPointObjectPos(0,0)（#245 の手順）
-		bool nameVp;	  // ビューポートに名前を付ける（#245 の手順）
-	};
-
-	// 1 枚のビューポートを作り、ラベルを 1 本置く。段ごとに Title / LS / 1032 を出す。
-	void TmPlaceLabel(vwprobe::Report& probe, MCObjectHandle sheet, MCObjectHandle design,
-					  const TmPlace& p, int index)
-	{
-		const std::string tag = p.tag;
 		MCObjectHandle vp = gSDK->CreateViewport(sheet);
 		if (vp == nullptr)
 		{
-			probe.fail(tag + ": CreateViewport が nil");
-			return;
+			probe.fail("CreateViewport が nil");
+			return nullptr;
 		}
 		gSDK->SetViewportLayerVisibility(vp, design, VWFC::VWObjects::kLayerVisibilityNormal);
 		TVariableBlock scaleVar;
 		scaleVar = static_cast<Real64>(kTmScale);
 		gSDK->SetObjectVariable(vp, ovViewportScale, scaleVar);
-		if (p.preset != nullptr)
+		if (preset != nullptr)
 		{
 			TVariableBlock descVar;
-			descVar = TXString(p.preset);
+			descVar = TXString(preset);
 			gSDK->SetObjectVariable(vp, ovViewportDescription, descVar);
 		}
-		if (p.showClasses)
-			gSDK->ForEachClass(
-				true, [vp](MCObjectHandle cls)
-				{ gSDK->SetViewportClassVisibility(vp, gSDK->GetObjectInternalIndex(cls), 0); });
 		gSDK->UpdateViewport(vp);
-		if (index > 0)
-			gSDK->MoveObject(vp, static_cast<WorldCoord>(300.0 * index), 0);
-		if (p.nameVp)
-			(void)gSDK->SetObjectName(vp, TXString(("tm-" + tag).c_str()));
-		probe.log("  [" + tag + "] VP を作った 1032=" + TmText(vp, ovViewportDescription) +
-				  "（クラス表示=" + TmYes(p.showClasses) + " 位置=" + TmYes(p.setPos) +
-				  " 名前=" + TmYes(p.nameVp) + "）");
+		if (moveX != 0.0)
+			gSDK->MoveObject(vp, static_cast<WorldCoord>(moveX), 0);
+		return vp;
+	}
 
-		MCObjectHandle h =
-			gSDK->CreateCustomObject(kTmLabel, WorldPt(0, -3000.0 * index), 0.0, false);
+	void TmSetDescription(MCObjectHandle vp, const char* value)
+	{
+		TVariableBlock descVar;
+		descVar = TXString(value);
+		gSDK->SetObjectVariable(vp, ovViewportDescription, descVar);
+	}
+
+	// ラベルを 1 本作って（どこにも入れない）、生まれたときの Title を出し、消す。
+	void TmBornTitle(vwprobe::Report& probe, const std::string& what, const WorldPt& at)
+	{
+		MCObjectHandle h = gSDK->CreateCustomObject(kTmLabel, at, 0.0, false);
 		if (h == nullptr)
 		{
-			probe.fail(tag + ": CreateCustomObject が nil");
+			probe.fail(what + ": CreateCustomObject が nil");
 			return;
 		}
-		probe.log("    作った直後 " + TmLabelParams(h));
-		TmRebuildLayout(probe, tag, h);
-		const bool added = gSDK->AddViewportAnnotationObject(vp, h) != 0;
-		probe.log("    注釈へ入れた=" + TmYes(added) + " " + TmLabelParams(h) +
-				  " / 1032=" + TmText(vp, ovViewportDescription));
-		if (p.setPos)
-		{
-			VWFC::VWObjects::VWParametricObj(h).SetPointObjectPos(VWPoint2D(0, 0));
-			probe.log("    SetPointObjectPos の後 " + TmLabelParams(h) +
-					  " / 1032=" + TmText(vp, ovViewportDescription));
-		}
-		if (p.title != nullptr)
-		{
-			VWFC::VWObjects::VWParametricObj(h).SetParamValue("Title", p.title);
-			probe.log("    Title を書いた " + TmLabelParams(h) +
-					  " / 1032=" + TmText(vp, ovViewportDescription));
-		}
-		gSDK->ResetObject(h);
-		probe.log("    ResetObject の後 " + TmLabelParams(h) +
-				  " / 1032=" + TmText(vp, ovViewportDescription) + " / " + TmDrawn(h));
+		probe.log("    " + what + " → " + TmLabelParams(h));
+		gSDK->DeleteObject(h);
 	}
 
-	struct TmLabelArm
+	// シートレイヤ上のビューポートを並び順に出す（どれが「先頭」か）。
+	std::string TmVpOrder(MCObjectHandle sheet)
 	{
-		const char* id;
-		const char* what;
-		bool fromTemplate;
-		std::vector<TmPlace> places;
+		std::string out;
+		for (MCObjectHandle m = gSDK->FirstMemberObj(sheet); m != nullptr; m = gSDK->NextObject(m))
+			if (gSDK->GetObjectTypeN(m) == kViewportNode)
+				out += " " + TmText(m, ovViewportDescription);
+		return out.empty() ? " (無し)" : out;
+	}
+
+	struct TmBornSet
+	{
+		MCObjectHandle design = nullptr;
+		MCObjectHandle sheet = nullptr;
 	};
 
-	void TmRunLabelArm(vwprobe::Report& probe, const TmLabelArm& arm)
+	bool TmBornSetup(vwprobe::Report& probe, TmBornSet& s, const char* sheetName)
 	{
-		probe.log("");
-		probe.log("=== " + std::string(arm.id) + "（" + TmOrigin(arm.fromTemplate) +
-				  "の図面）: " + arm.what + " ===");
-		const Sint32 ref = TmOpen(probe, arm.fromTemplate);
-		if (ref == 0)
-			return;
 		gSDK->DefineCustomObject(kTmLabel, kCustomObjectPrefNever);
-		RefNumber toolStyle = 0;
-		const bool okTool = gSDK->GetPluginStyleForTool(kTmLabel, toolStyle);
-		probe.log("  ツールのスタイル: " +
-				  (okTool ? TmRef(static_cast<InternalIndex>(toolStyle)) : std::string("(false)")));
-
-		MCObjectHandle design = gSDK->CreateLayer("tm-design", kLayerDesign);
-		MCObjectHandle sheet = gSDK->CreateLayer("tm-sheet", kLayerSheet);
-		if (design == nullptr || sheet == nullptr)
+		s.design = gSDK->CreateLayer("tm-design", kLayerDesign);
+		s.sheet = gSDK->CreateLayer(TXString(sheetName), kLayerSheet);
+		if (s.design == nullptr || s.sheet == nullptr)
 		{
 			probe.fail("CreateLayer が nil");
-			TmClose(probe, ref);
-			return;
+			return false;
 		}
-		gSDK->SetLayerScaleN(design, kTmScale);
-		gSDK->SetCurrentLayer(design);
+		gSDK->SetLayerScaleN(s.design, kTmScale);
+		gSDK->SetCurrentLayer(s.design);
 		gSDK->CreateRectangleN(WorldPt(0, 0), Vector2(1, 0), 10000.0, 10000.0);
-		gSDK->SetCurrentLayer(sheet);
+		gSDK->SetCurrentLayer(s.sheet);
+		return true;
+	}
 
-		for (size_t i = 0; i < arm.places.size(); ++i)
-			TmPlaceLabel(probe, sheet, design, arm.places[i], static_cast<int>(i));
-
-		// どこにも入れないラベルを 1 本作り、生まれたときの Title を読む（引き継ぎの有無）。
-		MCObjectHandle stray = gSDK->CreateCustomObject(kTmLabel, WorldPt(0, 9000), 0.0, false);
-		if (stray != nullptr)
+	// R: ラベルが生まれたときの Title はどこから来るか。
+	void TmRunBorn(vwprobe::Report& probe)
+	{
+		const WorldPt at(0, 0);
 		{
-			probe.log("  次に作ったラベル（注釈へ入れない）: " + TmLabelParams(stray));
-			gSDK->DeleteObject(stray);
-		}
-		TmClose(probe, ref);
-	}
-
-	// ---------------------------------------------------------------------------
-	// D: 寸法のクラスの文字スタイル
-
-	std::string TmDimStyle(MCObjectHandle dim)
-	{
-		if (dim == nullptr)
-			return "(nil)";
-		return "class=" + TmIndexName(gSDK->GetObjectClass(dim)) +
-			   " ref=" + TmRef(gSDK->GetTextStyleRef(dim)) +
-			   (gSDK->GetTextStyleByClass(dim) ? " cls" : " 明示") +
-			   " font=" + TmReal(dim, ovDimFontSize);
-	}
-
-	MCObjectHandle TmMakeDim(double y)
-	{
-		MCObjectHandle dim =
-			gSDK->CreateLinearDimension(WorldPt(0.0, y), WorldPt(1000.0, y),
-										static_cast<WorldCoord>(500.0), 0, Vector2(0, 0), 0);
-		return dim;
-	}
-
-	InternalIndex TmMakeTextStyle(vwprobe::Report& probe, const char* name, double pt)
-	{
-		MCObjectHandle style = gSDK->CreateTextStyleResource(TXString(name));
-		if (style == nullptr)
-		{
-			probe.fail(std::string("CreateTextStyleResource が nil: ") + name);
-			return 0;
-		}
-		TmSetReal(style, ovTextStyleSize, pt / 72.0);
-		return gSDK->GetObjectInternalIndex(style);
-	}
-
-	std::string TmStandardStr()
-	{
-		short stdIndex = -99;
-		gSDK->GetProgramVariable(varDimStandard, &stdIndex);
-		std::string out = "varDimStandard=" + std::to_string(stdIndex);
-		TVariableBlock nameBlock;
-		TXString name;
-		if (gSDK->GetDimensionStandardVariable(stdIndex, dimStdstandardName, nameBlock))
-			nameBlock.GetTXString(name);
-		out += "「" + TmStr(name) + "」";
-		TVariableBlock styleBlock;
-		Sint32 ref = 0;
-		if (gSDK->GetDimensionStandardVariable(stdIndex, dimStdTextStyle, styleBlock) &&
-			styleBlock.GetSint32(ref))
-			out += " 規格の文字スタイル=" + TmRef(static_cast<InternalIndex>(ref));
-		return out;
-	}
-
-	void TmRunDimArm(vwprobe::Report& probe, bool fromTemplate)
-	{
-		probe.log("");
-		probe.log("=== D（" + std::string(TmOrigin(fromTemplate)) +
-				  "の図面）: 寸法が入るクラスと、GetTextStyleRef が追うクラス ===");
-		const Sint32 ref = TmOpen(probe, fromTemplate);
-		if (ref == 0)
-			return;
-		const InternalIndex active = gSDK->GetActiveClass();
-		const InternalIndex dimClass = gSDK->GetDimensionClassID();
-		probe.log("  varCreateDimsInDimClass(44)=" + TmBoolPref(varCreateDimsInDimClass) + " / " +
-				  TmStandardStr());
-		probe.log("  アクティブクラス: " + TmClassStr(active));
-		probe.log("  寸法クラス（GetDimensionClassID）: " + TmClassStr(dimClass));
-		probe.log("  アクティブレイヤ: " + TmLayerStr(gSDK->GetActiveLayer()));
-
-		const InternalIndex tsA = TmMakeTextStyle(probe, "tm-ts-active", 20.0);
-		const InternalIndex tsD = TmMakeTextStyle(probe, "tm-ts-dimcls", 30.0);
-		const InternalIndex tsN = TmMakeTextStyle(probe, "tm-ts-new", 40.0);
-		if (tsA == 0 || tsD == 0 || tsN == 0)
-		{
+			probe.log("");
+			probe.log("=== R1（テンプレート）: VP を作る前・A・B の順に作った後 ===");
+			const Sint32 ref = TmOpen(probe, true);
+			TmBornSet s;
+			if (ref != 0 && TmBornSetup(probe, s, "tm-s1"))
+			{
+				TmBornTitle(probe, "VP が 1 枚も無い", at);
+				MCObjectHandle a = TmMakeVp(probe, s.sheet, s.design, "A", 0.0);
+				TmBornTitle(probe, "A だけ", at);
+				MCObjectHandle b = TmMakeVp(probe, s.sheet, s.design, "B", 300.0);
+				probe.log("    並び:" + TmVpOrder(s.sheet));
+				TmBornTitle(probe, "A → B", at);
+				TmBornTitle(probe, "A → B・B の上（300,0）に作る", WorldPt(300, 0));
+				TmBornTitle(probe, "A → B・遠く（50000,50000）に作る", WorldPt(50000, 50000));
+				TmSetDescription(a, "A2");
+				TmBornTitle(probe, "A の 1032 を A2 へ書き換えた後", at);
+				gSDK->DeselectAll();
+				gSDK->SelectObject(b, true);
+				TmBornTitle(probe, "B だけ選択した後", at);
+				gSDK->DeselectAll();
+				gSDK->DeleteObject(a);
+				probe.log("    A を消した後の並び:" + TmVpOrder(s.sheet));
+				TmBornTitle(probe, "A を消した後", at);
+				MCObjectHandle s2 = gSDK->CreateLayer("tm-s2", kLayerSheet);
+				if (s2 != nullptr)
+				{
+					gSDK->SetCurrentLayer(s2);
+					TmBornTitle(probe, "VP の無い別のシートがアクティブ", at);
+					(void)TmMakeVp(probe, s2, s.design, "C", 0.0);
+					TmBornTitle(probe, "別のシートに C を作った後（そこがアクティブ）", at);
+					gSDK->SetCurrentLayer(s.sheet);
+					TmBornTitle(probe, "元のシートへ戻った後", at);
+				}
+				gSDK->SetCurrentLayer(s.design);
+				TmBornTitle(probe, "デザインレイヤがアクティブ", at);
+			}
 			TmClose(probe, ref);
-			return;
 		}
-
-		// D1: #157 の手順——作ったまま。アクティブクラス、続いて寸法の入ったクラスを書き換える。
-		probe.log("  -- D1: #157 の手順（作ったまま）");
-		MCObjectHandle d1 = TmMakeDim(0.0);
-		probe.log("    作った直後 " + TmDimStyle(d1));
-		const InternalIndex d1Class = d1 != nullptr ? gSDK->GetObjectClass(d1) : 0;
-		probe.log("    寸法の入ったクラス: " + TmClassStr(d1Class) +
-				  "（アクティブと同じ=" + TmYes(d1Class == active) +
-				  " 寸法クラスと同じ=" + TmYes(d1Class == dimClass) + "）");
-		if (d1Class != active)
 		{
-			gSDK->SetClUseTextStyle(active, true);
-			gSDK->SetClTextStyleRef(active, tsA);
-			probe.log("    アクティブクラスへ tm-ts-active を当てた → " + TmDimStyle(d1));
+			probe.log("");
+			probe.log("=== R2（テンプレート）: 空の VP の後に B ===");
+			const Sint32 ref = TmOpen(probe, true);
+			TmBornSet s;
+			if (ref != 0 && TmBornSetup(probe, s, "tm-s1"))
+			{
+				(void)TmMakeVp(probe, s.sheet, s.design, nullptr, 0.0);
+				(void)TmMakeVp(probe, s.sheet, s.design, "B", 300.0);
+				probe.log("    並び:" + TmVpOrder(s.sheet));
+				TmBornTitle(probe, "空 → B", at);
+			}
+			TmClose(probe, ref);
 		}
-		gSDK->SetClUseTextStyle(d1Class, true);
-		gSDK->SetClTextStyleRef(d1Class, tsD);
-		probe.log("    寸法の入ったクラスへ tm-ts-dimcls を当てた → " + TmDimStyle(d1));
-		gSDK->ResetObject(d1);
-		probe.log("    ResetObject の後 → " + TmDimStyle(d1));
-		MCObjectHandle d1b = TmMakeDim(2000.0);
-		probe.log("    その後に作った寸法 → " + TmDimStyle(d1b));
-
-		// D2: #245 の手順——専用クラスへ入れて SetTextStyleByClass、クラスを書き換える。
-		probe.log("  -- D2: #245 の手順（専用クラス + SetTextStyleByClass）");
-		const InternalIndex cls2 = gSDK->AddClass(TXString("tm-cls2"));
-		MCObjectHandle d2 = TmMakeDim(4000.0);
-		gSDK->SetObjectClass(d2, cls2);
-		probe.log("    SetObjectClass だけ → " + TmDimStyle(d2));
-		gSDK->SetTextStyleByClass(d2);
-		probe.log("    SetTextStyleByClass の後 → " + TmDimStyle(d2));
-		gSDK->SetClUseTextStyle(cls2, true);
-		gSDK->SetClTextStyleRef(cls2, tsN);
-		probe.log("    クラスへ tm-ts-new を当てた → " + TmDimStyle(d2));
-
-		// D3: 専用クラスへ入れるが SetTextStyleByClass は呼ばない。
-		probe.log("  -- D3: 専用クラスへ入れるだけ（SetTextStyleByClass を呼ばない）");
-		const InternalIndex cls3 = gSDK->AddClass(TXString("tm-cls3"));
-		MCObjectHandle d3 = TmMakeDim(6000.0);
-		gSDK->SetObjectClass(d3, cls3);
-		probe.log("    SetObjectClass だけ → " + TmDimStyle(d3));
-		gSDK->SetClUseTextStyle(cls3, true);
-		gSDK->SetClTextStyleRef(cls3, tsN);
-		probe.log("    クラスへ tm-ts-new を当てた → " + TmDimStyle(d3));
-
-		// D4: 文字スタイルを持たないクラスへ入れた寸法は何を返すか（#245 の「前」= 0 の確認）。
-		probe.log("  -- D4: 文字スタイルを持たないクラスへ入れて SetTextStyleByClass");
-		const InternalIndex cls4 = gSDK->AddClass(TXString("tm-cls4"));
-		MCObjectHandle d4 = TmMakeDim(8000.0);
-		probe.log("    作った直後 → " + TmDimStyle(d4));
-		gSDK->SetObjectClass(d4, cls4);
-		gSDK->SetTextStyleByClass(d4);
-		probe.log("    tm-cls4（" + TmClassStr(cls4) + "）へ入れた後 → " + TmDimStyle(d4));
-		TmClose(probe, ref);
+		{
+			probe.log("");
+			probe.log("=== R3（テンプレート）: 前のラベルが Title を持つが、どの VP も空 ===");
+			const Sint32 ref = TmOpen(probe, true);
+			TmBornSet s;
+			if (ref != 0 && TmBornSetup(probe, s, "tm-s1"))
+			{
+				MCObjectHandle h = gSDK->CreateCustomObject(kTmLabel, at, 0.0, false);
+				if (h != nullptr)
+				{
+					VWFC::VWObjects::VWParametricObj(h).SetParamValue("Title", "ラベルに書いた題");
+					gSDK->ResetObject(h);
+					probe.log("    注釈へ入れないラベルに Title を書いた → " + TmLabelParams(h));
+				}
+				TmBornTitle(probe, "VP 無し・前のラベルが題を持つ", at);
+				(void)TmMakeVp(probe, s.sheet, s.design, nullptr, 0.0);
+				TmBornTitle(probe, "空の VP を作った後", at);
+			}
+			TmClose(probe, ref);
+		}
 	}
 
 	// ---------------------------------------------------------------------------
 	// A: 寸法の関連付け
 
-	enum class TmAssocWay
+	void TmAssocAt(vwprobe::Report& probe, const std::string& tag, double x, double y)
 	{
-		SelectFalse, // 線 2 本を選択して AssociateLinearDimension(dim, false)（#245 c5）
-		NoSelect,	 // 選択せずに false
-		SelectTrue	 // 選択して true
-	};
-
-	const char* TmWayName(TmAssocWay w)
-	{
-		switch (w)
-		{
-		case TmAssocWay::SelectFalse:
-			return "選択して false";
-		case TmAssocWay::NoSelect:
-			return "選択せずに false";
-		case TmAssocWay::SelectTrue:
-			return "選択して true";
-		}
-		return "?";
-	}
-
-	void TmAssocOnce(vwprobe::Report& probe, const std::string& tag, double y, TmAssocWay way)
-	{
-		MCObjectHandle lineA = gSDK->CreateLine(WorldPt(0.0, y), WorldPt(0.0, y - 500.0));
-		MCObjectHandle lineB = gSDK->CreateLine(WorldPt(3000.0, y), WorldPt(3000.0, y - 500.0));
+		MCObjectHandle lineA = gSDK->CreateLine(WorldPt(x, y), WorldPt(x, y - 500.0));
+		MCObjectHandle lineB =
+			gSDK->CreateLine(WorldPt(x + 3000.0, y), WorldPt(x + 3000.0, y - 500.0));
 		MCObjectHandle dim =
-			gSDK->CreateLinearDimension(WorldPt(0.0, y), WorldPt(3000.0, y),
+			gSDK->CreateLinearDimension(WorldPt(x, y), WorldPt(x + 3000.0, y),
 										static_cast<WorldCoord>(600.0), 0, Vector2(0, 0), 0);
 		if (lineA == nullptr || lineB == nullptr || dim == nullptr)
 		{
@@ -588,121 +361,96 @@ namespace
 			return;
 		}
 		gSDK->DeselectAll();
-		if (way != TmAssocWay::NoSelect)
-		{
-			gSDK->SelectObject(lineA, true);
-			gSDK->SelectObject(lineB, true);
-		}
-		gSDK->AssociateLinearDimension(dim, way == TmAssocWay::SelectTrue);
-		gSDK->DeselectAll();
-		probe.log("    " + tag + " y=" + TmNum(y, 0) + " " + TmWayName(way) +
-				  " → HasConstraint(寸法)=" + TmYes(gSDK->HasConstraint(dim) != 0) +
-				  " (線A)=" + TmYes(gSDK->HasConstraint(lineA) != 0) + " / 寸法のレイヤ " +
-				  TmLayerStr(gSDK->ParentObject(dim)) +
-				  " クラス=" + TmIndexName(gSDK->GetObjectClass(dim)));
+		gSDK->AssociateLinearDimension(dim, false);
+		probe.log("    " + tag + " (" + TmNum(x, 0) + "," + TmNum(y, 0) +
+				  ") → HasConstraint=" + TmYes(gSDK->HasConstraint(dim) != 0));
 	}
 
-	void TmAssocDiag(vwprobe::Report& probe)
+	std::string TmRectStr(const WorldRect& r)
 	{
-		probe.log("  varAssociateDims(28)=" + TmBoolPref(varAssociateDims) +
-				  " varAutoAssociateDims(134)=" + TmBoolPref(varAutoAssociateDims) +
-				  " varCreateDimsInDimClass(44)=" + TmBoolPref(varCreateDimsInDimClass));
-		int layers = 0;
-		gSDK->ForEachLayerN([&layers](MCObjectHandle) { ++layers; });
-		probe.log("  アクティブレイヤ " + TmLayerStr(gSDK->GetActiveLayer()) +
-				  " / レイヤ数=" + std::to_string(layers) +
-				  " / アクティブクラス=" + TmIndexName(gSDK->GetActiveClass()) +
-				  " / 寸法クラス=" + TmIndexName(gSDK->GetDimensionClassID()));
+		return "L" + TmNum(r.left, 0) + " B" + TmNum(r.bottom, 0) + " R" + TmNum(r.right, 0) +
+			   " T" + TmNum(r.top, 0);
 	}
 
-	void TmRunAssocArm(vwprobe::Report& probe, bool fromTemplate)
+	void TmAssocView(vwprobe::Report& probe)
 	{
-		probe.log("");
-		probe.log("=== A（" + std::string(TmOrigin(fromTemplate)) +
-				  "の図面）: AssociateLinearDimension が成立するか ===");
-		const Sint32 ref = TmOpen(probe, fromTemplate);
-		if (ref == 0)
-			return;
-		TmAssocDiag(probe);
-		if (TmBoolPref(varAssociateDims) != "1")
+		WorldRect page;
+		gSDK->GetPageBounds(page);
+		WorldPt center;
+		gSDK->GetViewCenter(center);
+		probe.log("  用紙 " + TmRectStr(page) + " / 表示の中心 (" + TmNum(center.x, 0) + "," +
+				  TmNum(center.y, 0) + ") / アクティブレイヤ " +
+				  TmLayerStr(gSDK->GetActiveLayer()));
+	}
+
+	void TmScan(vwprobe::Report& probe, const char* label, const std::vector<double>& ys, double x)
+	{
+		probe.log("  -- " + std::string(label));
+		TmAssocView(probe);
+		for (double y : ys)
+			TmAssocAt(probe, "y", x, y);
+	}
+
+	// S: 関連付けが成立する範囲。
+	void TmRunScan(vwprobe::Report& probe)
+	{
+		const std::vector<double> ys = {0,	   2000,  4000,	 6000,	8000,  9000,
+										10000, 11000, 12000, 16000, 20000, 60000};
 		{
-			TmSetBoolPref(varAssociateDims, true);
-			probe.log("  varAssociateDims を 1 にした → " + TmBoolPref(varAssociateDims));
+			probe.log("");
+			probe.log("=== S1（空の図面・1/1）: y を振る ===");
+			const Sint32 ref = TmOpen(probe, false);
+			if (ref != 0)
+			{
+				TmScan(probe, "x=0", ys, 0.0);
+				TmScan(probe, "x=-20000（左へ外す）", {0, 4000}, -20000.0);
+				TmScan(probe, "x=20000（右へ外す）", {0, 4000}, 20000.0);
+				gSDK->SetViewCenter(WorldPt(1500.0, 60000.0));
+				TmScan(probe, "表示の中心を (1500,60000) へ動かした後", {0, 4000, 60000, 61000},
+					   0.0);
+			}
+			TmClose(probe, ref);
 		}
-		probe.log("  -- そのままのレイヤで");
-		TmAssocOnce(probe, "A1", 60000.0, TmAssocWay::SelectFalse);
-		TmAssocOnce(probe, "A2", 0.0, TmAssocWay::NoSelect);
-		TmAssocOnce(probe, "A3", 4000.0, TmAssocWay::SelectTrue);
-
-		probe.log("  -- アクティブレイヤの縮尺を 1/50 にして");
-		MCObjectHandle layer = gSDK->GetActiveLayer();
-		double_gs scaleBefore = 1.0;
-		gSDK->GetLayerScaleN(layer, scaleBefore);
-		gSDK->SetLayerScaleN(layer, 50.0);
-		TmAssocOnce(probe, "A4", 8000.0, TmAssocWay::SelectFalse);
-		gSDK->SetLayerScaleN(layer, scaleBefore);
-
-		probe.log("  -- 新しく作ったデザインレイヤで");
-		MCObjectHandle design = gSDK->CreateLayer("tm-assoc", kLayerDesign);
-		if (design != nullptr)
 		{
-			gSDK->SetCurrentLayer(design);
-			TmAssocOnce(probe, "A5", 12000.0, TmAssocWay::SelectFalse);
+			probe.log("");
+			probe.log("=== S2（空の図面）: 先にレイヤを 1/50 にしてから y を振る ===");
+			const Sint32 ref = TmOpen(probe, false);
+			if (ref != 0)
+			{
+				gSDK->SetLayerScaleN(gSDK->GetActiveLayer(), 50.0);
+				TmScan(probe, "1/50", ys, 0.0);
+			}
+			TmClose(probe, ref);
 		}
-
-		probe.log("  -- varCreateDimsInDimClass を反転して");
-		const bool dimInClass = TmBoolPref(varCreateDimsInDimClass) == "1";
-		TmSetBoolPref(varCreateDimsInDimClass, !dimInClass);
-		probe.log("    varCreateDimsInDimClass → " + TmBoolPref(varCreateDimsInDimClass));
-		TmAssocOnce(probe, "A6", 16000.0, TmAssocWay::SelectFalse);
-		TmSetBoolPref(varCreateDimsInDimClass, dimInClass);
-		TmClose(probe, ref);
+		{
+			probe.log("");
+			probe.log("=== S3（空の図面・1/1）: 用紙を広げてから y を振る ===");
+			const Sint32 ref = TmOpen(probe, false);
+			if (ref != 0)
+			{
+				WorldRect page;
+				gSDK->GetPageBounds(page);
+				WorldRect big(WorldPt(-100000.0, 100000.0), WorldPt(100000.0, -100000.0));
+				gSDK->SetPageBounds(big);
+				TmScan(probe, "用紙を ±100000 に", ys, 0.0);
+			}
+			TmClose(probe, ref);
+		}
+		{
+			probe.log("");
+			probe.log("=== S4（テンプレート）: y を振る ===");
+			const Sint32 ref = TmOpen(probe, true);
+			if (ref != 0)
+				TmScan(probe, "そのまま", {0, 60000, 100000, 200000, 400000, 1000000}, 0.0);
+			TmClose(probe, ref);
+		}
 	}
 } // namespace
 
 VW_PROBE("t0-mismatch", "T0 の食い違い（#245）", "ラベル・文字スタイル・関連付けを振り分ける")
 {
-	// #177 の手順: クラスを戻さない・SetPointObjectPos しない・名前を付けない。
-	const TmPlace e177{"E", nullptr, nullptr, false, false, false};
-	const TmPlace pre177{"pre", "VP の図面タイトル", nullptr, false, false, false};
-	const TmPlace t177{"T", nullptr, "調査用の図面タイトル", false, false, false};
-	// #245 の手順: クラスを全部表示・SetPointObjectPos(0,0)・名前を付ける。
-	const TmPlace e245{"E", nullptr, nullptr, true, true, true};
-	const TmPlace pre245{"pre", "VP の図面タイトル", nullptr, true, true, true};
-	const TmPlace t245{"T", nullptr, "調査用の図面タイトル", true, true, true};
-	const TmPlace hand245{"H", nullptr, "手で書いた題", true, true, true};
-
-	const std::vector<TmLabelArm> labelArms = {
-		{"L1", "#245 の並び（pre → E → T）と手順", true, {pre245, e245, t245}},
-		{"L2", "#177 の並び（E → pre → T）と手順", true, {e177, pre177, t177}},
-		{"L3", "pre だけ・#177 の手順", true, {pre177}},
-		{"L4", "pre だけ・#245 の手順", true, {pre245}},
-		{"L5",
-		 "pre だけ・#245 からクラス表示を外す",
-		 true,
-		 {{"pre", "VP の図面タイトル", nullptr, false, true, true}}},
-		{"L6",
-		 "pre だけ・#245 から SetPointObjectPos を外す",
-		 true,
-		 {{"pre", "VP の図面タイトル", nullptr, true, false, true}}},
-		{"L7",
-		 "pre だけ・#245 から名前を外す",
-		 true,
-		 {{"pre", "VP の図面タイトル", nullptr, true, true, false}}},
-		{"L8", "pre だけ・#245 の手順", false, {pre245}},
-		{"L9", "pre だけ・#177 の手順", false, {pre177}},
-		{"L10", "Title を書いたラベルの後に E（引き継ぐか）", true, {hand245, e245}},
-		{"L11", "E だけ・#245 の手順", true, {e245}},
-	};
-	for (const TmLabelArm& arm : labelArms)
-		TmRunLabelArm(probe, arm);
-
-	TmRunDimArm(probe, true);
-	TmRunDimArm(probe, false);
-
-	TmRunAssocArm(probe, false);
-	TmRunAssocArm(probe, true);
-
+	TmRunBorn(probe);
+	TmRunScan(probe);
 	(void)gSDK->EndUndoEvent();
 	probe.log("");
 	probe.log("おわり");
