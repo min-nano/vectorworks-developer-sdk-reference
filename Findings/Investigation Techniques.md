@@ -351,6 +351,66 @@
     `SpecialArea` / `Volume` / `ObjectData` / `Thickness` の 17 個）という**列挙できる口**も
     ある。【ヘッダ根拠】
 
+## いつ読むか——同じ呼び出しの中・undo イベントの後・VW へ戻った後
+
+**プローブが書いた直後に同じ呼び出しの中で読んだ値は、利用者の図面に残る値と同じとは
+限らない。** VW は仕事の一部を後へ回す。[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)
+で、過去に「効かない／変わらない」と結論した項目を、同じ図形について次の 4 時点で
+読み比べた:
+
+| 時点 | いつ |
+| --- | --- |
+| T0 | 書いた直後（同じ呼び出しの中）——これまでの調査はすべてここ |
+| T1 | 同じ呼び出しの中でランループを 1.5 秒回した後（`CFRunLoopRunInMode` を短く刻む） |
+| Te | 自動で開いた undo イベントを `EndUndoEvent()` で閉じた直後（まだ同じ呼び出し） |
+| T2 | 別の走行（VW へ制御を返し、数十秒置いた後） |
+
+**後から変わったものは 2 種類あり、引き金が違った:**
+
+| 引き金 | 変わったもの | T0 | 変わった時点 |
+| --- | --- | --- | --- |
+| **ランループ**（VW へ戻れば回る） | 連続寸法へ `SetTextStyleRef` だけ掛けたときの中の寸法の大きさ（[Dimensions](Dimensions.md)） | 古い | T1 |
+| | 連続寸法の中の寸法へ直接書いた `ovDimFontSize`（捨てられる） | 書いた値 | T1 |
+| **undo イベントの終わり** | `ResetObject` の後に `SetEntityMatrix` で動かした PIO の外接（[Parametric Objects](Parametric%20Objects.md)） | 古い位置 | Te |
+| | `UpdateViewport` 直後のビューポートの `IsDirty()`（`no` → `yes`。[Viewports](Viewports.md)） | `no` | Te |
+
+**それ以外は変わらなかった**——PIO・スタイル 97 欄中 96、データタグ・レイヤ高さ 50 欄、
+寸法 107 欄中 100、ビューポート・図面ラベル 97 欄中 80（変わったのは上表の 2 種類だけ）、
+断面ビューポートの (1064,1065) × 向き × pt3 の 16 枚は 16 枚とも同じ。
+`UpdateStyledObjects` のずれと累積・`SetPluginObjectStyle` だけでは記録が変わらない・
+`RedrawRect` / `ResetObject(レイヤ)` は作り直さない・3D パスの構造材の `#ZTBB*#` が
+±1.79e308・`#IPZ#` が追随しない・クラスや規格の文字スタイルが寸法へ届かない、などの
+結論は**戻った後に読み直しても同じ**だった（各ファイルに注記した）。
+
+- **「効かない」と書く前に、undo イベントを閉じた後と、VW へ戻った後にも読む。**
+  とくに**外接・dirty の印・PIO の中身**は後から追い付くことがある。仕立ては
+  [PR #246](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/246) の
+  `probes/runtime/deferred-*/Deferred.h`（`RunDeferred`。役目を終えたので消したが、履歴から
+  取り出せる）——1 本のプローブを 2 回走らせ、状態を一時ファイルで受け渡し、図形は名前で
+  引き直す。1 回目の最後に自動で開いた undo イベントを閉じ、閉じた直後にも読む（Te）。
+- **自動で開いた undo イベントを閉じずに戻らない。** 図形を作るだけでイベントは開く
+  （[Undo](Undo.md)）。閉じずに戻ると、**利用者がクリックしても閉じず**、外接も
+  `IsDirty` も古いままで、MCP ブリッジは受け付けを見送って止まった（7 分。
+  [#247](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/247)）。
+  **閉じずに置いた 7 分のあいだ、外接は 1mm も追い付かなかった**——引き金は時間でも
+  アイドルでもない。
+- **戻った後に呼ばれるもの（タイマー・`dispatch_after`・通知）をプローブに仕掛けない。**
+  殻は走らせた直後に本体を降ろすので、VW ごと落ちる（#245 で落とした。
+  [probes/runtime/README.md](../probes/runtime/README.md)）。
+- **`OpenDocumentPath(nullptr)` で開いた図面はテンプレートの資源を持たない。** 利用者が
+  ⌘N で作る図面と違い、図面ラベルの既定レイアウトに文字が無く、`AssociateLinearDimension`
+  も関連付けを作らなかった（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)）。
+  旧調査を再現するときは、**同じ出どころの図面**（`.sta` を `OpenDocumentPath` へ渡す。
+  [Documents](Documents.md)）で走らせる。MCP ブリッジの `vw_run_probe` が開く新規図面も
+  `OpenDocumentPath(nullptr)` である。
+- **旧調査を測り直すときは、まず T0 が旧調査と同じ値になることを確かめる。** 場面の作り方が
+  少し違うだけで、断面ビューポートに中身が入らない（[#248](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/248)）・
+  図面ラベルが文字を描かない、といった食い違いが T0 の時点で出た。**T0 が合わないまま
+  T2 を比べても、何も確かめたことにならない**——#245 では旧プローブそのものを 2 回走らせる
+  形にして測り直した。
+- **所要時間（ms）の表は「呼び出しの中の時間」だけを測っている。** 戻った後の仕事
+  （上表のランループ側）は含まれていない。
+
 ## 運用
 
 - **実機の出力にはビルドの素性を添える。** 「その出力がどのビルドのものか」が分からないと

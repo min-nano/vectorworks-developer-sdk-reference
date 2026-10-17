@@ -1573,6 +1573,9 @@ per-part のマゼンタが出続けた）。**値は書けていて読み戻せ
 5 回刻みで実測）。**プローブは undo イベントを開かない**
 （[Undo](Undo.md)：半端な記録を取り消すと図面が壊れる）ので、置き石が PIO の中に残る。
 
+- **undo イベントを閉じても、VW へ戻った後も減らない**（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。5 回で 5 個、
+  1 つ `DeleteObject` しても 5 個のまま）。
+
 - **描かれた子の数は 30 回まで 7 つのまま保たれた**ので、**置き石そのものは描画を壊さない**。
 - ただし**同じ個体で `AttributesMode` を 0→1→2→3 と振った回**では、型 84（3D 実体）と
   断面のポリラインが消え、**値を既定へ戻しても戻らなかった**。`ResetObject` を 30 回
@@ -2071,12 +2074,28 @@ gSDK->ResetObject(h);                         // ここで 1 回だけ描く
 
 `CreateCustomObjectPath(name, nil, nil, doRegen=false)` は原点・角度 0 に置く。
 `SetEntityMatrix`（0.00ms）で原点 (6000, 5000)・30° を与えても子は 1 のまま
-（描き直さない）。その後の `ResetObject` で、`CreateCustomObject(pt, 30°)` と**同じ外形・
+（描き直さない。undo イベントを閉じた後も VW へ戻った後も 1 のままだった——[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。その後の `ResetObject` で、`CreateCustomObject(pt, 30°)` と**同じ外形・
 同じ子の型の並び**になった（ドア・窓とも）。
 
-**`ResetObject` の後で `SetEntityMatrix` で動かすと、外形（`GetObjectBounds`）が古い位置の
-まま残る**（原点は動いている）。もう一度 `ResetObject` すると追い付く。**置き場所は
-`ResetObject` の前に決める。**
+**`ResetObject` の後で `SetEntityMatrix` で動かすと、外形（`GetObjectBounds`）は undo
+イベントが閉じるまで古い位置のまま**（原点は動いている）。もう一度 `ResetObject` すると
+その場で追い付く。**置き場所は `ResetObject` の前に決める。**
+
+- 【訂正】以前は「古い位置のまま残る」と書いていたが、**同じ呼び出しの中で読んでいたため**
+  だった（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。
+  ドアを `ResetObject` → `SetEntityMatrix` で +5000 動かし、3 時点で外接を読んだ:
+
+  | いつ読んだか | 外接 |
+  | --- | --- |
+  | 書いた直後（同じ呼び出しの中） | L23545 … R24455（**古い位置**） |
+  | 呼び出しの中でランループを 1.5 秒回した後 | L23545 … R24455（**古い位置**） |
+  | **自動で開いた undo イベントを `EndUndoEvent()` で閉じた直後** | **L28545 … R29455（新しい位置）** |
+  | VW へ制御を返し、数十秒置いた後（別の走行） | L28545 … R29455（新しい位置） |
+
+  **undo イベントを閉じずに 7 分置いた回では、古い位置のままだった**——引き金は時間でも
+  アイドルでもなく、**undo イベントの終わり**である。プラグインは自分のイベントを閉じて
+  戻るので、**利用者の図面では新しい位置になっている**。外接を同じ呼び出しの中で読んで
+  位置合わせに使うなら、`ResetObject` を挟むこと（上の「置き場所は前に決める」）。
 
 ## プラグインスタイル
 
@@ -2123,6 +2142,10 @@ gSDK->ResetObject(h);                         // ここで 1 回だけ描く
    （変わるのは `styleRef` だけ）。**書き換えるのは、その後の `ResetObject` /
    `UpdateStyledObjects`**——つまりこの文書の冒頭「高さ・実体を最終的に決めるのは…」で
    言う「バウンドから作り直す」機構が、**スタイルのバウンドを見て作り直している**。
+   - **VW へ戻った後に読み直しても同じ**（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。`SetPluginObjectStyle` だけを
+     掛けて `ResetObject` を呼ばずにおくと、undo イベントを閉じても、VW へ戻って数十秒
+     置いても、記録 1000/6500・値 `HON-GOTO`/120 のままだった——**後から VW が作り直して
+     くれることはない**。
 2. **置き換わるのはレコードごと**で、解決結果だけではない。書いた
    `fOffset` 2500 が、`GetObjectStoryBound` で読み戻すと **5500**（スタイルの値）に
    なっている。**だから「書いて、読み戻して、合っていた」は保証にならない。**
@@ -2249,6 +2272,11 @@ gSDK->SetPluginStyleParameterType(hSymDef, "DialogStartElevationReference",
 4. 最後に `UpdateStyledObjects` を 1 回
 
 #### `UpdateStyledObjects` はバウンドから作り直さない——差分を足すだけで、流した回数ぶん累積する
+
+**VW へ戻った後に読み直しても同じ**（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。`ResetObject` を通さずに
+`UpdateStyledObjects` を 1 回流した材の Δz（−3000 / +2500）も、2 回流した材の累積（+5000）も、
+undo イベントを閉じた後・VW へ戻って数十秒置いた後に 1 桁も動かなかった。**ずれは一時的な
+写しではなく、そのまま図面に残る。**
 
 [issue #125](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/125) で
 **実機確認済み**（VW 2026 / mac・新規の空図面。`probes/runtime/update-styled-bound-delta/` を
@@ -2390,6 +2418,9 @@ gSDK->SetPluginStyleParameterType(hSymDef, "DialogStartElevationReference",
   **速さのために `ResetObject` を省く改変を入れない。**
 
 #### パラメータの値を配るのは `UpdateStyledObjects` だけ（`ResetObject` では配られない）
+
+**VW へ戻った後に読み直しても同じ**（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。`ResetObject` だけの材は戻った後も
+`HON-GOTO`/120 のまま）。
 
 同じ 6 本を、`UpdateStyledObjects` を流す前と後で読み比べた実測:
 
@@ -3023,6 +3054,11 @@ VectorScript の `ResetObject` は「どの型でも受ける」と書かれて�
 落ちない）が、**中の PIO までは作り直さない**。再描画は名前のとおり描き直すだけで、
 ジオメトリには触らない。**この 2 つはもう試さない。**
 
+- **VW へ戻った後に読み直しても同じ**（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。置いただけの構造材へ `RedrawRect` /
+  `ResetObject(レイヤ)` を掛けた材も、何も掛けない対照も、undo イベントを閉じた後・VW へ
+  戻って数十秒置いた後もパスの Z 差は 1（作ったまま）だった——**後から VW が作り直す
+  こともない**。`ResetObject` を呼ばずに置いた構造材は、そのまま図面に残る。
+
 ### `UpdateStyledObjects` はジオメトリの作り直しまで行う（issue #81 の (b)）——**バウンドが by-style のときは**
 
 **この節はバウンドまで by-style のスタイルの話である。** バウンドを by-instance にした
@@ -3136,6 +3172,11 @@ true / false で 1 文字も違わなかった**（6 通り × 2）。**この 2
 | いまの作り（`doRegen=true`・長さ 1 のパス → バウンド → 1 本ごとの `ResetObject`） | **23.6ms** | 作る 363.8ms ／ リセット 344.2ms ／ バウンド 0.7ms | 全件バウンドどおり |
 | **`doRegen=false` ＋ 0 長のパス** → バウンド → 1 本ごとの `ResetObject` | **11.9ms** | 作る 13.8ms ／ リセット 344.0ms | **30 / 30 バウンドどおり** |
 | `doRegen=false`（長さ 1）で全部置いてから、第 2 パスでまとめて `ResetObject` | 11.8ms | 置く 9.0ms ／ リセット 346.4ms | **全件 3001 ＝ 狂い**（Z の差 0 で作れば直る） |
+
+- 「狂い」（3001）は**VW へ戻った後に読み直しても同じ**だった（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。
+  `doRegen=false` で作って何も呼ばずに置いた材も、戻った後に作り直されてはいなかった。
+- **所要（ms）は呼び出しの中の時間だけ**で、VW へ戻った後の仕事は含まない
+  （[Investigation Techniques](Investigation%20Techniques.md)「いつ読むか」）。
 
 **水平材・斜め材**（[#109](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/109)。
 どちらも平面長 2000・**渡した Z の差は 0**）:

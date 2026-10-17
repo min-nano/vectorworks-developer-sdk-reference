@@ -148,6 +148,21 @@ VW_PROBE("layer-order", "レイヤの重ね順を実測する",
     取り消しは `DoMenuName("Undo", 0)` で起こせる（[Findings「Plug-in Interop」](../../Findings/Plug-in%20Interop.md)
     の 2）。読み戻しは**名前で引き直す**——取り消しの後の手元のハンドルは消えたものを
     指しているかもしれない（#223 の `story-layer-undo` がこの形だった）。
+- **戻った後に呼ばれるものを仕掛けない。** 殻は**走らせた直後に本体を降ろす**
+  （mac は `dlclose`。`plugin/src/ProbeMenu.cpp`）ので、プローブが OS のタイマー
+  （`CFRunLoopTimer` / `SetTimer`）・`dispatch_after`・通知手続きなどに**本体の中の関数**を
+  登録したまま戻ると、後で呼ばれたときに解放済みのコードへ飛んで **VectorWorks ごと落ちる**
+  （#245 で `dispatch_after_f` を 1.5 秒後に仕掛けて実際に落とした。クラッシュレポートの
+  メインスレッドが `_dispatch_client_callout` から所属イメージの無いアドレスへ飛んでいる）。
+  **呼び出しの中で回す**（ランループを短く刻んで回す）か、**2 回走らせて状態を一時ファイルで
+  受け渡す**。どちらも [PR #246](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/246)
+  の `probes/runtime/deferred-*/Deferred.h`（`DfPump` / `RunDeferred`。消したが履歴にある）が雛形になる。
+- **自動で開いた undo イベントは、戻る前に `EndUndoEvent()` で閉じる。** 図形を作るだけで
+  イベントは開く（[Findings「Undo」](../../Findings/Undo.md)）。閉じずに戻ると、利用者が
+  クリックしても閉じず、**MCP ブリッジが受け付けを見送って止まる**（#245 で 7 分止まった。
+  [#247](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/247)）。
+  外接やビューポートの dirty の印は**イベントの終わりで**更新されるので、閉じないと
+  利用者の図面と違う値を読み続けることにもなる（[Findings「Investigation Techniques」](../../Findings/Investigation%20Techniques.md)「いつ読むか」）。
 - **落ちてもよいが、落ちる前に書く。** `probe.log()` は 1 行ごとにファイルへ flush
   するので、VectorWorks ごと落ちてもそこまでの行は残る。**知りたいことは、それを
   引き起こす呼び出しの前にログへ出しておく。** 落ちた回のログも、次にメニューを
