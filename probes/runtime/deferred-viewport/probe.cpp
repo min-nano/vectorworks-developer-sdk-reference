@@ -254,6 +254,10 @@ namespace
 		const WorldPt pt1(kVpLineX0, kVpLineY);
 		const WorldPt pt2(kVpLineX1, kVpLineY);
 		const WorldPt pt3((kVpLineX0 + kVpLineX1) * 0.5, kVpLineY - kVpPt3Off);
+		// 旧プローブ（#202）はシートレイヤがアクティブな状態で作っていた（CreateLayer で最後に
+		// 作ったのがシート）。箱を作ったデザインレイヤがアクティブなままだと中身が入らなかった
+		// ので、それに合わせる（#245）。
+		gSDK->SetCurrentLayer(sheet);
 		MCObjectHandle vp =
 			gSDK->CreateSectionViewport(pt1, pt2, pt3, 0.0, kVpStartH, kVpEndH, sheet);
 		if (vp == nullptr)
@@ -940,5 +944,5 @@ VW_PROBE("deferred-viewport", "ビューポート系の遅延の測り直し",
 		 "断面・注釈外接・図面ラベルを T0/T1/T2 で")
 {
 	const std::vector<DeferredCase> cases = {VpCase1(), VpCase2(), VpCase3(), VpCase4(), VpCase5()};
-	RunDeferred(probe, "deferred-viewport", cases, true);
+	RunDeferred(probe, "deferred-viewport", cases, true, true);
 }

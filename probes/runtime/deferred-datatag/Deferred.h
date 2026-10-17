@@ -32,6 +32,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -251,6 +252,56 @@ namespace
 		return false;
 	}
 
+	// 利用者の既定のテンプレート（⌘N が使うもの）の見込みの場所。無ければ空。
+	std::string DfDefaultTemplate()
+	{
+#if GS_MAC
+		const char* home = std::getenv("HOME");
+		if (home == nullptr)
+			return "";
+		const std::filesystem::path p = std::filesystem::path(home) /
+										"Library/Application Support/Vectorworks/2026/Libraries/"
+										"Defaults/Templates/Default.sta";
+#else
+		const char* appdata = std::getenv("APPDATA");
+		if (appdata == nullptr)
+			return "";
+		const std::filesystem::path p = std::filesystem::path(appdata) /
+										"Nemetschek/Vectorworks/2026/Libraries/Defaults/Templates/"
+										"Default.sta";
+#endif
+		std::error_code ec;
+		return std::filesystem::exists(p, ec) ? p.string() : "";
+	}
+
+	// 自分用の図面を開く。fromTemplate なら既定のテンプレートから（.sta を渡すと無題の新規に
+	// なる。Findings「Documents」）。OpenDocumentPath(nullptr) で開いた図面はテンプレートの
+	// 資源を持たない——図面ラベルの既定レイアウトに文字が無い等（#245）。
+	bool DfOpenOwnDocument(vwprobe::Report& probe, bool fromTemplate)
+	{
+		const size_t before = DfOpenFiles().size();
+		const std::string tpl = fromTemplate ? DfDefaultTemplate() : "";
+		if (!tpl.empty())
+		{
+			VectorWorks::Filing::IFileIdentifierPtr fileID(VectorWorks::Filing::IID_FileIdentifier);
+			if (fileID && fileID->Set(TXString(tpl.c_str())) == kVCOMError_NoError)
+				(void)gSDK->OpenDocumentPath(fileID, false);
+			probe.log("自分用の図面をテンプレートから開く: " + tpl);
+		}
+		else
+		{
+			if (fromTemplate)
+				probe.log("既定のテンプレートが見つからないので、空の図面を開く");
+			(void)gSDK->OpenDocumentPath(nullptr, false);
+		}
+		if (DfOpenFiles().size() != before + 1)
+		{
+			probe.fail("自分用の新規図面を開けなかった");
+			return false;
+		}
+		return true;
+	}
+
 	// 入れ子のランループを ms ミリ秒ぶん回す（mac は短く刻んで何度も呼ぶ——1 回を長く
 	// 取ると即座に戻る。Findings「Timers and Notifications」4 の 5）。
 	void DfPump(int ms)
@@ -311,20 +362,16 @@ namespace
 	// 書くと、まだ一度もイベントループを通っていない図面になる——ビューポートの描画などが
 	// それで変わるかを切り分けるため。#245）。
 	void RunDeferred(vwprobe::Report& probe, const std::string& slug,
-					 const std::vector<DeferredCase>& cases, bool prepareFirst = false)
+					 const std::vector<DeferredCase>& cases, bool prepareFirst = false,
+					 bool fromTemplate = false)
 	{
 		DfState st;
 		const bool loaded = DfLoad(slug, st);
 		if (!loaded && prepareFirst)
 		{
 			// ===================== 準備の回 =====================
-			const size_t before = DfOpenFiles().size();
-			(void)gSDK->OpenDocumentPath(nullptr, false);
-			if (DfOpenFiles().size() != before + 1)
-			{
-				probe.fail("自分用の新規図面を開けなかった");
+			if (!DfOpenOwnDocument(probe, fromTemplate))
 				return;
-			}
 			st.fileRef = DfActiveRef();
 			st.stage = "prepared";
 			st.startedAt = DfNow();
@@ -356,13 +403,8 @@ namespace
 			}
 			else
 			{
-				const size_t before = DfOpenFiles().size();
-				(void)gSDK->OpenDocumentPath(nullptr, false);
-				if (DfOpenFiles().size() != before + 1)
-				{
-					probe.fail("自分用の新規図面を開けなかった");
+				if (!DfOpenOwnDocument(probe, fromTemplate))
 					return;
-				}
 				st.fileRef = DfActiveRef();
 				probe.log("自分用の図面 fileRef=" + std::to_string(st.fileRef));
 			}

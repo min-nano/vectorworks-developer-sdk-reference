@@ -712,5 +712,5 @@ VW_PROBE("deferred-dimension", "寸法: 書いた直後／ランループ後／�
 					 [](vwprobe::Report& p) { DmSetupAssociation(p); },
 					 [] { return DmMeasureAssociation(); }});
 
-	RunDeferred(probe, "deferred-dimension", cases);
+	RunDeferred(probe, "deferred-dimension", cases, false, true);
 }
