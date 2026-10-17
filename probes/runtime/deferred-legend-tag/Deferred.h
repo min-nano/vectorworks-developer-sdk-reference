@@ -1,37 +1,29 @@
 //
 //	probes/runtime/<slug>/Deferred.h
 //
-//	[issue #245] 「書いた直後に同じ呼び出しの中で読む」と「Vectorworks
-//へ制御を返した後に 	読む」を同じ図形で比べるための、2
-//回走らせる仕立て。**同じファイルを各プローブの
+//	[issue #245] 「書いた直後に同じ呼び出しの中で読む」と「Vectorworks へ制御を返した後に
+//	読む」を同じ図形で比べるための、2 回走らせる仕立て。**同じファイルを各プローブの
 //	ディレクトリへ写して使う**（公開ビルドは PR の殻のヘッダを持たないので、
-//	probes/runtime/README.md「同じ PR で足した殻のヘッダを include
-//しない」）。
+//	probes/runtime/README.md「同じ PR で足した殻のヘッダを include しない」）。
 //
 //	1 回目（状態ファイルが無いとき）:
-//	  1.
-//自分用の新規図面を開く（ブリッジが開いた図面ではないので、ブリッジの後始末の
+//	  1. 自分用の新規図面を開く（ブリッジが開いた図面ではないので、ブリッジの後始末の
 //	     保存が掛からない——読み直しに保存が混ざらない）。
-//	  2. 各ケースの setup() で書き、すぐに measure() で読む ………………
-//T0（同じ呼び出しの中）
-//	  3. 呼び出しの中でランループを 1.5 秒回してから、もう一度読む ………
-//T1（入れ子のランループ） 	  3b. 自動で開いた undo イベントを EndUndoEvent
-//で閉じて、もう一度読む … Te
-//	  4. 何もせずに戻る。**戻った後に呼ばれるもの（OS
-//のタイマー・dispatch・通知）を 	     仕掛けてはいけない**——殻は走らせた直後に本体を
-//dlclose するので、後から呼ばれた 	     コールバックは解放済みのコードへ飛んで VW
-//ごと落ちる（実際に落とした。#245）。 	     ブリッジで回すときは、1 回目の後に
-//vw_cleanup でブリッジの図面を閉じる——
+//	  2. 各ケースの setup() で書き、すぐに measure() で読む ……………… T0（同じ呼び出しの中）
+//	  3. 呼び出しの中でランループを 1.5 秒回してから、もう一度読む ……… T1（入れ子のランループ）
+//	  3b. 自動で開いた undo イベントを EndUndoEvent で閉じて、もう一度読む … Te
+//	  4. 何もせずに戻る。**戻った後に呼ばれるもの（OS のタイマー・dispatch・通知）を
+//	     仕掛けてはいけない**——殻は走らせた直後に本体を dlclose するので、後から呼ばれた
+//	     コールバックは解放済みのコードへ飛んで VW ごと落ちる（実際に落とした。#245）。
+//	     ブリッジで回すときは、1 回目の後に vw_cleanup でブリッジの図面を閉じる——
 //	     ブリッジは走らせた後に自分の図面を前へ出して保存するので、閉じれば自分の図面が
 //	     前に残る（前に出ていない図面は描かれない）。
 //	2 回目（状態ファイルがあるとき）:
-//	  5. 自分の図面へ切り替えて読む ……………………………………………… T2（VW
-//のイベントループの後）
-//	  6. T0 / T1 / T2
-//を並べて出し、自分の図面を閉じて（保存しない）状態ファイルを消す。
+//	  5. 自分の図面へ切り替えて読む ……………………………………………… T2（VW のイベントループの後）
+//	  6. T0 / T1 / T2 を並べて出し、自分の図面を閉じて（保存しない）状態ファイルを消す。
 //
-//	図形は名前で引き直す（ハンドルを持ち越さない）。名前は 63
-//文字で黙って切られるので 	短く付ける（Findings「Investigation Techniques」）。
+//	図形は名前で引き直す（ハンドルを持ち越さない）。名前は 63 文字で黙って切られるので
+//	短く付ける（Findings「Investigation Techniques」）。
 //
 
 #pragma once
@@ -103,8 +95,7 @@ namespace
 			probe.fail("名前を付ける相手が nil: " + name);
 			return false;
 		}
-		(void)gSDK->SetObjectName(h,
-								  TXString(name.c_str())); // 戻り値は当てにならない
+		(void)gSDK->SetObjectName(h, TXString(name.c_str())); // 戻り値は当てにならない
 		if (DfName(h) != name)
 		{
 			probe.fail("名前が付かない: " + name + " → " + DfName(h));
@@ -169,8 +160,7 @@ namespace
 	struct DfState
 	{
 		Sint32 fileRef = 0;
-		std::string stage; // "prepared"（図面を開いただけ）か "written"（書いて
-						   // T0〜Te を読んだ）
+		std::string stage; // "prepared"（図面を開いただけ）か "written"（書いて T0〜Te を読んだ）
 		std::string startedAt;
 		std::map<std::string, std::string> t0;
 		std::map<std::string, std::string> t1;
@@ -284,9 +274,8 @@ namespace
 		return std::filesystem::exists(p, ec) ? p.string() : "";
 	}
 
-	// 自分用の図面を開く。fromTemplate なら既定のテンプレートから（.sta
-	// を渡すと無題の新規に なる。Findings「Documents」）。OpenDocumentPath(nullptr)
-	// で開いた図面はテンプレートの
+	// 自分用の図面を開く。fromTemplate なら既定のテンプレートから（.sta を渡すと無題の新規に
+	// なる。Findings「Documents」）。OpenDocumentPath(nullptr) で開いた図面はテンプレートの
 	// 資源を持たない——図面ラベルの既定レイアウトに文字が無い等（#245）。
 	bool DfOpenOwnDocument(vwprobe::Report& probe, bool fromTemplate)
 	{
@@ -313,8 +302,8 @@ namespace
 		return true;
 	}
 
-	// 入れ子のランループを ms ミリ秒ぶん回す（mac は短く刻んで何度も呼ぶ——1
-	// 回を長く 取ると即座に戻る。Findings「Timers and Notifications」4 の 5）。
+	// 入れ子のランループを ms ミリ秒ぶん回す（mac は短く刻んで何度も呼ぶ——1 回を長く
+	// 取ると即座に戻る。Findings「Timers and Notifications」4 の 5）。
 	void DfPump(int ms)
 	{
 		const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
@@ -335,8 +324,8 @@ namespace
 	}
 
 	// いまどの時点を読んでいるか（0=T0 / 1=T1 / 2=T2）。T2 でだけ書き込みを伴う読み
-	// （例: データタグの更新手順を掛け直してから読む）をしたいケースのため。T0 / T1
-	// で 書くと、後の時点の読みが「VW が自分で変えたのか」を表さなくなる。
+	// （例: データタグの更新手順を掛け直してから読む）をしたいケースのため。T0 / T1 で
+	// 書くと、後の時点の読みが「VW が自分で変えたのか」を表さなくなる。
 	int& DfPhase()
 	{
 		static int sPhase = 0;
@@ -369,8 +358,7 @@ namespace
 			probe.log("  " + tag + " " + k + " = " + v);
 	}
 
-	// prepareFirst=true なら「図面を開くだけ」の回を先に 1
-	// 回挟む（開いた同じ呼び出しの中で
+	// prepareFirst=true なら「図面を開くだけ」の回を先に 1 回挟む（開いた同じ呼び出しの中で
 	// 書くと、まだ一度もイベントループを通っていない図面になる——ビューポートの描画などが
 	// それで変わるかを切り分けるため。#245）。
 	void RunDeferred(vwprobe::Report& probe, const std::string& slug,
@@ -396,8 +384,8 @@ namespace
 		if (!loaded || st.stage == "prepared")
 		{
 			// ===================== 1 回目 =====================
-			probe.log("【1 回目】書いて、同じ呼び出しの中で読む（T0）→ "
-					  "ランループを回して読む（T1）");
+			probe.log(
+				"【1 回目】書いて、同じ呼び出しの中で読む（T0）→ ランループを回して読む（T1）");
 			probe.log("building(走り出し)=" + DfBool(gSDK->IsCurrentlyBuildingAnUndoEvent()));
 			if (loaded)
 			{
@@ -405,8 +393,8 @@ namespace
 				if (!DfIsOpen(st.fileRef))
 				{
 					std::filesystem::remove(DfStatePath(slug), ec);
-					probe.fail("準備の回の図面が見つからない。状態を消したので、次は準備か"
-							   "らやり直し");
+					probe.fail(
+						"準備の回の図面が見つからない。状態を消したので、次は準備からやり直し");
 					return;
 				}
 				(void)gSDK->SwitchToOpenFile(st.fileRef);
@@ -479,11 +467,9 @@ namespace
 			}
 			probe.log("building(T1 の後)=" + DfBool(gSDK->IsCurrentlyBuildingAnUndoEvent()));
 
-			// **自動で開いた undo
-			// イベントを閉じて戻る**（実プラグインは自分のイベントを閉じて
+			// **自動で開いた undo イベントを閉じて戻る**（実プラグインは自分のイベントを閉じて
 			// 戻る。閉じずに戻ると、利用者が何か操作するまで開いたまま残り、その間ブリッジが
-			// 受け付けを見送って止まる——#245 で 7
-			// 分止まった）。閉じた直後にも読む（Te）。
+			// 受け付けを見送って止まる——#245 で 7 分止まった）。閉じた直後にも読む（Te）。
 			if (gSDK->IsCurrentlyBuildingAnUndoEvent())
 				probe.log("EndUndoEvent()=" + DfBool(gSDK->EndUndoEvent()));
 			probe.log("building(閉じた後)=" + DfBool(gSDK->IsCurrentlyBuildingAnUndoEvent()));
@@ -507,8 +493,7 @@ namespace
 			DfSave(slug, st);
 			probe.log("状態を保存した: " + DfStatePath(slug).string());
 			probe.log("→ 何秒か置いてから、**この図面を前にしたまま**もう一度走らせる。"
-					  "ブリッジなら vw_cleanup（ブリッジの図面を閉じる）→ "
-					  "new_document=false。");
+					  "ブリッジなら vw_cleanup（ブリッジの図面を閉じる）→ new_document=false。");
 			return;
 		}
 
