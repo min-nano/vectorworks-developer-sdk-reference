@@ -408,11 +408,21 @@
   殻は走らせた直後に本体を降ろすので、VW ごと落ちる（#245 で落とした。
   [probes/runtime/README.md](../probes/runtime/README.md)）。
 - **`OpenDocumentPath(nullptr)` で開いた図面はテンプレートの資源を持たない。** 利用者が
-  ⌘N で作る図面と違い、図面ラベルの既定レイアウトに文字が無く、`AssociateLinearDimension`
-  も関連付けを作らなかった（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)）。
+  ⌘N で作る図面と違い、図面ラベルのツールにスタイルが無く（既定レイアウトに文字が無い）、
+  「寸法」クラスも文字スタイルを持たない。**縮尺は 1/1 で用紙も小さい**ので、画面に見えて
+  いる範囲が狭い——`AssociateLinearDimension` が成立しなかったのは資源のせいではなく、
+  寸法を表示範囲の外に置いたからだった（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。
+  [Dimensions](Dimensions.md)「関連付くのは表示範囲の中だけ」）。
   旧調査を再現するときは、**同じ出どころの図面**（`.sta` を `OpenDocumentPath` へ渡す。
   [Documents](Documents.md)）で走らせる。MCP ブリッジの `vw_run_probe` が開く新規図面も
   `OpenDocumentPath(nullptr)` である。
+- **SDK の呼び出しが、表示・選択・アクティブレイヤといった「画面の状態」を黙って読む
+  ことがある。** #249 で 2 つ踏んだ——図面ラベルは**選択中のビューポート**の図面タイトルを
+  持って生まれ（[Drawing Labels](Drawing%20Labels.md)）、`AssociateLinearDimension` は
+  **表示範囲の外**の寸法を関連付けない（[Dimensions](Dimensions.md)）。しかも
+  **`CreateViewport` は作ったビューポートを選択したまま残す**ので、前の手順が後の手順の
+  結果を変える。旧調査と結果が食い違ったら、図面の出どころより先に**選択と表示**を疑い、
+  プローブでは `DeselectAll()` と表示の中心・縮尺をログに出しておく。
 - **旧調査を測り直すときは、まず T0 が旧調査と同じ値になることを確かめる。** 場面の作り方が
   少し違うだけで、断面ビューポートに中身が入らない（[#248](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/248)）・
   図面ラベルが文字を描かない、といった食い違いが T0 の時点で出た。**T0 が合わないまま
