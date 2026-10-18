@@ -1015,6 +1015,17 @@ namespace vwprobe
 		if (sTimer != nullptr)
 			CFRunLoopAddTimer(CFRunLoopGetMain(), sTimer, kCFRunLoopDefaultMode);
 #else
+		// **先に殻を留める**（issue #253）。Windows の VW は起動時に殻を読み込んで -1・-3 を
+		// 呼んだ後、-2 を送らずに一度降ろし、別の番地へ読み込み直して -4・-5 を呼ぶ。留めずに
+		// タイマーを作ると、最初の読み込みのタイマーが**もう無い殻の OnClock の番地**を呼び続け、
+		// そこへ後から入った別のモジュールのコードを踏んで起動中に落ちる（Findings
+		// 「Timers and Notifications」§4）。留めれば VW の FreeLibrary では降りず、番地が生き続ける。
+		// 留められなければ時計を動かさない（ブリッジが使えないだけで、落ちるよりよい）。
+		constexpr DWORD kPinSelf =
+			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
+		HMODULE self = nullptr;
+		if (!GetModuleHandleExW(kPinSelf, reinterpret_cast<LPCWSTR>(&OnClock), &self))
+			return;
 		// ウィンドウを持たないタイマー。WM_TIMER は Vectorworks のメッセージポンプが配る。
 		(void)SetTimer(nullptr, 0, kClockIntervalMs, &OnClock);
 #endif

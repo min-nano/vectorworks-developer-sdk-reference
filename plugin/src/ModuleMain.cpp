@@ -25,6 +25,10 @@
 #include <fstream>
 #include <system_error>
 
+#if GS_MAC
+#	include <dlfcn.h>
+#endif
+
 // Vectorworks が実行時にこのプラグインのリソース（.vwr）を引くときの識別子。
 // パッケージされる .vwr の基底名と一致していなければならない（BuildConfig.h）。
 const char* DefaultPluginVWRIdentifier()
@@ -40,8 +44,27 @@ const char* DefaultPluginVWRIdentifier()
 // 一時ディレクトリに頼み札（VwSdkProbes-module-actions.request）を置いている間だけ、
 // 1 行ずつ書いて閉じる。札が無ければ exists を 1 度見るだけで何もしない。
 // ここでは gSDK を呼ばない（-2 のときに生きている保証が無い）。
+// 殻が読み込まれている番地も書く——Windows の VW は起動時に殻を一度降ろして読み込み直す
+// ので、番地が変わればそれと分かる（issue #253）。
 namespace
 {
+	const void* ModuleBase()
+	{
+#if GS_MAC
+		Dl_info info = {};
+		if (dladdr(reinterpret_cast<const void*>(&ModuleBase), &info) == 0)
+			return nullptr;
+		return info.dli_fbase;
+#else
+		constexpr DWORD kLookUp =
+			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+		HMODULE self = nullptr;
+		if (!GetModuleHandleExW(kLookUp, reinterpret_cast<LPCWSTR>(&ModuleBase), &self))
+			return nullptr;
+		return self;
+#endif
+	}
+
 	void RecordModuleAction(Sint32 action)
 	{
 		std::error_code ec;
@@ -54,7 +77,8 @@ namespace
 		const long long wallMs = (long long)std::chrono::duration_cast<std::chrono::milliseconds>(
 									 std::chrono::system_clock::now().time_since_epoch())
 									 .count();
-		out << "module_main action=" << action << " wall_ms=" << wallMs << "\n";
+		out << "module_main action=" << action << " wall_ms=" << wallMs;
+		out << " base=" << ModuleBase() << "\n";
 	}
 } // namespace
 

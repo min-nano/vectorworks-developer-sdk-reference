@@ -66,6 +66,7 @@
 namespace vwprobe
 {
 	// **殻の時計を動かす。** plugin_module_main が呼ぶ（何度呼んでも 1 度しか動かさない）。
-	// 最初の刻みは起動の 10 秒後。
+	// 最初の刻みは起動の 10 秒後。Windows では先に殻を留める（VW が起動時に一度降ろして
+	// 読み込み直すため。issue #253）。
 	void StartMcpBridgeClock();
 } // namespace vwprobe
