@@ -1003,13 +1003,17 @@ namespace vwprobe
 #else
 		// 【診断 #253】頼み札（%TEMP%\VwSdkProbes-clock-trace.request）が起動時にあれば、刻みの
 		// 出入りを %TEMP%\VwSdkProbes-clock-trace.txt へ書く。札の 1 語目で振る舞いを選ぶ:
-		//   trace … 書くだけ / guard … SEH で包んで例外を書く / noop … 刻みで何もしない
+		//   trace … 書くだけ / guard … SEH で包んで例外を書く / noop … 刻みで何もしない（書かない）
+		//   none … タイマーを作らない / window … メッセージ専用ウィンドウのタイマーで働く（書かない）
+		// どの語でも、起動時に選んだ振る舞いを 1 行だけ書く。
 		enum class ClockTraceMode
 		{
 			Off,
 			Trace,
 			Guard,
-			Noop
+			Noop,
+			None,
+			Window
 		};
 		ClockTraceMode gTraceMode = ClockTraceMode::Off;
 		std::filesystem::path gTracePath;
@@ -1030,6 +1034,10 @@ namespace vwprobe
 				gTraceMode = ClockTraceMode::Guard;
 			if (word == "noop")
 				gTraceMode = ClockTraceMode::Noop;
+			if (word == "none")
+				gTraceMode = ClockTraceMode::None;
+			if (word == "window")
+				gTraceMode = ClockTraceMode::Window;
 			gTracePath = dir / "VwSdkProbes-clock-trace.txt";
 		}
 
@@ -1077,10 +1085,11 @@ namespace vwprobe
 			switch (gTraceMode)
 			{
 			case ClockTraceMode::Off:
+			case ClockTraceMode::Window:
 				ClockTick();
 				return;
 			case ClockTraceMode::Noop:
-				ClockTraceLine("noop", 0, 0, nullptr);
+			case ClockTraceMode::None:
 				return;
 			case ClockTraceMode::Trace:
 				ClockTraceLine("enter", gClockPhase, 0, nullptr);
@@ -1097,6 +1106,38 @@ namespace vwprobe
 					ClockTraceLine("seh", gClockPhase, gSehCode, gSehAddr);
 				return;
 			}
+		}
+
+		LRESULT CALLBACK ClockWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+		{
+			if (msg == WM_TIMER)
+			{
+				ClockTick();
+				return 0;
+			}
+			return DefWindowProcW(hwnd, msg, wParam, lParam);
+		}
+
+		// メッセージ専用ウィンドウを作り、そこへタイマーを付ける。作れなければ false。
+		bool StartWindowClock()
+		{
+			HMODULE self = nullptr;
+			if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+										GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+									reinterpret_cast<LPCWSTR>(&ClockWindowProc), &self))
+				return false;
+			WNDCLASSEXW wc = {};
+			wc.cbSize = sizeof(wc);
+			wc.lpfnWndProc = &ClockWindowProc;
+			wc.hInstance = self;
+			wc.lpszClassName = L"VwSdkProbesClock";
+			if (RegisterClassExW(&wc) == 0)
+				return false;
+			HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
+										nullptr, self, nullptr);
+			if (hwnd == nullptr)
+				return false;
+			return SetTimer(hwnd, 1, kClockIntervalMs, nullptr) != 0;
 		}
 #endif
 	} // namespace
@@ -1120,6 +1161,15 @@ namespace vwprobe
 #else
 		// ウィンドウを持たないタイマー。WM_TIMER は Vectorworks のメッセージポンプが配る。
 		LoadClockTraceMode();
+		if (gTraceMode != ClockTraceMode::Off)
+			ClockTraceLine("mode", static_cast<int>(gTraceMode), 0, nullptr);
+		if (gTraceMode == ClockTraceMode::None)
+			return;
+		if (gTraceMode == ClockTraceMode::Window)
+		{
+			ClockTraceLine(StartWindowClock() ? "window-ok" : "window-failed", 0, 0, nullptr);
+			return;
+		}
 		(void)SetTimer(nullptr, 0, kClockIntervalMs, &OnClock);
 #endif
 	}
