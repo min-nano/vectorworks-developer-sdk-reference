@@ -22,7 +22,7 @@ labels: investigation
 
 - [ ] `sdk-grep` / `sdk-ls`（ヘッダで答えが出る）
 - [ ] `compile`（probes/ のスニペットで構文が通るか）
-- [ ] 実機確認が必要（ローカルの VectorWorks）
+- [ ] 実機確認が必要（ローカルの VectorWorks。プローブを MCP ブリッジで走らせてログを受け取る）
 
 ## 期待する成果
 

@@ -160,16 +160,16 @@ namespace vwprobe
 		constexpr const char* kUpdateItem = "＊ 新しいプローブビルドを確認して入れ替える…";
 
 		// ピッカーの 2 番目。**結果を PR へ自動で投稿するかの設定**（Feedback.h）。
-		// ふだんは触らない——初めて PR 由来のプローブを走らせるときに 1 度だけ尋ねられ、
-		// あとは黙って投稿される。ここは「断ったあとで気が変わった」「トークンの期限が
-		// 切れた」ときの入り口で、**メニュー項目を増やさずに済ませる**ための置き場所。
+		// **既定は投稿しない**——実機確認のログは MCP ブリッジで Claude が直に受け取る
+		// （CLAUDE.md「ローカルセッションから実機確認を回す」）。投稿を入れるのも、
+		// トークンの期限が切れたときに入れ直すのもここだけで、**メニュー項目を増やさずに
+		// 済ませる**ための置き場所。
 		constexpr const char* kFeedbackItem = "＊ 結果の自動投稿を設定…";
 
 		// ピッカーの 3 番目。**一覧に挙がっているプローブを、上から順に全部走らせる**。
 		//
-		// 【なぜ要るか】結果は PR へ自動で投稿されるようになった（Feedback.h）ので、
-		// 実機でする操作は「走らせる」だけになった。だとすれば**確かめたいものを 1 件ずつ
-		// 選び直す理由が無い**——ピッカーを開き直す回数が、そのまま検証の手間になる。
+		// 【なぜ要るか】**確かめたいものを 1 件ずつ選び直す理由が無い**——ピッカーを開き
+		// 直す回数が、そのまま検証の手間になる。
 		// ここを選べば、一覧のプローブが順に走り、**結果は最後に 1 枚だけ**出る。
 		//
 		// メニュー項目でもボタンでもなくピッカーの項目にしてあるのは、入れ替え・設定と
@@ -734,26 +734,25 @@ namespace vwprobe
 		// 一括実行では群が変わるまで読み直さない。**降ろすのは呼び出し側**（ダイアログを
 		// 出す前に必ず降ろす）。
 		//
-		// interactive が false なのは MCP ブリッジから走らせるとき（McpBridge.h）——**何も
-		// 尋ねない**。allowPost が false なら投稿しない（下ごしらえもしない）。
+		// allowPost が false なら投稿しない（下ごしらえもしない）。MCP ブリッジから走らせる
+		// ときがそれで、ログは呼び出し側へ直に返る（ProbeMenu.h の RunProbesQuietly）。
 		OneResult RunOne(PayloadSession& session, const Choice& choice, const catalog::Catalog& cat,
-						 bool interactive = true, bool allowPost = true)
+						 bool allowPost = true)
 		{
 			if (!choice.available)
 				return Blocked(choice, "この本体は入っていません（" + choice.group.file + "）",
 							   "その群のビルドが通らなかったか、入れ替えが途中で止まって"
 							   "います。\n他の群のプローブはそのまま選べます。");
 
-			// 1. **走らせる前に、投稿の下ごしらえを済ませる。** 尋ねることがあるとしたら
-			//    ここだけで（初回の 1 度きり）、走らせたあとには何も尋ねない
-			//    （Feedback.h「走ったあとは何も尋ねない」）。一括実行でも同じ——2 件目
-			//    からは答えを覚えているので、もう尋ねられない。
+			// 1. **走らせる前に、投稿の下ごしらえを済ませる。** 投稿は既定で切で、利用者が
+			//    ピッカーの設定項目で入れたときだけ行う（Feedback.h「既定は投稿しない」）。
+			//    尋ねることがあるとしたらここだけ（入れたのにトークンが無いとき）で、走らせた
+			//    あとには何も尋ねない（Feedback.h「走ったあとは何も尋ねない」）。
 			std::string feedbackNote;
 			std::string feedbackPr = choice.group.pr;
 			std::string feedbackIssue = choice.probe.issue;
-			const bool posting =
-				allowPost && PrepareFeedback(feedbackPr, feedbackIssue, choice.group.branch,
-											 feedbackNote, interactive);
+			const bool posting = allowPost && PrepareFeedback(feedbackPr, feedbackIssue,
+															  choice.group.branch, feedbackNote);
 
 			// 2. **その群の本体を用意する**（すでに読んでいればそのまま使う）。
 			std::string loadError;
@@ -986,7 +985,7 @@ namespace vwprobe
 		return out;
 	}
 
-	std::vector<QuietRun> RunProbesQuietly(const std::vector<QuietTarget>& which, bool post)
+	std::vector<QuietRun> RunProbesQuietly(const std::vector<QuietTarget>& which)
 	{
 		std::vector<QuietRun> results;
 		catalog::Catalog cat;
@@ -1011,19 +1010,15 @@ namespace vwprobe
 				results.push_back(run);
 				continue;
 			}
-			const OneResult one = RunOne(session, *found, cat, /*interactive*/ false, post);
+			const OneResult one = RunOne(session, *found, cat, /*allowPost*/ false);
 			run.ran = one.ran;
 			run.failed = one.failed;
-			run.posted = one.posted;
-			run.postFailed = one.postFailed;
 			run.seconds = one.seconds;
 			run.outcome = one.outcome;
 			run.advice = one.advice;
-			run.note = one.note;
 			run.log = one.log;
 			run.logPath = one.logPath;
 			run.body = one.body;
-			run.postLines = one.postLines;
 			results.push_back(run);
 		}
 		session.release();

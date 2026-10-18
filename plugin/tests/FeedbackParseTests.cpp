@@ -99,7 +99,7 @@ int main()
 	// --- 設定（送ってよいか）-------------------------------------------------
 	{
 		Settings settings;
-		checkTrue(settings.consent == Consent::Unset, "既定はまだ尋ねていない");
+		checkTrue(settings.consent == Consent::Unset, "既定は決めていない（＝投稿しない）");
 
 		settings.consent = Consent::Send;
 		settings.repo = "min-nano/private";
@@ -116,6 +116,14 @@ int main()
 		checkTrue(ParseSettings("consent=maybe\n").consent == Consent::Unset,
 				  "知らない値は既定へ倒す");
 		checkTrue(ParseSettings("").consent == Consent::Unset, "空のファイルは既定");
+
+		// **初回に尋ねていた頃（version=1）の send は引き継がない**（既定を切に変えたため）。
+		checkTrue(ParseSettings("version=1\nconsent=send\n").consent == Consent::Unset,
+				  "version=1 の送る設定は既定へ倒す");
+		checkTrue(ParseSettings("consent=send\n").consent == Consent::Unset,
+				  "版の無い送る設定も既定へ倒す");
+		checkTrue(ParseSettings("version=1\nconsent=never\n").consent == Consent::Never,
+				  "version=1 の断った設定はそのまま");
 	}
 
 	// --- コメント本文 --------------------------------------------------------

@@ -31,7 +31,6 @@
 #include "BridgeJson.h"
 #include "BridgeParse.h"
 #include "BridgeSpool.h"
-#include "Feedback.h"
 #include "PayloadHost.h"
 #include "ProbeMenu.h"
 #include "Update.h"
@@ -441,22 +440,16 @@ namespace vwprobe
 			value.set("log_bytes", Json::integer(static_cast<long long>(run.log.size())));
 			value.set("log_truncated", Json::boolean(run.log.size() > maxBytes));
 			value.set("log", Json::string(bridge::KeepTail(run.log, maxBytes)));
-			value.set("posted", Json::boolean(run.posted));
-			if (!run.postLines.empty())
-				value.set("post", Strings(run.postLines));
-			if (!run.note.empty())
-				value.set("note", Json::string(run.note));
 			return value;
 		}
 
-		// 走らせる前の下ごしらえ（図面の用意と、前の走行の残りの投稿）。notes に経過を積む。
+		// 走らせる前の下ごしらえ（図面の用意）。notes に経過を積む。
+		//
+		// **前の走行の残り（Feedback.h「落ちても拾う」）はここでは投稿しない。** ブリッジから
+		// 走らせた周は投稿しない（ログは呼び出し側へ直に返る。RunProbesQuietly）ので、控えが
+		// 残っているとしたらメニューから走らせた周のもの——それはメニューを開いたときに拾う。
 		bool PrepareRun(const Json& args, std::vector<std::string>& notes, std::string& error)
 		{
-			// **前の走行の残りを先に拾う**（プローブが Vectorworks ごと落としていたら、控えが
-			// 残っている。メニューを開いたときと同じ。Feedback.h「落ちても拾う」）。
-			for (const std::string& line : PostLeftovers())
-				notes.push_back(line);
-
 			if (BoolArg(args, "new_document", true))
 				return OpenFreshDocument(notes, error);
 			if (gSDK->GetCurrentLayer() == nullptr)
@@ -472,8 +465,7 @@ namespace vwprobe
 						std::vector<std::string>& notes)
 		{
 			const std::size_t maxBytes = MaxBytesArg(args);
-			const std::vector<QuietRun> runs =
-				RunProbesQuietly(targets, BoolArg(args, "post", true));
+			const std::vector<QuietRun> runs = RunProbesQuietly(targets);
 			const std::string saved = SaveOwnedDocuments();
 			if (!saved.empty())
 				notes.push_back(saved);
@@ -684,9 +676,8 @@ namespace vwprobe
 		constexpr int kUpdateTimeoutSeconds = 600;
 		constexpr int kRestartTimeoutSeconds = 60;
 
-#define VW_RUN_ARGS                                                                                                                                                                                                        \
-	R"("post":{"type":"boolean","description":"結果をプローブの出所（PR、無ければ issue）へ投稿するか（既定 true。自動投稿をメニューで設定済みのときだけ投稿する）"},)" \
-	R"("new_document":{"type":"boolean","description":"新規の空図面を開いてから走らせるか（既定 true。前にブリッジが開いた図面は保存せずに閉じる）"},)"                         \
+#define VW_RUN_ARGS                                                                                                                                                                                \
+	R"("new_document":{"type":"boolean","description":"新規の空図面を開いてから走らせるか（既定 true。前にブリッジが開いた図面は保存せずに閉じる）"},)" \
 	R"("max_bytes":{"type":"integer","description":"1 件のログを返す上限（バイト。既定 60000。超えたら古いほうを削る）"})"
 
 		const auto kTools = std::to_array<Tool>({
