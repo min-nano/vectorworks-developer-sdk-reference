@@ -41,11 +41,9 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
-#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
-#include <fstream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -962,9 +960,6 @@ namespace vwprobe
 			return sStartedAt;
 		}
 
-		// 【診断 #253】刻みのどこまで進んだか（1 門・2 メニュー・3 undo・4 受け付け・9 終わり）。
-		int gClockPhase = 0;
-
 		// NOLINTBEGIN(bugprone-empty-catch): OS のタイマーのコールバックへ例外を漏らさない。
 		// 受け付けの失敗は応答に載る。
 		void ClockTick()
@@ -974,19 +969,14 @@ namespace vwprobe
 				return; // 入れ子で入らない（走らせている最中にイベントが処理されうる）
 			try
 			{
-				gClockPhase = 1;
 				if (gSDK == nullptr || NowSeconds() < ClockStartedAt() + kClockFirstTickSeconds)
 					return;
-				gClockPhase = 2;
 				if (ProbeMenuActive())
 					return;
-				gClockPhase = 3;
 				if (gSDK->IsCurrentlyBuildingAnUndoEvent())
 					return;
-				gClockPhase = 4;
 				sServing = true;
 				ServeOnce();
-				gClockPhase = 9;
 			}
 			catch (...)
 			{
@@ -1001,143 +991,9 @@ namespace vwprobe
 			ClockTick();
 		}
 #else
-		// 【診断 #253】頼み札（%TEMP%\VwSdkProbes-clock-trace.request）が起動時にあれば、刻みの
-		// 出入りを %TEMP%\VwSdkProbes-clock-trace.txt へ書く。札の 1 語目で振る舞いを選ぶ:
-		//   trace … 書くだけ / guard … SEH で包んで例外を書く / noop … 刻みで何もしない（書かない）
-		//   none … タイマーを作らない / window … メッセージ専用ウィンドウのタイマーで働く（書かない）
-		// どの語でも、起動時に選んだ振る舞いを 1 行だけ書く。
-		enum class ClockTraceMode
-		{
-			Off,
-			Trace,
-			Guard,
-			Noop,
-			None,
-			Window
-		};
-		ClockTraceMode gTraceMode = ClockTraceMode::Off;
-		std::filesystem::path gTracePath;
-
-		void LoadClockTraceMode()
-		{
-			std::error_code ec;
-			const std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
-			if (ec)
-				return;
-			std::ifstream in(dir / "VwSdkProbes-clock-trace.request");
-			if (!in)
-				return;
-			std::string word;
-			in >> word;
-			gTraceMode = ClockTraceMode::Trace;
-			if (word == "guard")
-				gTraceMode = ClockTraceMode::Guard;
-			if (word == "noop")
-				gTraceMode = ClockTraceMode::Noop;
-			if (word == "none")
-				gTraceMode = ClockTraceMode::None;
-			if (word == "window")
-				gTraceMode = ClockTraceMode::Window;
-			gTracePath = dir / "VwSdkProbes-clock-trace.txt";
-		}
-
-		void ClockTraceLine(const char* what, int phase, unsigned long code, const void* addr)
-		{
-			std::ofstream out(gTracePath, std::ios::app);
-			if (!out)
-				return;
-			const long long wallMs = static_cast<long long>(
-				std::chrono::duration_cast<std::chrono::milliseconds>(
-					std::chrono::system_clock::now().time_since_epoch())
-					.count());
-			char extra[64] = {0};
-			if (code != 0)
-				(void)std::snprintf(extra, sizeof(extra), " code=0x%08lx addr=%p", code, addr);
-			out << what << " wall_ms=" << wallMs << " phase=" << phase << extra << "\n";
-		}
-
-		unsigned long gSehCode = 0;
-		const void* gSehAddr = nullptr;
-
-		int SehFilter(EXCEPTION_POINTERS* info)
-		{
-			gSehCode = info->ExceptionRecord->ExceptionCode;
-			gSehAddr = info->ExceptionRecord->ExceptionAddress;
-			return EXCEPTION_EXECUTE_HANDLER;
-		}
-
-		// __try は後始末の要るオブジェクトを持つ関数に置けないので、これだけを包む。
-		bool GuardedClockTick()
-		{
-			__try
-			{
-				ClockTick();
-				return true;
-			}
-			__except (SehFilter(GetExceptionInformation()))
-			{
-				return false;
-			}
-		}
-
 		void CALLBACK OnClock(HWND /*hwnd*/, UINT /*msg*/, UINT_PTR /*id*/, DWORD /*time*/)
 		{
-			switch (gTraceMode)
-			{
-			case ClockTraceMode::Off:
-			case ClockTraceMode::Window:
-				ClockTick();
-				return;
-			case ClockTraceMode::Noop:
-			case ClockTraceMode::None:
-				return;
-			case ClockTraceMode::Trace:
-				ClockTraceLine("enter", gClockPhase, 0, nullptr);
-				gClockPhase = 0;
-				ClockTick();
-				ClockTraceLine("leave", gClockPhase, 0, nullptr);
-				return;
-			case ClockTraceMode::Guard:
-				ClockTraceLine("enter", gClockPhase, 0, nullptr);
-				gClockPhase = 0;
-				if (GuardedClockTick())
-					ClockTraceLine("leave", gClockPhase, 0, nullptr);
-				else
-					ClockTraceLine("seh", gClockPhase, gSehCode, gSehAddr);
-				return;
-			}
-		}
-
-		LRESULT CALLBACK ClockWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
-		{
-			if (msg == WM_TIMER)
-			{
-				ClockTick();
-				return 0;
-			}
-			return DefWindowProcW(hwnd, msg, wParam, lParam);
-		}
-
-		// メッセージ専用ウィンドウを作り、そこへタイマーを付ける。作れなければ false。
-		bool StartWindowClock()
-		{
-			HMODULE self = nullptr;
-			if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-										GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-									reinterpret_cast<LPCWSTR>(&ClockWindowProc), &self))
-				return false;
-			WNDCLASSEXW wc = {};
-			wc.cbSize = sizeof(wc);
-			wc.lpfnWndProc = &ClockWindowProc;
-			wc.hInstance = self;
-			wc.lpszClassName = L"VwSdkProbesClock";
-			if (RegisterClassExW(&wc) == 0)
-				return false;
-			HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE,
-										nullptr, self, nullptr);
-			if (hwnd == nullptr)
-				return false;
-			return SetTimer(hwnd, 1, kClockIntervalMs, nullptr) != 0;
+			ClockTick();
 		}
 #endif
 	} // namespace
@@ -1159,17 +1015,18 @@ namespace vwprobe
 		if (sTimer != nullptr)
 			CFRunLoopAddTimer(CFRunLoopGetMain(), sTimer, kCFRunLoopDefaultMode);
 #else
+		// **先に殻を留める**（issue #253）。Windows の VW は起動時に殻を読み込んで -1・-3 を
+		// 呼んだ後、-2 を送らずに一度降ろし、別の番地へ読み込み直して -4・-5 を呼ぶ。留めずに
+		// タイマーを作ると、最初の読み込みのタイマーが**もう無い殻の OnClock の番地**を呼び続け、
+		// そこへ後から入った別のモジュールのコードを踏んで起動中に落ちる（Findings
+		// 「Timers and Notifications」§4）。留めれば VW の FreeLibrary では降りず、番地が生き続ける。
+		// 留められなければ時計を動かさない（ブリッジが使えないだけで、落ちるよりよい）。
+		constexpr DWORD kPinSelf =
+			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN;
+		HMODULE self = nullptr;
+		if (!GetModuleHandleExW(kPinSelf, reinterpret_cast<LPCWSTR>(&OnClock), &self))
+			return;
 		// ウィンドウを持たないタイマー。WM_TIMER は Vectorworks のメッセージポンプが配る。
-		LoadClockTraceMode();
-		if (gTraceMode != ClockTraceMode::Off)
-			ClockTraceLine("mode", static_cast<int>(gTraceMode), 0, nullptr);
-		if (gTraceMode == ClockTraceMode::None)
-			return;
-		if (gTraceMode == ClockTraceMode::Window)
-		{
-			ClockTraceLine(StartWindowClock() ? "window-ok" : "window-failed", 0, 0, nullptr);
-			return;
-		}
 		(void)SetTimer(nullptr, 0, kClockIntervalMs, &OnClock);
 #endif
 	}
