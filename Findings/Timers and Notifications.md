@@ -198,6 +198,11 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
   VW のメッセージポンプが配る。**自分で `PeekMessage` を回せば、その場でも配られる**
   （mac と違ってこちらは効く）。ピン留めも `GetModuleHandleExW` の
   `GET_MODULE_HANDLE_EX_FLAG_PIN` で効いた。
+- **【罠】Windows では、VW が起動時に読み込む殻でも留める。** VW は起動時にモジュールを
+  一度降ろして読み込み直すので（-1・-3 の後に -2 無しで降ろす）、最初の呼び出しで作った
+  タイマーが**もう無い番地を呼び続けて起動中に落ちる**。作る前に
+  `GET_MODULE_HANDLE_EX_FLAG_PIN` で自分を留める（[Plug-in Modules](Plug-in%20Modules.md)
+  「【罠】Windows の VW は起動時にモジュールを一度降ろして読み込み直す」。issue #253）。
 - **入れ替えできるモジュールへ置くなら、降ろさせない手当てが要る。** 殻はプローブが
   終わると本体を `dlclose` する（[Plug-in Modules](Plug-in%20Modules.md)）ので、
   `dlopen(RTLD_NOLOAD)`（mac）／`GET_MODULE_HANDLE_EX_FLAG_PIN`（Windows）で参照を
@@ -768,11 +773,12 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
   ロックが放される」ことで見届けるなら、30 秒以上待つ前提にする**（仮想環境での値）。
 - `kNotifyBeforeApplicationQuit` が確認より前に届き、キャンセルされても届くのは mac と同じ。
 - 確認の最中の `IsCurrentlyBuildingAnUndoEvent()` は `no`（mac と同じ）。
-- 【推定】この間、利用者の側で**起動時のクラッシュが何度かあった**。プロセスが窓を閉じた後も
-  30 秒近く残るなら、その間に起動し直すと import-ifc #48 の「古いインスタンスが終わる前に
-  新しいのが立ち上がると落ちる」（[Documents](Documents.md)「`CloseAllFilesAndQuitVectorworks`」）
-  と同じ形になりうる。ただし**窓がいつ消えたか・どの起動が落ちたかは記録していない**し、
-  仮想環境のメモリ不足でも説明がつく。確かめていない。
+- この間、利用者の側で**起動時のクラッシュが何度かあった**。当時は「古いインスタンスが
+  終わる前に起動し直した」形を疑ったが、**その後の調査（issue #253）で、殻のタイマーが
+  起動時の読み込み直しで古い番地を指したまま残り、起動中に落ちることが分かった**
+  （[Plug-in Modules](Plug-in%20Modules.md)「【罠】Windows の VW は起動時にモジュールを一度
+  降ろして読み込み直す」。殻を留めて直した）。【推定】この節の測定中のクラッシュも同じもの
+  （当時の回は記録が無く、突き合わせられない）。
 
 **線引き（mac / Windows）**: 刻みから終了を呼んでよい。呼び出しは戻るので、応答はその前でも
 後でも書ける。キャンセルされたら何も変わらず動き続ける。**「終了の呼び出しの最中」を旗で
