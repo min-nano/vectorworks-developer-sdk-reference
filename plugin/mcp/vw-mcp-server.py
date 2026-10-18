@@ -1537,9 +1537,8 @@ def crashed_result(bridge, name, args, started, message):
         "message": message,
         "hint": (
             "プローブが Vectorworks ごと落とした見込みです（落ち方そのものが知見になります）。"
-            "ログの末尾が、落ちる前に最後に通った場所です。結果は控えに残っており、次に"
-            "プローブを走らせたとき（またはメニューを開いたとき）に「結末不明」として出所の"
-            "PR / issue へ投稿されます。続けるなら vw_launch で起動し直してください。"
+            "ログの末尾が、落ちる前に最後に通った場所です（PR / issue へは投稿されないので、"
+            "ここで返ったログがすべてです）。続けるなら vw_launch で起動し直してください。"
         ),
     }
     slug = args.get("probe") if name == "vw_run_probe" else None

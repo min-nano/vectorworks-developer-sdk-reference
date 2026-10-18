@@ -469,13 +469,15 @@ namespace vwprobe
 
 	// -----------------------------------------------------------------------
 	bool PrepareFeedback(std::string& pr, std::string& issue, const std::string& branch,
-						 std::string& note, bool interactive)
+						 std::string& note)
 	{
 		note.clear();
 
+		// **既定は投稿しない**（Feedback.h「既定は投稿しない」）。入れたのは利用者が
+		// 設定項目で選んだときだけで、ここでは尋ねない。
 		feedback::Settings settings = LoadSettings();
-		if (settings.consent == feedback::Consent::Never)
-			return false; // 断られている。**二度と尋ねない**
+		if (settings.consent != feedback::Consent::Send)
+			return false;
 
 		if (!FeedbackAvailable())
 		{
@@ -511,40 +513,6 @@ namespace vwprobe
 
 		if (pr.empty() && issue.empty())
 			return false; // 宛先が無い（issue 番号も書かれていないプローブ）。黙って投稿しない
-
-		if (!interactive && (settings.consent == feedback::Consent::Unset || !HaveToken()))
-		{
-			// **人がいない場面では尋ねない**（MCP ブリッジ。Feedback.h の PrepareFeedback）。
-			// 状態は変えない——次にメニューから走らせたとき、いつもどおり 1 度だけ尋ねる。
-			note = "結果の自動投稿はまだ設定されていないので投稿しませんでした"
-				   "（Vectorworks のメニューで 1 度設定すると、以後はここからも投稿します）。";
-			return false;
-		}
-
-		if (settings.consent == feedback::Consent::Unset)
-		{
-			// **尋ねるのはここ 1 回だけ。** 走らせた後には何も尋ねない。
-			const std::string dest = pr.empty() ? ("issue #" + issue) : ("PR #" + pr);
-			const bool yes =
-				Ask("プローブの結果を自動で投稿しますか？",
-					"投稿先は、そのプローブが来た " + dest +
-						" です。\n"
-						"送るのは結果・所要時間・出所・ログ全文で、投稿は毎回黙って行います"
-						"（走らせたあとは何も尋ねません）。\n\n"
-						"「投稿する」を選ぶと、続けて GitHub のトークンを 1 度だけ尋ねます。\n"
-						"断ると二度と尋ねません（ピッカーの「結果の自動投稿を設定…」から"
-						"いつでも入れ直せます）。",
-					"投稿する", "投稿しない");
-			if (!yes)
-			{
-				settings.consent = feedback::Consent::Never;
-				(void)SaveSettings(settings);
-				return false;
-			}
-			settings.consent = feedback::Consent::Send;
-			if (!SaveSettings(settings))
-				note = "設定を保存できませんでした（次も同じことを尋ねます）。";
-		}
 
 		if (HaveToken())
 			return true;
@@ -706,17 +674,20 @@ namespace vwprobe
 
 		std::string state = sending ? "いまの設定: 投稿する" : "いまの設定: 投稿しない";
 		if (settings.consent == feedback::Consent::Unset)
-			state = "いまの設定: まだ決めていません（初めて宛先のあるプローブを走らせるときに"
-					"尋ねます）";
+			state = "いまの設定: 投稿しない（既定）";
 		state += haveToken ? "\nトークン: 登録済み" : "\nトークン: 未登録";
 
-		if (!Ask("プローブの結果を自動で投稿しますか？",
-				 state + "\n\n投稿先は、そのプローブが来た PR です。PR が無ければ、プローブ本体の"
-						 "先頭コメントにある issue 番号（開いているものだけ）。\n"
-						 "どちらも無ければ（main に入っていて issue 番号も書かれていなければ）、"
-						 "宛先が無いので投稿しません。\n"
-						 "送るのは結果・所要時間・出所・ログ全文で、投稿は毎回黙って行います。",
-				 "投稿する", "投稿しない"))
+		if (!Ask(
+				"プローブの結果を自動で投稿しますか？",
+				state +
+					"\n\nふだんは投稿しません——実機確認のログは MCP ブリッジで Claude が"
+					"直に受け取ります（ブリッジから走らせた結果は、ここを入れても投稿しません）。\n"
+					"投稿先は、そのプローブが来た PR です。PR が無ければ、プローブ本体の"
+					"先頭コメントにある issue 番号（開いているものだけ）。\n"
+					"どちらも無ければ（main に入っていて issue 番号も書かれていなければ）、"
+					"宛先が無いので投稿しません。\n"
+					"送るのは結果・所要時間・出所・ログ全文で、投稿は毎回黙って行います。",
+				"投稿する", "投稿しない"))
 		{
 			settings.consent = feedback::Consent::Never;
 			(void)SaveSettings(settings);

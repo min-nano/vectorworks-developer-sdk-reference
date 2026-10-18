@@ -83,16 +83,20 @@ namespace vwprobe::feedback
 	// 設定（＝**送ってよいか**）。
 	//
 	// 覚えておくのはこれだけである。宛先の PR はプローブの出所（ビルドのときに決まる）が
-	// 持っているので尋ねる必要が無く、トークンはキーチェーン側にある。**1 度答えたら
-	// 二度と尋ねない**ために、断ったこと（Never）も残す——尋ね直すのは、利用者が
-	// ピッカーの設定項目を自分で開いたときだけ。
+	// 持っているので尋ねる必要が無く、トークンはキーチェーン側にある。**既定は投稿しない**
+	// （Feedback.h「既定は投稿しない」）——送るのは、利用者がピッカーの設定項目で入れた
+	// ときだけ。
+	//
+	// 【version=2】version=1 は「初回に尋ねて既定で投稿する」頃の書式で、その頃の
+	// `consent=send` は**初回のダイアログで答えたもの**である。既定を切に変えたので、
+	// それは引き継がない（Unset へ倒す）。入れ直すのは設定項目から 1 度でよい。
 	// -----------------------------------------------------------------------
 
 	enum class Consent
 	{
-		Unset, // まだ尋ねていない（＝次に PR 由来のプローブを走らせるとき 1 度だけ尋ねる）
-		Send,  // 走らせたら自動で投稿する
-		Never  // 投稿しない（二度と尋ねない）
+		Unset, // 決めていない（＝投稿しない。既定）
+		Send,  // 走らせたら自動で投稿する（設定項目で入れたときだけ）
+		Never // 投稿しない（設定項目で切った、またはトークンを入れずに終えた）
 	};
 
 	struct Settings
@@ -105,7 +109,7 @@ namespace vwprobe::feedback
 
 	inline std::string FormatSettings(const Settings& settings)
 	{
-		std::string out = "version=1\nconsent=";
+		std::string out = "version=2\nconsent=";
 		switch (settings.consent)
 		{
 		case Consent::Send:
@@ -130,7 +134,8 @@ namespace vwprobe::feedback
 	{
 		Settings settings;
 		const std::string consent = ValueOf(text, "consent");
-		if (consent == "send")
+		// **version=1 の send は引き継がない**（上記「version=2」）。
+		if (consent == "send" && ValueOf(text, "version") == "2")
 			settings.consent = Consent::Send;
 		else if (consent == "never")
 			settings.consent = Consent::Never;
