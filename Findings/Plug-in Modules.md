@@ -18,6 +18,45 @@ Vectorworks はコンパイル済みプラグインを**起動時に走査して
 - Windows は**読み込み中の DLL を消すことも上書きすることもできない**（共有違反）。
   入れ替えは Vectorworks を終了させてからになる。
 
+## 拡張機能を 1 つも登録しないモジュールも、有効なら起動時から常駐する（Windows・macOS）
+
+（[issue #252](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/252)。
+被験体は [vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)
+の `cli`。実測の記録はあちらの [Windows の実機での実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)
+と [SDK の調査 0](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/sdk-research.md#0-拡張機能を-1-つも登録しないプラグインの読み込み)。）
+
+**メニューも PIO もプラグインライブラリ関数も登録しない（`REGISTER_Extension` を 1 度も
+呼ばない）モジュールでも、VW は起動時に読み込んで `plugin_module_main` を呼び、そのまま
+常駐させる。** そこで始めた OS タイマーは刻み続ける。常駐させるために目に触れない
+メニューを 1 つ登録する、といった細工は要らない。条件は 2 つだけ:
+
+- **「開発元不明のプラグイン」で有効にしてあること**（下の「開発元不明のプラグイン」）。
+  新しく置いた最初の起動では「無効」にされ、**読み込まれない**——プロセスのモジュール一覧に
+  居らず、`plugin_module_main` も呼ばれない。拡張の有無とは関係が無い。
+- **Windows では、OS にコールバックを預ける前に自分を留めること**（下の「【罠】Windows の VW は
+  起動時にモジュールを一度降ろして読み込み直す」）。
+
+`cli` の `plugin_module_main` は `GS_InitializeVCOM(cbp)` のあと、`kPluginModuleDeinit` 以外の
+action で 1 度だけ OS タイマーを始めて 0 を返す（`plugin_module_ver` と
+`DefaultPluginVWRIdentifier` は定義する。下の「SDK の静的ライブラリをリンクするモジュールは…」）。
+
+| | Windows（VW 2026 Update 6 x64・Windows 11 ARM64 の VM の x64 エミュレーション） | macOS（VW 2026 `31.6.0 (872399)`・macOS 27.0.1 arm64） |
+| --- | --- | --- |
+| ビルド | `0683df0` / `296a797`（`SetTimer(nullptr, 0, 250, proc)` の前に `GET_MODULE_HANDLE_EX_FLAG_PIN`） | `7b80014`（`CFRunLoopTimer` を `kCFRunLoopCommonModes` に。留めない） |
+| 登録 | 無し（ソースに `REGISTER_Extension` が無い） | 同じ |
+| 常駐 | 起動から 10〜50 秒前後で `cli.vlb` がモジュール一覧に載り、刻みが受け付ける `ping` が応えた（`running:true` から 0.2〜2.4 秒） | 有効化した後の起動で、ダイアログが開いている間から `ping` が応えた |
+| 有効化の前 | 「無効」と示され、モジュール一覧に `cli.vlb` が無く、最初の刻みで作るスプールも作られなかった | 「無効」と示され、130 秒待ってもスプールは作られなかった |
+
+- **プラグインマネージャの「開発元」タブで、拡張なしのモジュールは「不明な開発元」の下に
+  ファイル名だけが載る**（下に項目が並ばない）。読み込まれていない印ではない。
+- **初めに「Windows では拡張なしだと常駐しない」と見えたのは、有効化の前だったため**と読める
+  ——上の表の「有効化の前」は、当初の観測（留めない版）とそっくり同じである。
+- **留めない「拡張なし」のモジュールが Windows の読み込み直しの対象になるかは確かめていない**
+  （#253 で読み込み直しを見たのは、メニューとプラグインライブラリ関数を登録した殻）。留めれば
+  降ろされも読み込み直されもしないので、確かめなくても困らない。【推定】仮に対象になっても、
+  読み込み直した側で static が初期化し直され -4 以降でタイマーを作り直すので、「常駐しない」
+  ではなく「古い番地のタイマーが残って落ちうる」形になる。
+
 ## 【罠】Windows の VW は起動時にモジュールを一度降ろして読み込み直す——OS に預けたコールバックは留めておく
 
 （[issue #253](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/253)。
