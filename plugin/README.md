@@ -501,12 +501,12 @@ Claude Code ──MCP(stdio)──▶ plugin/mcp/vw-mcp-server.py ──ファ�
 
 ## 自動アップデート
 
-> **【Windows・1 度だけ】#237 より前の殻から入れ替えるときは、先に Vectorworks を終了し、
-> Plug-ins 直下の `VWPluginLibraryRoutines.h` / `VWPluginLibraryRoutines.p` /
-> `WorksheetFunctionOptionsRegistry` を退けてから起動する。** 古い殻はプラグインライブラリ関数の
-> 定義がずれていて（戻り値の欄が無かった）、その書き出しが残ったまま `.vlb` が変わると、
-> Vectorworks が起動画面で落ちる（`0xe0000001`。[Findings「プラグイン間の呼び出し」](../Findings/Plug-in%20Interop.md)
-> の【罠】、issue #233）。3 ファイルは VW が作り直す。直した殻どうしの入れ替えでは要らない。
+> **【Windows】#254 より前の殻は、起動画面で落ちることがある**（`0xe0000001` など。殻の時計が
+> 起動時の読み込み直しで古い番地を指したまま残るため。[Findings「プラグインモジュール」](../Findings/Plug-in%20Modules.md)
+> の【罠】、issue #253 / #233）。その殻が入っていて起動しないときは、Vectorworks を止めた状態で
+> 手で新しいビルドを置く。Plug-ins 直下の `VWPluginLibraryRoutines.h` / `.p` /
+> `WorksheetFunctionOptionsRegistry.txt` を退ける必要は無い（以前そう書いていたが、原因では
+> なかった）。
 
 **入れ替えはプラグイン自身が行う。** 入口は 1 つだけ:
 

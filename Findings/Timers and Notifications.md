@@ -628,8 +628,10 @@ Claude Code から MCP ブリッジで回した。ビルド `26b6337dfcc7` / `44
   **どちらも食い違い 0・落ちない。** モジュールが読み込まれた直後の刻み——起動画面が
   出ている頃——から呼んでも `nullptr` が返るだけだった。
   （**殻の差し替えそのもので Windows の VW が起動時に落ちる**事故を、この測定の途中で
-  踏んだ。原因は記録のコードではなく、プラグインライブラリ関数を登録した `.vlb` の
-  差し替え——[issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233)。）
+  踏んだ。原因は記録のコードではなく、**起動時の読み込み直しで古い番地を指したまま残った
+  殻の時計**だった——[issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233)。
+  当初はプラグインライブラリ関数の書き出しのせいと見ていたが誤り。[プラグインモジュール](Plug-in%20Modules.md)
+  「【罠】Windows の VW は起動時にモジュールを一度降ろして読み込み直す」。）
 - **件数と `nullptr` かどうかは、刻みごとに常に一致した**（mac 1 万 2 千回余り・Windows
   3 万 5 千回余りで食い違い 0 回）。**閉じる途中・開く途中の刻みは 1 つも来なかった**——`CloseDocument` /
   `OpenDocumentPath` はブリッジの刻みの中で同期的に終わり、その間に入れ子の刻みは
