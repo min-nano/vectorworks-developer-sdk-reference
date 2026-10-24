@@ -138,13 +138,13 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
 - **前もって有効にしておける——ただし作れるのは同じ記録の複製だけ。** VW を止めた状態で
   以前の `ExceptionsMissingCredentials.bin` を戻すと、ダイアログ無しで読み込まれた。記録は
   固定の鍵による暗号文なので、新しいパスの記録を外から作ることはできない（鍵は取り出して
-  いない）。
+  いない）。**別の機械で作った記録の複製が通るかは未確認**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
 - **ダイアログは「無効のものがあれば毎回」「全部有効なら前回から約 24 時間おき」に出る。**
   同梱ヘルプは「各セッションの開始時に開く」と書くが、実測では間引かれる。全部有効なら
   開いている間もプラグインは読み込み済み（[cli の実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)と同じ）。
 - **SDK に有効にする口は無い【ヘッダ根拠】。Authenticode の署名では消えない見込み
   【バイナリ根拠】**——「開発元」は Vectorworks のパートナープログラムが発行する
-  クレデンシャルで、Windows の署名ではない（下記）。
+  クレデンシャルで、Windows の署名ではない（下記）。署名して試すのは [#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)。
 - **macOS も同じ。** 記録は `~/Library/Application Support/Vectorworks/2026/Settings/ExceptionsMissingCredentials.bin`
   に**バンドル（`cli.vwlibrary`）のフルパス**で残り、`install` の手順（フォルダごと
   付け替え・中身も別ビルド）でも有効のまま、閾値はほぼ 24 時間ちょうど（下の「macOS」）。
@@ -193,7 +193,7 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
     含むブロックから先が違った。鍵も IV も固定のブロック暗号で、同じ平文は同じ暗号文になる
     （7 で作り直した記録は退けたものとバイト単位で同一だった）。
   - 何も有効でなければ 8 バイト（長さ 0）。**プラグインが 2 本以上のときの並べ方は見ていない**
-    （有効にしたのは 1 本ずつ）。
+    （有効にしたのは 1 本ずつ。[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
 - **間引きの基準**: `Settings\SavedSettingsUser.xml` の
   `<Vectorworks><UnknownPluginsDialog><Date>21;10;2026;17;14</Date>`（日;月;年;時;分。
   ローカル時刻。同じ要素にダイアログの位置と列幅も入る）。
@@ -218,7 +218,7 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
 - **Authenticode は使っていない見込み。** `Vectorworks2026.exe` と同梱の `.vlb` / `.dll` の
   どれも `WinVerifyTrust` を含まない（含むのは Cineware・CEF・PhysX・Redshift・
   インストーラだけ）。`CryptQueryObject` / `CertGetNameStringA` は exe にあるが、同じ所に
-  curl の schannel の文字列が並んでおり、そちらの持ち物と読める。**署名して試してはいない。**
+  curl の schannel の文字列が並んでおり、そちらの持ち物と読める。**署名して試してはいない**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
 
 ### SDK【ヘッダ根拠】
 
