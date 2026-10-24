@@ -254,21 +254,30 @@ namespace
 		UacAppend(line);
 	}
 
-	// 線を 1 本作り、閉じずに置く。前後の旗を書く。
+	// 図形を作る呼び出しを順に呼び、**呼ぶたびに旗を書く**（どれが開くかを見る。Windows の
+	// 最初の版では CreateLine だけでは開かなかった。#206 の mac は CreateLocus で開いた）。
+	// 開いたものは閉じずに置く。
 	void UacCreate(UacState* st, const char* where)
 	{
 		Sint32 active = -1;
 		int count = 0;
 		UacDocs(active, count);
-		const bool before = gSDK->IsCurrentlyBuildingAnUndoEvent();
-		MCObjectHandle h = gSDK->CreateLine(WorldPt(0.0, 0.0), WorldPt(1000.0, 500.0));
-		const bool after = gSDK->IsCurrentlyBuildingAnUndoEvent();
 		st->created = true;
 		st->targetDoc = active;
 		std::string line = UacClock() + " create where=" + where;
 		line += " doc=" + std::to_string((long long)active);
+		line += " before=" + UacYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent());
+		MCObjectHandle h = gSDK->CreateLine(WorldPt(0.0, 0.0), WorldPt(1000.0, 500.0));
 		line += " CreateLine=" + std::string(h == nullptr ? "nullptr" : "ok");
-		line += " building_before=" + UacYesNo(before) + " building_after=" + UacYesNo(after);
+		line += "→" + UacYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent());
+		MCObjectHandle locus = gSDK->CreateLocus(WorldPt(500.0, 0.0));
+		line += " CreateLocus=" + std::string(locus == nullptr ? "nullptr" : "ok");
+		line += "→" + UacYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent());
+		MCObjectHandle extra = gSDK->CreateLine(WorldPt(0.0, 500.0), WorldPt(500.0, 500.0));
+		if (extra != nullptr)
+			gSDK->DeleteObject(extra, true);
+		line += " DeleteObject(useUndo=true)";
+		line += "→" + UacYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent());
 		line += "（閉じずに置く）";
 		UacAppend(line);
 	}
