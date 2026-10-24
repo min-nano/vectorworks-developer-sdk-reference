@@ -19,6 +19,8 @@
     [#206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)。
     そのプローブはイベントを一度も開いていない）。PIO やビューポートのような重い生成に
     限らず、**図形を作る呼び出しは軒並み開くと思っておく**ほうが安全である。
+    （**Windows では `CreateLine` / `CreateLocus` では開かず、`DeleteObject(h, true)` で
+    開いた**——下記「レイヤのハンドルを直接 `DeleteObject` する」の【追記】。#247）
     - **だから「どの undo イベントにも属さない図形」を作ることはできない**——作る行為が
       イベントを開く。「イベントの外で作ったものは取り消しスタックに載らない」
       （下記）を**対照実験に使おうとすると、ここで足をすくわれる**。#206 の調査では
@@ -651,6 +653,45 @@ undo イベントの**外**で作った、登録していない呼び出し元�
     **少なくとも「コマンドが戻った時点では閉じない」**ということである。
     周期実行と組み合わせるときの効き方は
     [周期実行と通知 7 節](Timers%20and%20Notifications.md)。
+  - **【追記】閉じるのは「利用者の次の、取り消せる操作」——時間でも、クリックでも、
+    図面の切り替えでもない**（Windows で実測。
+    [issue #247](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/247)、
+    `probes/runtime/undo-auto-close/`、ビルド `4a75f9c807a9`。VW 2026 Update 6 /
+    Windows 11 ARM64 の仮想環境。操作は computer use で行い、操作の時刻を記録へ書き込んで
+    並べた）。#213 の「53 秒後」と #245 の「7 分閉じない」の差はこれで説明が付く。
+    `DeleteObject(h, useUndo=true)` で開いたイベントを閉じずに置き、50 ms の刻みで
+    アクティブな図面と `IsCurrentlyBuildingAnUndoEvent()`、`kNotifyUndoEndEvent` を記録した。
+    開いた場所はメニューコマンドの中（段 0）と OS タイマーの刻みの中（段 1。ブリッジの形）の
+    2 通りで、**どちらも同じ振る舞いだった**:
+
+    | 操作 | `building` | `kNotifyUndoEndEvent` |
+    | --- | --- | --- |
+    | 何も触らずに 2 分（段 0） | `yes` のまま | 来ない |
+    | 図面の上でマウスを動かす | `yes` のまま | 来ない |
+    | 図面の空いた所を 1 回クリック（セレクションツール） | `yes` のまま | 来ない |
+    | メニューを開いて Esc で閉じる | `yes` のまま | 来ない |
+    | **矩形ツールで矩形を描く**（段 0・段 1 とも） | **`no` になる**（次の刻みから） | **2 回**（3〜5 ms 差。描き終えたクリックの時刻） |
+    | ファイル ＞ 新規 で 2 枚目を開く（段 1） | 新しい図面は `no` | 来ない |
+    | **タブで元の図面へ戻る** | **`yes` のまま**（閉じていなかった） | 来ない |
+
+    - **閉じたのは、利用者が図面を変える操作をした時点**。通知が 2 回来るのは、置き土産の
+      イベントと矩形のイベントがそれぞれ閉じたものと見ている【推定】（矩形が置き土産と同じ
+      イベントに入ったか——1 回の取り消しで一緒に戻るか——は確かめていない）。
+    - **新規の図面を開いても閉じない。** `IsCurrentlyBuildingAnUndoEvent()` は**前面の図面の**
+      旗なので、別の図面が前に出れば `no` に見えるだけで、元の図面へ戻れば `yes` に戻る。
+      **#245 で ⌘N の直後にブリッジが戻ったのは、閉じたのではなく前面が替わったから**である。
+    - したがって**何もしなければいつまでも閉じない**（#245 の 7 分）。#213 の 53 秒は、その間に
+      人が何か描いた・動かしたと見るのが自然【推定】（当時の操作の記録は無い）。
+    - **ブリッジは走らせた後に自分で閉じる**ようにした（[#266](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/266)。
+      `plugin/src/McpBridge.cpp` の `RunTargets`）。プローブ側の作法は変わらない——**自動で
+      開いたイベントは、戻る前に `EndUndoEvent()` で閉じる**（[probes/runtime/README.md](../probes/runtime/README.md)）。
+  - **【追記】Windows では `CreateLine` / `CreateLocus` だけでは開かなかった**（同じプローブ。
+    メニューコマンドの中でも刻みの中でも、呼んだ直後の旗は `no`。続けて
+    `DeleteObject(h, useUndo=true)` を呼んだ時点で `yes`）。冒頭の「素の 2D 図形を 1 つ
+    作るだけでも開く——`CreateLocus` で確かめた」は #206 の **mac** の実測で、
+    プラットフォームの違いか、呼んだ場面の違い（#206 は何をしてから呼んだか）かは
+    切り分けていない。**どちらにしても「作る呼び出しは開くかもしれない」と構える**のは
+    変わらない——開いたかは呼んだ後に旗を読んで確かめる。
 - **ビューポートの載ったシートレイヤも `DeleteObject(sheetLayer, true)` で丸ごと消せる**
   （実機。[issue #29](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/29)、
   `probes/runtime/delete-sheet-layer-viewport/`）。ビューポート 2 枚＋注釈空間へ
