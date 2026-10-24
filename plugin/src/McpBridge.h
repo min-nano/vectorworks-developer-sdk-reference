@@ -38,7 +38,11 @@
 //	  * メニュー（「SDK 実機プローブ…」）が動いている間（ProbeMenuActive）。Windows の
 //	    WM_TIMER はモーダルダイアログの中でも配られるので、人がピッカーを出している間に
 //	    同じ本体・同じ控えへ割り込ませない。
-//	  * undo の記録が開いている間（IsCurrentlyBuildingAnUndoEvent）。
+//	  * undo の記録が開いている間（IsCurrentlyBuildingAnUndoEvent）。この間も生存の印は書き、
+//	    `deferred: "undo"` と見送り始めた時刻を載せる（Python 側はそれを理由として返す）。
+//	    **プローブが図形を作って閉じずに戻ると記録は開いたまま残り、誰も閉じない**（#245 で
+//	    7 分止まった）ので、走らせる前に開いていなければ、走らせた後に EndUndoEvent で閉じる
+//	    （issue #247）。
 //	  * 起動の直後 10 秒。
 //
 //	【図面】プローブは図面を変更する。だから `vw_run_probe` は既定で**新規の空図面を開いて

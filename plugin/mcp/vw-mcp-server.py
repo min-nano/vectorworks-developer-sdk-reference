@@ -697,6 +697,32 @@ class VectorworksGone(BridgeDown):
     """**応答を待っている間に Vectorworks のプロセスが消えた**（プローブが落とした等）。"""
 
 
+class BridgeDeferred(TimeoutError):
+    """**ブリッジは生きているが、undo イベントが開いたままなので受け付けていない**（#247）。
+
+    BridgeDown にしない——そちらは「起動していない」として Vectorworks を起動しに行く。
+    """
+
+
+# undo イベントが開いたままの見送りがこれだけ続き、要求がまだ読まれていなければ、待つのを
+# やめて理由を返す（秒）。閉じるのを待っても、何が閉じるのかは分かっていない（#247）。
+DEFERRED_GIVE_UP_SECONDS = 20.0
+
+
+def deferred_message(status):
+    """undo イベントの見送りを人に見せる文。見送っていなければ None。"""
+    if not isinstance(status, dict) or status.get("deferred") != "undo":
+        return None
+    since = status.get("deferred_since")
+    seconds = int(time.time() - float(since)) if isinstance(since, (int, float)) else 0
+    return (
+        "前面の図面で undo イベントが開いたままなので、ブリッジは要求を受け付けていません"
+        "（%d 秒前から。%s〜）。プローブが図形を作って閉じずに戻ると残ります（issue #247）。"
+        "ブリッジから走らせた分はブリッジが閉じますが、刻みの中などで後から開いたものは"
+        "閉じられません。" % (seconds, format_time(since))
+    )
+
+
 class Bridge:
     """スプール越しに Vectorworks を呼ぶ（1 往復＝ファイル 2 つ）。"""
 
@@ -850,6 +876,18 @@ class Bridge:
                     raise VectorworksGone(
                         "応答を待っている間に Vectorworks が終了しました（%s。pid %s）。" % (tool, pid)
                     )
+                # **undo イベントの見送りが続き、要求がまだ読まれていなければ、理由を返す**
+                # （待ち続けても、いつ閉じるかは分からない。#247）。
+                deferred = self.status()
+                since = deferred.get("deferred_since") if deferred else None
+                if (deferred_message(deferred) and os.path.exists(request_path)
+                        and isinstance(since, (int, float))
+                        and time.time() - float(since) >= DEFERRED_GIVE_UP_SECONDS):
+                    try:
+                        os.remove(request_path)
+                    except OSError:
+                        pass  # 取り下げる直前に読まれたなら、応答は次の開始時に掃除される
+                    raise BridgeDeferred("%s は送れませんでした。%s" % (tool, deferred_message(deferred)))
             if time.time() >= deadline:
                 # 置いたままの要求を取り下げる（次のセッションが読み取らないように）。
                 try:
@@ -1134,6 +1172,9 @@ def bridge_status_result(bridge, notify=None):
         return result
     result = {"running": True, "spool": bridge.dir}
     result.update(status)
+    deferred = deferred_message(status)
+    if deferred:
+        result["hint"] = deferred
     result["lock"] = bridge.lease.snapshot()
     tools = bridge.live_tools()
     if tools is not None:
@@ -1721,6 +1762,10 @@ def lock_status(bridge, args, progress=None):
     """
     lease = bridge.lease
     view = lease.snapshot()
+    # 占有が空いていても受け付けていないことがある（undo イベントの見送り。#247）。
+    deferred = deferred_message(bridge.status())
+    if deferred:
+        view["bridge_deferred"] = deferred
     wait = lock_wait_seconds(args)
     until = args.get("until") or "free"
     if wait <= 0:
