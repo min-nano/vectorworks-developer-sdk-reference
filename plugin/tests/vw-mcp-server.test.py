@@ -376,6 +376,20 @@ def load_server_module():
     return module
 
 
+def check_deferred(module):
+    """**undo イベントの見送りを理由つきで見せる**（#247。以前は「止まりました」としか出ず、
+    7 分待たされた）。"""
+    now = int(time.time())
+    check(module.deferred_message({"beat": now}) is None, "見送っていなければ何も言わない")
+    check(module.deferred_message(None) is None, "印が無ければ何も言わない")
+    message = module.deferred_message({"beat": now, "deferred": "undo", "deferred_since": now - 30})
+    check(message is not None and "undo イベント" in message, "見送りの理由を言う (%r)" % message)
+    check(message is not None and "30 秒前" in message, "いつからかを言う (%r)" % message)
+    # **起動しに行かない種類の失敗**（BridgeDown だと vw_launch の道へ入る）。
+    check(issubclass(module.BridgeDeferred, TimeoutError), "見送りは TimeoutError の仲間")
+    check(not issubclass(module.BridgeDeferred, module.BridgeDown), "見送りは BridgeDown ではない")
+
+
 def check_spool_search(module, root):
     """**場所の探し方**を直に試す（本番で失敗したのはここ）。
 
@@ -810,6 +824,7 @@ def main():
     try:
         # --- 場所の探し方（本番で失敗したところ）------------------------
         check_spool_search(load_server_module(), root)
+        check_deferred(load_server_module())
 
         # --- Vectorworks を起こす ----------------------------------------
         check_launch(root)

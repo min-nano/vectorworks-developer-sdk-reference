@@ -21,7 +21,9 @@
 //	  * GetOpenFilesList / SwitchToOpenFile / CloseDocument … ブリッジが
 //	    開いた図面を閉じる。**CloseDocument の戻り値は当てにならない**（閉じても false を返す。
 //	    同 Findings）ので、閉じたかは一覧を読み戻して確かめる。
-//	  * IsCurrentlyBuildingAnUndoEvent … 刻みを見送るか（Findings「Timers and Notifications」§6）
+//	  * IsCurrentlyBuildingAnUndoEvent … 刻みを見送るか（Findings「Timers and Notifications」§6）。
+//	    見送っている間も生存の印は書き、理由（deferred）を載せる（issue #247）
+//	  * EndUndoEvent … プローブが閉じずに残した undo イベントを、走らせた後に閉じる（同上）
 //
 
 #include "PluginPrefix.h"
@@ -465,7 +467,21 @@ namespace vwprobe
 						std::vector<std::string>& notes)
 		{
 			const std::size_t maxBytes = MaxBytesArg(args);
+			// **プローブが閉じずに残した undo イベントは、ここで閉じる**（issue #247）。図形を
+			// 作るだけでイベントは開き（Findings「Undo」）、メニューと違ってブリッジの実行は
+			// VW のコマンドではないので、誰も閉じない——その間ブリッジは受け付けを見送り続け、
+			// 止まったように見える（#245 で 7 分）。**走らせる前に開いていなかったときだけ**
+			// 閉じる（人が開いているイベントは閉じない）。
+			const bool buildingBefore = gSDK->IsCurrentlyBuildingAnUndoEvent();
 			const std::vector<QuietRun> runs = RunProbesQuietly(targets);
+			if (!buildingBefore && gSDK->IsCurrentlyBuildingAnUndoEvent())
+			{
+				(void)gSDK->EndUndoEvent();
+				if (gSDK->IsCurrentlyBuildingAnUndoEvent())
+					notes.push_back("残った undo イベントを閉じられませんでした");
+				else
+					notes.push_back("プローブが残した undo イベントを閉じました");
+			}
 			const std::string saved = SaveOwnedDocuments();
 			if (!saved.empty())
 				notes.push_back(saved);
@@ -817,6 +833,9 @@ namespace vwprobe
 			long long lastBeat = 0;
 			long long served = 0;
 			long long failed = 0;
+			// 前面の図面で undo イベントが開いていて、受け付けを見送り始めた時刻（0 = 見送って
+			// いない）。生存の印に載せる——載せないと、呼ぶ側には理由の分からない無応答に見える。
+			long long deferredSince = 0;
 		};
 
 		ServeState& State()
@@ -847,6 +866,11 @@ namespace vwprobe
 			value.set("beat", Json::integer(NowSeconds()));
 			value.set("served", Json::integer(state.served));
 			value.set("failed", Json::integer(state.failed));
+			if (state.deferredSince > 0)
+			{
+				value.set("deferred", Json::string("undo"));
+				value.set("deferred_since", Json::integer(state.deferredSince));
+			}
 			if (!busyTool.empty())
 			{
 				value.set("busy", Json::string(busyTool));
@@ -874,10 +898,35 @@ namespace vwprobe
 			return true;
 		}
 
+		// **undo イベントが開いている間は受け付けない**が、生存の印だけは書き続ける（理由を
+		// 載せて）。印はファイルを書くだけで gSDK を呼ばないので、開いているイベントに混ざる
+		// ものは無い。
+		void NoteDeferred()
+		{
+			ServeState& state = State();
+			const long long now = NowSeconds();
+			if (state.deferredSince == 0)
+			{
+				state.deferredSince = now;
+				state.lastBeat = 0; // 見送り始めたことをすぐ知らせる
+			}
+			if (!Prepare(state, now) || now - state.lastBeat < kStatusBeatSeconds)
+				return;
+			const bridge::Spool spool(state.dir);
+			std::string statusError;
+			if (spool.writeStatus(StatusJson(state), statusError))
+				state.lastBeat = now;
+		}
+
 		void ServeOnce()
 		{
 			ServeState& state = State();
 			long long now = NowSeconds();
+			if (state.deferredSince != 0)
+			{
+				state.deferredSince = 0;
+				state.lastBeat = 0; // 見送りが終わったことをすぐ知らせる
+			}
 			if (!Prepare(state, now))
 				return;
 			const bridge::Spool spool(state.dir);
@@ -964,10 +1013,11 @@ namespace vwprobe
 					return;
 				if (ProbeMenuActive())
 					return;
-				if (gSDK->IsCurrentlyBuildingAnUndoEvent())
-					return;
 				sServing = true;
-				ServeOnce();
+				if (gSDK->IsCurrentlyBuildingAnUndoEvent())
+					NoteDeferred();
+				else
+					ServeOnce();
 			}
 			catch (...)
 			{
