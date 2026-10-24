@@ -219,14 +219,17 @@ namespace
 
 	// -----------------------------------------------------------------------
 	// 刻みが持ち越す状態。**意図して leak する**（タイマーはプローブより長生き）。
+	// 段 1 の進み: 準備待ち → 準備した（結果ダイアログが閉じる＝モーダルでない刻みを待つ）
+	// → 利用者のモーダルが開くのを待つ → モーダルを見た（終了を呼ぶ待ち）→ 呼び出しの中
+	// → 呼び出しから戻った。
 	enum QumPhase
 	{
-		kQumPhaseWaiting,	   // 準備待ち
-		kQumPhaseWaitNoModal,  // 準備した。結果ダイアログが閉じる（モーダルでない刻み）のを待つ
-		kQumPhaseWaitModal,	   // 利用者のモーダルが開くのを待つ
-		kQumPhaseModalSeen,	   // モーダルを見た。終了を呼ぶ待ち
-		kQumPhaseCalling,	   // 呼び出しの中
-		kQumPhaseReturned,	   // 呼び出しから戻った
+		kQumPhaseWaiting,
+		kQumPhaseWaitNoModal,
+		kQumPhaseWaitModal,
+		kQumPhaseModalSeen,
+		kQumPhaseCalling,
+		kQumPhaseReturned,
 		kQumPhaseDone,
 	};
 
@@ -242,8 +245,9 @@ namespace
 		long long returnedAt = -1;
 		int depth = 0; // 終了の呼び出しが何段スタックに載っているか
 		long long ticks = 0;
-		long long ticksModal = 0;	   // モーダルと見えた刻み
-		long long ticksInCall = 0;	   // 呼び出しの最中の刻み（入り直し）
+		// モーダルと見えた刻み・呼び出しの最中の刻み（入り直し）・戻った後の刻み
+		long long ticksModal = 0;
+		long long ticksInCall = 0;
 		long long ticksAfterReturn = 0;
 		long long maxGapMs = 0;
 		long long gaps = 0;
@@ -355,18 +359,20 @@ namespace
 	{
 		const long long begin = QumElapsedMs(*st);
 		QumWriteCounts(*st);
-		QumAppend(st->events, "quit-call-begin " + QumStamp(*st) + " modal=" +
-								  QumYesNo(QumModal()) + " " + QumMode() +
-								  " undo=" + QumYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()) +
-								  " → CloseAllFilesAndQuitVectorworks(true, false)");
+		std::string line = "quit-call-begin " + QumStamp(*st);
+		line += " modal=" + QumYesNo(QumModal()) + " " + QumMode();
+		line += " undo=" + QumYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent());
+		line += " → CloseAllFilesAndQuitVectorworks(true, false)";
+		QumAppend(st->events, line);
 		++st->depth;
 		gSDK->CloseAllFilesAndQuitVectorworks(true, false);
 		--st->depth;
 		const long long end = QumElapsedMs(*st);
-		QumAppend(st->events, "quit-call-returned " + QumStamp(*st) +
-								  " took_ms=" + std::to_string(end - begin) +
-								  " modal=" + QumYesNo(QumModal()) + " " + QumMode() +
-								  " docs=" + std::to_string(QumDocCount()));
+		line = "quit-call-returned " + QumStamp(*st);
+		line += " took_ms=" + std::to_string(end - begin);
+		line += " modal=" + QumYesNo(QumModal()) + " " + QumMode();
+		line += " docs=" + std::to_string(QumDocCount());
+		QumAppend(st->events, line);
 		QumWriteCounts(*st);
 	}
 
@@ -406,11 +412,13 @@ namespace
 			<< " " << mode;
 		if (key.str() != st->lastKey)
 		{
-			QumAppend(st->events, "state t_ms=" + std::to_string(now) +
-									  " tick=" + std::to_string(st->ticks) + " " + key.str() +
-									  " → GetOpenFilesList / IsCurrentlyBuildingAnUndoEvent を呼ぶ");
-			QumAppend(st->events, "  docs=" + std::to_string(QumDocCount()) + " undo=" +
-									  QumYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+			std::string line = "state t_ms=" + std::to_string(now);
+			line += " tick=" + std::to_string(st->ticks) + " " + key.str();
+			line += " → GetOpenFilesList / IsCurrentlyBuildingAnUndoEvent を呼ぶ";
+			QumAppend(st->events, line);
+			line = "  docs=" + std::to_string(QumDocCount());
+			line += " undo=" + QumYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent());
+			QumAppend(st->events, line);
 			st->lastKey = key.str();
 			QumWriteCounts(*st);
 		}
@@ -437,8 +445,10 @@ namespace
 				const int docs = QumDocCount();
 				if (docs != 1)
 				{
-					QumAppend(st->events, "abort " + QumStamp(*st) + " docs=" + std::to_string(docs) +
-											  "（図面を 1 枚だけ開いた状態で走らせる）");
+					std::string line = "abort " + QumStamp(*st);
+					line += " docs=" + std::to_string(docs);
+					line += "（図面を 1 枚だけ開いた状態で走らせる）";
+					QumAppend(st->events, line);
 					QumDisarm("docs-not-1");
 					return;
 				}
@@ -610,8 +620,8 @@ namespace
 		// コマンドの中の前面の窓＝ VW の主窓（の根の持ち主）。
 		HWND fg = ::GetForegroundWindow();
 		gQumMainWnd = fg != nullptr ? ::GetAncestor(fg, GA_ROOTOWNER) : nullptr;
-		probe.log("主窓: " + QumWndText(gQumMainWnd) + " enabled=" +
-				  QumYesNo(gQumMainWnd != nullptr && ::IsWindowEnabled(gQumMainWnd)));
+		const bool mainEnabled = gQumMainWnd != nullptr && ::IsWindowEnabled(gQumMainWnd);
+		probe.log("主窓: " + QumWndText(gQumMainWnd) + " enabled=" + QumYesNo(mainEnabled));
 #endif
 		gQumState = new QumState();
 		QumState* st = gQumState;
