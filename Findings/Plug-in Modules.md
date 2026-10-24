@@ -117,6 +117,169 @@ Sentry（sentry-native / crashpad）が先に掴み、ダンプを
 - 【推定】同じ `Plug-ins` に入れていた別のプラグイン（`cli`。`SetTimer` を使う）も同じ形で
   落ちうる。cli だけで落ちた回（issue の 5）はダンプが残っておらず、確かめていない。
 
+## 「開発元不明のプラグイン」のダイアログ——有効化は**フルパス**で覚え、出るのは無効があるときと約 24 時間おき（Windows・macOS）
+
+（[issue #258](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/258)。
+VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エミュレーション。
+被験体は `%APPDATA%\Nemetschek\Vectorworks\2026\Plug-ins\cli\cli.vlb`（署名なし。
+[vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)）。
+2026-10-21 に 12 回起動して確かめた。macOS も 2026-10-24 に同じ規則を確かめた——下の「macOS」。）
+
+**まとめ（`install` のように外からプラグインを置く側が知っておくこと）:**
+
+- **有効化の記録は `Settings\ExceptionsMissingCredentials.bin` に、プラグインの
+  フルパスで残る**（レジストリには無い）。**中身は見ない**——同じパスのまま別のビルドへ
+  入れ替えても、末尾にバイトを足しても有効のまま読み込まれた。**パスが変われば別物**
+  （フォルダ名を変えただけで「無効」に戻った）。
+- **記録はダイアログを閉じるたびに、そのとき一覧にあったものだけで書き直される。**
+  プラグインが居ない起動でダイアログを閉じると、そのプラグインの有効化は消える
+  （戻しても「無効」から）。**入れ替えはパスを変えず、プラグインが居ない状態で VW を
+  起動させない。**
+- **前もって有効にしておける——ただし作れるのは同じ記録の複製だけ。** VW を止めた状態で
+  以前の `ExceptionsMissingCredentials.bin` を戻すと、ダイアログ無しで読み込まれた。記録は
+  固定の鍵による暗号文なので、新しいパスの記録を外から作ることはできない（鍵は取り出して
+  いない）。**別の機械で作った記録の複製が通るかは未確認**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+- **ダイアログは「無効のものがあれば毎回」「全部有効なら前回から約 24 時間おき」に出る。**
+  同梱ヘルプは「各セッションの開始時に開く」と書くが、実測では間引かれる。全部有効なら
+  開いている間もプラグインは読み込み済み（[cli の実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)と同じ）。
+- **SDK に有効にする口は無い【ヘッダ根拠】。Authenticode の署名では消えない見込み
+  【バイナリ根拠】**——「開発元」は Vectorworks のパートナープログラムが発行する
+  クレデンシャルで、Windows の署名ではない（下記）。署名して試すのは [#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)。
+- **macOS も同じ。** 記録は `~/Library/Application Support/Vectorworks/2026/Settings/ExceptionsMissingCredentials.bin`
+  に**バンドル（`cli.vwlibrary`）のフルパス**で残り、`install` の手順（フォルダごと
+  付け替え・中身も別ビルド）でも有効のまま、閾値はほぼ 24 時間ちょうど（下の「macOS」）。
+
+### 実測（起動ごと）
+
+「出た」は `VW User Log.txt` の `Dialog[OPEN]: ID-10002 (UnknownDeveloperPlugIns)` と画面で、
+「読み込み」はホーム画面が出た後に VW のプロセスのモジュール一覧に `cli.vlb` があるかで見た。
+`<Date>` は下記の `SavedSettingsUser.xml` の値（VW を止めて書き換えたものを含む）。
+
+| # | 前提 | ダイアログ | cli の表示 | 読み込み |
+| --- | --- | --- | --- | --- |
+| 1 | 何も変えない（記録あり。`<Date>` は 3 日前の 10/18 21:19） | **出た** | 有効 | された |
+| 2 | 1 の直後にそのまま | 出ない | — | された |
+| 3 | `<Date>` を 24 時間 20 分前に | **出た** | 有効 | された |
+| 4 | `<Date>` を 6 時間前（同じ日）に | 出ない | — | された |
+| 5 | `<Date>` を前日の 23:59（約 18 時間前）に | 出ない | — | された |
+| 6 | `<Date>` を 23 時間前に | 出ない | — | された |
+| 7 | 記録を退ける（`<Date>` は今） | **出た** | **無効** | **されない** |
+| 7' | 7 で「有効化」→「再起動」した後の起動 | 出ない | — | された |
+| 8 | フォルダを `cli` → `cli2`（記録は `cli` のもの） | **出た** | **無効** | **されない** |
+| 9 | 8 で有効化せず「続ける」→ `cli` に戻す | **出た** | **無効** | **されない** |
+| 10 | 9 の後、VW を止めて 7 で退けた記録を戻す | 出ない | — | された |
+| 11 | `cli.vlb` の末尾に 16 バイト足す（SHA-256・サイズ・日時が変わる） | 出ない | — | された |
+| 12 | `cli2` にして有効化 →「再起動」した後の起動 | 出ない | — | された（`cli2\cli.vlb`） |
+
+- **閾値は 23 時間〜24 時間 20 分の間**（4〜6 と 3）。暦の日付ではない（5 は前日だが出ない）。
+- **無効のものがあると `<Date>` が新しくても出る**（7〜9。どれも前回から 24 時間以内）。
+- ボタンごとの記録の書き方:
+
+  | 操作 | `ExceptionsMissingCredentials.bin` | `<Date>` | その後 |
+  | --- | --- | --- | --- |
+  | 「続ける」（全部有効のとき。1・3） | 書き直す（同じバイト列） | 押した時刻になる | そのまま起動を続ける |
+  | 「有効化」 | まだ書かない | — | 「続ける」が「再起動」に変わる |
+  | 「再起動」（7・12） | 書き直す | 変わらなかった | ホーム画面まで進んでから終了し、自動で起動し直す |
+  | 「続ける」（無効が残るとき。8） | 書き直す（**8 バイト＝空**） | 変わらなかった | そのまま起動を続ける（無効のものは読まれない） |
+  | 「終了」（9） | 書き直す（8 バイト） | 変わらなかった | ホーム画面まで進んでから VW を終了する（ログは `Return=2`） |
+
+### 置き場所と形
+
+- **有効化の記録**: `%APPDATA%\Nemetschek\Vectorworks\2026\Settings\ExceptionsMissingCredentials.bin`。
+  先頭 8 バイトが平文の長さ（リトルエンディアン）、続いて 16 バイト単位の暗号文。
+  - `cli` 1 本のとき長さ 82（0x52）＝ `C:\Users\…\Plug-ins\cli\cli.vlb` の 81 文字＋終端。
+    `cli2` にすると 83（0x53）になった——**フルパスそのものを暗号化している**。
+  - `cli` と `cli2` の記録は**暗号文の先頭 64 バイトが一致**し、パスが食い違う文字（73 文字目）を
+    含むブロックから先が違った。鍵も IV も固定のブロック暗号で、同じ平文は同じ暗号文になる
+    （7 で作り直した記録は退けたものとバイト単位で同一だった）。
+  - 何も有効でなければ 8 バイト（長さ 0）。**プラグインが 2 本以上のときの並べ方は見ていない**
+    （有効にしたのは 1 本ずつ。[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+- **間引きの基準**: `Settings\SavedSettingsUser.xml` の
+  `<Vectorworks><UnknownPluginsDialog><Date>21;10;2026;17;14</Date>`（日;月;年;時;分。
+  ローカル時刻。同じ要素にダイアログの位置と列幅も入る）。
+- **レジストリ**（`HKCU\Software\Nemetschek\Vectorworks 31` 以下）には何も無い。
+
+### 「開発元」とは何か【バイナリ根拠】
+
+- VW 同梱の `Plug-Ins\` に**クレデンシャル**が置いてある: `CredentialsVectorworks.vlb`・
+  `CredentialsComputerWorks.vlb`・`CredentialsExtragroup.vlb`・`CredentialsMaxon.vlb`・
+  `CredentialsVectorworksJapanJW.vst`。中身は DLL ではなく、魔法の数 `de 4c 34 97`・
+  長さ・**ECDSA P-384 の署名**（DER）・長さ・JSON の順で、JSON は
+  `{"developer":{"contact":…,"issueDate":…,"name":"Vectorworks Inc.","web":…},"files":["3DS Library",…,"Vectorworks Remote/Vectorworks Remote",…]}`。
+  `files` は **`Plug-Ins` からの相対パス（拡張子なし）**の一覧。
+- `Vectorworks2026.exe` には P-384 の公開鍵（PEM）、`developer` / `contact` / `issueDate`、
+  `IExtendedPropsSupport::AddCredentials`、`_AddCredentialsLog.txt` と
+  `ADDED CREDENTIALS TO` / `FILE CONTAINS SIGNATURE` などの文字列がある——VectorScript の
+  暗号化プラグインにクレデンシャルを書き込む道具も本体に入っている。
+- ダイアログの文言は「開発者は Vectorworks パートナーシッププログラムの一員ではありません」、
+  同梱ヘルプ（`VWHelp\…\Start\Third-party_plug-in_security.htm`「サードパーティプラグインの
+  セキュリティ」）は「パートナーシップを申請しプラグインの審査を受けて…認証を得る」。
+  有効にした開発者のプラグインは「プラグインマネージャ」の「開発元」タブで管理するとある。
+- **Authenticode は使っていない見込み。** `Vectorworks2026.exe` と同梱の `.vlb` / `.dll` の
+  どれも `WinVerifyTrust` を含まない（含むのは Cineware・CEF・PhysX・Redshift・
+  インストーラだけ）。`CryptQueryObject` / `CertGetNameStringA` は exe にあるが、同じ所に
+  curl の schannel の文字列が並んでおり、そちらの持ち物と読める。**署名して試してはいない**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+
+### SDK【ヘッダ根拠】
+
+`SDK Index/` に `credential` / `UnknownPlugin` / `UnknownDeveloper` / `ExtendedPropsSupport` /
+`AddCredentials` / `partner` は 1 件も無い。プラグインから有効・無効を操作する口も、
+クレデンシャルを扱う口も公開されていない。
+
+### macOS
+
+（VW 2026 31.6.0（Build 872399）・macOS 27.0.1・arm64。被験体は
+`~/Library/Application Support/Vectorworks/2026/Plug-ins/cli/cli.vwlibrary`（アドホック署名）。
+2026-10-24 に 11 回起動して確かめた。見方は Windows と同じで、「読み込み」は `lsof -p` に
+`cli.vwlibrary/Contents/MacOS/cli` が出るか。）
+
+**規則は Windows と同じだった。** 違うのは置き場所と、空の記録の先頭 8 バイトだけ。
+
+| # | 前提 | ダイアログ | cli の表示 | 読み込み |
+| --- | --- | --- | --- | --- |
+| m1 | `<Date>` を 1 時間前に（記録あり） | 出ない | — | された |
+| m2 | **`install` の手順で入れ替え**（下記）。`<Date>` は 1 時間前 | **出ない** | — | **された** |
+| m3 | `<Date>` を 23 時間前に | 出ない | — | された |
+| m4 | `<Date>` を 24 時間 20 分前に | **出た** | 有効 | された（開いている間も） |
+| m5 | `<Date>` を 23 時間 55 分前に | 出ない | — | された |
+| m6 | `<Date>` を 24 時間 5 分前に | **出た** | 有効 | された |
+| m7 | フォルダを `cli` → `cli2` | **出た** | **無効** | **されない** |
+| m8 | m7 で有効化せず「続ける」→ `cli` に戻す | **出た** | **無効** | **されない** |
+| m9 | m8 で「終了」→ VW を止めて m6 の後の記録を戻す | 出ない | — | された |
+| m10 | `cli2` にして有効化 →「再起動」した後の起動 | 出ない | — | された（`cli2/cli.vwlibrary`） |
+
+- **m2 の入れ替え**は cli の `install` と同じ手順で、VW を止めてから
+  `<Plug-ins>/cli` を `~/Library/Application Support/vectorworks2026-cli/old/cli` へ退け、
+  `…/staging/cli`（CI の別ビルド。`5fcf0f3` → `0b206b8`）を `<Plug-ins>/cli` へ置き、
+  `old/cli` を消した。フォルダの inode・実行ファイルの inode・作成日時・SHA-256 が
+  すべて変わり、パスだけが同じ。**有効のまま、ダイアログも出なかった。**
+- **閾値は 23 時間 55 分〜24 時間 5 分の間**（m5・m6）——ほぼ 24 時間ちょうど。
+  Windows で絞った「23h〜24h20m」とも食い違わない。
+- **記録**: `~/Library/Application Support/Vectorworks/2026/Settings/ExceptionsMissingCredentials.bin`。
+  cli 1 本のとき 104 バイトで、先頭 8 バイトが 91＝`/Users/…/Plug-ins/cli/cli.vwlibrary`
+  の 90 文字＋終端、続いて 96 バイト（16 の倍数）。**鍵はバンドルのパス**で、中の
+  実行ファイル（`Contents/MacOS/cli`）のパスではない。
+- ボタンごとの書き方も Windows と同じ:
+  - 「続ける」（全部有効。m4・m6）は記録を**同じバイト列で**書き直し、`<Date>` を押した
+    時刻にする（ファイルに出るのは終了時の保存で、押した直後の XML はまだ古い値）。
+  - 「続ける」（無効が残る。m7）と「終了」（m8）は記録を **8 バイト**に書き直し、`<Date>` は
+    変えない。**ただし先頭 8 バイトは 0 ではなく**、`0x7b84ce7960`・`0x76d47c15a0` と
+    書くたびに違う値だった（Windows は長さ 0）。【推定】初期化していない値をそのまま
+    書いている。中身が無いことに変わりはない（m8 は「無効」）。
+  - 「有効化」（m10）は押した時点では記録を書かず（mtime もバイト列もそのまま）、
+    「続ける」が「再起動」に変わる。「再起動」は記録を書き直し（長さ 92＝`cli2` のパス
+    ＋終端）、`<Date>` は変えず、ホーム画面まで進んでから自動で起動し直す。
+- **「有効化」ボタンは実際のクリックで行を選んだときだけ押せるようになる。**
+  アクセシビリティ API で行を選んでも（`AXSelected`）灰色のまま（[cli の実測](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/258#issuecomment-6263987581)
+  と同じ）。「続ける」「終了」は `AXPress` で押せた。
+- [cli の実測](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/258#issuecomment-6263987581)
+  で、入れたばかりの VW で「有効化」→「再起動」の 2 回目も**ダイアログが出た**（cli は
+  「有効」で読み込まれた）のは、【推定】`<Date>` がまだ無かったため（「再起動」は
+  `<Date>` を書かない。m10 は `<Date>` が 9 分前だったので出なかった）。
+- 同じ VW の 10/19〜10/23 のログも同じ規則で読める: 10/19 16:04 に「続ける」で閉じた
+  時刻がそのまま `<Date>` に残り、約 3 日後の 10/22 の起動で出たダイアログを「終了」
+  （`Return=2`）で閉じたときは、記録だけ書き直されて `<Date>` は変わらなかった。
+
 ## VCOM の初期化はモジュールごとに閉じている【ソース根拠】
 
 `gSDK` / `gCBP` / `gVWMM` / `gVCOMCallback` は、SDK の静的ライブラリ（`libVWSDK.a` /
