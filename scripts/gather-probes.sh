@@ -343,7 +343,9 @@ buildid_source="$OUT/build-id-source.txt"
 {
 	echo "main=${head_full}"
 	if [ "${#ID_PR_PARTS[@]}" -gt 0 ]; then
-		printf '%s\n' "${ID_PR_PARTS[@]}" | sort -t= -k2 -V
+		# 区切りは長い形で渡す。runner の sort が uutils（Rust 版）になると `-t=` を
+		# 「-t に空の値」と読んで止まる（#262 で踏んだ）。
+		printf '%s\n' "${ID_PR_PARTS[@]}" | sort --field-separator='=' -k2 -V
 	fi
 } >"$buildid_source"
 
