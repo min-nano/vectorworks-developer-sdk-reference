@@ -150,7 +150,8 @@ namespace
 	// 切り分けのスイッチ。一時ディレクトリの VwSdkProbes-section-vp-order-mode.txt に語を
 	// 空白区切りで書く: nostate（作る前後のアクティブレイヤ・選択の数を読まない）／nolayer
 	// （場面のレイヤの性質を読まない）／noparent（箱の親を読まない）／withx（切断面を切る
-	// X 箱を映さないレイヤへ置く）。
+	// X 箱を映さないレイヤへ置く）／bounds（箱を作った直後に外接を読む）／reset（箱を
+	// ResetObject する）。
 	std::string& SvoMode()
 	{
 		static std::string sMode;
@@ -237,6 +238,21 @@ namespace
 		MCObjectHandle bs = SvoMakeBox(-3000.0, -2000.0, 0.0, 3000.0);
 		gSDK->SetCurrentLayer(sc.layerN);
 		MCObjectHandle bn = SvoMakeBox(7000.0, 8000.0, 5000.0, 3000.0);
+		if (SvoOff("bounds"))
+		{
+			// #202 と #245 の c0 は、箱を作った直後に外接を読んでいた（c1 は読んでいない）。
+			WorldRect rs, rn;
+			const bool okS = gSDK->GetObjectBounds(bs, rs) != 0;
+			const bool okN = gSDK->GetObjectBounds(bn, rn) != 0;
+			probe.log("  " + prefix + " 箱の外接を読んだ S " + (okS ? SvoRectText(rs) : "×") + " N " +
+					  (okN ? SvoRectText(rn) : "×"));
+		}
+		if (SvoOff("reset"))
+		{
+			gSDK->ResetObject(bs);
+			gSDK->ResetObject(bn);
+			probe.log("  " + prefix + " 箱を ResetObject した");
+		}
 		if (SvoOff("withx"))
 		{
 			// #202 / #245 の c0 と同じく、切断面を切る X 箱を別のレイヤへ置く（断面には映さない）。
