@@ -149,7 +149,8 @@ namespace
 
 	// 切り分けのスイッチ。一時ディレクトリの VwSdkProbes-section-vp-order-mode.txt に語を
 	// 空白区切りで書く: nostate（作る前後のアクティブレイヤ・選択の数を読まない）／nolayer
-	// （場面のレイヤの性質を読まない）／noparent（箱の親を読まない）。
+	// （場面のレイヤの性質を読まない）／noparent（箱の親を読まない）／withx（切断面を切る
+	// X 箱を映さないレイヤへ置く）。
 	std::string& SvoMode()
 	{
 		static std::string sMode;
@@ -236,6 +237,15 @@ namespace
 		MCObjectHandle bs = SvoMakeBox(-3000.0, -2000.0, 0.0, 3000.0);
 		gSDK->SetCurrentLayer(sc.layerN);
 		MCObjectHandle bn = SvoMakeBox(7000.0, 8000.0, 5000.0, 3000.0);
+		if (SvoOff("withx"))
+		{
+			// #202 / #245 の c0 と同じく、切断面を切る X 箱を別のレイヤへ置く（断面には映さない）。
+			MCObjectHandle layerX = gSDK->CreateLayer(TXString((prefix + "-X").c_str()),
+													  static_cast<short>(kLayerDesign));
+			gSDK->SetCurrentLayer(layerX);
+			MCObjectHandle bx = SvoMakeBox(2000.0, 3000.0, 0.0, 3000.0);
+			probe.log("  " + prefix + " X 箱（映さない）" + std::string(bx != nullptr ? "あり" : "作れず"));
+		}
 		if (!SvoOff("noparent"))
 			probe.log("  " + prefix + " S 箱の親 \"" + SvoName(gSDK->ParentObject(bs)) +
 					  "\" N 箱の親 \"" + SvoName(gSDK->ParentObject(bn)) + "\"");
