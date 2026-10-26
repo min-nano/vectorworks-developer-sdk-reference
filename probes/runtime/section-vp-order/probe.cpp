@@ -24,7 +24,8 @@
 //	腕ごとに、作る前のアクティブレイヤ・選択の有無と、場面のレイヤの性質（表示・縮尺・高さ）を
 //	書き、断面のキャッシュ群（3/4/5/6/7/15）の件数と中身の外接を書く。
 //
-//	新規の空図面で走らせる（ブリッジの既定）。
+//	新規の空図面で走らせる（ブリッジの既定）。**同じ図面のままもう一度走らせる**（new_document=false）と、
+//	VW へ戻った後のキャッシュ群を名前（svo-A … svo-G）で引き直して読み、更新し直してもう一度読む。
 //
 
 #include "Probe.h"
@@ -149,6 +150,40 @@ namespace
 				  " / 選択 " + std::to_string(SvoSelectedCount()) + " 個");
 	}
 
+	// キャッシュ群（3/4/5/6/7/15）の件数と、中身（群 4 以外）の外接。
+	std::string SvoGroups(MCObjectHandle vp)
+	{
+		const short groups[] = {3, 4, 5, 6, 7, 15};
+		std::string line;
+		bool hasContent = false;
+		WorldRect content;
+		for (short g : groups)
+		{
+			line += " " + std::to_string(g) + "=";
+			MCObjectHandle group = gSDK->GetViewportGroup(vp, g);
+			if (group == nullptr)
+			{
+				line += "nil";
+				continue;
+			}
+			int n = 0;
+			for (MCObjectHandle h = gSDK->FirstMemberObj(group); h != nullptr;
+				 h = gSDK->NextObject(h))
+				++n;
+			line += std::to_string(n);
+			WorldRect r;
+			if (g == 4 || !gSDK->GetObjectBounds(group, r) || SvoRectIsEmpty(r))
+				continue;
+			if (!hasContent)
+				content = r;
+			else
+				content.Unite(r);
+			hasContent = true;
+		}
+		return std::string(hasContent ? "中身あり" : "空") + " / 群" + line + " / 中身 " +
+			   (hasContent ? SvoRectText(content) : std::string("無し"));
+	}
+
 	struct SvoScene
 	{
 		MCObjectHandle layerS = nullptr;
@@ -224,44 +259,45 @@ namespace
 		TVariableBlock scaleBlock(kSvoScale);
 		gSDK->SetObjectVariable(vp, ovViewportScale, scaleBlock);
 		gSDK->UpdateViewport(vp);
-
-		const short groups[] = {3, 4, 5, 6, 7, 15};
-		std::string line;
-		bool hasContent = false;
-		WorldRect content;
-		for (short g : groups)
-		{
-			line += " " + std::to_string(g) + "=";
-			MCObjectHandle group = gSDK->GetViewportGroup(vp, g);
-			if (group == nullptr)
-			{
-				line += "nil";
-				continue;
-			}
-			int n = 0;
-			for (MCObjectHandle h = gSDK->FirstMemberObj(group); h != nullptr;
-				 h = gSDK->NextObject(h))
-				++n;
-			line += std::to_string(n);
-			WorldRect r;
-			if (g == 4 || !gSDK->GetObjectBounds(group, r) || SvoRectIsEmpty(r))
-				continue;
-			if (!hasContent)
-				content = r;
-			else
-				content.Unite(r);
-			hasContent = true;
-		}
+		// 名前は UpdateViewport の後で付ける（#245）。2 回目に名前で引き直して読む。
+		gSDK->SetObjectName(vp, TXString(("svo-" + arm).c_str()));
 		probe.log("  ★" + arm + " 映す=\"" + SvoName(show.layerS) + "\"+\"" + SvoName(show.layerN) +
-				  "\" 用紙=\"" + SvoName(sheet) + "\" → " + (hasContent ? "中身あり" : "空") +
-				  " / 群" + line + " / 中身 " +
-				  (hasContent ? SvoRectText(content) : std::string("無し")));
+				  "\" 用紙=\"" + SvoName(sheet) + "\" → " + SvoGroups(vp));
 		SvoState(probe, arm + " 断面を作った後");
+	}
+
+	const char* const kSvoArms[] = {"A", "B", "C", "D", "E", "F", "G"};
+
+	// 2 回目: 1 回目の図面のまま走らせると、VW へ戻った後のキャッシュ群を名前で引き直して読む。
+	// 続けて UpdateViewport し直して、もう一度読む。
+	bool SvoRemeasure(vwprobe::Report& probe)
+	{
+		if (gSDK->GetNamedObject("svo-A") == nullptr)
+			return false;
+		probe.log("■ 2 回目: VW へ戻った後に、1 回目の断面を名前で引き直して読む");
+		for (const char* arm : kSvoArms)
+		{
+			MCObjectHandle vp = gSDK->GetNamedObject(TXString((std::string("svo-") + arm).c_str()));
+			probe.log(std::string("  ") + arm + " 戻った後 → " +
+					  (vp == nullptr ? std::string("（見つからない）") : SvoGroups(vp)));
+		}
+		probe.log("■ 2 回目: UpdateViewport し直して読む");
+		for (const char* arm : kSvoArms)
+		{
+			MCObjectHandle vp = gSDK->GetNamedObject(TXString((std::string("svo-") + arm).c_str()));
+			if (vp == nullptr)
+				continue;
+			gSDK->UpdateViewport(vp);
+			probe.log(std::string("  ") + arm + " 更新し直した → " + SvoGroups(vp));
+		}
+		return true;
 	}
 } // namespace
 
 VW_PROBE("section-vp-order", "断面VPの順序", "後から作った場面の断面が空になる条件を切り分ける")
 {
+	if (SvoRemeasure(probe))
+		return;
 	probe.log("■ A 場面 1 → 用紙 1 → 断面（対照）");
 	SvoScene s1;
 	if (!SvoMakeScene(probe, "s1", s1))
