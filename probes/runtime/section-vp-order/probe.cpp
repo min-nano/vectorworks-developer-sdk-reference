@@ -244,7 +244,8 @@ namespace
 													  static_cast<short>(kLayerDesign));
 			gSDK->SetCurrentLayer(layerX);
 			MCObjectHandle bx = SvoMakeBox(2000.0, 3000.0, 0.0, 3000.0);
-			probe.log("  " + prefix + " X 箱（映さない）" + std::string(bx != nullptr ? "あり" : "作れず"));
+			probe.log("  " + prefix + " X 箱（映さない）" +
+					  std::string(bx != nullptr ? "あり" : "作れず"));
 		}
 		if (!SvoOff("noparent"))
 			probe.log("  " + prefix + " S 箱の親 \"" + SvoName(gSDK->ParentObject(bs)) +
