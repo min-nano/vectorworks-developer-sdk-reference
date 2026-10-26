@@ -244,8 +244,8 @@ namespace
 			WorldRect rs, rn;
 			const bool okS = gSDK->GetObjectBounds(bs, rs) != 0;
 			const bool okN = gSDK->GetObjectBounds(bn, rn) != 0;
-			probe.log("  " + prefix + " 箱の外接を読んだ S " + (okS ? SvoRectText(rs) : "×") + " N " +
-					  (okN ? SvoRectText(rn) : "×"));
+			probe.log("  " + prefix + " 箱の外接を読んだ S " + (okS ? SvoRectText(rs) : "×") +
+					  " N " + (okN ? SvoRectText(rn) : "×"));
 		}
 		if (SvoOff("reset"))
 		{
