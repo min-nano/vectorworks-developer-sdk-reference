@@ -258,8 +258,16 @@ VW 2026 Update 6（Build 872399）x64・Windows 11 Pro ARM64 の VM（UTM）の 
 7〜14 秒後に -2、その 0.5 秒後に -5、-2 の 19〜21 秒後にプロセスが終わった。刻みから
 `CloseAllFilesAndQuitVectorworks` を呼んだ道（[Timers and Notifications](Timers%20and%20Notifications.md)
 4 の 9。戻ってから 8〜10 秒で -2、その約 20 秒後に `atexit`）と同じ並び。番地は -1 から -2 まで
-同じだった（留めてあるので読み込み直しは起きない。上の「【罠】」）。**この道で刻みがいつまで
-来るかは測っていない。**
+同じだった（留めてあるので読み込み直しは起きない。上の「【罠】」）。この道で刻みが
+いつまで来るかは [Timers and Notifications](Timers%20and%20Notifications.md) 4 の 9「利用者が
+閉じる道の刻み」——**`kNotifyBeforeApplicationQuit` の後には来ない**（11 回。#269）。
+
+**その #269 の 11 回のうち 1 回は、終了の途中に `libcef.dll_unloaded` の `0xC0000005` で
+落ちた**（-2・-5 の後、`atexit` の前。閉じる指示の 44.5 秒後。WER のフルダンプが残った）。
+上の 82 回で再現しなかった `cli` の落ち方と同じモジュールである。この回は、ブリッジが図面を
+閉じて**ホーム画面へ戻った後**に閉じていた（上の 82 回は、起動してホーム画面から閉じた
+だけ）。同じ形の回は 5 回中 1 回で、入っていたのは `VwSdkProbes` だけ。【推定】図面を開いて
+閉じ、ホーム画面（CEF）へ戻ったことが効いている——確かめていない。
 
 ### 読み違えやすいところ
 
@@ -270,6 +278,11 @@ VW 2026 Update 6（Build 872399）x64・Windows 11 Pro ARM64 の VM（UTM）の 
   （`ExceptionsMissingCredentials.bin`）を全部入りの写しから戻してから起動した。**プラグインを
   出し入れしながらダイアログを閉じると、居ないものの有効化が消える**（同じ節）ので、写しを
   戻すのは必須。
+- **`Get-Process Vectorworks2026` は CEF の子プロセスも拾う。** 子（`--type=renderer` /
+  `gpu-process` など）も同じ `Vectorworks2026.exe` なので、先頭の 1 つを取ると主窓の無い子に
+  当たることがある——`CloseMainWindow` は黙って何もせず（主窓のハンドルが 0）、「VW が閉じる
+  指示を無視した」ように見える（#269 で 4 回踏んだ）。主のプロセスはコマンドラインに
+  `--type=` が無いもの（`Win32_Process` で引く）か、`Start-Process -PassThru` の戻り値を使う。
 - **`VW User Log.txt` の `After SetUpCOM` はホーム画面ではない**（その後にライブラリの準備が
   20 秒ほど続く）。「起動し終えた」の目印には `Section = HomeScreen` を使う。
 
