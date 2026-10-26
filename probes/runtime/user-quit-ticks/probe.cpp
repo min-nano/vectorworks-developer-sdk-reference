@@ -220,9 +220,9 @@ namespace
 		if (st == nullptr || st->disarmed)
 			return;
 		++st->notifyQuit;
-		UqtAppend(st->events, "notify BeforeApplicationQuit wall_ms=" +
-								  std::to_string(UqtWallMs()) + " main=" + UqtMainState() +
-								  " ticks=" + std::to_string(st->ticks));
+		UqtAppend(st->events,
+				  "notify BeforeApplicationQuit wall_ms=" + std::to_string(UqtWallMs()) +
+					  " main=" + UqtMainState() + " ticks=" + std::to_string(st->ticks));
 	}
 
 	void UqtNotifyDocClose(StatusID, StatusData)
@@ -231,9 +231,8 @@ namespace
 		if (st == nullptr || st->disarmed)
 			return;
 		++st->notifyDocClose;
-		UqtAppend(st->events, "notify DocClose wall_ms=" + std::to_string(UqtWallMs()) +
-								  " main=" + UqtMainState() +
-								  " ticks=" + std::to_string(st->ticks));
+		UqtAppend(st->events, "notify DocClose wall_ms=" + std::to_string(UqtWallMs()) + " main=" +
+								  UqtMainState() + " ticks=" + std::to_string(st->ticks));
 	}
 
 	void UqtAtExit()
@@ -276,8 +275,8 @@ namespace
 			VectorWorks::TVWArray_OpenFileInformation list;
 			gSDK->GetOpenFilesList(list);
 			const bool undo = gSDK->IsCurrentlyBuildingAnUndoEvent();
-			UqtAppend(st->events, "  docs=" + std::to_string((int)list.GetSize()) +
-									  " undo=" + UqtYesNo(undo));
+			UqtAppend(st->events,
+					  "  docs=" + std::to_string((int)list.GetSize()) + " undo=" + UqtYesNo(undo));
 		}
 		if (now - st->armedWall > kUqtMaxMs)
 			UqtDisarm("time-limit");
@@ -336,7 +335,8 @@ namespace
 			probe.log("  " + events[i]);
 		}
 		const std::vector<std::string> actions = UqtReadLines(UqtActionsPath());
-		probe.log("■ 殻の action の記録（" + std::to_string(actions.size()) + " 行。最後の 20 行）");
+		probe.log("■ 殻の action の記録（" + std::to_string(actions.size()) +
+				  " 行。最後の 20 行）");
 		for (std::size_t i = actions.size() > 20 ? actions.size() - 20 : 0; i < actions.size(); ++i)
 			probe.log("  " + actions[i]);
 	}
@@ -382,8 +382,8 @@ VW_PROBE("user-quit-ticks", "閉じる道の刻み", "利用者が閉じたと�
 	}
 	std::filesystem::remove(st->events, ec);
 	UqtAppend(st->events, "arm wall_ms=" + std::to_string(st->armedWall) + " owner=" + st->owner +
-							  " build=" + VW_PAYLOAD_BUILD_ID + " read_sdk=" +
-							  UqtYesNo(st->readSdk) + " main=" + UqtMainState() +
+							  " build=" + VW_PAYLOAD_BUILD_ID +
+							  " read_sdk=" + UqtYesNo(st->readSdk) + " main=" + UqtMainState() +
 							  " pinned=" + pinnedPath);
 
 	const Boolean q =
@@ -413,7 +413,8 @@ VW_PROBE("user-quit-ticks", "閉じる道の刻み", "利用者が閉じたと�
 		return;
 	}
 	probe.log("");
-	probe.log(std::string("■ 仕掛けた（read_sdk=") + UqtYesNo(st->readSdk) + " main=" +
-			  UqtMainState() + "）。このあと Vectorworks をメニューの「終了」で閉じ、起動し直して"
-							   "もう一度走らせると、閉じる途中の刻みを報告する。");
+	probe.log(std::string("■ 仕掛けた（read_sdk=") + UqtYesNo(st->readSdk) +
+			  " main=" + UqtMainState() +
+			  "）。このあと Vectorworks をメニューの「終了」で閉じ、起動し直して"
+			  "もう一度走らせると、閉じる途中の刻みを報告する。");
 }
