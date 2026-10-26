@@ -31,7 +31,10 @@
 #include "Probe.h"
 
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace
@@ -144,8 +147,34 @@ namespace
 			   " thick=" + SvoReadRealVar(layer, ovLayerThicknessInCurrUnits);
 	}
 
+	// 切り分けのスイッチ。一時ディレクトリの VwSdkProbes-section-vp-order-mode.txt に語を
+	// 空白区切りで書く: nostate（作る前後のアクティブレイヤ・選択の数を読まない）／nolayer
+	// （場面のレイヤの性質を読まない）／noparent（箱の親を読まない）。
+	std::string& SvoMode()
+	{
+		static std::string sMode;
+		return sMode;
+	}
+
+	bool SvoOff(const char* word)
+	{
+		return (" " + SvoMode() + " ").find(std::string(" ") + word + " ") != std::string::npos;
+	}
+
+	void SvoLoadMode()
+	{
+		std::error_code ec;
+		std::filesystem::path dir = std::filesystem::temp_directory_path(ec);
+		std::ifstream in((dir / "VwSdkProbes-section-vp-order-mode.txt").string());
+		std::string line;
+		std::getline(in, line);
+		SvoMode() = line;
+	}
+
 	void SvoState(vwprobe::Report& probe, const std::string& when)
 	{
+		if (SvoOff("nostate"))
+			return;
 		probe.log("  [" + when + "] アクティブ " + SvoLayerText(gSDK->GetActiveLayer()) +
 				  " / 選択 " + std::to_string(SvoSelectedCount()) + " 個");
 	}
@@ -207,10 +236,14 @@ namespace
 		MCObjectHandle bs = SvoMakeBox(-3000.0, -2000.0, 0.0, 3000.0);
 		gSDK->SetCurrentLayer(sc.layerN);
 		MCObjectHandle bn = SvoMakeBox(7000.0, 8000.0, 5000.0, 3000.0);
-		probe.log("  " + prefix + " S 箱の親 \"" + SvoName(gSDK->ParentObject(bs)) +
-				  "\" N 箱の親 \"" + SvoName(gSDK->ParentObject(bn)) + "\"");
-		probe.log("    S レイヤ " + SvoLayerText(sc.layerS));
-		probe.log("    N レイヤ " + SvoLayerText(sc.layerN));
+		if (!SvoOff("noparent"))
+			probe.log("  " + prefix + " S 箱の親 \"" + SvoName(gSDK->ParentObject(bs)) +
+					  "\" N 箱の親 \"" + SvoName(gSDK->ParentObject(bn)) + "\"");
+		if (!SvoOff("nolayer"))
+		{
+			probe.log("    S レイヤ " + SvoLayerText(sc.layerS));
+			probe.log("    N レイヤ " + SvoLayerText(sc.layerN));
+		}
 		return bs != nullptr && bn != nullptr;
 	}
 
@@ -298,6 +331,8 @@ VW_PROBE("section-vp-order", "断面VPの順序", "後から作った場面の�
 {
 	if (SvoRemeasure(probe))
 		return;
+	SvoLoadMode();
+	probe.log("切り分けのスイッチ: \"" + SvoMode() + "\"");
 	probe.log("■ A 場面 1 → 用紙 1 → 断面（対照）");
 	SvoScene s1;
 	if (!SvoMakeScene(probe, "s1", s1))
