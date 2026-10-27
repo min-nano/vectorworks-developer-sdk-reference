@@ -6,7 +6,7 @@
 //	`vw_run_probe` で走らせる前提で、ダイアログが開いていないときにも同じ手順を走らせて比べる。
 //
 //	手順（どれも結果をログに書いてから次へ進む）:
-//	  1. 前面の図面・図面の数・`IsCurrentlyBuildingAnUndoEvent()`・プロセスの窓（ダイアログが
+//	  1. 前面の図面・図面の数・`IsCurrentlyBuildingAnUndoEvent()`・mac はランループのモード・プロセスの窓（ダイアログが
 //	     開いているか。Windows は可視のトップレベル窓の題・クラス・有効か）を書く。
 //	  2. **図形を足す**——実プラグインと同じ作法で undo イベントを開き（このプローブは
 //	     「undo の記録の中で足せるか」が問いなので例外）、矩形を作って名前を付け、
@@ -33,6 +33,8 @@
 #		define NOMINMAX
 #	endif
 #	include <windows.h>
+#else
+#	include <CoreFoundation/CoreFoundation.h>
 #endif
 
 namespace
@@ -108,10 +110,26 @@ namespace
 	}
 #endif
 
+	// mac はランループのモード（`NSModalPanelRunLoopMode` ならモーダルの中）。Windows は窓を並べる。
+	std::string SddMode()
+	{
+#if GS_WIN
+		return std::string();
+#else
+		CFStringRef mode = ::CFRunLoopCopyCurrentMode(::CFRunLoopGetMain());
+		if (mode == nullptr)
+			return " mode=(ランループの外)";
+		char buf[128] = {0};
+		const bool ok = ::CFStringGetCString(mode, buf, sizeof(buf), kCFStringEncodingUTF8);
+		::CFRelease(mode);
+		return std::string(" mode=") + (ok ? buf : "?");
+#endif
+	}
+
 	void SddState(vwprobe::Report& probe, const std::string& when)
 	{
 		probe.log("[" + when + "] 図面 " + SddDocs() +
-				  " undo=" + SddYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()));
+				  " undo=" + SddYesNo(gSDK->IsCurrentlyBuildingAnUndoEvent()) + SddMode());
 	}
 } // namespace
 
