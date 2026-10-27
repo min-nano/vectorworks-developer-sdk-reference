@@ -22,7 +22,7 @@ Vectorworks はコンパイル済みプラグインを**起動時に走査して
 
 （[issue #252](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/252)。
 被験体は [vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)
-の `cli`。実測の記録はあちらの [Windows の実機での実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)
+の `cli`。実測の記録はあちらの [Windows の実機での実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/98bfbb1e5745405cb208981271a2d8b8240ad224/docs/plugin/windows-measurements.md)
 と [SDK の調査 0](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/sdk-research.md#0-拡張機能を-1-つも登録しないプラグインの読み込み)。）
 
 **メニューも PIO もプラグインライブラリ関数も登録しない（`REGISTER_Extension` を 1 度も
@@ -213,7 +213,7 @@ VW 2026 Update 6（Build 872399）x64・Windows 11 Pro ARM64 の VM（UTM）の 
 `cli` の有無ではなく当時の状況の側にあったと読める。当時と違うのは、起動からホーム画面までが
 36〜308 秒とばらついていたこと（今回は 45〜91 秒）と、閉じる時機をホーム画面ではなく
 起動からの決め打ち（240 / 360 秒）で決めていたこと。**何が効いていたかは分かっていない**
-（当時の記録は cli の側の [Windows の実機での実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)）。
+（当時の記録は cli の側の [Windows の実機での実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/98bfbb1e5745405cb208981271a2d8b8240ad224/docs/plugin/windows-measurements.md)）。
 
 ### 実測
 
@@ -348,7 +348,7 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
   いない）。**別の機械で作った記録の複製が通るかは未確認**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
 - **ダイアログは「無効のものがあれば毎回」「全部有効なら前回から約 24 時間おき」に出る。**
   同梱ヘルプは「各セッションの開始時に開く」と書くが、実測では間引かれる。全部有効なら
-  開いている間もプラグインは読み込み済み（[cli の実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)と同じ）。
+  開いている間もプラグインは読み込み済み（[cli の実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/98bfbb1e5745405cb208981271a2d8b8240ad224/docs/plugin/windows-measurements.md)と同じ）。
 - **全部有効で出たダイアログの最中も、プラグインは OS タイマーの刻みから図面を作る・足す
   （undo の記録の中で）・保存する・閉じる・開くができ、閉じた後も残る**（Windows。下の
   「ダイアログの最中も…」。#264）。ボタンは UI Automation では押せず、Win32 の `BM_CLICK`
