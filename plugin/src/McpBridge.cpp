@@ -852,6 +852,18 @@ namespace vwprobe
 			return bridge::SpoolDir(TempDirectory(), PLUGIN_VWR_ID);
 		}
 
+		// **調べるときだけ**、mac の時計を共通モード（kCFRunLoopCommonModes）にも登録する。
+		// スプールに旗ファイル `common-modes` があれば立つ（起動時に 1 度だけ読む。GUI の
+		// Vectorworks は環境変数を受け継がないので、旗はファイルで置く）。既定のモードだけでは
+		// VW のモーダルの最中（起動時の「開発元不明のプラグイン」のダイアログを含む）は 1 度も
+		// 刻まないので、その最中を調べるとき（issue #264）に使う。undo の記録が開いている間に
+		// 見送るのは変わらない。Windows の WM_TIMER はもとからモーダルの中でも配られる。
+		bool& CommonModes()
+		{
+			static bool sCommonModes = false;
+			return sCommonModes;
+		}
+
 		Json StatusJson(const ServeState& state, const std::string& busyTool = {},
 						long long busyUntil = 0)
 		{
@@ -866,6 +878,8 @@ namespace vwprobe
 			value.set("beat", Json::integer(NowSeconds()));
 			value.set("served", Json::integer(state.served));
 			value.set("failed", Json::integer(state.failed));
+			if (CommonModes())
+				value.set("modes", Json::string("common"));
 			if (state.deferredSince > 0)
 			{
 				value.set("deferred", Json::string("undo"));
@@ -1049,12 +1063,17 @@ namespace vwprobe
 #if GS_MAC
 		// **既定のモードにだけ登録する**（共通モードだと Vectorworks のモーダルの最中にも
 		// 刻み、開いている undo の記録へ書き込みが混ざる。Findings「Timers and
-		// Notifications」§6）。Vectorworks が終わるまで持ち続ける（解放しない）。
+		// Notifications」§6）。例外は旗 `common-modes` を置いたときだけ（CommonModes）。
+		// Vectorworks が終わるまで持ち続ける（解放しない）。
+		std::error_code ec;
+		CommonModes() =
+			std::filesystem::exists(std::filesystem::path(SpoolDirectory()) / "common-modes", ec);
 		static CFRunLoopTimerRef sTimer = nullptr;
 		sTimer = CFRunLoopTimerCreate(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent(),
 									  kClockIntervalMs / 1000.0, 0, 0, &OnClock, nullptr);
 		if (sTimer != nullptr)
-			CFRunLoopAddTimer(CFRunLoopGetMain(), sTimer, kCFRunLoopDefaultMode);
+			CFRunLoopAddTimer(CFRunLoopGetMain(), sTimer,
+							  CommonModes() ? kCFRunLoopCommonModes : kCFRunLoopDefaultMode);
 #else
 		// **先に殻を留める**（issue #253）。Windows の VW は起動時に殻を読み込んで -1・-3 を
 		// 呼んだ後、-2 を送らずに一度降ろし、別の番地へ読み込み直して -4・-5 を呼ぶ。留めずに
