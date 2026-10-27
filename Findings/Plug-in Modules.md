@@ -349,6 +349,12 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
 - **ダイアログは「無効のものがあれば毎回」「全部有効なら前回から約 24 時間おき」に出る。**
   同梱ヘルプは「各セッションの開始時に開く」と書くが、実測では間引かれる。全部有効なら
   開いている間もプラグインは読み込み済み（[cli の実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)と同じ）。
+- **全部有効で出たダイアログの最中も、プラグインは OS タイマーの刻みから図面を作る・足す
+  （undo の記録の中で）・保存する・閉じる・開くができ、閉じた後も残る**（Windows。下の
+  「ダイアログの最中も…」。#264）。ボタンは UI Automation では押せず、Win32 の `BM_CLICK`
+  なら押せる。**mac は `kCFRunLoopCommonModes` に登録したタイマーからなら同じことができる**
+  （ダイアログは `NSModalPanelRunLoopMode` のモーダルで、既定のモードのタイマーは刻まない。
+  下の「mac も…」）。ボタンは `AXPress` で押せる。
 - **SDK に有効にする口は無い【ヘッダ根拠】。Authenticode の署名では消えない**——
   自己署名で付けても「開発元不明」のままだった（実測。信頼された認証局の証明書では未確認
   だが、Authenticode を検証する箇所が無い【バイナリ根拠】）。「開発元」は Vectorworks の
@@ -392,6 +398,105 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
   | 「再起動」（7・12） | 書き直す | 変わらなかった | ホーム画面まで進んでから終了し、自動で起動し直す |
   | 「続ける」（無効が残るとき。8） | 書き直す（**8 バイト＝空**） | 変わらなかった | そのまま起動を続ける（無効のものは読まれない） |
   | 「終了」（9） | 書き直す（8 バイト） | 変わらなかった | ホーム画面まで進んでから VW を終了する（ログは `Return=2`） |
+
+### ダイアログの最中も、プラグインは刻みから図面を扱える（Windows）
+
+（[issue #264](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/264)。
+VW 2026 Update 6・Windows 11 ARM64 の VM。2026-10-26。`Plug-ins` には有効化済みの
+`VwSdkProbes` だけを置き、`<Date>` を 2 日前にして起動した——全部有効でも出る回。
+`probes/runtime/startup-dialog-docs/`、ビルド `b0a3ea33ef37`。macOS は下の「mac も…」。）
+
+**全部有効で出たダイアログの最中、OS タイマー（`SetTimer(nullptr, …)`）の刻みは届き、
+そこから図面を作る・足す・保存する・閉じる・開くがすべて通った。** ダイアログを閉じた後も、
+作った図面と保存したファイルは残っていた。**＝誰も見ていないときに起動してダイアログで
+止まっても、プラグイン経由の操作は待たずに進められる。**
+
+- 刻みは届く。殻の MCP ブリッジ（250 ms の `SetTimer`）の生存の印は 2 秒ごとに更新され続け、
+  `vw_ping` は 1 秒で応えた（その時点の図面は 0 枚）。
+- `vw_run_probe` が刻みの中で `OpenDocumentPath(nullptr, false)` で新規の図面を開き、
+  プローブが続けて次を行った——どれも成功し、落ちなかった。
+  | 手順 | 結果 |
+  | --- | --- |
+  | 始め | 図面 1 枚（ブリッジが開いた無題）・`IsCurrentlyBuildingAnUndoEvent()` は `no` |
+  | `SetUndoMethod(kUndoSwapObjects)` ＋ `NameUndoEvent` → 矩形 → `AddAfterSwapObject` → `EndUndoEvent` | 開いた後 `yes`、閉じた後 `no`。どれも成功 |
+  | `SaveActiveDocumentPath`（一時ディレクトリの `.vwx`） | 0（成功）・33255 バイト。前面の図面がそのパスになり `saved=yes` |
+  | `CloseDocument` → `OpenDocumentPath(そのファイル)` | 0 枚 → 1 枚。名前で矩形を引き直せた |
+
+  ダイアログの無い起動で同じ手順を走らせた結果と、ファイルの大きさ（32607 / 33255 バイト）
+  以外は同じだった。所要はダイアログの最中が 38 秒、無いときが 7 秒（起動の途中で新規の
+  図面を開くのが重い）。
+- そのときのプロセスの窓（可視のトップレベル）は、ダイアログ「開発元不明のプラグイン」
+  （`#32770`・有効）、題の無い `#32770`（無効。起動画面）、主窓（**無効**）の 3 つ。主窓の
+  リボンと開いた図面のタブは、起動画面とダイアログの後ろに既に描かれていた。
+- **ダイアログを閉じた後**: 開き直した図面は開いたまま、保存したファイルもそのまま。VW は
+  その上にホーム画面を出して起動を終えた（図面を開いた状態でも出る）。ブリッジはそのまま
+  応え続けた。
+
+**ボタンは UI Automation では押せない。Win32 の `BM_CLICK` なら押せる。**
+
+- UI Automation では、ダイアログのボタンが **`Button` ではなく `Pane`** として見え、
+  **パターンを 1 つも持たない**（`InvokePattern` も無い）。
+- Win32 では普通の子窓: 「続ける」＝`Button`・ID 1、「終了」＝ID 2、「有効化」＝ID 7、
+  「ファイルの場所を開く...」＝ID 8。**「続ける」へ `BM_CLICK` を送ると、3 秒以内に
+  ダイアログが閉じ**、記録はそのとき一覧にあったものだけで書き直された（上の表の「続ける」と
+  同じ。`<Date>` は VW を終えるまでファイルへ書かれない）。ダイアログは、VW のプロセスの
+  可視の `#32770` で題が「開発元不明のプラグイン」のものとして見つけた（表示言語を変えると
+  題も変わるはず——ID で押すほうが確か）。
+- 見つける目印に `VW User Log.txt` を使うときは注意。この回は、起動を待つハーネス
+  （「書き換え時刻が起動より新しく、`Section = HomeScreen` を含む」で判定）が**ダイアログの
+  最中に「ホーム画面」と誤判定した**。直後のファイルは、ダイアログの最中にログが送信されて
+  （`Log uploading complete`）**10 行に縮んでおり**、`HomeScreen` の行は無かった——
+  【推定】縮む前のファイルに残っていた前の起動の行を拾った。ダイアログが開いているかは、
+  窓（上記）で見るほうが確か。
+
+### mac も、共通モードの刻みからなら扱える（既定のモードだけでは刻まない）
+
+（[issue #264](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/264)。
+VW 2026 Update 6（Build 872399）・macOS 27.0.1。2026-10-27。`Plug-ins` には有効化済みの
+`cli`（`0b206b8`）と `VwSdkProbes` を置き、VW を止めて `<Date>` を 2 日前にして起動した。
+ローカルの Claude Code から MCP ブリッジで走らせた。ビルド `442411571f73`。）
+
+**ダイアログは `applicationDidFinishLaunching` の中の `-[NSApplication runModalForWindow:]`
+で回る**（`sample` で採ったメインスレッドのスタック。開く道は AppleEvent の open →
+`_postDidFinishNotification` → VW → `runModalForWindow:` → `_doModalLoop:peek:`）。ランループの
+モードは **`NSModalPanelRunLoopMode`**（下のプローブの `CFRunLoopCopyCurrentMode`）。
+したがって**刻むのは `kCFRunLoopCommonModes` に登録したタイマーだけ**である
+（[Timers and Notifications](Timers%20and%20Notifications.md) の 4 の 6 と同じ）。
+
+- **既定のモードにだけ登録したタイマーは、ダイアログの間 1 度も刻まない。** 殻の MCP
+  ブリッジ（`kCFRunLoopDefaultMode`）の生存の印は、ダイアログが出る 5 秒前の値のまま
+  **639 秒**更新されなかった。「続ける」で閉じた直後から刻み直した。
+- **共通モードのタイマーは刻む。** 同じプロセス（同じ pid）の `cli`（`CFRunLoopAddTimer(…,
+  kCFRunLoopCommonModes)`）は、同じダイアログの最中に `ping` へ 0.07〜0.17 秒で応えた。
+- 殻のブリッジを共通モードに登録し直して（スプールの旗 `common-modes`。
+  [#276](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/276)）、
+  ダイアログの最中に `vw_run_probe` で `startup-dialog-docs` を走らせた——**Windows と同じ
+  手順がすべて通り、落ちなかった**（所要 3.1 秒）。
+  | 手順 | 結果 |
+  | --- | --- |
+  | 始め | 図面 1 枚（ブリッジが `OpenDocumentPath(nullptr, false)` で開いた無題）・`undo=no`・モード `NSModalPanelRunLoopMode` |
+  | `SetUndoMethod` ＋ `NameUndoEvent` → 矩形 → `AddAfterSwapObject` → `EndUndoEvent` | 開いた後 `yes`、閉じた後 `no`。どれも成功 |
+  | `SaveActiveDocumentPath`（一時ディレクトリの `.vwx`） | 0（成功）・34722 バイト・`saved=yes` |
+  | `CloseDocument` → `OpenDocumentPath(そのファイル)` | 0 枚 → 1 枚。名前で矩形を引き直せた |
+
+  どの時点も `IsCurrentlyBuildingAnUndoEvent()` は（自分で開いた間を除き）`no`——利用者が
+  開いた環境設定などの最中（`yes`。Timers and Notifications の 9）とは違い、Windows と同じ。
+  ダイアログの最中は、開いた図面の窓は窓の一覧（AX）に出ていなかった（ダイアログだけ）。
+- **ダイアログを閉じた後**（約 2 分後に `AXPress` で「続ける」）: 開き直した図面は開いたまま
+  （`GetOpenFilesList` 1 枚・`GetCurrentLayer()` が「レイヤ-1」）、保存したファイルも同じ
+  大きさで残った。VW はその上にホーム画面を出して起動を終え、ブリッジはそのまま応え続けた。
+  Windows と同じ。
+- **ボタンは AX の `AXPress` で押せる**（#258 と同じ）。押した後の記録はバイト単位で
+  押す前と同じに書き直され、`<Date>` は押した時刻（分まで）が VW の終了時に書かれた——
+  手で押したときと同じ（上記の表）。
+- **ダイアログが出たことは `VW User Log.txt` の `Dialog[OPEN]: ID-10002 (UnknownDeveloperPlugIns)`
+  の行で分かる**（ID と内部名なので表示言語に依らない【推定】。日本語でしか見ていない）。
+  窓の題（「開発元不明のプラグイン」）は表示言語で変わるはず。ただし Windows と同じく、
+  ダイアログの最中にログが送信されてファイルが縮む（この回は 10 行）ので、縮む前の行を
+  拾わないように「起動の後に書かれた行か」を時刻で確かめる。
+- **呼ぶ側の作りへの含み**: 共通モードに登録したプラグイン（`cli` はそう）なら、ダイアログが
+  開いたままでも待たずに図面を扱える。**既定のモードだけのプラグインは、ダイアログが閉じる
+  まで何もできない。**
 
 ### 置き場所と形
 
