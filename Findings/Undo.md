@@ -19,8 +19,8 @@
     [#206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)。
     そのプローブはイベントを一度も開いていない）。PIO やビューポートのような重い生成に
     限らず、**図形を作る呼び出しは軒並み開くと思っておく**ほうが安全である。
-    （**Windows では `CreateLine` / `CreateLocus` では開かず、`DeleteObject(h, true)` で
-    開いた**——下記「レイヤのハンドルを直接 `DeleteObject` する」の【追記】。#247）
+    （**#247 のプローブでは `CreateLine` / `CreateLocus` では開かず、`DeleteObject(h, true)` で
+    開いた**——Windows・mac とも。下記「レイヤのハンドルを直接 `DeleteObject` する」の【追記】）
     - **だから「どの undo イベントにも属さない図形」を作ることはできない**——作る行為が
       イベントを開く。「イベントの外で作ったものは取り消しスタックに載らない」
       （下記）を**対照実験に使おうとすると、ここで足をすくわれる**。#206 の調査では
@@ -654,7 +654,7 @@ undo イベントの**外**で作った、登録していない呼び出し元�
     周期実行と組み合わせるときの効き方は
     [周期実行と通知 7 節](Timers%20and%20Notifications.md)。
   - **【追記】閉じるのは「利用者の次の、取り消せる操作」——時間でも、クリックでも、
-    図面の切り替えでもない**（Windows で実測。
+    図面の切り替えでもない**（Windows で実測。mac も同じ——下記。
     [issue #247](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/247)、
     `probes/runtime/undo-auto-close/`、ビルド `4a75f9c807a9`。VW 2026 Update 6 /
     Windows 11 ARM64 の仮想環境。操作は computer use で行い、操作の時刻を記録へ書き込んで
@@ -685,13 +685,32 @@ undo イベントの**外**で作った、登録していない呼び出し元�
     - **ブリッジは走らせた後に自分で閉じる**ようにした（[#266](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/266)。
       `plugin/src/McpBridge.cpp` の `RunTargets`）。プローブ側の作法は変わらない——**自動で
       開いたイベントは、戻る前に `EndUndoEvent()` で閉じる**（[probes/runtime/README.md](../probes/runtime/README.md)）。
-  - **【追記】Windows では `CreateLine` / `CreateLocus` だけでは開かなかった**（同じプローブ。
-    メニューコマンドの中でも刻みの中でも、呼んだ直後の旗は `no`。続けて
-    `DeleteObject(h, useUndo=true)` を呼んだ時点で `yes`）。冒頭の「素の 2D 図形を 1 つ
-    作るだけでも開く——`CreateLocus` で確かめた」は #206 の **mac** の実測で、
-    プラットフォームの違いか、呼んだ場面の違い（#206 は何をしてから呼んだか）かは
-    切り分けていない。**どちらにしても「作る呼び出しは開くかもしれない」と構える**のは
-    変わらない——開いたかは呼んだ後に旗を読んで確かめる。
+    - **mac でも同じ**（VW 2026 Update 6 / macOS 27.0.1。同じプローブの段 1——刻みの中で
+      開く、ブリッジの形——だけ。ビルド `5e9af2e4bed5`。2026-10-27。ローカルの Claude Code
+      から MCP ブリッジで仕掛け、操作は computer use で行って `mark` 行を記録へ足した）。
+      段 0（メニューコマンドの中）は、メニュー「SDK 実機プローブ…」がこの機械のワーク
+      スペースに入っておらず回していない（ブリッジから走らせると、#266 のブリッジが走らせた
+      直後に閉じてしまうので段 0 の形にならない）。
+
+      | 操作 | `building` | `kNotifyUndoEndEvent` |
+      | --- | --- | --- |
+      | 何も触らずに 2 分 | `yes` のまま | 来ない |
+      | 図面の空いた所を 1 回クリック（セレクションツール） | `yes` のまま | 来ない |
+      | 基本パレットで矩形ツールを選ぶ | `yes` のまま（その間のモードは `NSEventTrackingRunLoopMode`） | 来ない |
+      | ファイル ＞ 新規 で 2 枚目を開く | 「用紙の作成」の最中は `yes`（`NSModalPanelRunLoopMode`）、開いた新しい図面は `no` | 来ない |
+      | **ウインドウ メニューで元の図面へ戻る** | **`yes` のまま** | 来ない |
+      | **矩形ツールで矩形を描き終える**（2 点目のクリック） | **`no` になる**（次の刻みから） | **2 回**（同じミリ秒。ランループの外＝クリックの処理の中） |
+
+      メニューを開いて Esc で閉じる操作は試していない（AX でメニューを押すと追跡を経ない
+      ため、人の操作と同じにならない）。
+  - **【追記】`CreateLine` / `CreateLocus` だけでは開かなかった——Windows も mac も**（同じ
+    プローブ。メニューコマンドの中でも刻みの中でも、呼んだ直後の旗は `no`。続けて
+    `DeleteObject(h, useUndo=true)` を呼んだ時点で `yes`。mac は刻みの中だけ）。冒頭の
+    「素の 2D 図形を 1 つ作るだけでも開く——`CreateLocus` で確かめた」は #206 の **mac** の
+    実測で、**mac の刻みの中でも開かなかったので、プラットフォームの違いではない**。#206 との
+    違いは呼んだ場面（#206 は何をしてから呼んだか）にあると見ている【推定】が、切り分けては
+    いない。**どちらにしても「作る呼び出しは開くかもしれない」と構える**のは変わらない
+    ——開いたかは呼んだ後に旗を読んで確かめる。
 - **ビューポートの載ったシートレイヤも `DeleteObject(sheetLayer, true)` で丸ごと消せる**
   （実機。[issue #29](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/29)、
   `probes/runtime/delete-sheet-layer-viewport/`）。ビューポート 2 枚＋注釈空間へ
