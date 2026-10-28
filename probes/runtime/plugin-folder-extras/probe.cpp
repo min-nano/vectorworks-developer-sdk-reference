@@ -289,7 +289,13 @@ namespace
 		{
 			std::string p = PfeModulePath(h);
 			if (plugIns.empty() && PfeLower(fs::path(p).filename().string()) == "vwsdkprobes.vlb")
-				plugIns = PfeU8(fs::path(p).parent_path());
+			{
+				// Windows の殻は <Plug-ins>/VwSdkProbes/VwSdkProbes.vlb と 1 段深い。
+				fs::path dir = fs::path(p).parent_path();
+				if (PfeLower(PfeU8(dir.filename())) == "vwsdkprobes")
+					dir = dir.parent_path();
+				plugIns = PfeU8(dir);
+			}
 		}
 		probe.log("プロセスのモジュール: " + std::to_string(mods.size()) + " 個");
 		for (HMODULE h : mods)
