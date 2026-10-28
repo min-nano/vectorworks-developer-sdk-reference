@@ -592,6 +592,64 @@ VW 2026 Update 6（Build 872399）・macOS 27.0.1。2026-10-27。`Plug-ins` に�
   時刻がそのまま `<Date>` に残り、約 3 日後の 10/22 の起動で出たダイアログを「終了」
   （`Return=2`）で閉じたときは、記録だけ書き直されて `<Date>` は変わらなかった。
 
+## プラグインのフォルダの「モジュール以外のもの」は無視され、モジュールは置いた場所から読まれる（macOS。Windows は未測定）
+
+（[issue #277](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/277)。
+VW 2026 `31.6.0 (872399)`・macOS 27.0.1 arm64。2026-10-28。ローカルの Claude Code から
+MCP ブリッジで走らせた。プローブ `plugin-folder-extras`、本体のビルド `1544564efe53`。）
+
+`<Plug-ins>/cli/` のようにモジュールをフォルダへ入れ、その隣に CLI の実行ファイル・フック・
+JSON・スプールを置く形（cli の段 3）を確かめた。**mac では、VW はそれらに何もしない。**
+
+- **警告は出ない。** 起動ごとの `VW User Log.txt` / `VW User Log Sent.txt` で、そのセッションの
+  `Dialog` の行はホーム画面の開閉だけだった。INFO 以外の行（`NNAExceptionHandlerDelegate`
+  10 件・`RefNameTableHandle::IsValid failed` 2 件）は**試料を置く前の起動にも出ていたもの**
+  である——前者（修飾キーの `NSEvent` の例外）は直前の 5 回の起動すべてで 10 件ずつ、後者は
+  5 回のうち 2 回で 4 件ずつ出ていた。
+  起動直後の VW の窓もホーム画面だけだった（3 回目の起動で窓の一覧を見た）。
+- **書き換えも、移しも、消しもしない。** 試料を作ってから**起動を 2 回またいで**、17 件
+  （試料 14・cli の実物 3）の inode・大きさ・更新時刻（ns）・中身のハッシュ・mode が
+  すべて同じだった。
+- **開いたままにしない。** 起動後のプロセスのファイル記述子（`PROC_PIDLISTFDS`）のうち
+  Plug-ins の下のものは、**cli 自身が持つ `cli/spool/bridge.lock` の 1 つだけ**（3 回とも）。
+  写像（`PROC_PIDREGIONPATHINFO` で全領域を舐めた）も、Plug-ins の下は 2 つのモジュールの
+  実行ファイルだけだった。
+- **モジュールは置いた場所のファイルそのものから読まれる。** `_dyld_get_image_name`・
+  `dladdr(イメージの先頭番地).dli_fname`・`realpath` がどれも
+  `…/Plug-ins/cli/cli.vwlibrary/Contents/MacOS/cli` を返し、写像されているファイルの inode
+  （615865）がそのパスを `stat` した inode と一致した（殻 `VwSdkProbes` も同じ）。写しから
+  読んでいれば inode が食い違う。だから**モジュールの中で `dladdr` で自分の場所を求めれば、
+  `<Plug-ins>/cli/` が得られる**——実際、段 3 の cli（`39edfc9`）はそうして求めた
+  `<Plug-ins>/cli/spool/bridge.lock` を開いていた。mac の VW は読み込み直さない（上の
+  「macOS の VW は読み込み直さない」）ので、起動の途中で求めても同じ値になる。
+
+置いた試料（`<Plug-ins>/cli/p277/` の下。cli の `spool/` に入れなかったのは、cli が
+`*.req.json` を処理してしまうため）:
+
+| 種類 | 試料 |
+| --- | --- |
+| 実行ファイル | `bin/vw2026`（拡張子なしの Mach-O。`/bin/echo` の写し・755） |
+| フック | `hooks/post-install.sh`（755）・`hooks/post-install.ps1` |
+| JSON | `build.json`・`vw2026-install.json` |
+| スプール | `spool/bridge.lock`（空）・`p277-0001.req.json`・`p277-0001.res.json`・`p277-0002.wait`（空）・`p277-0002.res.json.tmp`（JSON の書きかけ） |
+| cli の実物（深さ 1） | `bin/vw2026`（7.8 MB の Mach-O）・`build.json` |
+
+| 起動 | pid | 台帳との違い | Plug-ins の下の fd | 警告 |
+| --- | --- | --- | --- | --- |
+| 試料を作った回（19:45） | 4506 | —（台帳を作った） | `cli/spool/bridge.lock` | 無し |
+| 再起動 1（19:47） | 4717 | 17 件とも同じ | `cli/spool/bridge.lock` | 無し |
+| 再起動 2（20:26） | 5593 | 17 件とも同じ | `cli/spool/bridge.lock` | 無し |
+
+- **見ていないこと: 起動時の走査で中身を読んだか**（開いて閉じたか）。fd は起動後の
+  一瞬を写したもので、走査の最中は見ていない（`fs_usage` は root が要る）。中身も
+  更新時刻も変わらず、警告も出ないので、読んでいたとしても害は無い。
+- **mac はフォルダの名前をいつでも変えられる**（読み込み中でも）ので、ハンドルの問いは
+  Windows でだけ意味がある。
+- **Windows は未測定。** 同じプローブが Windows では、`GetModuleFileNameW`・
+  `GetModuleHandleExW(FROM_ADDRESS)`・`GetMappedFileNameW`・モジュールを書き込みで開けるか
+  （写像中なら共有違反）、試料を共有なしで開けるか、試料のフォルダと cli のフォルダの名前を
+  付け替えられるかを出す（[PR #279](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/279)）。
+
 ## VCOM の初期化はモジュールごとに閉じている【ソース根拠】
 
 `gSDK` / `gCBP` / `gVWMM` / `gVCOMCallback` は、SDK の静的ライブラリ（`libVWSDK.a` /
