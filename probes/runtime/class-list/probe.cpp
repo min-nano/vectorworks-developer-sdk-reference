@@ -299,6 +299,19 @@ VW_PROBE("class-list", "クラスの一覧を列挙する", "ForEachClass の中
 
 	probe.log("docs=" + std::to_string(ClsDocCount()));
 
+	// 参照される側の図面を作る段（札があるときだけ）。ゲストのクラスだけを足して戻る。
+	if (std::filesystem::exists(ClsDir() / "VwSdkProbes-class-list-guest.txt"))
+	{
+		for (const char* name : {"G280-ゲスト", "G280-親-子"})
+		{
+			const std::string id = std::to_string(gSDK->AddClass(name));
+			probe.log(std::string("  参照元へ AddClass(") + name + ") -> id=" + id);
+		}
+		if (gSDK->IsCurrentlyBuildingAnUndoEvent())
+			gSDK->EndUndoEvent();
+		return;
+	}
+
 	// ---- 2. 試験用のクラスを足す ----
 	const InternalIndex maxBefore = gSDK->MaxClassID();
 	const int countBeforeAdd = ClsCount(false);
@@ -307,7 +320,7 @@ VW_PROBE("class-list", "クラスの一覧を列挙する", "ForEachClass の中
 	for (const char* name : kClsAdd)
 	{
 		const InternalIndex existing = gSDK->ClassNameToID(name);
-		if (existing != 0)
+		if (existing > 0) // 無い名前は 0 ではなく -1 が返る（実測）
 		{
 			probe.log(std::string("  既にある: ") + name + " id=" + std::to_string(existing));
 			continue;
