@@ -191,6 +191,7 @@ VW_PROBE("layer-guest", "参照で入るレイヤ", "CreateReference 後の列�
 	gSDK->SetCurrentLayer(src);
 	MCObjectHandle locus = gSDK->CreateLocus(WorldPt(100, 200));
 	probe.log("  CreateLocus → " + LgPtr(locus));
+	probe.log("  LG-src の直下=" + LgMembers(src));
 	const std::string srcPath = LgPath("VwSdkProbes-layer-guest-src.vwx");
 	const std::string hostPath = LgPath("VwSdkProbes-layer-guest-host.vwx");
 	if (!LgSaveAs(probe, srcPath))
@@ -224,10 +225,20 @@ VW_PROBE("layer-guest", "参照で入るレイヤ", "CreateReference 後の列�
 	probe.log(std::string("  → ") + (made ? "true" : "false") + " 図面=" + LgActivePath());
 	LgWalk(probe, "CreateReference の後の列");
 
-	MCObjectHandle guest = gSDK->GetNamedLayer("LG-src");
-	probe.log("  GetNamedLayer(\"LG-src\") → " + LgPtr(guest));
+	probe.log("  GetNamedLayer(\"LG-src\") → " + LgPtr(gSDK->GetNamedLayer("LG-src")));
+	MCObjectHandle guest = nullptr;
+	first = gSDK->FirstMemberObj(gSDK->GetDrawingHeader());
+	for (MCObjectHandle h = first; h != nullptr; h = gSDK->NextObject(h))
+	{
+		if (gSDK->GetObjectTypeN(h) == kLayerNode && VWLayerObj(h).GetLayerType() == 3)
+			guest = h; // 最後の 1 枚（LG-src 由来）を取る
+	}
+	probe.log("  種類 3 の最後のレイヤ → " + LgPtr(guest));
 	if (guest != nullptr)
 	{
+		const std::string name = LgName(guest);
+		MCObjectHandle byName = gSDK->GetNamedLayer(name.c_str());
+		probe.log("  GetNamedLayer(\"" + name + "\") → " + LgPtr(byName));
 		probe.log("■ 参照で入ったレイヤを現在にする");
 		gSDK->SetCurrentLayer(guest);
 		MCObjectHandle cur = gSDK->GetCurrentLayer();
@@ -235,6 +246,7 @@ VW_PROBE("layer-guest", "参照で入るレイヤ", "CreateReference 後の列�
 		double_gs scale = -1;
 		gSDK->GetLayerScaleN(guest, scale);
 		probe.log("  GetLayerScaleN → " + std::to_string((double)scale));
+		LgWalk(probe, "参照で入ったレイヤを現在にした後の列");
 	}
 
 	if (gSDK->IsCurrentlyBuildingAnUndoEvent())
