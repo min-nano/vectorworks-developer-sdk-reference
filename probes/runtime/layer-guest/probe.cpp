@@ -32,6 +32,9 @@
 
 namespace
 {
+	using VectorWorks::Filing::IFileIdentifierPtr;
+	using VectorWorks::Filing::IID_FileIdentifier;
+
 	std::string LgPath(const char* leaf)
 	{
 		std::error_code ec;
