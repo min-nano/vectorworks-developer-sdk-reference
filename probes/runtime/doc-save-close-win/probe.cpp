@@ -132,10 +132,10 @@ namespace
 		probe.log(tag + ":   件数=" + std::to_string(docs.size()));
 		for (size_t i = 0; i < docs.size(); ++i)
 		{
-			probe.log(tag + ":   [" + std::to_string(i) + "] fileRef=" + std::to_string(docs[i].ref) +
-					  " active=" + DswFlag(docs[i].active) +
-					  " inMemoryOnly=" + DswFlag(docs[i].inMemoryOnly) + " len=" +
-					  std::to_string(docs[i].path.size()) + " path=" + docs[i].path);
+			probe.log(tag + ":   [" + std::to_string(i) + "] fileRef=" +
+					  std::to_string(docs[i].ref) + " active=" + DswFlag(docs[i].active) +
+					  " inMemoryOnly=" + DswFlag(docs[i].inMemoryOnly) +
+					  " len=" + std::to_string(docs[i].path.size()) + " path=" + docs[i].path);
 		}
 	}
 
@@ -169,8 +169,8 @@ namespace
 	{
 		const bool ok = gSDK->OpenDocumentPath(nullptr, false);
 		const Sint32 ref = DswActiveRef();
-		probe.log(tag + ": OpenDocumentPath(nullptr)=" + DswFlag(ok) + " fileRef=" +
-				  std::to_string(ref) + " path=" + DswPathOfRef(ref));
+		probe.log(tag + ": OpenDocumentPath(nullptr)=" + DswFlag(ok) +
+				  " fileRef=" + std::to_string(ref) + " path=" + DswPathOfRef(ref));
 		return ref;
 	}
 
@@ -440,7 +440,8 @@ namespace
 			return -999;
 		}
 		probe.log(tag + ": SaveActiveDocumentPath を呼ぶ（保存先 " + DswFileState(path) +
-				  " 渡したパス=" + path + " IFileIdentifier の読み戻し=" + DswPathOf(fileID) + "）");
+				  " 渡したパス=" + path + " IFileIdentifier の読み戻し=" + DswPathOf(fileID) +
+				  "）");
 		GSError err = -998;
 		const long long ms =
 			DswWatched(probe, tag, press, [&] { err = gSDK->SaveActiveDocumentPath(fileID); });
@@ -454,16 +455,16 @@ namespace
 	{
 		const Sint32 activeRef = DswActiveRef();
 		const size_t before = DswList().size();
-		probe.log(tag + ": DoMenuName(\"Close\", 0) を呼ぶ（active fileRef=" +
-				  std::to_string(activeRef) + " 期待=" + std::to_string(expectRef) +
-				  " 件数=" + std::to_string(before) + "）");
+		probe.log(tag +
+				  ": DoMenuName(\"Close\", 0) を呼ぶ（active fileRef=" + std::to_string(activeRef) +
+				  " 期待=" + std::to_string(expectRef) + " 件数=" + std::to_string(before) + "）");
 		short r = -99;
 		const long long ms = DswWatched(probe, tag, DswPress::Cancel,
 										[&] { r = gSDK->DoMenuName(TXString("Close"), 0); });
 		probe.log(tag + ": DoMenuName(\"Close\", 0)=" + std::to_string(r) + " (" +
 				  std::to_string(ms) + "ms) 件数 " + std::to_string(before) + " → " +
-				  std::to_string(DswList().size()) + " 対象はまだ開いている=" +
-				  DswFlag(DswIsOpen(expectRef)) +
+				  std::to_string(DswList().size()) +
+				  " 対象はまだ開いている=" + DswFlag(DswIsOpen(expectRef)) +
 				  " 閉じた後の active fileRef=" + std::to_string(DswActiveRef()));
 	}
 
@@ -527,9 +528,9 @@ namespace
 		gDswWatch = nullptr;
 		DswWatchSummary(probe, w, ms);
 		probe.log(tag + ": 駆動: 終えた=" + DswFlag(w.driveDone) + " WM_QUIT=" + DswFlag(quit) +
-				  " DoMenuName=" + std::to_string(w.driveResult) + " 呼び出しの所要=" +
-				  std::to_string(w.driveCallMs) + "ms **駆動の入り直し=" +
-				  std::to_string(w.driveReentries) + "**（初回 " +
+				  " DoMenuName=" + std::to_string(w.driveResult) +
+				  " 呼び出しの所要=" + std::to_string(w.driveCallMs) +
+				  "ms **駆動の入り直し=" + std::to_string(w.driveReentries) + "**（初回 " +
 				  std::to_string(w.driveFirstReentryMs) + "ms）");
 		probe.log(tag + ": 件数 " + std::to_string(before) + " → " +
 				  std::to_string(DswList().size()) +
@@ -543,9 +544,8 @@ namespace
 		Filing::IFileIdentifierPtr fileID(Filing::IID_FileIdentifier);
 		fileID->Set(TXString(path.c_str()));
 		bool opened = false;
-		const long long ms = DswWatched(probe, tag, DswPress::Ok, [&] {
-			opened = gSDK->OpenDocumentPath(fileID, false);
-		});
+		const long long ms = DswWatched(probe, tag, DswPress::Ok,
+										[&] { opened = gSDK->OpenDocumentPath(fileID, false); });
 		outRef = DswActiveRef();
 		probe.log(tag + ": OpenDocumentPath(" + path + ")=" + DswFlag(opened) + " (" +
 				  std::to_string(ms) + "ms) active fileRef=" + std::to_string(outRef) +
@@ -591,10 +591,11 @@ VW_PROBE("doc-save-close-win", "図面の保存と閉じる（Windows）", "Wind
 	{
 		DWORD v = 0;
 		DWORD sz = sizeof(v);
-		const LSTATUS s = ::RegGetValueW(HKEY_LOCAL_MACHINE,
-										 L"SYSTEM\\CurrentControlSet\\Control\\FileSystem",
-										 L"LongPathsEnabled", RRF_RT_REG_DWORD, nullptr, &v, &sz);
-		probe.log("S0: LongPathsEnabled=" + (s == ERROR_SUCCESS ? std::to_string(v) : "(読めない)"));
+		const LSTATUS s =
+			::RegGetValueW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\FileSystem",
+						   L"LongPathsEnabled", RRF_RT_REG_DWORD, nullptr, &v, &sz);
+		probe.log("S0: LongPathsEnabled=" +
+				  (s == ERROR_SUCCESS ? std::to_string(v) : "(読めない)"));
 		wchar_t exe[MAX_PATH] = {0};
 		::GetModuleFileNameW(nullptr, exe, MAX_PATH);
 		wchar_t cwd[MAX_PATH] = {0};
@@ -678,8 +679,7 @@ VW_PROBE("doc-save-close-win", "図面の保存と閉じる（Windows）", "Wind
 		owned.push_back(sLong);
 		DswSave(probe, "A-6 260 文字を超えるパス", pLong);
 		const DWORD attr = ::GetFileAttributesW(DswToWide("\\\\?\\" + pLong).c_str());
-		probe.log("A-6: \\\\?\\ 経由で見たファイル=" +
-				  DswFlag(attr != INVALID_FILE_ATTRIBUTES));
+		probe.log("A-6: \\\\?\\ 経由で見たファイル=" + DswFlag(attr != INVALID_FILE_ATTRIBUTES));
 	}
 	DswSnap(probe, "A 保存済みのパスの形");
 
