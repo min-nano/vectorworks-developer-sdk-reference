@@ -1,7 +1,8 @@
 # 描画属性とクラス
 
 オブジェクトの描画属性（ペン色・面色・線の太さ・線種・面パターン・マーカー・不透明度）を
-「クラスに従わせる」ための口と、その**費用**。
+「クラスに従わせる」ための口と、その**費用**。末尾に、図面のクラスの一覧を列挙する
+手順（`ForEachClass`）。
 
 ## 「クラスに従わせる」口は per-object と「文書の既定」の 2 段で揃っている【ヘッダ根拠】
 
@@ -1143,3 +1144,108 @@ const long root = readBack.style & kMarkerRootTypeMask; // マスクはここで
 **中口を「角度のためだけ」に挟まないこと。** 中口は `style` と `size` も同時に書くので、
 **様式は番号 0〜6 の 7 つへ落ち、大きさは 1/16384 インチで渡し直すことになる**。
 角度が要るだけなら新口の `nAngle` で足りる（丸などの 5 つの根を除く）。
+
+## クラスの一覧は `ForEachClass` で列挙する——順序は作った順、ゲストは `NNA#<n>_` 付きで後ろに足される
+
+図面のクラスを全部なめる口は `ISDK::ForEachClass(Boolean doGuestClasses,
+std::function<void(MCObjectHandle h)>)`（`ISDK.h:2697`）ひとつで、VWFC の
+`VWClass::ForEachClass(bool, std::function<void(const VWClass&)>)`（`VWClass.cpp:213`）は
+これを包んだだけ——渡ってきたハンドルの型が `kClassDefNode`（94）のものだけを
+`GetObjectInternalIndex(h)` で `VWClass` にして渡す【ソース根拠】。以下は Windows・
+VW 2026 の実測（[#280](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/280)）。
+
+### 渡ってくるもの
+
+- ハンドルは**クラス 1 つにつき 1 本**で、型は必ず 94。`GetObjectInternalIndex(h)` が
+  クラスの ID、`GetObjectName(h)` が名前で、**`ClassIDToName(id)` と同じ文字列**、
+  `ClassNameToID(名前)` で同じ ID へ戻る（全件で往復一致）。
+- **`IsObjectFromReferencedFile(h)` は、参照先から来たゲストのクラスでも `false`** だった
+  ——参照由来かどうかの判定には使えない（下記「ゲスト」）。
+- **列挙されるのはアクティブな図面のクラスだけ。** 図面を 2 枚開いて切り替えると、
+  タイマーの刻みから呼んだ同じ呼び出しが 6 件 → 2 件に変わった。
+
+### 新規の図面の中身と ID の歯抜け
+
+新規の空図面（テンプレート無し）のクラスは **「一般」（なしのクラス）と「寸法」の 2 つだけ**。
+
+| ID | `ClassIDToName` | 備考 |
+| --- | --- | --- |
+| 0, 1 | `""` | 空き |
+| 2 | 一般 | `GetNoneClassID()` = `GetDefaultClass()` = `GetActiveClass()` |
+| 3 | 寸法 | `GetDimensionClassID()`。**呼んでもクラスは増えない**（件数・`MaxClassID` とも不変） |
+| 4〜10 | `""` | 空き（`AddClass` の最初の 1 つは 11 になった） |
+
+- **ID は詰まっていない。** `1..MaxClassID()` を回して `ClassIDToName` で引くと空文字が
+  混ざる。一覧が欲しいなら `ForEachClass` を使う。
+- **`MaxClassID()` はゲストのクラスを含まない**（下記。ゲストの ID は `MaxClassID` を超える）。
+- **無いクラス名の `ClassNameToID` は `0` ではなく `-1`** を返す。「`== 0` なら無い」と
+  書くと、無いクラスを「ある」と読む（このプローブで実際に踏んだ）。`> 0` で判定する。
+
+### 順序は ID の順（作った順）。名前順でもオーガナイザの順でもない
+
+`zz280-最後` → `AA280-最初` → `mm280` → `P280-子-孫` の順に `AddClass` すると、ID は
+11〜14 になり、`ForEachClass` は **一般(2)・寸法(3)・zz280-最後(11)・AA280-最初(12)・
+mm280(13)・P280-子-孫(14)** の順で渡した。`ClassIDToName` で ID 順に引いた並びと完全に
+同じである。
+
+**オーガナイザ（クラスタブ）は名前の昇順で並べる**（`AA280-最初`・`mm280`・`P280-子-孫`・
+`zz280-最後`・一般・寸法）。顔ぶれは 6 件で一致したので、**画面と同じ並びが欲しいなら
+自分で名前で並べ替える**。
+
+### 階層名（`-` 区切り）は 1 つのクラス。親は作られない
+
+`AddClass("P280-子-孫")` は**名前に `-` を含むクラスを 1 つ作るだけ**で、
+`ClassNameToID("P280")` も `ClassNameToID("P280-子")` も `-1`（無い）だった。列挙にも
+`P280` / `P280-子` は現れない。
+
+オーガナイザの階層表示とナビゲーションパレットは `P280` ▸ `子` ▸ `孫` の木に描くが、
+**`P280` と `子` の行は属性の欄が空の、表示のためだけの節**である（平らな表示に切り替える
+と `P280-子-孫` の 1 行になる）。木を組み立てたいなら、名前を `-` で割って自分で組む。
+
+### `doGuestClasses` は「参照している図面のクラス」を足す
+
+ゲストのクラスを 2 つ（`G280-ゲスト` / `G280-親-子`）だけ足した図面を保存し、別の図面から
+**オーガナイザの「ファイル参照」タブで参照を 1 つ足しただけ**（ビューポートは作らない）で
+比べた。
+
+| | `ForEachClass(false)` | `ForEachClass(true)` |
+| --- | --- | --- |
+| 自分のクラス（一般・寸法・280 の 4 つ） | 6 件（ID 2, 3, 11〜14） | 同じ 6 件・同じ順 |
+| 参照先のクラス | 渡らない | **`NNA#1_一般`(18)・`NNA#1_寸法`(19)・`NNA#1_G280-ゲスト`(20)・`NNA#1_G280-親-子`(21)** が後ろに続く |
+| `MaxClassID()` | 14 | 14（ゲストの ID 18〜21 はこれを超える） |
+
+- **ゲストのクラスは `NNA#<n>_<参照先での名前>` という名前で、この図面のクラス表に
+  実在する**（`ClassIDToName` / `ClassNameToID` で往復する）。参照先の「一般」「寸法」も
+  ゲストとして入る。`<n>` は参照の番号と見られる【推定】（参照 1 つでしか測っていない）。
+- **共通部分の順序は `true` / `false` で同じ**で、ゲストは自分のクラスの**後ろ**に渡る
+  （ID の順）。
+- **オーガナイザ（すべてのクラス・平らな表示でも）とナビゲーションパレットには
+  ゲストのクラスは出ない。** 画面の一覧と揃えたいなら `doGuestClasses=false`。
+- `IsObjectFromReferencedFile(h)` はゲストのハンドルでも `false` だった。**ゲストかどうかを
+  見分けるのは「`false` の列挙に無い」か名前の `NNA#` 接頭辞**で、前者のほうが確か。
+- デザインレイヤビューポートで参照した場合の顔ぶれは測っていない（ファイル参照だけで
+  ゲストが入ることまで）。
+
+### タイマーの刻みから呼べる。図面 0 枚でも落ちない
+
+- OS のタイマー（`SetTimer`、Windows）の刻みから、呼び出しの最中（13 刻み）・呼び出しが
+  戻った後（5 分で約 1000 刻み）とも普通に呼べ、件数はそのときのアクティブな図面のものだった。
+- **図面を全部閉じた状態（`GetCurrentLayer()` が `nullptr`）で呼んでも落ちず、`true` /
+  `false` とも 0 件**で戻った。図面 8 枚のときも 2 件（アクティブな新規図面のもの）。
+- 刻みの中で undo イベントが開いていることは無かった（[Undo](Undo.md)）。
+
+### 書き方
+
+```cpp
+// 画面（オーガナイザ）と同じ顔ぶれ。順序は ID 順なので、要るなら名前で並べ替える
+std::vector<std::pair<InternalIndex, TXString>> classes;
+gSDK->ForEachClass(false, [&](MCObjectHandle h) {
+	if (gSDK->GetObjectTypeN(h) != kClassDefNode)
+		return;
+	const InternalIndex id = gSDK->GetObjectInternalIndex(h);
+	classes.emplace_back(id, gSDK->ClassIDToName(id)); // GetObjectName(h) と同じ
+});
+
+// 名前から引くときは -1 が「無い」
+if (gSDK->ClassNameToID(name) > 0) { /* ある */ }
+```
