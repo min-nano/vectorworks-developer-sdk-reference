@@ -29,6 +29,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <functional>
 #include <map>
 #include <string>
@@ -626,15 +627,50 @@ namespace
 		probe.log(s);
 	}
 
-	void LoBuild(vwprobe::Report& probe, LoLayers& L)
+	// 作るものを絞る（落ちの切り分け用）。%TEMP%\VwSdkProbes-layer-objects.mode に
+	// 語を空白区切りで並べると、その語の群だけ作る。ファイルが無ければ全部作る。
+	// 語: 2d symbol door wall extrude viewport many b
+	struct LoMode
 	{
-		probe.log("--- 見本を作る ---");
-		LoMakeLayers(probe, L);
-		if (L.a == nullptr)
-			return;
-		const InternalIndex cls = gSDK->AddClass("LO-クラス");
-		LoBuilder b{probe, L.a, {}};
+		std::string words;
+		bool all = true;
 
+		bool Has(const char* w) const
+		{
+			if (all)
+				return true;
+			return (" " + words + " ").find(std::string(" ") + w + " ") != std::string::npos;
+		}
+	};
+
+	LoMode LoReadMode(vwprobe::Report& probe)
+	{
+		LoMode m;
+		const char* tmp = std::getenv("TEMP");
+		if (tmp == nullptr)
+			return m;
+		const std::string path = std::string(tmp) + "\\VwSdkProbes-layer-objects.mode";
+		std::FILE* f = std::fopen(path.c_str(), "r");
+		if (f == nullptr)
+		{
+			probe.log("  mode: ファイル無し → 全部作る");
+			return m;
+		}
+		char buf[256] = {};
+		const size_t n = std::fread(buf, 1, sizeof buf - 1, f);
+		std::fclose(f);
+		for (size_t i = 0; i < n; ++i)
+		{
+			const char c = buf[i];
+			m.words += (c == '\r' || c == '\n' || c == '\t') ? ' ' : c;
+		}
+		m.all = false;
+		probe.log("  mode: \"" + m.words + "\" の群だけ作る");
+		return m;
+	}
+
+	void LoBuild2D(LoBuilder& b, InternalIndex cls)
+	{
 		MCObjectHandle line = gSDK->CreateLine(WorldPt(0, 0), WorldPt(1000, 0));
 		b.Add("01 直線（名前あり）", line, "LO-直線");
 
@@ -655,8 +691,11 @@ namespace
 
 		MCObjectHandle group = LoMakeGroup();
 		b.Add("06 グループ（直線 2・入れ子 1）", group, "LO-グループ");
+	}
 
-		MCObjectHandle def = LoMakeSymbolDef(probe);
+	void LoBuildSymbols(LoBuilder& b)
+	{
+		MCObjectHandle def = LoMakeSymbolDef(b.probe);
 		MCObjectHandle s1 = nullptr;
 		MCObjectHandle s2 = nullptr;
 		if (def != nullptr)
@@ -666,24 +705,46 @@ namespace
 		}
 		b.Add("07a シンボル", s1, nullptr);
 		b.Add("07b シンボル（名前あり・45°）", s2, "LO-シンボル2");
+	}
+
+	void LoBuild(vwprobe::Report& probe, LoLayers& L)
+	{
+		probe.log("--- 見本を作る ---");
+		const LoMode mode = LoReadMode(probe);
+		LoMakeLayers(probe, L);
+		if (L.a == nullptr)
+			return;
+		const InternalIndex cls = gSDK->AddClass("LO-クラス");
+		LoBuilder b{probe, L.a, {}};
+
+		if (mode.Has("2d"))
+			LoBuild2D(b, cls);
+		if (mode.Has("symbol"))
+			LoBuildSymbols(b);
 
 		// 設定ダイアログを出さないため先に定義する（Findings「Parametric Objects」）。
 		gSDK->DefineCustomObject("Door", kCustomObjectPrefNever);
 		gSDK->DefineCustomObject("Window", kCustomObjectPrefNever);
-		MCObjectHandle door = gSDK->CreateCustomObject("Door", WorldPt(8000, 0), 0);
-		b.Add("08 PIO ドア", door, nullptr);
-
-		LoMakeWall(b);
-		b.Add("10 押し出し（1000×1000×高さ 1000）", LoMakeExtrude(), nullptr);
+		if (mode.Has("door"))
+		{
+			MCObjectHandle door = gSDK->CreateCustomObject("Door", WorldPt(8000, 0), 0);
+			b.Add("08 PIO ドア", door, nullptr);
+		}
+		if (mode.Has("wall"))
+			LoMakeWall(b);
+		if (mode.Has("extrude"))
+			b.Add("10 押し出し（1000×1000×高さ 1000）", LoMakeExtrude(), nullptr);
 
 		// 同じ矩形を LO-B（1:50）へ
-		MCObjectHandle rb = LoPut(probe, "B 矩形", LoRect(0, 100, 1000, 600), L.b);
-		if (rb != nullptr)
-			gSDK->SetObjectName(rb, "LO-B矩形");
-
-		if (L.sheet != nullptr)
+		if (mode.Has("b"))
+		{
+			MCObjectHandle rb = LoPut(probe, "B 矩形", LoRect(0, 100, 1000, 600), L.b);
+			if (rb != nullptr)
+				gSDK->SetObjectName(rb, "LO-B矩形");
+		}
+		if (L.sheet != nullptr && mode.Has("viewport"))
 			LoMakeViewport(probe, L.sheet, L.a);
-		if (L.many != nullptr)
+		if (L.many != nullptr && mode.Has("many"))
 			LoMakeMany(L.many);
 
 		probe.log("--- 作った順（1 の答え合わせ） ---");
