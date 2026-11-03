@@ -718,6 +718,20 @@ VW_PROBE("doc-save-close-win", "図面の保存と閉じる（Windows）", "Wind
 	DswSave(probe, "C-3 別の図面が開いているファイル", p1);
 	DswSave(probe, "C-4 別の図面が開いているファイル（名前を大文字に）", DswUpperName(p1));
 	DswSnap(probe, "C-4 の後");
+	// 開いている図面のパスを、文字列だけ違う形で渡す（警告は文字列の完全一致でだけ出るのか）
+	DswSave(probe, "C-7 8.3 で開いている図面を長い名前で", dir + "\\q-short.vwx");
+	DswSave(probe, "C-8 開いている図面を短い名前で", dirShort + "\\q1-untitled.vwx");
+	{
+		std::string lower = p1;
+		if (lower.size() > 1 && lower[1] == ':' && lower[0] >= 'A' && lower[0] <= 'Z')
+			lower[0] = (char)(lower[0] - 'A' + 'a');
+		DswSave(probe, "C-9 開いている図面をドライブだけ小文字で", lower);
+	}
+	DswSave(probe, "C-10 開いている図面を '/' 区切りで",
+			DswReplaceAll(dir + "\\q-slash.vwx", '\\', '/'));
+	DswSave(probe, "C-11 小文字のドライブで開いている図面を、そのままの文字列で",
+			DswPathOfRef(sLower));
+	DswSnap(probe, "C-11 の後");
 	// 自分のパスを大文字と小文字だけ変えて渡す（u1 は p1 を開いている）
 	probe.log("C-5: SwitchToOpenFile(u1)=" + DswFlag(gSDK->SwitchToOpenFile(u1)));
 	DswSave(probe, "C-5 自分のパス（名前を大文字に）", DswUpperName(p1));
@@ -760,9 +774,13 @@ VW_PROBE("doc-save-close-win", "図面の保存と閉じる（Windows）", "Wind
 	owned.push_back(e3);
 	DswSave(probe, "E-3 保存", dir + "\\e3.vwx");
 	DswClose(probe, "E-3 前面を閉じる", e3);
-	probe.log("E-3: SwitchToOpenFile(origin)=" + DswFlag(gSDK->SwitchToOpenFile(originRef)) +
-			  " active fileRef=" + std::to_string(DswActiveRef()) +
-			  " カレントレイヤ同じハンドル=" + DswFlag(gSDK->GetCurrentLayer() == originLayer));
+	// 1 つの式に並べると評価順が決まらない（前回は戻す前の値が出た）ので、文を分ける
+	const bool switched = gSDK->SwitchToOpenFile(originRef);
+	const Sint32 afterRef = DswActiveRef();
+	const bool sameLayer = gSDK->GetCurrentLayer() == originLayer;
+	probe.log("E-3: SwitchToOpenFile(origin)=" + DswFlag(switched) +
+			  " active fileRef=" + std::to_string(afterRef) + "（走り出し " +
+			  std::to_string(originRef) + "） カレントレイヤ同じハンドル=" + DswFlag(sameLayer));
 
 	// ===== 片付け =====
 	for (const Sint32 ref : owned)
