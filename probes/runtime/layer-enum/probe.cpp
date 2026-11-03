@@ -200,9 +200,12 @@ namespace
 		gSDK->ForEachLayer(&LeForEachCb, &hs);
 		std::vector<std::string> out;
 		for (std::size_t i = 0; i < hs.size(); ++i)
-			out.push_back("(" + std::to_string(i) + ") " + LePtr(hs[i]) + " type=" +
-						  std::to_string(gSDK->GetObjectTypeN(hs[i])) + " \"" + LeName(hs[i]) +
-						  "\"");
+		{
+			const std::string type = std::to_string(gSDK->GetObjectTypeN(hs[i]));
+			const std::string name = LeName(hs[i]);
+			out.push_back("(" + std::to_string(i) + ") " + LePtr(hs[i]));
+			out.back() += " type=" + type + " \"" + name + "\"";
+		}
 		return out;
 	}
 
@@ -296,8 +299,9 @@ namespace
 
 	void LeTickWalk(const char* label)
 	{
-		LeAppend(std::string("■ 刻みの中で辿る（") + label + "） docs=" + std::to_string(LeOpenDocs()) +
-				 " undo=" + (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
+		const std::string docs = std::to_string(LeOpenDocs());
+		const char* undo = gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no";
+		LeAppend(std::string("■ 刻みの中で辿る（") + label + "） docs=" + docs + " undo=" + undo);
 		const std::vector<std::string> rows = LeWalk(&LeAppend);
 		for (const std::string& r : rows)
 			LeAppend("  " + r);
@@ -323,9 +327,9 @@ namespace
 		}
 		if (!LeIdle() || now - st->armedWall < 500)
 			return; // 結果ダイアログなどのモーダルが閉じるまで待つ
-		const std::string head = "tick " + std::to_string(st->ticks) +
-								 " wall_ms=" + std::to_string(now) + " step=" +
-								 std::to_string(st->step);
+		std::string head = "tick " + std::to_string(st->ticks);
+		head += " wall_ms=" + std::to_string(now);
+		head += " step=" + std::to_string(st->step);
 		switch (st->step)
 		{
 		case 0:
@@ -448,8 +452,8 @@ namespace
 			return h;
 		}
 		h = gSDK->CreateLayer(name, kind);
-		probe.log(std::string("  CreateLayer(\"") + name + "\", " + std::to_string(kind) +
-				  ") → " + LePtr(h));
+		const std::string kindText = std::to_string(kind);
+		probe.log(std::string("  CreateLayer(\"") + name + "\", " + kindText + ") → " + LePtr(h));
 		return h;
 	}
 
@@ -488,7 +492,8 @@ VW_PROBE("layer-enum", "レイヤの列挙", "種類・順序・現在・縮尺�
 		return;
 	}
 
-	probe.log("build=" + std::string(VW_PAYLOAD_BUILD_ID) + " docs=" + std::to_string(LeOpenDocs()));
+	const std::string docsAtStart = std::to_string(LeOpenDocs());
+	probe.log("build=" + std::string(VW_PAYLOAD_BUILD_ID) + " docs=" + docsAtStart);
 	probe.log("ELayerType: kLayerDesign=" + std::to_string((int)kLayerDesign) +
 			  " kLayerSheet=" + std::to_string((int)kLayerSheet) +
 			  " kGuestLayerDesign=" + std::to_string((int)kGuestLayerDesign));
@@ -584,15 +589,17 @@ VW_PROBE("layer-enum", "レイヤの列挙", "種類・順序・現在・縮尺�
 		std::error_code ec;
 		std::filesystem::remove(gLeState->events, ec);
 	}
-	LeAppend("arm wall_ms=" + std::to_string(gLeState->armedWall) + " build=" +
-			 VW_PAYLOAD_BUILD_ID + " nodoc=" + (gLeState->nodoc ? "yes" : "no"));
+	std::string armLine = "arm wall_ms=" + std::to_string(gLeState->armedWall);
+	armLine += std::string(" build=") + VW_PAYLOAD_BUILD_ID;
+	armLine += std::string(" nodoc=") + (gLeState->nodoc ? "yes" : "no");
+	LeAppend(armLine);
 #if GS_WIN
 	gLeTimer = ::SetTimer(nullptr, 0, (UINT)kLeTickMs, &LeWinTick);
 	const bool armed = gLeTimer != 0;
 #else
 	const CFAbsoluteTime t = (CFAbsoluteTime)kLeTickMs / 1000.0;
-	gLeTimer = ::CFRunLoopTimerCreate(kCFAllocatorDefault, ::CFAbsoluteTimeGetCurrent() + t, t, 0, 0,
-									  &LeCFTick, nullptr);
+	const CFAbsoluteTime fire = ::CFAbsoluteTimeGetCurrent() + t;
+	gLeTimer = ::CFRunLoopTimerCreate(kCFAllocatorDefault, fire, t, 0, 0, &LeCFTick, nullptr);
 	const bool armed = gLeTimer != nullptr;
 	if (armed)
 		::CFRunLoopAddTimer(::CFRunLoopGetMain(), gLeTimer, kCFRunLoopCommonModes);
