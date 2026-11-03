@@ -663,6 +663,7 @@ VW_PROBE("doc-save-close-win", "図面の保存と閉じる（Windows）", "Wind
 		DswSave(probe, "A-5 小文字のドライブ・大文字混じりの名前で渡す", lower);
 	}
 	// 260 文字を超えるパス
+	Sint32 sLong = -1;
 	{
 		std::string longDir = dir;
 		for (int i = 0; i < 3 && longDir.size() < 280; ++i)
@@ -675,7 +676,7 @@ VW_PROBE("doc-save-close-win", "図面の保存と閉じる（Windows）", "Wind
 		}
 		const std::string pLong = longDir + "\\q-long.vwx";
 		probe.log("A-6: 長いパスの長さ=" + std::to_string(pLong.size()));
-		const Sint32 sLong = DswOpenNew(probe, "A-6");
+		sLong = DswOpenNew(probe, "A-6");
 		owned.push_back(sLong);
 		DswSave(probe, "A-6 260 文字を超えるパス", pLong);
 		const DWORD attr = ::GetFileAttributesW(DswToWide("\\\\?\\" + pLong).c_str());
@@ -732,6 +733,14 @@ VW_PROBE("doc-save-close-win", "図面の保存と閉じる（Windows）", "Wind
 	DswSave(probe, "C-11 小文字のドライブで開いている図面を、そのままの文字列で",
 			DswPathOfRef(sLower));
 	DswSnap(probe, "C-11 の後");
+	// 開いていられる図面は 8 枚まで（9 枚目は「これ以上用紙を開けません」で止まる）。
+	// A の図面は用済みなので閉じて、D・E の分を空ける
+	for (const Sint32 ref : {sShort, sSlash, sLower, sLong})
+	{
+		if (DswIsOpen(ref) && gSDK->SwitchToOpenFile(ref) && DswActiveRef() == ref)
+			(void)gSDK->CloseDocument();
+	}
+	probe.log("C-12: A の図面を閉じた。件数=" + std::to_string(DswList().size()));
 	// 自分のパスを大文字と小文字だけ変えて渡す（u1 は p1 を開いている）
 	probe.log("C-5: SwitchToOpenFile(u1)=" + DswFlag(gSDK->SwitchToOpenFile(u1)));
 	DswSave(probe, "C-5 自分のパス（名前を大文字に）", DswUpperName(p1));
@@ -770,17 +779,28 @@ VW_PROBE("doc-save-close-win", "図面の保存と閉じる（Windows）", "Wind
 				  " カレントレイヤ同じハンドル=" + DswFlag(layer == originLayer));
 	}
 	// E-3 前面の図面を閉じた後、何が前へ出るか → 元へ戻す
+	const size_t beforeE3 = DswList().size();
 	const Sint32 e3 = DswOpenNew(probe, "E-3");
-	owned.push_back(e3);
-	DswSave(probe, "E-3 保存", dir + "\\e3.vwx");
-	DswClose(probe, "E-3 前面を閉じる", e3);
-	// 1 つの式に並べると評価順が決まらない（前回は戻す前の値が出た）ので、文を分ける
-	const bool switched = gSDK->SwitchToOpenFile(originRef);
-	const Sint32 afterRef = DswActiveRef();
-	const bool sameLayer = gSDK->GetCurrentLayer() == originLayer;
-	probe.log("E-3: SwitchToOpenFile(origin)=" + DswFlag(switched) +
-			  " active fileRef=" + std::to_string(afterRef) + "（走り出し " +
-			  std::to_string(originRef) + "） カレントレイヤ同じハンドル=" + DswFlag(sameLayer));
+	// 開けなくても OpenDocumentPath(nullptr) は true を返し、前面は元のまま（8 枚の上限で
+	// 踏んだ）。取り違えて走り出しの図面を閉じないように、件数で確かめる
+	if (e3 == originRef || DswList().size() != beforeE3 + 1)
+	{
+		probe.fail("E-3: 新しい図面が開かなかった（件数 " + std::to_string(beforeE3) + " → " +
+				   std::to_string(DswList().size()) + "）");
+	}
+	else
+	{
+		owned.push_back(e3);
+		DswSave(probe, "E-3 保存", dir + "\\e3.vwx");
+		DswClose(probe, "E-3 前面を閉じる", e3);
+		// 1 つの式に並べると評価順が決まらない（前回は戻す前の値が出た）ので、文を分ける
+		const bool switched = gSDK->SwitchToOpenFile(originRef);
+		const Sint32 afterRef = DswActiveRef();
+		const bool sameLayer = gSDK->GetCurrentLayer() == originLayer;
+		probe.log("E-3: SwitchToOpenFile(origin)=" + DswFlag(switched) +
+				  " active fileRef=" + std::to_string(afterRef) + "（走り出し " +
+				  std::to_string(originRef) + "） カレントレイヤ同じハンドル=" + DswFlag(sameLayer));
+	}
 
 	// ===== 片付け =====
 	for (const Sint32 ref : owned)
