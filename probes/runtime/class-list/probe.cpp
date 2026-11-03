@@ -122,14 +122,16 @@ namespace
 	std::vector<ClsSeen> ClsCollect(bool guests)
 	{
 		std::vector<ClsSeen> out;
-		gSDK->ForEachClass(guests, [&out](MCObjectHandle h) {
-			ClsSeen s;
-			s.h = h;
-			s.type = gSDK->GetObjectTypeN(h);
-			s.index = gSDK->GetObjectInternalIndex(h);
-			s.name = ClsName(h);
-			out.push_back(s);
-		});
+		gSDK->ForEachClass(guests,
+						   [&out](MCObjectHandle h)
+						   {
+							   ClsSeen s;
+							   s.h = h;
+							   s.type = gSDK->GetObjectTypeN(h);
+							   s.index = gSDK->GetObjectInternalIndex(h);
+							   s.name = ClsName(h);
+							   out.push_back(s);
+						   });
 		return out;
 	}
 
@@ -201,12 +203,13 @@ namespace
 			ClsAppend("pre ## t=" + std::to_string(t) + " ## " + pre + " ## (これから列挙する)");
 		const int nf = ClsCount(false);
 		const int nt = ClsCount(true);
-		const std::string now = pre + " false=" + std::to_string(nf) + " true=" + std::to_string(nt);
+		const std::string now =
+			pre + " false=" + std::to_string(nf) + " true=" + std::to_string(nt);
 		if (now != st->last)
 		{
 			ClsAppend("tick ## t=" + std::to_string(t) + " ## tick=" + std::to_string(st->ticks) +
-					  " ## " + now + " ## undo=" +
-					  (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
+					  " ## " + now +
+					  " ## undo=" + (gSDK->IsCurrentlyBuildingAnUndoEvent() ? "yes" : "no"));
 			st->last = now;
 		}
 	}
@@ -270,7 +273,7 @@ namespace
 		gClsInCall->countTrue = ClsCount(true);
 	}
 #endif
-}
+} // namespace
 
 VW_PROBE("class-list", "クラスの一覧を列挙する", "ForEachClass の中身と順序")
 {
@@ -332,7 +335,8 @@ VW_PROBE("class-list", "クラスの一覧を列挙する", "ForEachClass の中
 	for (size_t i = 0; i < withF.size(); ++i)
 		inF[withF[i].index] = (int)i;
 
-	auto dump = [&probe](const char* label, const std::vector<ClsSeen>& seen) {
+	auto dump = [&probe](const char* label, const std::vector<ClsSeen>& seen)
+	{
 		probe.log(std::string("  -- ") + label + " 件数=" + std::to_string(seen.size()));
 		for (size_t i = 0; i < seen.size(); ++i)
 		{
@@ -343,9 +347,8 @@ VW_PROBE("class-list", "クラスの一覧を列挙する", "ForEachClass の中
 					  " index=" + std::to_string(s.index) + " name=\"" + s.name + "\"" +
 					  " IDToName=" + (byId == s.name ? "一致" : "\"" + byId + "\"") +
 					  " NameToID=" + (back == s.index ? "一致" : std::to_string(back)) +
-					  " ref=" + (gSDK->IsObjectFromReferencedFile(s.h) ? "yes" : "no") +
-					  " vis=" + std::to_string(gSDK->GetClVisibility(s.index)) +
-					  " h=" + ClsPtr(s.h));
+					  " ref=" + (gSDK->IsObjectFromReferencedFile(s.h) ? "yes" : "no") + " vis=" +
+					  std::to_string(gSDK->GetClVisibility(s.index)) + " h=" + ClsPtr(s.h));
 		}
 	};
 	dump("ForEachClass(false)", withF);
@@ -377,8 +380,8 @@ VW_PROBE("class-list", "クラスの一覧を列挙する", "ForEachClass の中
 	const InternalIndex dimId = gSDK->GetDimensionClassID();
 	probe.log("  GetDimensionClassID=" + std::to_string(dimId) + " (" + ClsIdName(dimId) + ")" +
 			  " MaxClassID " + std::to_string(maxBeforeDim) + " -> " +
-			  std::to_string(gSDK->MaxClassID()) + " 件数(false) " +
-			  std::to_string(withF.size()) + " -> " + std::to_string(ClsCount(false)));
+			  std::to_string(gSDK->MaxClassID()) + " 件数(false) " + std::to_string(withF.size()) +
+			  " -> " + std::to_string(ClsCount(false)));
 
 	// ---- 4. 呼び出しの中で刻ませる ----
 	probe.log("== 4. 呼び出しの中の刻みから列挙 ==");
@@ -435,7 +438,8 @@ VW_PROBE("class-list", "クラスの一覧を列挙する", "ForEachClass の中
 			::CFRunLoopAddTimer(::CFRunLoopGetMain(), gClsTimer, kCFRunLoopCommonModes);
 			probe.log("  CFRunLoopTimer を仕掛けた");
 #endif
-			probe.log("  5 分のあいだ刻む。図面を全部閉じ、新規を開いてもう一度走らせると報告する。");
+			probe.log(
+				"  5 分のあいだ刻む。図面を全部閉じ、新規を開いてもう一度走らせると報告する。");
 		}
 	}
 
