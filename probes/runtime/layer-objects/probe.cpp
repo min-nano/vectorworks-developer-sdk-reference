@@ -539,18 +539,26 @@ namespace
 	{
 		MCObjectHandle w = gSDK->CreateWall(WorldPt(0, 2000), WorldPt(5000, 2000), 200);
 		MCObjectHandle wall = b.Add("09 壁", w, "LO-壁");
+		// 壁の上に置けば CreateCustomObject が自分で壁へ入れる見込み
+		// （varCreateCustomObjectDontInsertInWall があるため）。#282 の 1 回目は、この後に
+		// AddObjectToContainer(窓, 壁) を重ねて、窓の親が nil になった。
 		MCObjectHandle win = gSDK->CreateCustomObject("Window", WorldPt(2500, 2000), 0);
 		if (wall == nullptr || win == nullptr)
 			return;
-		const bool ok = gSDK->AddObjectToContainer(win, wall);
-		gSDK->ResetObject(wall);
 		MCObjectHandle parent = gSDK->ParentObject(win);
-		std::string s = "  窓を壁へ AddObjectToContainer: ";
-		s += ok ? "ok" : "失敗";
-		s += "  窓の親の型=" + LoInt(LoType(parent));
+		std::string s = "  窓を壁の上に CreateCustomObject: 親の型=" + LoInt(LoType(parent));
+		s += parent == wall ? "（その壁）" : "（壁ではない）";
 		b.probe.log(s);
-		if (parent != wall)
-			b.made.push_back({"09b 窓（壁に入らなかった）", win});
+		if (parent == wall)
+			return;
+		if (parent == nullptr)
+		{
+			// 行き場の無い PIO を図面に残さない
+			gSDK->DeleteObject(win, false);
+			b.probe.log("  親の無い窓を DeleteObject(useUndo=false) で消した");
+			return;
+		}
+		b.made.push_back({"09b 窓（壁に入らなかった）", win});
 	}
 
 	MCObjectHandle LoMakeExtrude()
