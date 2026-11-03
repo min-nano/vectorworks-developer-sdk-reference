@@ -19,6 +19,7 @@
 //	デザインレイヤ「LO-A」の有無で決める。
 //
 //	プローブは undo イベントを自分では開かない（CLAUDE.md）。
+//	整形が 1 通りに決まるよう、式は 1 行に収め、ラムダは使わない（手元に clang-format が無い）。
 //
 
 #include "Probe.h"
@@ -28,6 +29,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -41,10 +43,14 @@
 
 namespace
 {
-	const char* const kLoA = "LO-A";	   // 見本（縮尺 1:1）
-	const char* const kLoB = "LO-B";	   // 同じ矩形を縮尺 1:50 で
-	const char* const kLoMany = "LO-多";  // 刻みの中の所要を測る 3000 個
-	const char* const kLoSheet = "LO-S";  // シートレイヤ（ビューポート）
+	// 見本（縮尺 1:1）
+	const char* const kLoA = "LO-A";
+	// 同じ矩形を縮尺 1:50 で
+	const char* const kLoB = "LO-B";
+	// 刻みの中の所要を測る 3000 個
+	const char* const kLoMany = "LO-多";
+	// シートレイヤ（ビューポート）
+	const char* const kLoSheet = "LO-S";
 	const int kManyCount = 3000;
 
 	std::string LoStr(const TXString& s)
@@ -66,9 +72,22 @@ namespace
 		return buf;
 	}
 
+	std::string LoInt(long long v)
+	{
+		return std::to_string(v);
+	}
+
 	short LoType(MCObjectHandle h)
 	{
-		return h == nullptr ? -1 : gSDK->GetObjectTypeN(h);
+		if (h == nullptr)
+			return -1;
+		return gSDK->GetObjectTypeN(h);
+	}
+
+	long long LoUs(std::chrono::steady_clock::time_point t0)
+	{
+		const auto d = std::chrono::steady_clock::now() - t0;
+		return std::chrono::duration_cast<std::chrono::microseconds>(d).count();
 	}
 
 	// 図形の下にある容れ物（レイヤ＝31）まで ParentObject を辿る。
@@ -93,11 +112,23 @@ namespace
 		return LoStr(n);
 	}
 
+	int LoCountMembers(MCObjectHandle h)
+	{
+		int kids = 0;
+		MCObjectHandle k = gSDK->FirstMemberObj(h);
+		while (k != nullptr && kids < 10000)
+		{
+			++kids;
+			k = gSDK->NextObject(k);
+		}
+		return kids;
+	}
+
 	// 1 ノードの読み（名前・クラス・外形・親・選択・PIO 名・3D の外形）。
 	std::string LoDescribe(MCObjectHandle h)
 	{
 		const short t = LoType(h);
-		std::string s = "type=" + std::to_string(t);
+		std::string s = "type=" + LoInt(t);
 		if (t == kTermNode)
 			return s + "（終端）";
 		TXString name;
@@ -108,10 +139,10 @@ namespace
 		s += " class=\"" + LoStr(cls) + "\"";
 		WorldRect r;
 		const Boolean ok = gSDK->GetObjectBounds(h, r);
-		s += " bounds" + std::string(ok ? "" : "(false)") + "=[" + LoNum(r.Left()) + "," +
-			 LoNum(r.Bottom()) + " → " + LoNum(r.Right()) + "," + LoNum(r.Top()) + "]";
-		MCObjectHandle parent = gSDK->ParentObject(h);
-		s += " parent=" + std::to_string(LoType(parent));
+		s += ok ? " bounds=[" : " bounds(false)=[";
+		s += LoNum(r.Left()) + "," + LoNum(r.Bottom()) + " → ";
+		s += LoNum(r.Right()) + "," + LoNum(r.Top()) + "]";
+		s += " parent=" + LoInt(LoType(gSDK->ParentObject(h)));
 		if (gSDK->IsSelected(h))
 			s += " selected";
 		if (t == kParametricNode)
@@ -119,18 +150,16 @@ namespace
 			VWFC::VWObjects::VWParametricObj pio(h);
 			s += " pio=\"" + LoStr(pio.GetParametricName()) + "\"";
 		}
-		if (t == kExtrudeNode || t == kParametricNode || t == kWallNode || t == kSymbolNode)
+		const bool solid = t == kExtrudeNode || t == kParametricNode;
+		if (solid || t == kWallNode || t == kSymbolNode)
 		{
 			WorldCube c;
 			gSDK->GetObjectCube(h, c);
 			s += " cube.z=[" + LoNum(c.MinZ()) + " → " + LoNum(c.MaxZ()) + "]";
 		}
-		int kids = 0;
-		for (MCObjectHandle k = gSDK->FirstMemberObj(h); k != nullptr && kids < 10000;
-			 k = gSDK->NextObject(k))
-			++kids;
+		const int kids = LoCountMembers(h);
 		if (kids > 0)
-			s += " members=" + std::to_string(kids);
+			s += " members=" + LoInt(kids);
 		return s;
 	}
 
@@ -139,8 +168,14 @@ namespace
 	{
 		std::string s;
 		for (const auto& kv : m)
-			s += (s.empty() ? "" : " ") + std::to_string(kv.first) + ":" + std::to_string(kv.second);
-		return s.empty() ? "(なし)" : s;
+		{
+			if (!s.empty())
+				s += " ";
+			s += LoInt(kv.first) + ":" + LoInt(kv.second);
+		}
+		if (s.empty())
+			return "(なし)";
+		return s;
 	}
 
 	// FirstMemberObj → NextObject で辿る。full なら 1 ノードずつ書く。
@@ -148,19 +183,20 @@ namespace
 	{
 		std::vector<MCObjectHandle> seq;
 		std::map<short, int> histo;
-		for (MCObjectHandle h = gSDK->FirstMemberObj(layer); h != nullptr && seq.size() < 100000;
-			 h = gSDK->NextObject(h))
+		MCObjectHandle h = gSDK->FirstMemberObj(layer);
+		while (h != nullptr && seq.size() < 100000)
 		{
 			seq.push_back(h);
 			histo[LoType(h)]++;
+			h = gSDK->NextObject(h);
 		}
-		probe.log("  walk(First→Next) " + LoLayerName(layer) + ": " + std::to_string(seq.size()) +
-				  " ノード  型の内訳 " + LoHisto(histo));
-		if (full)
-		{
-			for (size_t i = 0; i < seq.size(); ++i)
-				probe.log("    [" + std::to_string(i) + "] " + LoDescribe(seq[i]));
-		}
+		std::string s = "  walk(First→Next) " + LoLayerName(layer) + ": ";
+		s += LoInt(seq.size()) + " ノード  型の内訳 " + LoHisto(histo);
+		probe.log(s);
+		if (!full)
+			return seq;
+		for (size_t i = 0; i < seq.size(); ++i)
+			probe.log("    [" + LoInt(i) + "] " + LoDescribe(seq[i]));
 		return seq;
 	}
 
@@ -169,99 +205,128 @@ namespace
 						const std::vector<MCObjectHandle>& fwd)
 	{
 		std::vector<MCObjectHandle> rev;
-		for (MCObjectHandle h = gSDK->LastMemberObj(layer); h != nullptr && rev.size() < 100000;
-			 h = gSDK->PrevObject(h))
+		MCObjectHandle h = gSDK->LastMemberObj(layer);
+		while (h != nullptr && rev.size() < 100000)
+		{
 			rev.push_back(h);
+			h = gSDK->PrevObject(h);
+		}
 		bool mirror = rev.size() == fwd.size();
 		for (size_t i = 0; mirror && i < rev.size(); ++i)
 			mirror = rev[i] == fwd[fwd.size() - 1 - i];
-		std::string head = rev.empty() ? "-" : std::to_string(LoType(rev.front()));
-		probe.log("  walk(Last→Prev) " + LoLayerName(layer) + ": " + std::to_string(rev.size()) +
-				  " ノード  先頭の型=" + head + "  First→Next の逆と一致=" + (mirror ? "yes" : "no"));
+		std::string head = "-";
+		if (!rev.empty())
+			head = LoInt(LoType(rev.front()));
+		std::string s = "  walk(Last→Prev) " + LoLayerName(layer) + ": ";
+		s += LoInt(rev.size()) + " ノード  先頭の型=" + head;
+		s += std::string("  First→Next の逆と一致=") + (mirror ? "yes" : "no");
+		probe.log(s);
 	}
 
-	struct LoTraverse
+	// ForEachObjectN の 1 回分の集計。
+	struct LoCount
 	{
-		const char* label;
-		short what;
+		MCObjectHandle layerA = nullptr;
+		int total = 0;
+		std::map<std::string, std::map<short, int>> perLayer;
+		// layerA の直下のものだけ、出てきた順
+		std::vector<MCObjectHandle> topA;
 	};
 
-	const LoTraverse kTraverses[] = {
-		{"allSelected", allSelected},
-		{"allEditable", allEditable},
-		{"allVisible", allVisible},
-		{"allDrawing", allDrawing},
-		{"allObjects", allObjects},
-		{"allObjectsAndResources", allObjectsAndResources},
-		{"allDrawing+descendIntoGroups", allDrawing + descendIntoGroups},
-		{"allDrawing+descendIntoAll", allDrawing + descendIntoAll},
-		{"allObjects+descendIntoGroups", allObjects + descendIntoGroups},
-		{"allObjects+descendIntoAll", allObjects + descendIntoAll},
-		{"allObjects+descendIntoAll+Viewports", allObjects + descendIntoAll + descendIntoViewports},
-		{"allObjects+descendIntoAuxLists", allObjects + descendIntoAuxLists},
-		{"allObjects+descendIntoAll+AuxLists", allObjects + descendIntoAll + descendIntoAuxLists},
-	};
-
-	// ForEachObjectN をレイヤごとの数・型の内訳で出す。順序は layerA の top レベルと比べる。
-	void LoForEach(vwprobe::Report& probe, MCObjectHandle layerA,
-				   const std::vector<MCObjectHandle>& walkA)
+	struct LoCounter
 	{
-		for (const LoTraverse& tr : kTraverses)
+		LoCount* st;
+
+		void operator()(MCObjectHandle h) const
 		{
-			std::map<std::string, std::map<short, int>> perLayer;
-			std::vector<MCObjectHandle> topA; // layerA の直下のものだけ、出てきた順
-			int total = 0;
-			const auto t0 = std::chrono::steady_clock::now();
-			gSDK->ForEachObjectN(tr.what, [&](MCObjectHandle h) {
-				++total;
-				MCObjectHandle layer = LoLayerOf(h);
-				perLayer[LoLayerName(layer)][LoType(h)]++;
-				if (gSDK->ParentObject(h) == layerA)
-					topA.push_back(h);
-			});
-			const auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-								std::chrono::steady_clock::now() - t0)
-								.count();
-			probe.log("  ForEachObjectN(" + std::string(tr.label) + "=" + std::to_string(tr.what) +
-					  "): 計 " + std::to_string(total) + "  " + std::to_string(us) + " µs");
-			for (const auto& kv : perLayer)
-			{
-				int n = 0;
-				for (const auto& tv : kv.second)
-					n += tv.second;
-				probe.log("    " + kv.first + ": " + std::to_string(n) + "  " + LoHisto(kv.second));
-			}
-			// 直下の並びが walk（終端・置き石を除く）と同じ順か、逆順か。
-			std::vector<MCObjectHandle> walkObjs;
-			for (MCObjectHandle h : walkA)
-				if (LoType(h) != kTermNode)
-					walkObjs.push_back(h);
-			bool same = topA.size() == walkObjs.size();
-			bool reverse = same;
-			for (size_t i = 0; i < topA.size() && (same || reverse); ++i)
-			{
-				if (i >= walkObjs.size())
-				{
-					same = reverse = false;
-					break;
-				}
-				same = same && topA[i] == walkObjs[i];
-				reverse = reverse && topA[i] == walkObjs[walkObjs.size() - 1 - i];
-			}
-			std::string missing;
-			for (MCObjectHandle h : walkObjs)
-			{
-				bool found = false;
-				for (MCObjectHandle k : topA)
-					found = found || k == h;
-				if (!found)
-					missing += " " + std::to_string(LoType(h)) + "@" + LoPtr(h);
-			}
-			probe.log("    " + std::string(kLoA) + " 直下: " + std::to_string(topA.size()) +
-					  "（walk から終端を除いた数 " + std::to_string(walkObjs.size()) + "）  同順=" +
-					  (same ? "yes" : "no") + " 逆順=" + (reverse ? "yes" : "no") +
-					  (missing.empty() ? "" : "  walk にあって出てこない:" + missing));
+			st->total++;
+			MCObjectHandle layer = LoLayerOf(h);
+			st->perLayer[LoLayerName(layer)][LoType(h)]++;
+			if (gSDK->ParentObject(h) == st->layerA)
+				st->topA.push_back(h);
 		}
+	};
+
+	bool LoContains(const std::vector<MCObjectHandle>& v, MCObjectHandle h)
+	{
+		for (MCObjectHandle k : v)
+		{
+			if (k == h)
+				return true;
+		}
+		return false;
+	}
+
+	// 直下の並びが walk（終端を除く）と同じ順か、逆順か。
+	void LoCompareOrder(vwprobe::Report& probe, const std::vector<MCObjectHandle>& topA,
+						const std::vector<MCObjectHandle>& walkA)
+	{
+		std::vector<MCObjectHandle> objs;
+		for (MCObjectHandle h : walkA)
+		{
+			if (LoType(h) != kTermNode)
+				objs.push_back(h);
+		}
+		bool same = topA.size() == objs.size();
+		bool reverse = same;
+		for (size_t i = 0; same && i < topA.size(); ++i)
+			same = topA[i] == objs[i];
+		for (size_t i = 0; reverse && i < topA.size(); ++i)
+			reverse = topA[i] == objs[objs.size() - 1 - i];
+		std::string missing;
+		for (MCObjectHandle h : objs)
+		{
+			if (!LoContains(topA, h))
+				missing += " " + LoInt(LoType(h)) + "@" + LoPtr(h);
+		}
+		std::string s = "    " + std::string(kLoA) + " 直下: " + LoInt(topA.size());
+		s += "（walk から終端を除いた数 " + LoInt(objs.size()) + "）";
+		s += std::string("  同順=") + (same ? "yes" : "no");
+		s += std::string(" 逆順=") + (reverse ? "yes" : "no");
+		if (!missing.empty())
+			s += "  walk にあって出てこない:" + missing;
+		probe.log(s);
+	}
+
+	// ForEachObjectN を 1 回、レイヤごとの数・型の内訳で出す。順序は layerA の直下で比べる。
+	void LoForEachOne(vwprobe::Report& probe, MCObjectHandle layerA,
+					  const std::vector<MCObjectHandle>& walkA, const char* label, short what)
+	{
+		LoCount st;
+		st.layerA = layerA;
+		std::function<void(MCObjectHandle)> fn = LoCounter{&st};
+		const auto t0 = std::chrono::steady_clock::now();
+		gSDK->ForEachObjectN(what, fn);
+		const long long us = LoUs(t0);
+		std::string s = "  ForEachObjectN(" + std::string(label) + "=";
+		s += LoInt(what) + "): 計 " + LoInt(st.total) + "  " + LoInt(us) + " µs";
+		probe.log(s);
+		for (const auto& kv : st.perLayer)
+		{
+			int n = 0;
+			for (const auto& tv : kv.second)
+				n += tv.second;
+			probe.log("    " + kv.first + ": " + LoInt(n) + "  " + LoHisto(kv.second));
+		}
+		LoCompareOrder(probe, st.topA, walkA);
+	}
+
+	void LoForEach(vwprobe::Report& probe, MCObjectHandle a, const std::vector<MCObjectHandle>& w)
+	{
+		const short objAll = allObjects + descendIntoAll;
+		LoForEachOne(probe, a, w, "allSelected", allSelected);
+		LoForEachOne(probe, a, w, "allEditable", allEditable);
+		LoForEachOne(probe, a, w, "allVisible", allVisible);
+		LoForEachOne(probe, a, w, "allDrawing", allDrawing);
+		LoForEachOne(probe, a, w, "allObjects", allObjects);
+		LoForEachOne(probe, a, w, "allObjectsAndResources", allObjectsAndResources);
+		LoForEachOne(probe, a, w, "allDrawing+Groups", allDrawing + descendIntoGroups);
+		LoForEachOne(probe, a, w, "allDrawing+All", allDrawing + descendIntoAll);
+		LoForEachOne(probe, a, w, "allObjects+Groups", allObjects + descendIntoGroups);
+		LoForEachOne(probe, a, w, "allObjects+All", objAll);
+		LoForEachOne(probe, a, w, "allObjects+All+Viewports", objAll + descendIntoViewports);
+		LoForEachOne(probe, a, w, "allObjects+AuxLists", allObjects + descendIntoAuxLists);
+		LoForEachOne(probe, a, w, "allObjects+All+AuxLists", objAll + descendIntoAuxLists);
 	}
 
 	// 作ったものを指定のレイヤへ置く（作成はアクティブなレイヤに入るので、違えば移す）。
@@ -273,12 +338,12 @@ namespace
 			probe.log(std::string("  作れなかった: ") + label);
 			return nullptr;
 		}
-		if (gSDK->ParentObject(h) != layer)
-		{
-			const bool moved = gSDK->AddObjectToContainer(h, layer);
-			probe.log(std::string("  ") + label + " を " + LoLayerName(layer) + " へ移した: " +
-					  (moved ? "ok" : "失敗"));
-		}
+		if (gSDK->ParentObject(h) == layer)
+			return h;
+		const bool moved = gSDK->AddObjectToContainer(h, layer);
+		std::string s = std::string("  ") + label + " を " + LoLayerName(layer);
+		s += std::string(" へ移した: ") + (moved ? "ok" : "失敗");
+		probe.log(s);
 		return h;
 	}
 
@@ -291,18 +356,51 @@ namespace
 	{
 		probe.log("--- レイヤの並び（GetDrawingHeader の子） ---");
 		MCObjectHandle header = gSDK->GetDrawingHeader();
-		int i = 0;
-		for (MCObjectHandle l = gSDK->FirstMemberObj(header); l != nullptr && i < 1000;
-			 l = gSDK->NextObject(l), ++i)
+		MCObjectHandle active = gSDK->GetActiveLayer();
+		MCObjectHandle l = gSDK->FirstMemberObj(header);
+		for (int i = 0; l != nullptr && i < 1000; ++i)
 		{
-			if (LoType(l) != kLayerNode)
-				continue;
-			double_gs scale = 0;
-			gSDK->GetLayerScaleN(l, scale);
-			probe.log("  [" + std::to_string(i) + "] " + LoLayerName(l) + "  scale=" + LoNum(scale) +
-					  (l == gSDK->GetActiveLayer() ? "  (アクティブ)" : ""));
+			if (LoType(l) == kLayerNode)
+			{
+				double_gs scale = 0;
+				gSDK->GetLayerScaleN(l, scale);
+				std::string s = "  [" + LoInt(i) + "] " + LoLayerName(l);
+				s += "  scale=" + LoNum(scale);
+				if (l == active)
+					s += "  (アクティブ)";
+				probe.log(s);
+			}
+			l = gSDK->NextObject(l);
 		}
 	}
+
+	// 名前・外形・クラスを読みながら辿る（刻みの中の所要を測る本体）。
+	int LoWalkRead(MCObjectHandle layer)
+	{
+		int n = 0;
+		MCObjectHandle h = gSDK->FirstMemberObj(layer);
+		while (h != nullptr)
+		{
+			TXString name;
+			gSDK->GetObjectName(h, name);
+			WorldRect r;
+			gSDK->GetObjectBounds(h, r);
+			gSDK->GetObjectClass(h);
+			++n;
+			h = gSDK->NextObject(h);
+		}
+		return n;
+	}
+
+	struct LoCountOnly
+	{
+		int* n;
+
+		void operator()(MCObjectHandle) const
+		{
+			(*n)++;
+		}
+	};
 
 #if GS_WIN
 	// 刻みの中で辿る（SetTimer の刻みからだけ呼ばれる）。
@@ -322,151 +420,109 @@ namespace
 		::KillTimer(nullptr, id);
 		if (gLoTick.done)
 			return;
-		auto t0 = std::chrono::steady_clock::now();
-		int n = 0;
-		for (MCObjectHandle h = gSDK->FirstMemberObj(gLoTick.layer); h != nullptr;
-			 h = gSDK->NextObject(h))
-		{
-			TXString name;
-			gSDK->GetObjectName(h, name);
-			WorldRect r;
-			gSDK->GetObjectBounds(h, r);
-			gSDK->GetObjectClass(h);
-			++n;
-		}
-		auto t1 = std::chrono::steady_clock::now();
+		const auto t0 = std::chrono::steady_clock::now();
+		gLoTick.walkN = LoWalkRead(gLoTick.layer);
+		gLoTick.walkUs = LoUs(t0);
 		int m = 0;
-		gSDK->ForEachObjectN(allObjects, [&](MCObjectHandle) { ++m; });
-		auto t2 = std::chrono::steady_clock::now();
-		gLoTick.walkUs = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
-		gLoTick.forEachUs = std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count();
-		gLoTick.walkN = n;
+		std::function<void(MCObjectHandle)> fn = LoCountOnly{&m};
+		const auto t1 = std::chrono::steady_clock::now();
+		gSDK->ForEachObjectN(allObjects, fn);
+		gLoTick.forEachUs = LoUs(t1);
 		gLoTick.forEachN = m;
 		gLoTick.done = true;
+	}
+
+	void LoTimingInTick(vwprobe::Report& probe, MCObjectHandle many)
+	{
+		gLoTick = LoTick();
+		gLoTick.layer = many;
+		const UINT_PTR timer = ::SetTimer(nullptr, 0, 20, &LoTimerProc);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		MSG msg;
+		while (!gLoTick.done && std::chrono::steady_clock::now() < deadline)
+		{
+			while (::PeekMessageW(&msg, nullptr, WM_TIMER, WM_TIMER, PM_REMOVE))
+				::DispatchMessageW(&msg);
+			::Sleep(1);
+		}
+		if (!gLoTick.done)
+		{
+			::KillTimer(nullptr, timer);
+			probe.log("  刻みが 10 秒来なかった");
+			return;
+		}
+		std::string s = "  刻みの中 walk＋名前・外形・クラス: " + LoInt(gLoTick.walkN);
+		s += " ノード " + LoInt(gLoTick.walkUs) + " µs";
+		s += " / ForEachObjectN(allObjects): " + LoInt(gLoTick.forEachN);
+		s += " 個 " + LoInt(gLoTick.forEachUs) + " µs";
+		probe.log(s);
 	}
 #endif
 
 	void LoTiming(vwprobe::Report& probe, MCObjectHandle many)
 	{
-		probe.log("--- 8 刻みの中の所要（" + std::string(kLoMany) + " に " +
-				  std::to_string(kManyCount) + " 個） ---");
+		probe.log("--- 8 刻みの中の所要（" + std::string(kLoMany) + "） ---");
 		// 刻みの外（対照）
 		for (int rep = 0; rep < 3; ++rep)
 		{
-			auto t0 = std::chrono::steady_clock::now();
-			int n = 0;
-			for (MCObjectHandle h = gSDK->FirstMemberObj(many); h != nullptr; h = gSDK->NextObject(h))
-			{
-				TXString name;
-				gSDK->GetObjectName(h, name);
-				WorldRect r;
-				gSDK->GetObjectBounds(h, r);
-				gSDK->GetObjectClass(h);
-				++n;
-			}
-			auto us = std::chrono::duration_cast<std::chrono::microseconds>(
-						  std::chrono::steady_clock::now() - t0)
-						  .count();
-			probe.log("  刻みの外 walk＋名前・外形・クラス: " + std::to_string(n) + " ノード " +
-					  std::to_string(us) + " µs");
+			const auto t0 = std::chrono::steady_clock::now();
+			const int n = LoWalkRead(many);
+			const long long us = LoUs(t0);
+			std::string s = "  刻みの外 walk＋名前・外形・クラス: " + LoInt(n);
+			s += " ノード " + LoInt(us) + " µs";
+			probe.log(s);
 		}
 #if GS_WIN
 		for (int rep = 0; rep < 3; ++rep)
-		{
-			gLoTick = LoTick();
-			gLoTick.layer = many;
-			const UINT_PTR timer = ::SetTimer(nullptr, 0, 20, &LoTimerProc);
-			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-			MSG msg;
-			while (!gLoTick.done && std::chrono::steady_clock::now() < deadline)
-			{
-				while (::PeekMessageW(&msg, nullptr, WM_TIMER, WM_TIMER, PM_REMOVE))
-					::DispatchMessageW(&msg);
-				::Sleep(1);
-			}
-			if (!gLoTick.done)
-			{
-				::KillTimer(nullptr, timer);
-				probe.log("  刻みが 10 秒来なかった");
-				continue;
-			}
-			probe.log("  刻みの中 walk＋名前・外形・クラス: " + std::to_string(gLoTick.walkN) +
-					  " ノード " + std::to_string(gLoTick.walkUs) + " µs / ForEachObjectN(allObjects): " +
-					  std::to_string(gLoTick.forEachN) + " 個 " + std::to_string(gLoTick.forEachUs) +
-					  " µs");
-		}
+			LoTimingInTick(probe, many);
 #else
 		probe.log("  （刻みの中の測定は Windows だけ）");
 #endif
 	}
 
-	void LoBuild(vwprobe::Report& probe, MCObjectHandle& layerA, MCObjectHandle& layerB,
-				 MCObjectHandle& many, MCObjectHandle& sheet)
+	// 作った順（重ね順の確かめ）。
+	struct LoMade
 	{
-		probe.log("--- 見本を作る ---");
-		layerA = gSDK->CreateLayerN(kLoA, 1.0);
-		layerB = gSDK->CreateLayerN(kLoB, 50.0);
-		double_gs sb = 0;
-		gSDK->GetLayerScaleN(layerB, sb);
-		if (std::fabs(sb - 50.0) > 1e-9)
-		{
-			gSDK->SetLayerScaleN(layerB, 50.0);
-			gSDK->GetLayerScaleN(layerB, sb);
-		}
-		probe.log("  " + std::string(kLoB) + " の縮尺（読み戻し）= " + LoNum(sb));
-		many = gSDK->CreateLayerN(kLoMany, 1.0);
-		sheet = gSDK->CreateLayer(kLoSheet, kLayerSheet);
-		probe.log("  レイヤ: A=" + LoPtr(layerA) + " B=" + LoPtr(layerB) + " 多=" + LoPtr(many) +
-				  " S=" + LoPtr(sheet) + "  作った直後のアクティブ=" +
-				  LoLayerName(gSDK->GetActiveLayer()));
+		std::string label;
+		MCObjectHandle h;
+	};
 
-		const InternalIndex cls = gSDK->AddClass("LO-クラス");
+	struct LoBuilder
+	{
+		vwprobe::Report& probe;
+		MCObjectHandle layerA;
+		std::vector<LoMade> made;
 
-		// 作った順（重ね順の確かめ）。名前は付けたり付けなかったり。
-		struct Made
+		MCObjectHandle Add(const char* label, MCObjectHandle h, const char* name)
 		{
-			const char* label;
-			MCObjectHandle h;
-		};
-		std::vector<Made> made;
-		auto add = [&](const char* label, MCObjectHandle h, const char* name) {
 			h = LoPut(probe, label, h, layerA);
 			if (h != nullptr && name != nullptr)
 				gSDK->SetObjectName(h, name);
 			made.push_back({label, h});
 			return h;
-		};
+		}
+	};
 
-		add("01 直線（名前あり）", gSDK->CreateLine(WorldPt(0, 0), WorldPt(1000, 0)), "LO-直線");
-		MCObjectHandle rect = add("02 矩形（名前なし・クラス LO-クラス）", LoRect(0, 100, 1000, 600),
-								  nullptr);
-		if (rect != nullptr)
-			gSDK->SetObjectClass(rect, cls);
-		const double kPi = 3.14159265358979323846;
-		add("03 回転した矩形 30°（原点 1500,100 ・1000×500）",
-			gSDK->CreateRectangleN(WorldPt(1500, 100), Vector2(std::cos(kPi / 6), std::sin(kPi / 6)),
-								   1000, 500),
-			"LO-回転");
-		add("04 楕円", gSDK->CreateOval(WorldRect(WorldPt(2500, 600), WorldPt(3500, 100))), nullptr);
-		add("05 文字", gSDK->CreateTextBlock("文字の外形", WorldPt(0, -500), false, 0), "LO-文字");
-
-		// 06 グループ（直線 2 本＋入れ子のグループに矩形 1 つ）
+	MCObjectHandle LoMakeGroup()
+	{
 		MCObjectHandle inner = gSDK->CreateGroup();
 		if (inner != nullptr)
 			gSDK->AddObjectToContainer(LoRect(4000, 100, 4300, 400), inner);
 		MCObjectHandle group = gSDK->CreateGroup();
-		if (group != nullptr)
-		{
-			gSDK->AddObjectToContainer(gSDK->CreateLine(WorldPt(4000, 0), WorldPt(5000, 0)), group);
-			gSDK->AddObjectToContainer(gSDK->CreateLine(WorldPt(4000, 600), WorldPt(5000, 600)),
-									   group);
-			if (inner != nullptr)
-				gSDK->AddObjectToContainer(inner, group);
-			gSDK->ResetObject(group);
-		}
-		add("06 グループ（直線 2・入れ子のグループ 1（矩形 1））", group, "LO-グループ");
+		if (group == nullptr)
+			return nullptr;
+		MCObjectHandle l1 = gSDK->CreateLine(WorldPt(4000, 0), WorldPt(5000, 0));
+		MCObjectHandle l2 = gSDK->CreateLine(WorldPt(4000, 600), WorldPt(5000, 600));
+		gSDK->AddObjectToContainer(l1, group);
+		gSDK->AddObjectToContainer(l2, group);
+		if (inner != nullptr)
+			gSDK->AddObjectToContainer(inner, group);
+		gSDK->ResetObject(group);
+		return group;
+	}
 
-		// 07 シンボル（定義に矩形 2）× 2
+	MCObjectHandle LoMakeSymbolDef(vwprobe::Report& probe)
+	{
 		TXString symName = "LO-シンボル";
 		MCObjectHandle def = gSDK->CreateSymbolDefinition(symName);
 		if (def != nullptr)
@@ -476,53 +532,54 @@ namespace
 			gSDK->ResetObject(def);
 		}
 		probe.log("  シンボル定義: " + LoPtr(def) + " name=\"" + LoStr(symName) + "\"");
-		add("07a シンボル", def ? gSDK->PlaceSymbolN(def, WorldPt(6000, 0), 0) : nullptr, nullptr);
-		add("07b シンボル（名前あり・45°）", def ? gSDK->PlaceSymbolN(def, WorldPt(7000, 0), 45) : nullptr,
-			"LO-シンボル2");
+		return def;
+	}
 
-		// 08 PIO（ドア単体）。設定ダイアログを出さないため先に定義する（Findings「Parametric Objects」）。
-		gSDK->DefineCustomObject("Door", kCustomObjectPrefNever);
-		gSDK->DefineCustomObject("Window", kCustomObjectPrefNever);
-		add("08 PIO ドア", gSDK->CreateCustomObject("Door", WorldPt(8000, 0), 0), nullptr);
-
-		// 09 壁＋窓（AddObjectToContainer で壁へ入れてみる）
-		MCObjectHandle wall = add("09 壁", gSDK->CreateWall(WorldPt(0, 2000), WorldPt(5000, 2000), 200),
-								  "LO-壁");
+	void LoMakeWall(LoBuilder& b)
+	{
+		MCObjectHandle w = gSDK->CreateWall(WorldPt(0, 2000), WorldPt(5000, 2000), 200);
+		MCObjectHandle wall = b.Add("09 壁", w, "LO-壁");
 		MCObjectHandle win = gSDK->CreateCustomObject("Window", WorldPt(2500, 2000), 0);
-		if (wall != nullptr && win != nullptr)
-		{
-			const bool ok = gSDK->AddObjectToContainer(win, wall);
-			gSDK->ResetObject(wall);
-			probe.log(std::string("  窓を壁へ AddObjectToContainer: ") + (ok ? "ok" : "失敗") +
-					  "  窓の親の型=" + std::to_string(LoType(gSDK->ParentObject(win))));
-			if (gSDK->ParentObject(win) != wall)
-				made.push_back({"09b 窓（壁に入らなかった）", win});
-		}
+		if (wall == nullptr || win == nullptr)
+			return;
+		const bool ok = gSDK->AddObjectToContainer(win, wall);
+		gSDK->ResetObject(wall);
+		MCObjectHandle parent = gSDK->ParentObject(win);
+		std::string s = "  窓を壁へ AddObjectToContainer: ";
+		s += ok ? "ok" : "失敗";
+		s += "  窓の親の型=" + LoInt(LoType(parent));
+		b.probe.log(s);
+		if (parent != wall)
+			b.made.push_back({"09b 窓（壁に入らなかった）", win});
+	}
 
-		// 10 押し出し（矩形を入れる）
+	MCObjectHandle LoMakeExtrude()
+	{
 		MCObjectHandle ex = gSDK->CreateExtrude(0, 1000);
-		if (ex != nullptr)
-		{
-			gSDK->AddObjectToContainer(LoRect(6000, 2000, 7000, 3000), ex);
-			gSDK->ResetObject(ex);
-		}
-		add("10 押し出し（1000×1000×高さ 1000）", ex, nullptr);
+		if (ex == nullptr)
+			return nullptr;
+		gSDK->AddObjectToContainer(LoRect(6000, 2000, 7000, 3000), ex);
+		gSDK->ResetObject(ex);
+		return ex;
+	}
 
-		// 11 同じ矩形を LO-B（1:50）へ
-		MCObjectHandle rb = LoPut(probe, "B 矩形", LoRect(0, 100, 1000, 600), layerB);
-		if (rb != nullptr)
-			gSDK->SetObjectName(rb, "LO-B矩形");
-
-		// 12 シートレイヤにビューポート（LO-A を映す）
+	MCObjectHandle LoMakeViewport(vwprobe::Report& probe, MCObjectHandle sheet,
+								  MCObjectHandle layerA)
+	{
 		MCObjectHandle vp = gSDK->CreateViewport(sheet);
 		if (vp != nullptr)
 		{
-			gSDK->SetViewportLayerVisibility(vp, layerA, 0 /* kLayerVisibilityNormal */);
+			// 0 = kLayerVisibilityNormal
+			gSDK->SetViewportLayerVisibility(vp, layerA, 0);
 			gSDK->UpdateViewport(vp);
 		}
-		probe.log("  ビューポート: " + LoPtr(vp) + " 親の型=" + std::to_string(LoType(gSDK->ParentObject(vp))));
+		MCObjectHandle parent = gSDK->ParentObject(vp);
+		probe.log("  ビューポート: " + LoPtr(vp) + " 親の型=" + LoInt(LoType(parent)));
+		return vp;
+	}
 
-		// 13 3000 個
+	void LoMakeMany(MCObjectHandle many)
+	{
 		for (int i = 0; i < kManyCount; ++i)
 		{
 			const double x = (i % 60) * 200.0;
@@ -531,26 +588,171 @@ namespace
 			if (h != nullptr && gSDK->ParentObject(h) != many)
 				gSDK->AddObjectToContainer(h, many);
 		}
+	}
+
+	struct LoLayers
+	{
+		MCObjectHandle a = nullptr;
+		MCObjectHandle b = nullptr;
+		MCObjectHandle many = nullptr;
+		MCObjectHandle sheet = nullptr;
+	};
+
+	void LoMakeLayers(vwprobe::Report& probe, LoLayers& L)
+	{
+		L.a = gSDK->CreateLayerN(kLoA, 1.0);
+		L.b = gSDK->CreateLayerN(kLoB, 50.0);
+		double_gs sb = 0;
+		gSDK->GetLayerScaleN(L.b, sb);
+		if (std::fabs(sb - 50.0) > 1e-9)
+		{
+			gSDK->SetLayerScaleN(L.b, 50.0);
+			gSDK->GetLayerScaleN(L.b, sb);
+		}
+		probe.log("  " + std::string(kLoB) + " の縮尺（読み戻し）= " + LoNum(sb));
+		L.many = gSDK->CreateLayerN(kLoMany, 1.0);
+		L.sheet = gSDK->CreateLayer(kLoSheet, kLayerSheet);
+		std::string s = "  レイヤ: A=" + LoPtr(L.a) + " B=" + LoPtr(L.b);
+		s += " 多=" + LoPtr(L.many) + " S=" + LoPtr(L.sheet);
+		s += "  作った直後のアクティブ=" + LoLayerName(gSDK->GetActiveLayer());
+		probe.log(s);
+	}
+
+	void LoBuild(vwprobe::Report& probe, LoLayers& L)
+	{
+		probe.log("--- 見本を作る ---");
+		LoMakeLayers(probe, L);
+		if (L.a == nullptr)
+			return;
+		const InternalIndex cls = gSDK->AddClass("LO-クラス");
+		LoBuilder b{probe, L.a, {}};
+
+		MCObjectHandle line = gSDK->CreateLine(WorldPt(0, 0), WorldPt(1000, 0));
+		b.Add("01 直線（名前あり）", line, "LO-直線");
+
+		MCObjectHandle rect = b.Add("02 矩形（名前なし）", LoRect(0, 100, 1000, 600), nullptr);
+		if (rect != nullptr)
+			gSDK->SetObjectClass(rect, cls);
+
+		const double kPi = 3.14159265358979323846;
+		const Vector2 dir(std::cos(kPi / 6), std::sin(kPi / 6));
+		MCObjectHandle rot = gSDK->CreateRectangleN(WorldPt(1500, 100), dir, 1000, 500);
+		b.Add("03 回転した矩形 30°（原点 1500,100・1000×500）", rot, "LO-回転");
+
+		const WorldRect ovalBox(WorldPt(2500, 600), WorldPt(3500, 100));
+		b.Add("04 楕円", gSDK->CreateOval(ovalBox), nullptr);
+
+		MCObjectHandle text = gSDK->CreateTextBlock("文字の外形", WorldPt(0, -500), false, 0);
+		b.Add("05 文字", text, "LO-文字");
+
+		MCObjectHandle group = LoMakeGroup();
+		b.Add("06 グループ（直線 2・入れ子 1）", group, "LO-グループ");
+
+		MCObjectHandle def = LoMakeSymbolDef(probe);
+		MCObjectHandle s1 = nullptr;
+		MCObjectHandle s2 = nullptr;
+		if (def != nullptr)
+		{
+			s1 = gSDK->PlaceSymbolN(def, WorldPt(6000, 0), 0);
+			s2 = gSDK->PlaceSymbolN(def, WorldPt(7000, 0), 45);
+		}
+		b.Add("07a シンボル", s1, nullptr);
+		b.Add("07b シンボル（名前あり・45°）", s2, "LO-シンボル2");
+
+		// 設定ダイアログを出さないため先に定義する（Findings「Parametric Objects」）。
+		gSDK->DefineCustomObject("Door", kCustomObjectPrefNever);
+		gSDK->DefineCustomObject("Window", kCustomObjectPrefNever);
+		MCObjectHandle door = gSDK->CreateCustomObject("Door", WorldPt(8000, 0), 0);
+		b.Add("08 PIO ドア", door, nullptr);
+
+		LoMakeWall(b);
+		b.Add("10 押し出し（1000×1000×高さ 1000）", LoMakeExtrude(), nullptr);
+
+		// 同じ矩形を LO-B（1:50）へ
+		MCObjectHandle rb = LoPut(probe, "B 矩形", LoRect(0, 100, 1000, 600), L.b);
+		if (rb != nullptr)
+			gSDK->SetObjectName(rb, "LO-B矩形");
+
+		if (L.sheet != nullptr)
+			LoMakeViewport(probe, L.sheet, L.a);
+		if (L.many != nullptr)
+			LoMakeMany(L.many);
 
 		probe.log("--- 作った順（1 の答え合わせ） ---");
-		for (const Made& m : made)
-			probe.log(std::string("  ") + m.label + " → " + LoPtr(m.h) + " type=" +
-					  std::to_string(LoType(m.h)));
+		for (const LoMade& m : b.made)
+		{
+			std::string s = "  " + m.label + " → " + LoPtr(m.h);
+			s += " type=" + LoInt(LoType(m.h));
+			probe.log(s);
+		}
+	}
+
+	void LoNested(vwprobe::Report& probe, const std::vector<MCObjectHandle>& walkA)
+	{
+		probe.log("--- 3 入れ子の中身（グループ・シンボル定義・壁・PIO の子） ---");
+		for (MCObjectHandle h : walkA)
+		{
+			const short t = LoType(h);
+			const bool box = t == kGroupNode || t == kWallNode;
+			if (box || t == kParametricNode || t == kExtrudeNode)
+			{
+				probe.log("  " + LoDescribe(h));
+				MCObjectHandle k = gSDK->FirstMemberObj(h);
+				while (k != nullptr)
+				{
+					probe.log("      子 " + LoDescribe(k));
+					k = gSDK->NextObject(k);
+				}
+			}
+			if (t != kSymbolNode)
+				continue;
+			MCObjectHandle def = gSDK->GetDefinition(h);
+			TXString dn;
+			gSDK->GetObjectName(def, dn);
+			std::string s = "  シンボル → 定義 \"" + LoStr(dn) + "\"";
+			s += " type=" + LoInt(LoType(def));
+			s += "  インスタンスの子の先頭の型=" + LoInt(LoType(gSDK->FirstMemberObj(h)));
+			probe.log(s);
+		}
+	}
+
+	void LoNamedOne(vwprobe::Report& probe, const char* n)
+	{
+		MCObjectHandle h = gSDK->GetNamedObject(n);
+		std::string s = std::string("  ") + n + " → " + LoPtr(h);
+		s += " type=" + LoInt(LoType(h));
+		s += " layer=" + LoLayerName(LoLayerOf(h));
+		probe.log(s);
+	}
+
+	void LoNamed(vwprobe::Report& probe)
+	{
+		probe.log("--- 名前で引けるか（GetNamedObject） ---");
+		LoNamedOne(probe, "LO-直線");
+		LoNamedOne(probe, "LO-回転");
+		LoNamedOne(probe, "LO-グループ");
+		LoNamedOne(probe, "LO-壁");
+		LoNamedOne(probe, "LO-シンボル");
+		LoNamedOne(probe, "LO-B矩形");
 	}
 } // namespace
 
 VW_PROBE("layer-objects", "レイヤの中の図形の列挙", "見本を作り、辿り方ごとに数と並びを出す")
 {
-	MCObjectHandle layerA = gSDK->GetNamedLayer(kLoA);
-	MCObjectHandle layerB = gSDK->GetNamedLayer(kLoB);
-	MCObjectHandle many = gSDK->GetNamedLayer(kLoMany);
-	MCObjectHandle sheet = gSDK->GetNamedLayer(kLoSheet);
-	const bool second = layerA != nullptr;
-	probe.log(second ? "見本あり → 辿り直すだけ（2 回目）" : "見本なし → 作って測る（1 回目）");
+	LoLayers L;
+	L.a = gSDK->GetNamedLayer(kLoA);
+	L.b = gSDK->GetNamedLayer(kLoB);
+	L.many = gSDK->GetNamedLayer(kLoMany);
+	L.sheet = gSDK->GetNamedLayer(kLoSheet);
+	const bool second = L.a != nullptr;
+	if (second)
+		probe.log("見本あり → 辿り直すだけ（2 回目）");
+	else
+		probe.log("見本なし → 作って測る（1 回目）");
 
 	if (!second)
-		LoBuild(probe, layerA, layerB, many, sheet);
-	if (layerA == nullptr)
+		LoBuild(probe, L);
+	if (L.a == nullptr)
 	{
 		probe.fail("LO-A が作れなかった");
 		return;
@@ -559,54 +761,28 @@ VW_PROBE("layer-objects", "レイヤの中の図形の列挙", "見本を作り�
 	LoDumpLayers(probe);
 
 	probe.log("--- 1・2・5・6 LO-A を First→Next で（1 ノードずつ） ---");
-	const std::vector<MCObjectHandle> walkA = LoWalk(probe, layerA, true);
-	LoReverseCheck(probe, layerA, walkA);
+	const std::vector<MCObjectHandle> walkA = LoWalk(probe, L.a, true);
+	LoReverseCheck(probe, L.a, walkA);
+	LoNested(probe, walkA);
 
-	probe.log("--- 3 入れ子の中身（グループ・シンボル定義・壁・PIO の子） ---");
-	for (MCObjectHandle h : walkA)
+	if (L.b != nullptr)
 	{
-		const short t = LoType(h);
-		if (t == kGroupNode || t == kWallNode || t == kParametricNode || t == kExtrudeNode)
-		{
-			probe.log("  " + LoDescribe(h));
-			for (MCObjectHandle k = gSDK->FirstMemberObj(h); k != nullptr; k = gSDK->NextObject(k))
-				probe.log("      子 " + LoDescribe(k));
-		}
-		if (t == kSymbolNode)
-		{
-			MCObjectHandle def = gSDK->GetDefinition(h);
-			TXString dn;
-			gSDK->GetObjectName(def, dn);
-			probe.log("  シンボル → 定義 \"" + LoStr(dn) + "\" type=" + std::to_string(LoType(def)) +
-					  "  インスタンス自身の子の先頭の型=" +
-					  std::to_string(LoType(gSDK->FirstMemberObj(h))));
-		}
+		probe.log("--- 6 縮尺 1:50 のレイヤ（LO-A の 02 と同じ座標の矩形） ---");
+		LoWalk(probe, L.b, true);
 	}
-
-	if (layerB != nullptr)
-	{
-		probe.log("--- 6 縮尺 1:50 のレイヤ（LO-A の 02 と同じ座標で作った矩形） ---");
-		LoWalk(probe, layerB, true);
-	}
-	if (sheet != nullptr)
+	if (L.sheet != nullptr)
 	{
 		probe.log("--- 7 シートレイヤ ---");
-		LoWalk(probe, sheet, true);
+		LoWalk(probe, L.sheet, true);
 	}
-	if (many != nullptr)
-		LoWalk(probe, many, false);
+	if (L.many != nullptr)
+		LoWalk(probe, L.many, false);
 
 	probe.log("--- 3・7 ForEachObjectN の traverseWhat ごと ---");
-	LoForEach(probe, layerA, walkA);
+	LoForEach(probe, L.a, walkA);
 
-	if (many != nullptr)
-		LoTiming(probe, many);
+	if (L.many != nullptr)
+		LoTiming(probe, L.many);
 
-	probe.log("--- 名前で引けるか（GetNamedObject） ---");
-	for (const char* n : {"LO-直線", "LO-回転", "LO-グループ", "LO-壁", "LO-シンボル", "LO-B矩形"})
-	{
-		MCObjectHandle h = gSDK->GetNamedObject(n);
-		probe.log(std::string("  ") + n + " → " + LoPtr(h) + " type=" + std::to_string(LoType(h)) +
-				  " layer=" + LoLayerName(LoLayerOf(h)));
-	}
+	LoNamed(probe);
 }
