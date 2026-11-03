@@ -522,8 +522,15 @@ namespace
 		return group;
 	}
 
-	MCObjectHandle LoMakeSymbolDef(vwprobe::Report& probe)
+	// onLayer が nil でなければ、中身の矩形はそのレイヤをアクティブにしてから作る（symonA）。
+	MCObjectHandle LoMakeSymbolDef(vwprobe::Report& probe, MCObjectHandle onLayer)
 	{
+		MCObjectHandle before = gSDK->GetActiveLayer();
+		if (onLayer != nullptr)
+			gSDK->SetCurrentLayer(onLayer);
+		std::string s = "  シンボルの中身を作るときのアクティブ=";
+		s += LoLayerName(gSDK->GetActiveLayer());
+		probe.log(s);
 		TXString symName = "LO-シンボル";
 		MCObjectHandle def = gSDK->CreateSymbolDefinition(symName);
 		if (def != nullptr)
@@ -532,6 +539,8 @@ namespace
 			gSDK->AddObjectToContainer(LoRect(300, 0, 500, 200), def);
 			gSDK->ResetObject(def);
 		}
+		if (onLayer != nullptr && before != nullptr)
+			gSDK->SetCurrentLayer(before);
 		probe.log("  シンボル定義: " + LoPtr(def) + " name=\"" + LoStr(symName) + "\"");
 		return def;
 	}
@@ -629,7 +638,7 @@ namespace
 
 	// 作るものを絞る（落ちの切り分け用）。%TEMP%\VwSdkProbes-layer-objects.mode に
 	// 語を空白区切りで並べると、その語の群だけ作る。ファイルが無ければ全部作る。
-	// 語: 2d symbol sym0 sym45 symdef door wall extrude viewport many b nosel
+	// 語: 2d symbol sym0 sym45 symdef symonA door wall extrude viewport many b nosel
 	struct LoMode
 	{
 		std::string words;
@@ -696,7 +705,10 @@ namespace
 	// symbol は 0° と 45° の両方を置く。sym0 / sym45 はどちらか一方、symdef は定義だけ。
 	void LoBuildSymbols(LoBuilder& b, const LoMode& mode)
 	{
-		MCObjectHandle def = LoMakeSymbolDef(b.probe);
+		MCObjectHandle onLayer = nullptr;
+		if (!mode.all && mode.Has("symonA"))
+			onLayer = b.layerA;
+		MCObjectHandle def = LoMakeSymbolDef(b.probe, onLayer);
 		if (def == nullptr)
 			return;
 		const bool both = mode.Has("symbol");
