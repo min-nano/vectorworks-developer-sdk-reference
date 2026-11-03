@@ -629,7 +629,7 @@ namespace
 
 	// 作るものを絞る（落ちの切り分け用）。%TEMP%\VwSdkProbes-layer-objects.mode に
 	// 語を空白区切りで並べると、その語の群だけ作る。ファイルが無ければ全部作る。
-	// 語: 2d symbol door wall extrude viewport many b
+	// 語: 2d symbol sym0 sym45 symdef door wall extrude viewport many b nosel
 	struct LoMode
 	{
 		std::string words;
@@ -693,18 +693,43 @@ namespace
 		b.Add("06 グループ（直線 2・入れ子 1）", group, "LO-グループ");
 	}
 
-	void LoBuildSymbols(LoBuilder& b)
+	// symbol は 0° と 45° の両方を置く。sym0 / sym45 はどちらか一方、symdef は定義だけ。
+	void LoBuildSymbols(LoBuilder& b, const LoMode& mode)
 	{
 		MCObjectHandle def = LoMakeSymbolDef(b.probe);
-		MCObjectHandle s1 = nullptr;
-		MCObjectHandle s2 = nullptr;
-		if (def != nullptr)
+		if (def == nullptr)
+			return;
+		const bool both = mode.Has("symbol");
+		if (both || mode.Has("sym0"))
+			b.Add("07a シンボル", gSDK->PlaceSymbolN(def, WorldPt(6000, 0), 0), nullptr);
+		if (both || mode.Has("sym45"))
 		{
-			s1 = gSDK->PlaceSymbolN(def, WorldPt(6000, 0), 0);
-			s2 = gSDK->PlaceSymbolN(def, WorldPt(7000, 0), 45);
+			MCObjectHandle s2 = gSDK->PlaceSymbolN(def, WorldPt(7000, 0), 45);
+			b.Add("07b シンボル（名前あり・45°）", s2, "LO-シンボル2");
 		}
-		b.Add("07a シンボル", s1, nullptr);
-		b.Add("07b シンボル（名前あり・45°）", s2, "LO-シンボル2");
+	}
+
+	// 作ったものの選択を外す（nosel。選択の強調の描画が引き金かを分ける）。
+	void LoDeselect(vwprobe::Report& probe, const LoLayers& L)
+	{
+		int n = 0;
+		const MCObjectHandle layers[] = {L.a, L.b, L.many, L.sheet};
+		for (MCObjectHandle layer : layers)
+		{
+			if (layer == nullptr)
+				continue;
+			MCObjectHandle h = gSDK->FirstMemberObj(layer);
+			while (h != nullptr)
+			{
+				if (gSDK->IsSelected(h))
+				{
+					gSDK->SelectObject(h, false);
+					++n;
+				}
+				h = gSDK->NextObject(h);
+			}
+		}
+		probe.log("  nosel: 選択を外した数 " + LoInt(n));
 	}
 
 	void LoBuild(vwprobe::Report& probe, LoLayers& L)
@@ -719,8 +744,9 @@ namespace
 
 		if (mode.Has("2d"))
 			LoBuild2D(b, cls);
-		if (mode.Has("symbol"))
-			LoBuildSymbols(b);
+		const bool anySym = mode.Has("symbol") || mode.Has("sym0") || mode.Has("sym45");
+		if (anySym || mode.Has("symdef"))
+			LoBuildSymbols(b, mode);
 
 		// 設定ダイアログを出さないため先に定義する（Findings「Parametric Objects」）。
 		gSDK->DefineCustomObject("Door", kCustomObjectPrefNever);
@@ -746,6 +772,8 @@ namespace
 			LoMakeViewport(probe, L.sheet, L.a);
 		if (L.many != nullptr && mode.Has("many"))
 			LoMakeMany(L.many);
+		if (!mode.all && mode.Has("nosel"))
+			LoDeselect(probe, L);
 
 		probe.log("--- 作った順（1 の答え合わせ） ---");
 		for (const LoMade& m : b.made)
