@@ -350,6 +350,8 @@ macOS の窓の「編集済み」（`NSWindow` の `isDocumentEdited`）も、�
   `NextObject` で数えた図形数は減らず、上書き保存した瞬間に減った（#242 の段ごとの測定）。
   **図形数で「取り消しが効いたか」を判定しない。** #241 の測定で「取り消しで戻らない」と
   見えたのはこれで、取り消し自体は効いていた（窓の「編集済み」が `no` に戻っていた）。
+  **残っているのは図形ではなく型 `90` の置き石**で、`ForEachObjectN` には出ない（[Layer
+  Objects](Layer%20Objects.md) の 4。#282）。
 - **刻みの中から呼んでよい。** 上の測定はすべて OS タイマーの刻みの中で、落ちず、
   `GetActiveDocument` は 1 回 7〜94 µs（#241）。**図面 0 枚・起動直後の刻みでも
   `GetOpenFilesList()` は落ちない**（[Timers and Notifications](Timers%20and%20Notifications.md)
