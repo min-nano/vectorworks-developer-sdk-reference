@@ -1003,7 +1003,10 @@ namespace
 		const std::string watchPath = target.inMemoryOnly ? std::string() : target.path;
 		LgMeasure(
 			probe, tag, watchPath,
-			[&] { return "DoMenuName=" + std::to_string(gSDK->DoMenuName("Close", 0)); },
+			[&] {
+				return "DoMenuName=" +
+					   std::to_string(static_cast<int>(gSDK->DoMenuName("Close", 0)));
+			},
 			[&]
 			{
 				const std::size_t count = SdDocs().size();
