@@ -185,7 +185,8 @@ namespace
 			probe.log(tag + ": フォルダ ある 書ける=" + SdFlag(ownerWrite) + ": " + path);
 			return;
 		}
-		const auto when = sdfs::last_write_time(p, ec).time_since_epoch().count();
+		const long long when =
+			static_cast<long long>(sdfs::last_write_time(p, ec).time_since_epoch().count());
 		char hash[32];
 		std::snprintf(hash, sizeof hash, "%016llx", static_cast<unsigned long long>(SdHash(p)));
 		probe.log(tag + ": ファイル ある size=" + std::to_string(sdfs::file_size(p, ec)) +
