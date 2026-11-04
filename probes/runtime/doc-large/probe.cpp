@@ -33,6 +33,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -1097,10 +1098,18 @@ namespace
 				probe.fail(tag + ": CreatePolyshape が nil");
 				return;
 			}
+			// 自己交差させない（中心の周りを角度の順に回る）。乱数の頂点を並べると、描画の分割
+			// （gluTessEndPolygon）が 30 分以上終わらず、測りたいものが測れなくなる（実際に踏んだ）。
+			const double cx = LgRand(100000.0);
+			const double cy = LgRand(100000.0);
 			for (long long v = 0; v < verts; ++v)
 			{
-				gSDK->AddVertex(poly, WorldPt(LgRand(100000.0), LgRand(100000.0)), nullptr,
-								vtCorner, 0, v + 1 == verts);
+				const double angle =
+					6.283185307179586 * static_cast<double>(v) / static_cast<double>(verts);
+				const double radius = 200.0 + LgRand(100.0);
+				gSDK->AddVertex(
+					poly, WorldPt(cx + radius * std::cos(angle), cy + radius * std::sin(angle)),
+					nullptr, vtCorner, 0, v + 1 == verts);
 			}
 			if (i % 1000 == 999)
 				probe.log(tag + ":   " + std::to_string(i + 1) + " 件 " + std::to_string(SdMs(t0)) +
