@@ -12,6 +12,7 @@
 //	  図面   new / open <P> / switch <P> / closefront / docs
 //	  保存   saveto <P>（前面の図面をそのパスへ）/ save（前面の図面を、一覧のパスの文字列のまま）
 //	  図形   rect <名前>（undo イベントの外）/ event <名前>（自分で開いて閉じる）/ list
+//	         ev-story・ev-layer・ev-member <名前>（階・レイヤ・構造材をイベントの中で）/ find <名前>
 //	  取消   doundo（DoMenuName("Undo", 0)）/ menu（「取り消し」の項目の文言）
 //	  ファイル  mkdir <P> / mv <A> -> <B> / rm <P> / ro <P> / rw <P> / write <P> / fs <P> / ls <P>
 //	  見張り  press auto|none
@@ -702,6 +703,62 @@ namespace
 				  " EndUndoEvent=" + SdFlag(closed != 0));
 	}
 
+	// 階（CreateStory）とレイヤをイベントの中で作る。#223 の条件の切り分け用。
+	void SdStoryEvent(vwprobe::Report& probe, const std::string& tag, const std::string& name)
+	{
+		gSDK->SetUndoMethod(kUndoSwapObjects);
+		gSDK->NameUndoEvent(TXString(name.c_str()));
+		const bool created = gSDK->CreateStory(TXString(name.c_str()), TXString(name.c_str()));
+		const Boolean closed = gSDK->EndUndoEvent();
+		probe.log(tag + ": 階 " + name + " 作れた=" + SdFlag(created) +
+				  " EndUndoEvent=" + SdFlag(closed != 0));
+	}
+
+	void SdLayerEvent(vwprobe::Report& probe, const std::string& tag, const std::string& name)
+	{
+		gSDK->SetUndoMethod(kUndoSwapObjects);
+		gSDK->NameUndoEvent(TXString(name.c_str()));
+		MCObjectHandle layer = gSDK->CreateLayer(name.c_str(), kLayerDesign);
+		if (layer != nullptr)
+			gSDK->AddAfterSwapObject(layer);
+		const Boolean closed = gSDK->EndUndoEvent();
+		probe.log(tag + ": レイヤ " + name + " 作れた=" + SdFlag(layer != nullptr) +
+				  " EndUndoEvent=" + SdFlag(closed != 0));
+	}
+
+	// 構造材（PIO）をイベントの中で作る。パスも登録する（#223 と同じ）。
+	void SdMemberEvent(vwprobe::Report& probe, const std::string& tag, const std::string& name)
+	{
+		gSDK->DefineCustomObject("StructuralMember", kCustomObjectPrefNever);
+		gSDK->EndUndoEvent();
+		gSDK->SetUndoMethod(kUndoSwapObjects);
+		gSDK->NameUndoEvent(TXString(name.c_str()));
+		MCObjectHandle path = gSDK->CreateLine(WorldPt(0, 0), WorldPt(1000, 0));
+		bool made = false;
+		if (path != nullptr)
+		{
+			gSDK->AddAfterSwapObject(path);
+			MCObjectHandle member =
+				gSDK->CreateCustomObjectPath("StructuralMember", path, nullptr, true);
+			if (member != nullptr)
+			{
+				made = true;
+				gSDK->SetObjectName(member, TXString(name.c_str()));
+				gSDK->ResetObject(member);
+			}
+		}
+		const Boolean closed = gSDK->EndUndoEvent();
+		probe.log(tag + ": 構造材 " + name + " 作れた=" + SdFlag(made) +
+				  " EndUndoEvent=" + SdFlag(closed != 0));
+	}
+
+	// 名前で引く（階・レイヤは list に出ない）。
+	void SdFind(vwprobe::Report& probe, const std::string& tag, const std::string& name)
+	{
+		probe.log(tag + ": " + name +
+				  " 引ける=" + SdFlag(gSDK->GetNamedObject(TXString(name.c_str())) != nullptr));
+	}
+
 	void SdList(vwprobe::Report& probe, const std::string& tag)
 	{
 		int live = 0;
@@ -821,6 +878,14 @@ namespace
 			SdRect(probe, tag, arg);
 		else if (verb == "event")
 			SdEvent(probe, tag, arg);
+		else if (verb == "ev-story")
+			SdStoryEvent(probe, tag, arg);
+		else if (verb == "ev-layer")
+			SdLayerEvent(probe, tag, arg);
+		else if (verb == "ev-member")
+			SdMemberEvent(probe, tag, arg);
+		else if (verb == "find")
+			SdFind(probe, tag, arg);
 		else if (verb == "list")
 			SdList(probe, tag);
 		else if (verb == "doundo")
