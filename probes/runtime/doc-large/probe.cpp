@@ -897,7 +897,8 @@ namespace
 		const auto size = sdfs::file_size(p, ec);
 		if (ec)
 			return "無い";
-		const auto when = sdfs::last_write_time(p, ec).time_since_epoch().count();
+		const long long when =
+			static_cast<long long>(sdfs::last_write_time(p, ec).time_since_epoch().count());
 		return "size=" + std::to_string(size) + " time=" + std::to_string(when);
 	}
 
