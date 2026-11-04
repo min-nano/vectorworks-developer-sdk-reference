@@ -333,7 +333,7 @@ Claude Code ──MCP(stdio)──▶ plugin/mcp/vw-mcp-server.py ──ファ�
   止まるため。**次に走らせる前・`vw_cleanup`・再起動の前に閉じて、一時ファイルも消す**
   （人の図面には触れない——閉じるのは、開いた本人であることを fileRef とパスで確かめた
   ものだけ）。開いている図面で走らせたいときだけ `new_document=false`。
-  - **この保存は、図面に PIO があると取り消しの段を 1 つ積む**（[Findings「Undo」](../Findings/Undo.md)。
+  - **この保存は、図面に PIO を足した後だと取り消しの段を 1 つ積むことがある**（[Findings「Undo」](../Findings/Undo.md)。
     #288）。1 回目で作り、`new_document=false` の 2 回目で `DoMenuName("Undo", 0)` するような
     **コマンドをまたいだ取り消し**を測るときは、1 段目で何も戻らないことがある。段を重ねて
     「消えるまで掛ける」形に書いておく。
