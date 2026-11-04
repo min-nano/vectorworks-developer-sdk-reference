@@ -708,7 +708,9 @@ namespace
 	{
 		gSDK->SetUndoMethod(kUndoSwapObjects);
 		gSDK->NameUndoEvent(TXString(name.c_str()));
-		const bool created = gSDK->CreateStory(TXString(name.c_str()), TXString(name.c_str()));
+		TXString storyName(name.c_str());
+		TXString storySuffix(name.c_str());
+		const bool created = gSDK->CreateStory(storyName, storySuffix);
 		const Boolean closed = gSDK->EndUndoEvent();
 		probe.log(tag + ": 階 " + name + " 作れた=" + SdFlag(created) +
 				  " EndUndoEvent=" + SdFlag(closed != 0));
