@@ -13,10 +13,13 @@
 //	  7  シートレイヤを辿ったときに何が出るか
 //	  8  OS タイマー（SetTimer）の刻みの中で辿ったときの所要（Windows。図形 3000）
 //
-//	**2 回走らせる。** 1 回目は新規の空図面で走らせると見本を作って全部を測る。そのあと人が
-//	（あるいは computer use で）LO-A の上の図形を消したり描いて取り消したりしてから 2 回目を
-//	走らせると、見本は作らずに辿り直すだけ（各ノードの印を全部出す）。見本があるかは
-//	デザインレイヤ「LO-A」の有無で決める。
+//	**2 回以上走らせる。** 1 回目は新規の空図面で走らせると見本を作って全部を測る。そのあと人が
+//	（あるいは computer use で）LO-A の上の図形を消したり複製して取り消したりしてから
+//	new_document=false で走らせると、見本は作らずに辿り直すだけ（各ノードの印を全部出す）。
+//	見本があるかはデザインレイヤ「LO-A」の有無で決める。
+//
+//	2 回目以降は、先に一時ディレクトリの VwSdkProbes-layer-objects.do を 1 行ずつ行う
+//	（画面の操作の前の準備）: activate <レイヤ名> / deselect / select <図形の名前>。読んだら消す。
 //
 //	プローブは undo イベントを自分では開かない（CLAUDE.md）。
 //	整形が 1 通りに決まるよう、式は 1 行に収め、ラムダは使わない（手元に clang-format が無い）。
@@ -144,8 +147,13 @@ namespace
 		s += LoNum(r.Left()) + "," + LoNum(r.Bottom()) + " → ";
 		s += LoNum(r.Right()) + "," + LoNum(r.Top()) + "]";
 		s += " parent=" + LoInt(LoType(gSDK->ParentObject(h)));
+		s += " @" + LoPtr(h);
 		if (gSDK->IsSelected(h))
 			s += " selected";
+		if (!gSDK->IsVisible(h))
+			s += " invisible";
+		if (gSDK->IsLocked(h))
+			s += " locked";
 		if (t == kParametricNode)
 		{
 			VWFC::VWObjects::VWParametricObj pio(h);
@@ -310,6 +318,18 @@ namespace
 			probe.log("    " + kv.first + ": " + LoInt(n) + "  " + LoHisto(kv.second));
 		}
 		LoCompareOrder(probe, st.topA, walkA);
+	}
+
+	// 2 回目以降に見るものだけ（消した・取り消した図形が walk との差に出るか）。
+	void LoForEachShort(vwprobe::Report& probe, MCObjectHandle a,
+						const std::vector<MCObjectHandle>& w)
+	{
+		LoForEachOne(probe, a, w, "allSelected", allSelected);
+		LoForEachOne(probe, a, w, "allEditable", allEditable);
+		LoForEachOne(probe, a, w, "allVisible", allVisible);
+		LoForEachOne(probe, a, w, "allDrawing", allDrawing);
+		LoForEachOne(probe, a, w, "allObjects", allObjects);
+		LoForEachOne(probe, a, w, "allDrawing+All", allDrawing + descendIntoAll);
 	}
 
 	void LoForEach(vwprobe::Report& probe, MCObjectHandle a, const std::vector<MCObjectHandle>& w)
@@ -825,6 +845,77 @@ namespace
 		}
 	}
 
+	std::string LoDoPath()
+	{
+		const char* mac = std::getenv("TMPDIR");
+		if (mac != nullptr)
+			return std::string(mac) + "VwSdkProbes-layer-objects.do";
+		const char* win = std::getenv("TEMP");
+		if (win != nullptr)
+			return std::string(win) + "\\VwSdkProbes-layer-objects.do";
+		return "";
+	}
+
+	void LoDoOne(vwprobe::Report& probe, const std::string& line)
+	{
+		const std::string kActivate = "activate ";
+		const std::string kSelect = "select ";
+		if (line == "deselect")
+		{
+			gSDK->DeselectAll();
+			probe.log("  do: deselect");
+		}
+		else if (line.compare(0, kActivate.size(), kActivate) == 0)
+		{
+			const std::string name = line.substr(kActivate.size());
+			MCObjectHandle layer = gSDK->GetNamedLayer(name.c_str());
+			if (layer != nullptr)
+				gSDK->SetCurrentLayer(layer);
+			probe.log("  do: activate " + name + " → " + LoPtr(layer));
+		}
+		else if (line.compare(0, kSelect.size(), kSelect) == 0)
+		{
+			const std::string name = line.substr(kSelect.size());
+			MCObjectHandle h = gSDK->GetNamedObject(name.c_str());
+			if (h != nullptr)
+				gSDK->SelectObject(h, true);
+			probe.log("  do: select " + name + " → " + LoPtr(h));
+		}
+		else if (!line.empty())
+			probe.log("  do: 分からない行: " + line);
+	}
+
+	void LoDoFile(vwprobe::Report& probe)
+	{
+		const std::string path = LoDoPath();
+		std::FILE* f = path.empty() ? nullptr : std::fopen(path.c_str(), "r");
+		if (f == nullptr)
+		{
+			probe.log("  do: 指示なし（" + path + "）");
+			return;
+		}
+		char buf[512];
+		while (std::fgets(buf, sizeof buf, f) != nullptr)
+		{
+			std::string line = buf;
+			while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+				line.pop_back();
+			LoDoOne(probe, line);
+		}
+		std::fclose(f);
+		std::remove(path.c_str());
+	}
+
+	// 辿ったあとの選択とアクティブレイヤ（画面の「N 図形」と突き合わせる）。
+	void LoSelection(vwprobe::Report& probe)
+	{
+		std::string s = "  アクティブ=" + LoLayerName(gSDK->GetActiveLayer());
+		s += "  NumSelectedObjects=" + LoInt(gSDK->NumSelectedObjects());
+		MCObjectHandle first = gSDK->FirstSelectedObject();
+		s += "  FirstSelectedObject=" + LoPtr(first) + " type=" + LoInt(LoType(first));
+		probe.log(s);
+	}
+
 	void LoNamedOne(vwprobe::Report& probe, const char* n)
 	{
 		MCObjectHandle h = gSDK->GetNamedObject(n);
@@ -859,7 +950,9 @@ VW_PROBE("layer-objects", "レイヤの中の図形の列挙", "見本を作り�
 	else
 		probe.log("見本なし → 作って測る（1 回目）");
 
-	if (!second)
+	if (second)
+		LoDoFile(probe);
+	else
 		LoBuild(probe, L);
 	if (L.a == nullptr)
 	{
@@ -868,6 +961,7 @@ VW_PROBE("layer-objects", "レイヤの中の図形の列挙", "見本を作り�
 	}
 
 	LoDumpLayers(probe);
+	LoSelection(probe);
 
 	probe.log("--- 1・2・5・6 LO-A を First→Next で（1 ノードずつ） ---");
 	const std::vector<MCObjectHandle> walkA = LoWalk(probe, L.a, true);
@@ -888,9 +982,12 @@ VW_PROBE("layer-objects", "レイヤの中の図形の列挙", "見本を作り�
 		LoWalk(probe, L.many, false);
 
 	probe.log("--- 3・7 ForEachObjectN の traverseWhat ごと ---");
-	LoForEach(probe, L.a, walkA);
+	if (second)
+		LoForEachShort(probe, L.a, walkA);
+	else
+		LoForEach(probe, L.a, walkA);
 
-	if (L.many != nullptr)
+	if (L.many != nullptr && !second)
 		LoTiming(probe, L.many);
 
 	LoNamed(probe);
