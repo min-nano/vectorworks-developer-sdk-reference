@@ -156,6 +156,7 @@
   - **Windows では測っていない**: メニューの「取り消し」と「保存」、人の操作の後の取り消し、「取り消し」の
     文字（メニューが `HMENU` ではなくプローブから読めない）。この VM は 3D アクセラレーションが無く、
     画面からの操作で落ちやすい（[Documents](Documents.md)「Windows——測れた範囲」）。
+    残りは [#291](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/291) に切り出した。
 
 ## 打ち切った調査: プラグインから「もう閉じたイベント」へ Undo を掛ける
 

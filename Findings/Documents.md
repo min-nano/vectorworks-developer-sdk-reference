@@ -814,7 +814,7 @@ c:\ で渡す  c:\Users\…\VwSdkProbes-dsw-…\Q-Lower.vwx        ← ドライ
   **mac は振る舞いが違う**（上の表。ダイアログが出て、`.bak` は残らない）。
 - **クラッシュで残った `.lck` は開くのを妨げない。** 確認なしで開き（`fIsInMemoryOnly=no`）、閉じると消えた。
 
-**測れなかったもの**（この VM の描画で落ちるため）
+**測れなかったもの**（この VM の描画で落ちるため。[#291](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/291) に切り出した）
 
 - **古い版のファイル**（この機械に無い。同梱ライブラリの保存時の版はどれも `VW31.x`）。
 - **ほかの Vectorworks が開いているファイル**（上の通り、起動してもファイルは動いている VW へ渡る）。代わりに
