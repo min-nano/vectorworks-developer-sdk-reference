@@ -799,6 +799,18 @@ namespace
 			MCObjectHandle rb = LoPut(probe, "B 矩形", LoRect(0, 100, 1000, 600), L.b);
 			if (rb != nullptr)
 				gSDK->SetObjectName(rb, "LO-B矩形");
+			// 文字の外形と縮尺（移したものと、LO-B をアクティブにして作ったもの）
+			MCObjectHandle moved = gSDK->CreateTextBlock("文字の外形", WorldPt(0, -500), false, 0);
+			LoPut(probe, "B 文字（移した）", moved, L.b);
+			if (moved != nullptr)
+				gSDK->SetObjectName(moved, "LO-B文字移");
+			MCObjectHandle before = gSDK->GetActiveLayer();
+			gSDK->SetCurrentLayer(L.b);
+			MCObjectHandle made = gSDK->CreateTextBlock("文字の外形", WorldPt(0, -1000), false, 0);
+			if (made != nullptr)
+				gSDK->SetObjectName(made, "LO-B文字作");
+			if (before != nullptr)
+				gSDK->SetCurrentLayer(before);
 		}
 		if (L.sheet != nullptr && mode.Has("viewport"))
 			LoMakeViewport(probe, L.sheet, L.a);
