@@ -153,10 +153,12 @@
   - **MCP ブリッジの `vw_run_probe` は走らせた後に図面を別名保存する**ので、構造材を足した図面で
     「コマンドをまたいだ取り消し」を測ると 1 段多く見える
     （[plugin/README.md](../plugin/README.md)「ローカルの Claude Code から操作する」）。
-  - **Windows では測っていない**: メニューの「取り消し」と「保存」、人の操作の後の取り消し、「取り消し」の
-    文字（メニューが `HMENU` ではなくプローブから読めない）。この VM は 3D アクセラレーションが無く、
-    画面からの操作で落ちやすい（[Documents](Documents.md)「Windows——測れた範囲」）。
-    残りは [#291](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/291) に切り出した。
+  - **Windows では測れていない**: メニューの「取り消し」と「保存」、人の操作の後の取り消し、「取り消し」の
+    文字（メニューが `HMENU` ではなくプローブから読めない）。[#291](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/291) で
+    試し直したが、この VM は 3D アクセラレーションが無く、メニューを開く・図面のタブを切り替えると落ち、Ctrl+S はホーム画面に
+    遮られて図面に届かなかった。`DoMenuName` は `Save` を **-3** で受け付けないのでプローブからも起こせない。描画で落ちない
+    Windows が無いので打ち切った（[Documents](Documents.md)「Windows——ほかの Vectorworks が開くファイルと、測れなかった残り」）。
+    **この Windows の 2 の場面は、mac から類推しないこと。**
 
 ## 打ち切った調査: プラグインから「もう閉じたイベント」へ Undo を掛ける
 
