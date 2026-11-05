@@ -355,9 +355,12 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
   なら押せる。**mac は `kCFRunLoopCommonModes` に登録したタイマーからなら同じことができる**
   （ダイアログは `NSModalPanelRunLoopMode` のモーダルで、既定のモードのタイマーは刻まない。
   下の「mac も…」）。ボタンは `AXPress` で押せる。
-- **SDK に有効にする口は無い【ヘッダ根拠】。Authenticode の署名では消えない見込み
-  【バイナリ根拠】**——「開発元」は Vectorworks のパートナープログラムが発行する
-  クレデンシャルで、Windows の署名ではない（下記）。署名して試すのは [#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)。
+- **SDK に有効にする口は無い【ヘッダ根拠】。Authenticode の署名では消えない**——
+  自己署名で付けても「開発元不明」のままだった（実測。信頼された認証局の証明書では未確認
+  だが、Authenticode を検証する箇所が無い【バイナリ根拠】）。「開発元」は Vectorworks の
+  パートナープログラムが発行するクレデンシャルで、Windows の署名ではない（下記）。
+- **2 本以上を有効にすると、記録は 1 本の暗号文に決まった順で並ぶ**（`cli` が先。有効にした
+  順に依らない）。1 本を消しても残りは有効のまま（下の「置き場所と形」。#260）。
 - **macOS も同じ。** 記録は `~/Library/Application Support/Vectorworks/2026/Settings/ExceptionsMissingCredentials.bin`
   に**バンドル（`cli.vwlibrary`）のフルパス**で残り、`install` の手順（フォルダごと
   付け替え・中身も別ビルド）でも有効のまま、閾値はほぼ 24 時間ちょうど（下の「macOS」）。
@@ -504,8 +507,22 @@ VW 2026 Update 6（Build 872399）・macOS 27.0.1。2026-10-27。`Plug-ins` に�
   - `cli` と `cli2` の記録は**暗号文の先頭 64 バイトが一致**し、パスが食い違う文字（73 文字目）を
     含むブロックから先が違った。鍵も IV も固定のブロック暗号で、同じ平文は同じ暗号文になる
     （7 で作り直した記録は退けたものとバイト単位で同一だった）。
-  - 何も有効でなければ 8 バイト（長さ 0）。**プラグインが 2 本以上のときの並べ方は見ていない**
-    （有効にしたのは 1 本ずつ。[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+  - 何も有効でなければ 8 バイト（長さ 0）。
+  - **2 本のときは、1 本の暗号文に「パス＋終端」を続けて並べる**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)。
+    2026-10-26）。`cli`（81 文字）と `VwSdkProbes`（`…\Plug-ins\VwSdkProbes\VwSdkProbes.vlb`、
+    97 文字）の両方が有効な記録は長さ 180（0xB4）＝ 82 ＋ 98。`VwSdkProbes` 1 本の記録は 98
+    （0x62）。暗号文はそれぞれ 96（`cli`）・128（`VwSdkProbes`）・192（2 本）バイトで、
+    「16 バイトの区切りへ埋める」では 98 → 128 が説明できない（32 バイト単位なら 3 つとも合う）。
+  - **並びは `cli` が先で、有効にした順には依らない。** 2 本の記録の先頭 64 バイトは 1 本の記録と
+    同じで、65〜96 バイト目は `VwSdkProbes` 1 本の記録と違う——同じ平文が同じ暗号文になる
+    ので、先頭は `VwSdkProbes` ではない。`VwSdkProbes` だけを有効にした記録から「有効化」で
+    `cli` を足し直した記録は、元の 2 本の記録と**バイト単位で同一**だった。ダイアログの一覧も
+    `cli`・`VwSdkProbes` の順（大文字小文字を区別しない名前順・パス順と同じ。どちらかは
+    分けていない）。
+  - **1 本だけ消しても、残りは有効のまま。** 2 本の記録で `cli` を `Plug-ins` から退けて起動し
+    （`<Date>` を 2 日前にしてダイアログを出し）「続ける」を押すと、記録は `VwSdkProbes` だけ
+    （136 バイト）に書き直され、`VwSdkProbes` は読み込まれた。上の「一覧にあったものだけで
+    書き直す」の 2 本版。
 - **間引きの基準**: `Settings\SavedSettingsUser.xml` の
   `<Vectorworks><UnknownPluginsDialog><Date>21;10;2026;17;14</Date>`（日;月;年;時;分。
   ローカル時刻。同じ要素にダイアログの位置と列幅も入る）。
@@ -530,7 +547,14 @@ VW 2026 Update 6（Build 872399）・macOS 27.0.1。2026-10-27。`Plug-ins` に�
 - **Authenticode は使っていない見込み。** `Vectorworks2026.exe` と同梱の `.vlb` / `.dll` の
   どれも `WinVerifyTrust` を含まない（含むのは Cineware・CEF・PhysX・Redshift・
   インストーラだけ）。`CryptQueryObject` / `CertGetNameStringA` は exe にあるが、同じ所に
-  curl の schannel の文字列が並んでおり、そちらの持ち物と読める。**署名して試してはいない**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+  curl の schannel の文字列が並んでおり、そちらの持ち物と読める。
+- **自己署名の Authenticode を付けても変わらない（実測）。** `cli.vlb` の写しにコード署名用の
+  自己署名証明書（メモリの中だけで作り、証明書ストアにも信頼にも入れていない）で
+  `Set-AuthenticodeSignature`（SHA-256）を付け、同じパスに置いて起動すると、ダイアログは
+  `cli` を**「開発元不明」・「無効」**と出した（2026-10-26。[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+  そのまま「有効化」すると、記録は署名の無いときとバイト単位で同じになった（パスで覚えて
+  中身は見ない、のとおり）。**信頼された認証局の証明書では試していない**——ただし上の
+  とおり `WinVerifyTrust` を呼ぶ箇所が無いので、変わる見込みは無い【バイナリ根拠】。
 
 ### SDK【ヘッダ根拠】
 
