@@ -993,7 +993,8 @@ namespace
 		if (isDir)
 		{
 			const DWORD backup = FILE_FLAG_BACKUP_SEMANTICS;
-			const std::string add = SdCreateFile(wide, FILE_ADD_FILE, shareAll, OPEN_EXISTING, backup);
+			const DWORD existing = OPEN_EXISTING;
+			const std::string add = SdCreateFile(wide, FILE_ADD_FILE, shareAll, existing, backup);
 			line += " CreateFileW(FILE_ADD_FILE)=" + add;
 			line += " ACL(FILE_ADD_FILE)=" + SdAccessCheck(wide, FILE_ADD_FILE);
 			line += " ACL(FILE_DELETE_CHILD)=" + SdAccessCheck(wide, FILE_DELETE_CHILD);
