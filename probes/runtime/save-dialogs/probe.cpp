@@ -16,7 +16,7 @@
 //	  取消   doundo（DoMenuName("Undo", 0)）/ menu（「取り消し」の項目の文言）
 //	  ファイル  mkdir <P> / mv <A> -> <B> / rm <P> / ro <P> / rw <P> / write <P> / fs <P> / ls <P>
 //	  OS     oscheck <P>（そのパスと親について OS へ聞く候補の答え）/ sh <コマンド> / cwd
-//	  他     close（DoMenuName("Close", 0)）/ tree <P>（再帰の一覧）/ note <文>
+//	  他     close（DoMenuName("Close", 0)）/ domenu <名前> / tree <P>（再帰の一覧）/ note <文>
 //	  見張り  press auto|none
 //
 //	**ダイアログは人を待たない。** 保存・開く・取り消しの呼び出しの間だけ「見張り」のタイマー
@@ -1095,6 +1095,14 @@ namespace
 					 " -> " + std::to_string(SdDocs().size()) + " 前面=" + SdActivePath());
 	}
 
+	// メニューのコマンドを名前で起こす（Export MiniCAD File など）。press none で人に任せる。
+	void SdDoMenu(vwprobe::Report& probe, const std::string& tag, const std::string& name)
+	{
+		SdWatchScope watch(probe, tag);
+		const short r = gSDK->DoMenuName(name.c_str(), 0);
+		watch.report("DoMenuName=" + std::to_string(r) + " 前面=" + SdActivePath());
+	}
+
 	// 保存先がどこになったかを見るための再帰の一覧。
 	void SdTree(vwprobe::Report& probe, const std::string& tag, const std::string& path)
 	{
@@ -1191,6 +1199,8 @@ namespace
 			SdOsCheck(probe, tag, arg);
 		else if (verb == "sh")
 			SdSh(probe, tag, arg);
+		else if (verb == "domenu")
+			SdDoMenu(probe, tag, arg);
 		else if (verb == "close")
 			SdClose(probe, tag);
 		else if (verb == "tree")
