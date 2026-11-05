@@ -937,8 +937,8 @@ namespace
 	// プロセスのトークンで、その ACL が desired を許すか。共有違反に左右されない。
 	std::string SdAccessCheck(const std::wstring& path, DWORD desired)
 	{
-		const SECURITY_INFORMATION info = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
-										  DACL_SECURITY_INFORMATION;
+		const DWORD who = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION;
+		const SECURITY_INFORMATION info = who | DACL_SECURITY_INFORMATION;
 		DWORD need = 0;
 		::GetFileSecurityW(path.c_str(), info, nullptr, 0, &need);
 		if (need == 0)
@@ -985,21 +985,22 @@ namespace
 		std::snprintf(hex, sizeof hex, "0x%x", static_cast<unsigned int>(attr));
 		const bool isDir = (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
 		const DWORD shareAll = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
-		std::string line = label + ": attr=" + hex +
-						   " READONLY=" + SdFlag((attr & FILE_ATTRIBUTE_READONLY) != 0);
+		std::string line = label + ": attr=" + hex;
+		line += " READONLY=" + SdFlag((attr & FILE_ATTRIBUTE_READONLY) != 0);
 		errno = 0;
 		const int acc = ::_waccess(wide.c_str(), 2);
 		line += " _waccess(W)=" + std::to_string(acc) + " errno=" + std::to_string(errno);
 		if (isDir)
 		{
-			line += " CreateFileW(FILE_ADD_FILE)=" +
-					SdCreateFile(wide, FILE_ADD_FILE, shareAll, OPEN_EXISTING,
-								 FILE_FLAG_BACKUP_SEMANTICS);
+			const DWORD backup = FILE_FLAG_BACKUP_SEMANTICS;
+			const std::string add = SdCreateFile(wide, FILE_ADD_FILE, shareAll, OPEN_EXISTING, backup);
+			line += " CreateFileW(FILE_ADD_FILE)=" + add;
 			line += " ACL(FILE_ADD_FILE)=" + SdAccessCheck(wide, FILE_ADD_FILE);
 			line += " ACL(FILE_DELETE_CHILD)=" + SdAccessCheck(wide, FILE_DELETE_CHILD);
-			line += " 一時ファイルを作る=" +
-					SdCreateFile(wide + L"\\~sd-probe-write-test", GENERIC_WRITE, 0, CREATE_NEW,
-								 FILE_FLAG_DELETE_ON_CLOSE);
+			const std::wstring temp = wide + L"\\~sd-probe-write-test";
+			const DWORD gone = FILE_FLAG_DELETE_ON_CLOSE;
+			const std::string made = SdCreateFile(temp, GENERIC_WRITE, 0, CREATE_NEW, gone);
+			line += " 一時ファイルを作る=" + made;
 		}
 		else
 		{
