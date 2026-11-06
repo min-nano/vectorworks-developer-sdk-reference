@@ -116,6 +116,65 @@ fs $T/p298/S0real/f.vwx
 sh ls -la "$T/p298/S0real"
 close
 docs
+note O OpenDocumentPath がファイルのリンクで false なら、理由を読む（Windows は false だった）
+openv $T/p298/L0lnk/d.vwx
+docs
+note N2 実体の無いリンクへ saveto（Windows は図面のパスがリンクになり、2 回目でリンクが消えた）
+mkdir $T/p298/N2real
+mkdir $T/p298/N2lnk
+sh ln -s "$T/p298/N2real/f.vwx" "$T/p298/N2lnk/d.vwx"
+new
+rect a
+saveto $T/p298/N2lnk/d.vwx
+docs
+final $T/p298/N2lnk/d.vwx
+sh ls -la "$T/p298/N2lnk"
+sh ls -la "$T/p298/N2real"
+oscheck $T/p298/N2lnk/d.vwx
+rect b
+saveto $T/p298/N2lnk/d.vwx
+docs
+final $T/p298/N2lnk/d.vwx
+sh ls -la "$T/p298/N2lnk"
+sh ls -la "$T/p298/N2real"
+close
+docs
+note P1 図面のパスがリンクのまま、リンクの先のフォルダに足せない
+mkdir $T/p298/P1real
+mkdir $T/p298/P1lnk
+sh ln -s "$T/p298/P1real/f.vwx" "$T/p298/P1lnk/d.vwx"
+new
+rect a
+saveto $T/p298/P1lnk/d.vwx
+sh chmod a-w "$T/p298/P1real"
+oscheck $T/p298/P1lnk/d.vwx
+oscheck $T/p298/P1real/f.vwx
+rect b
+saveto $T/p298/P1lnk/d.vwx
+docs
+sh ls -la "$T/p298/P1lnk"
+sh ls -la "$T/p298/P1real"
+sh chmod u+w "$T/p298/P1real"
+closefront
+docs
+note P2 図面のパスがリンクのまま、リンクのあるフォルダに足せない
+mkdir $T/p298/P2real
+mkdir $T/p298/P2lnk
+sh ln -s "$T/p298/P2real/f.vwx" "$T/p298/P2lnk/d.vwx"
+new
+rect a
+saveto $T/p298/P2lnk/d.vwx
+sh chmod a-w "$T/p298/P2lnk"
+oscheck $T/p298/P2lnk/d.vwx
+oscheck $T/p298/P2real/f.vwx
+rect b
+saveto $T/p298/P2lnk/d.vwx
+docs
+sh ls -la "$T/p298/P2lnk"
+sh ls -la "$T/p298/P2real"
+sh chmod u+w "$T/p298/P2lnk"
+closefront
+docs
 note N0 T の場面の種を作る
 new
 rect a

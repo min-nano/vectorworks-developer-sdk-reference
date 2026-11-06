@@ -9,7 +9,7 @@
 //	# で始まる行は飛ばす。パスの中の $T は作業用フォルダ（一時ディレクトリの
 //	VwSdkProbes-save-links。無ければ作る）に置き換わる。
 //
-//	  図面   new / open <P> / switch <P> / closefront / docs
+//	  図面   new / open <P> / openv <P>（エラーの表示を許して）/ switch <P> / closefront / docs
 //	  保存   saveto <P>（前面の図面をそのパスへ）/ save（前面の図面を、一覧のパスの文字列のまま）
 //	  図形   rect <名前>（undo イベントの外）/ event <名前>（自分で開いて閉じる）/ list
 //	         ev-story・ev-layer・ev-member <名前>（階・レイヤ・構造材をイベントの中で）/ find <名前>
@@ -665,6 +665,22 @@ namespace
 		watch.report("OpenDocumentPath=" + SdFlag(ok));
 	}
 
+	// 開く前に VW がパスをどう見ているかを読み、エラーの表示を許して開く。
+	void SdOpenLoud(vwprobe::Report& probe, const std::string& tag, const std::string& path)
+	{
+		Filing::IFileIdentifierPtr fileID(Filing::IID_FileIdentifier);
+		fileID->Set(TXString(path.c_str()));
+		bool exists = false;
+		const VCOMError existsErr = fileID->ExistsOnDisk(exists);
+		size_t size = 0;
+		const VCOMError sizeErr = fileID->GetFileSize(size);
+		probe.log(tag + ": ExistsOnDisk=" + SdFlag(exists) + " err=" + std::to_string(existsErr));
+		probe.log(tag + ": GetFileSize=" + std::to_string(size) + " err=" + std::to_string(sizeErr));
+		SdWatchScope watch(probe, tag);
+		const bool ok = gSDK->OpenDocumentPath(fileID, true);
+		watch.report("OpenDocumentPath(表示あり)=" + SdFlag(ok));
+	}
+
 	void SdNew(vwprobe::Report& probe, const std::string& tag)
 	{
 		SdWatchScope watch(probe, tag);
@@ -1207,6 +1223,8 @@ namespace
 			SdNew(probe, tag);
 		else if (verb == "open")
 			SdOpen(probe, tag, arg);
+		else if (verb == "openv")
+			SdOpenLoud(probe, tag, arg);
 		else if (verb == "switch")
 			SdSwitch(probe, tag, arg);
 		else if (verb == "closefront")
