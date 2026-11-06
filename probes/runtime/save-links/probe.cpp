@@ -675,7 +675,7 @@ namespace
 		size_t size = 0;
 		const VCOMError sizeErr = fileID->GetFileSize(size);
 		probe.log(tag + ": ExistsOnDisk=" + SdFlag(exists) + " err=" + std::to_string(existsErr));
-		probe.log(tag + ": GetFileSize=" + std::to_string(size) + " err=" + std::to_string(sizeErr));
+		probe.log(tag + ": size=" + std::to_string(size) + " err=" + std::to_string(sizeErr));
 		SdWatchScope watch(probe, tag);
 		const bool ok = gSDK->OpenDocumentPath(fileID, true);
 		watch.report("OpenDocumentPath(表示あり)=" + SdFlag(ok));
