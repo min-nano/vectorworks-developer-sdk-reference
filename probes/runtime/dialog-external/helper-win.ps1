@@ -19,13 +19,14 @@ param(
     [int]$Count = 1,
     [int]$SettleMs = 800,
     [int]$TimeoutSec = 60,
-    [string]$Marker = ''
+    [string]$Marker = '',
+    [string]$Assembly = ''
 )
 
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-Add-Type -TypeDefinition @'
+$VwDlgSource = @'
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
@@ -113,16 +114,38 @@ public static class VwDlg {
 }
 '@
 
-function Say([string]$s) { Write-Output ("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss.fff'), $s) }
+# 整合性レベルを Medium に下げたトークンで起こすと、Add-Type のコンパイル（csc の起動）が
+# 「A required privilege is not held by the client」で失敗する。そのときは昇格した側で
+# `compile -Assembly <P>` で DLL にしておき、環境変数 VWDLG_ASSEMBLY でそれを読ませる。
+if ($Command -eq 'compile') {
+    Add-Type -TypeDefinition $VwDlgSource -OutputAssembly $Assembly
+    Write-Output "compiled: $Assembly"
+    exit 0
+}
+if ($env:VWDLG_ASSEMBLY -and (Test-Path -LiteralPath $env:VWDLG_ASSEMBLY)) { Add-Type -Path $env:VWDLG_ASSEMBLY }
+else { Add-Type -TypeDefinition $VwDlgSource }
+
+# Write-Output だと、値を返す関数（Press）の中の行が戻り値に混ざって消えるので、標準出力へ直に書く。
+function Say([string]$s) { [Console]::Out.WriteLine(("[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss.fff'), $s)) }
 
 function Get-VwPid {
-    $p = Get-Process | Where-Object { $_.ProcessName -like 'Vectorworks20*' } | Select-Object -First 1
+    # Vectorworks2026.exe は同じ名前の子（埋め込みの Chromium）を 3 つ起こすので、名前の先頭で選ぶと子を掴む。
+    # 子の親は VW 自身なので、親が同じ名前でないものを選ぶ。
+    $all = @(Get-CimInstance Win32_Process -Filter "Name like 'Vectorworks20%.exe'")
+    $ids = @($all | ForEach-Object { $_.ProcessId })
+    $root = $all | Where-Object { $ids -notcontains $_.ParentProcessId } | Select-Object -First 1
+    $p = if ($root) { Get-Process -Id $root.ProcessId -ErrorAction SilentlyContinue } else { $null }
     if (-not $p) { Say 'Vectorworks が居ない'; exit 3 }
     return [uint32]$p.Id
 }
 
 function Get-Dialogs([uint32]$vw) {
-    return @([VwDlg]::Tops($vw) | Where-Object { [VwDlg]::IsWindowVisible($_) -and [VwDlg]::Class($_) -eq '#32770' })
+    # 可視の #32770 でも、ボタンがすべて不可視の窓（題が空。起動のときから居る）がある。押せる相手は
+    # 可視のボタンを持つものに限る。
+    return @([VwDlg]::Tops($vw) | Where-Object {
+            [VwDlg]::IsWindowVisible($_) -and [VwDlg]::Class($_) -eq '#32770' -and
+            @([VwDlg]::Children($_) | Where-Object { [VwDlg]::Class($_) -eq 'Button' -and [VwDlg]::IsWindowVisible($_) }).Count -gt 0
+        })
 }
 
 function Show-Window([IntPtr]$h) {
@@ -243,6 +266,36 @@ switch ($Command) {
         Start-Sleep -Seconds 1
         Say ("1 秒後 marker=" + (Read-Marker))
         Show-Log $logStart
+    }
+    'nest' {
+        # 2 枚が重なるのを待ち、並び（EnumWindows の順＝上から）を読んで、**下の窓**のボタン（-Id / -Title）を押す。
+        # その後は残った窓を上から OK / キャンセルで片付ける。
+        $vw = Get-VwPid
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ((Get-Dialogs $vw).Count -lt 2 -and $sw.Elapsed.TotalSeconds -lt $TimeoutSec) { Start-Sleep -Milliseconds 30 }
+        $d = Get-Dialogs $vw
+        Say ("重なり: 開始から {0} ms 枚数={1} marker={2}" -f $sw.ElapsedMilliseconds, $d.Count, (Read-Marker))
+        foreach ($h in $d) { Show-Window $h; Show-Controls $h }
+        if ($d.Count -lt 2) { Say '2 枚にならなかった'; exit 6 }
+        Start-Sleep -Milliseconds $SettleMs
+        $lower = $d[$d.Count - 1]
+        $b = Find-Button $lower $Id $Title
+        Say ("下の窓 0x{0:x} のボタンを押す: id={1}" -f [int64]$lower, [VwDlg]::GetDlgCtrlID($b))
+        $err = 0
+        Say ("BM_CLICK: {0} lastError={1}" -f [VwDlg]::Click($b, 5000, [ref]$err), $err)
+        Start-Sleep -Seconds 3
+        Say ("3 秒後 marker=" + (Read-Marker))
+        foreach ($h in $d) { Say ("  0x{0:x} IsWindow={1} visible={2}" -f [int64]$h, [VwDlg]::IsWindow($h), [VwDlg]::IsWindowVisible($h)) }
+        for ($i = 0; $i -lt 4; $i++) {
+            $d = Get-Dialogs $vw
+            if ($d.Count -eq 0) { break }
+            Show-Window $d[0]; Show-Controls $d[0]
+            $null = Press $d[0] -1 'OK|キャンセル'
+            Start-Sleep -Milliseconds 500
+            Say ("marker=" + (Read-Marker))
+        }
+        $logStart = 0
+        Show-Log ([Math]::Max(0, (Get-Item -LiteralPath (Get-LogPath)).Length - 3000))
     }
     'busy' {
         $vw = Get-VwPid
