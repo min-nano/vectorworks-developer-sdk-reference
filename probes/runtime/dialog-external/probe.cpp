@@ -13,7 +13,8 @@
 //	  取消   doundo / menu（「取り消し」の項目の文言）
 //	  ファイル  mkdir <P> / rm <P> / ro <P> / rw <P> / write <P> / fs <P> / ls <P> / sh <コマンド>
 //	  他     close / domenu <名前> / note <文> / busy <秒>（メインスレッドを塞ぐ）
-//	  見張り  press auto|none|after <秒>
+//	  見張り  press auto|none|after <秒> / nest <P>（次の呼び出しのダイアログの最中に、見張りの
+//	         刻みからそのパスへ保存する。利用者のダイアログの最中に呼び出しが届いた形）
 //
 //	**見張りは見るだけで、既定では押さない。** 既定は `press after 90`——別のプロセスが押せなかった
 //	ときに VW が人待ちで止まり続けないための安全弁で、90 秒待って初めて押す。新しく出た窓・閉じた
@@ -478,6 +479,8 @@ namespace
 	bool gSdAutoPress = true;
 	long long gSdPressAfterMs = 90000;
 	std::string gSdMarker;
+	std::string gSdNestPath;
+	bool gSdInNest = false;
 
 	long long SdSelfPid()
 	{
@@ -526,7 +529,7 @@ namespace
 	void SdWatchTick()
 	{
 		SdWatch* w = gSdWatch;
-		if (w == nullptr)
+		if (w == nullptr || gSdInNest)
 			return;
 		++w->ticks;
 		const long long now = SdMs(w->t0);
@@ -546,6 +549,20 @@ namespace
 							  c.cls + " id=" + std::to_string(c.id) + " text=\"" + c.text + "\"");
 			}
 		}
+		if (!gSdNestPath.empty() && w->dialog != nullptr && now - w->seenAt >= 1000)
+		{
+			const std::string path = gSdNestPath;
+			gSdNestPath.clear();
+			gSdInNest = true;
+			w->probe->log(w->tag + ":   [" + std::to_string(now) + "ms] 重ねて保存する: " + path);
+			Filing::IFileIdentifierPtr fileID(Filing::IID_FileIdentifier);
+			fileID->Set(TXString(path.c_str()));
+			const GSError err = gSDK->SaveActiveDocumentPath(fileID);
+			w->probe->log(w->tag + ":   [" + std::to_string(SdMs(w->t0)) +
+						  "ms] 重ねた保存が戻った GSError=" + std::to_string((long long)err));
+			gSdInNest = false;
+			return;
+		}
 		for (void* h : w->logged)
 		{
 			bool visible = false;
@@ -553,8 +570,7 @@ namespace
 				visible = visible || o == h;
 			if (!visible && w->gone.insert(h).second)
 			{
-				w->probe->log(w->tag + ":   [" + std::to_string(now) +
-							  "ms] 窓が閉じた（刻み " + std::to_string(w->ticks) + "）");
+				w->probe->log(w->tag + ":   [" + std::to_string(now) + "ms] 窓が閉じた");
 			}
 		}
 		if (!gSdAutoPress || w->dialog == nullptr || now - w->seenAt < gSdPressAfterMs)
@@ -707,7 +723,8 @@ namespace
 		size_t size = 0;
 		const VCOMError sizeErr = fileID->GetFileSize(size);
 		probe.log(tag + ": ExistsOnDisk=" + SdFlag(exists) + " err=" + std::to_string(existsErr));
-		probe.log(tag + ": GetFileSize=" + std::to_string(size) + " err=" + std::to_string(sizeErr));
+		probe.log(tag + ": GetFileSize=" + std::to_string(size) +
+				  " err=" + std::to_string(sizeErr));
 		SdWatchScope watch(probe, tag);
 		const bool ok = gSDK->OpenDocumentPath(fileID, true);
 		watch.report("OpenDocumentPath(表示あり)=" + SdFlag(ok));
@@ -1326,6 +1343,8 @@ namespace
 			const bool later = arg.rfind("after ", 0) == 0;
 			gSdPressAfterMs = later ? std::atoll(arg.c_str() + 6) * 1000 : 1000;
 		}
+		else if (verb == "nest")
+			gSdNestPath = arg;
 		else if (verb == "busy")
 		{
 			probe.log(tag + ": メインスレッドを塞ぐ " + arg + " 秒");
@@ -1339,7 +1358,7 @@ namespace
 	}
 } // namespace
 
-VW_PROBE("dialog-external", "別プロセスからダイアログを押す", "指示ファイルの手順でダイアログを出す")
+VW_PROBE("dialog-external", "別プロセスから押すダイアログ", "指示ファイルで出す")
 {
 	std::error_code ec;
 	const sdfs::path tmp = sdfs::temp_directory_path(ec);
@@ -1369,6 +1388,8 @@ VW_PROBE("dialog-external", "別プロセスからダイアログを押す", "�
 
 	gSdAutoPress = true;
 	gSdPressAfterMs = 90000;
+	gSdNestPath.clear();
+	gSdInNest = false;
 	gSdMarker = SdUtf8(work / "in-call.txt");
 	int no = 0;
 	for (const std::string& line : lines)

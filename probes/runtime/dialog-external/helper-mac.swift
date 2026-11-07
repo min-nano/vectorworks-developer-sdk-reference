@@ -55,7 +55,7 @@ func axName(_ e: AXError) -> String {
 
 func vwApp() -> NSRunningApplication? {
     NSWorkspace.shared.runningApplications.first {
-        ($0.executableURL?.lastPathComponent ?? "").hasPrefix("Vectorworks 20")
+        ($0.localizedName ?? "").hasPrefix("Vectorworks 20")
     }
 }
 
@@ -152,11 +152,9 @@ func windowLine(_ w: AXUIElement) -> String {
     return parts.joined(separator: " ")
 }
 
-/// ダイアログに見えるか。AXModal か、Subrole がダイアログ系のもの。
+/// ダイアログか。**AXModal だけで見る**——パレットも AXSubrole=AXDialog（AXModal=false）を名乗る。
 func isDialog(_ w: AXUIElement) -> Bool {
-    if bool(w, "AXModal") == true { return true }
-    let sub = str(w, "AXSubrole") ?? ""
-    return sub == "AXDialog" || sub == "AXSystemDialog"
+    bool(w, "AXModal") == true
 }
 
 func allWindows(_ app: AXUIElement) -> [AXUIElement] {
@@ -282,6 +280,7 @@ func cmdList(_ args: [String]) {
 func findButton(_ w: AXUIElement, _ args: [String]) -> AXUIElement? {
     if args.contains("--default") { return elem(w, "AXDefaultButton") }
     if args.contains("--cancel") { return elem(w, "AXCancelButton") }
+    if args.contains("--close-button") { return elem(w, "AXCloseButton") }
     guard let title = argValue(args, "--title") else { return nil }
     return buttons(w).first { (str($0, "AXTitle") ?? "") == title }
 }
@@ -294,7 +293,12 @@ func cmdPress(_ args: [String]) {
     let app = requireVW()
     let ax = AXUIElementCreateApplication(app.processIdentifier)
     let list = dialogsOf(ax)
-    guard let w = list.first else {
+    let index = Int(argValue(args, "--window") ?? "0") ?? 0
+    guard index < list.count || list.isEmpty else {
+        say("ダイアログは \(list.count) 枚")
+        exit(4)
+    }
+    guard let w = list.isEmpty ? nil : list[index] else {
         say("ダイアログが無い（窓 \(allWindows(ax).count) 枚）")
         exit(4)
     }
@@ -312,16 +316,24 @@ func pressAndWait(_ ax: AXUIElement, _ w: AXUIElement, _ b: AXUIElement) {
     let r = AXUIElementPerformAction(b, "AXPress" as CFString)
     say("AXPress: err=\(axName(r)) \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
     let t1 = Date()
-    while Date().timeIntervalSince(t1) < 15 {
+    let limit = 60.0
+    var busy = 0
+    while Date().timeIntervalSince(t1) < limit {
         // 閉じた窓への問い合わせは invalidUIElement を返す。
         let (_, e) = attr(w, "AXRole")
+        // cannotComplete は「VW が忙しくて答えない」で、閉じたことを意味しない。
+        if e == .cannotComplete {
+            busy += 1
+            say("AX が答えない（\(axName(e))）\(busy) 回目 押してから \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            continue
+        }
         if e != .success {
-            say("閉じた: 窓の AXRole err=\(axName(e)) 押してから \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            say("閉じた: 窓の AXRole err=\(axName(e)) 押してから \(Int(Date().timeIntervalSince(t0) * 1000)) ms 答えなかった回数=\(busy)")
             return
         }
         usleep(20_000)
     }
-    say("押してから 15 秒たっても閉じない")
+    say("押してから \(limit) 秒たっても閉じない 答えなかった回数=\(busy)")
 }
 
 func cmdClick(_ args: [String]) {
@@ -348,8 +360,9 @@ func cmdClick(_ args: [String]) {
         .post(tap: .cghidEventTap)
     let t0 = Date()
     while Date().timeIntervalSince(t0) < 10 {
-        if attr(w, "AXRole").1 != .success {
-            say("閉じた: \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+        let e = attr(w, "AXRole").1
+        if e != .success && e != .cannotComplete {
+            say("閉じた: err=\(axName(e)) \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
             return
         }
         usleep(20_000)
@@ -420,6 +433,7 @@ func cmdWatch(_ args: [String]) {
         for (i, o) in allWindows(ax).enumerated() {
             say("全窓[\(i)] dialog=\(isDialog(o)) \(windowLine(o))")
         }
+        cmdCg()
         sayLogLines(from: logStart)
         usleep(settle * 1000)
         guard let press else {
