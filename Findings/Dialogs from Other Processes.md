@@ -16,7 +16,9 @@ Vectorworks がモーダルなダイアログを出して呼び出しから戻�
 - **`cannotComplete(-25204)` は「閉じた」でも「無い」でもない。** VW のメインスレッドが忙しいという答え。
 - **重なっているときは一番上だけを押す。** 下の窓のボタンを押すと、**下は閉じず、上のダイアログが違うコードで閉じる。**
 - **呼び出しの最中に出たものかは、窓からもログからも分からない。** プラグインが印を置く必要がある。
-- **許可が無ければ AX はすべて `apiDisabled(-25211)` を返す。** `AXIsProcessTrusted()` で事前に分かる。
+- **許可が無ければ AX はすべて `apiDisabled(-25211)` を返す。** `AXIsProcessTrusted()` で事前に分かる（画面は出ない）。
+- **許可は起動元（責任プロセス）で数えられる。** ターミナルから起こす CLI はターミナルの許可で通り、CLI 自身の許可は効かない。
+  ad-hoc 署名の CLI に付けた許可は、作り直して cdhash が変わると黙って切れる。
 
 ## 環境
 
@@ -141,15 +143,31 @@ VW が前面でなくても `AXPress` は効く。クリックは必ず前面に
 
 ## 権限（mac）
 
-`AXIsProcessTrusted` と `AXIsProcessTrustedWithOptions(prompt=false)` は同じ答えで、12〜29 ms で返った。
+`AXIsProcessTrusted` と `AXIsProcessTrustedWithOptions(prompt=false)` は同じ答えで、2〜36 ms で返った。
+**許可の無い経路で何度呼んでも、許可を求める画面は出なかった**（目視）。
 
-| 起動の経路 | 責任プロセス（`responsibility_get_pid_responsible_for_pid`） | `AXIsProcessTrusted` | VW への AX |
-| --- | --- | --- | --- |
-| Claude Code の Bash の子 | `claude`（許可あり） | **true** | 読める・押せる |
-| Terminal.app の `.command` | **Terminal** | **false** | **`apiDisabled(-25211)`** |
-| launchd（`launchctl submit`） | **自分自身** | **false** | **`apiDisabled(-25211)`** |
+同じ実行ファイル（`~/vwdlg-302/vwdlg`、ad-hoc 署名）を 2 つの経路から起こし、システム設定の「アクセシビリティ」の
+スイッチを入れ替えて測った（どの行が入っているかは `/Library/Application Support/com.apple.TCC/TCC.db` の
+`kTCCServiceAccessibility` の `auth_value` で確かめた）。
 
-- **同じ実行ファイルでも、起動の経路で答えが変わる。** `vwdlg` 自身には許可を付けていないのに `claude` の子では true なので、**許可は実行ファイルではなく責任プロセス（起動元のアプリ）で数えられる**。
+| 許可（Terminal / vwdlg） | Terminal.app の `.command`（責任プロセス = **Terminal**） | launchd の `launchctl submit`（責任プロセス = **vwdlg 自身**） |
+| --- | --- | --- |
+| 切 / 切 | false・`apiDisabled(-25211)` | false・`apiDisabled` |
+| 切 / **入** | **false**・`apiDisabled` | **true**・読める |
+| **入** / 切 | **true**・読める | **false**・`apiDisabled` |
+| 入 / 入 | true | true |
+
+`claude` の子として起こしたとき（責任プロセス = `claude`。許可あり）は、vwdlg の許可に依らず true だった。
+
+- **許可は責任プロセス（`responsibility_get_pid_responsible_for_pid`）の 1 つでだけ数えられる。** 実行ファイルに許可を付けても、
+  Terminal から起こせば Terminal の許可しか見られない。**どちらか一方で足り、両方は要らない。**
+- **スイッチの変更は、走っている Terminal にもすぐ効いた**（Terminal を起動し直さずに、次に起こした子から答えが変わった）。
+  システム設定でスイッチを切っても、**TCC.db に書かれないことが 1 度あった**（入れ直して切ったら書かれた）。答えは DB の値どおりだった。
+- **ad-hoc 署名の実行ファイルへの許可は cdhash に結び付く。** TCC.db の `csreq` は `cdhash H"d554…"` の要件だった。
+  - 同じソースを同じ `-O` で作り直すと cdhash は変わらず（`d5542e1e…`）、true のまま。
+  - `-Onone` で作り直すと cdhash が変わり（`9ce3913c…`）、**設定のスイッチは入ったままなのに false**。元の `-O` に戻すと true に戻った。
+  - つまり**CLI を更新するたびに、許可を付け直す必要がある**（設定画面では入っているように見える）。開発者 ID で署名すれば要件は
+    識別子とチームになるので、更新しても切れない見込み【推定】。
 - 許可が無いと属性の読み取りはどれも `apiDisabled` で、`AXWindows` も読めない（空の一覧ではない）。
 - **許可が無くても `CGWindowListCopyWindowInfo` は答える。** VW の窓の枚数・位置・`layer` が読める。題は読めない（画面収録の許可が無いと `kCGWindowName` が無い）。
 - `layer` はダイアログの目印に足りない。VW が前面のとき、ダイアログも進み具合の窓も `layer=8` だった。**前面でないときの閉じる確認は `layer=0`**（A1。この 1 回）。パレットは 3、ツールチップは 103。
@@ -159,7 +177,9 @@ VW が前面でなくても `AXPress` は効く。クリックは必ず前面に
 
 `dialog list`:
 
-1. `AXIsProcessTrusted()` を見る（プロンプトの要らない呼び方）。false なら「許可が要る」と答え、起動元（ターミナル）に許可を与える案内を出す。CGWindowList で `layer=8` の窓があれば「何か出ているらしい」と添える。
+1. `AXIsProcessTrusted()` を見る（画面は出ない）。false なら「許可が要る」と答え、**責任プロセス**（`responsibility_get_pid_responsible_for_pid` の
+   パス。ふつうは使っているターミナル）に許可を与える案内を出す。CLI の実行ファイルに付けても、ターミナルから起こす限り効かない。
+   ad-hoc 署名の CLI を更新したなら「設定に入っていても付け直す」と添える。CGWindowList で `layer=8` の窓があれば「何か出ているらしい」と添える。
 2. `AXWindows` のうち `AXModal=true` を、**配列の順のまま**返す。先頭が押せる相手。
 3. 有効な `AXButton` が 1 つも無い窓（進み具合）は押せない窓として別に示す。ウィンドウの制御ボタン（`AXCloseButton` など）はボタンから除く。
 4. `cannotComplete` は「忙しい」と答える。「ダイアログは無い」と答えない。
@@ -182,7 +202,5 @@ VW が前面でなくても `AXPress` は効く。クリックは必ず前面に
 この調査の範囲内で、**PR を open のまま答えを待っている**項目（[CLAUDE.md](../CLAUDE.md)「PR とマージ」3）。
 
 - **Windows のすべて**: `#32770` の見つけ方・読める中身・`BM_CLICK`・印・重なったとき・`SendMessageTimeout` の答えと、**昇格（UIPI）の組み合わせ**。手順とヘルパーは `probes/runtime/dialog-external/`（`steps-win.md`・`helper-win.ps1`）。ヘルパーは書いただけで、一度も走らせていない。
-- **mac で許可を付ける先**: ターミナルに許可を付けるとその子が通るか、実行ファイル自身に許可を付けて launchd からなら通るか、作り直して署名が変わると切れるか。上の表は「許可の無い経路」と、もともと許可のあった `claude` の子しか測っていない。システム設定の変更が要るので、人の手が要る。
-- **`AXIsProcessTrusted` が許可を求める画面を出さないこと**: 許可の無い経路で 12〜29 ms で返ったが、画面は見ていない。
 - 表示言語を変えたときの題と目印。
 - 閉じる確認で閉じるボタンにあたるもの（`AXCloseButton` の有無を含む）。
