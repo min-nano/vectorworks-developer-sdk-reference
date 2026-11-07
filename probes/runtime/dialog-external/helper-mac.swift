@@ -54,7 +54,11 @@ func axName(_ e: AXError) -> String {
 }
 
 func vwApp() -> NSRunningApplication? {
-    NSWorkspace.shared.runningApplications.first {
+    // 2 つ目の Vectorworks を相手にするときは環境変数 VW_PID で選ぶ。
+    if let e = ProcessInfo.processInfo.environment["VW_PID"], let pid = pid_t(e) {
+        return NSRunningApplication(processIdentifier: pid)
+    }
+    return NSWorkspace.shared.runningApplications.first {
         ($0.localizedName ?? "").hasPrefix("Vectorworks 20")
     }
 }

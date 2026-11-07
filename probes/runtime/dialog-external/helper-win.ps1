@@ -1,4 +1,4 @@
-# probes/runtime/dialog-external/helper-win.ps1
+﻿# probes/runtime/dialog-external/helper-win.ps1
 #
 # [issue #302] CLI の代わりに「別のプロセス」から Vectorworks のダイアログを見つけ、読み、押す（Windows）。
 # プラグインには入らない。mac の helper-mac.swift と同じ問いを Win32 で測る。
