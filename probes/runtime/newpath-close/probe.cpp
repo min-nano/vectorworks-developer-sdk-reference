@@ -1224,16 +1224,21 @@ namespace
 	{
 		gNcMarkRef = NcActiveRef();
 		gNcMarkLayer = gSDK->GetCurrentLayer();
-		probe.log(tag + ": 覚えた fileRef=" + std::to_string(gNcMarkRef) + " 前面=" + SdActivePath());
+		std::string line = tag + ": 覚えた fileRef=" + std::to_string(gNcMarkRef);
+		line += " 前面=" + SdActivePath();
+		probe.log(line);
 	}
 
 	void NcBack(vwprobe::Report& probe, const std::string& tag)
 	{
 		const bool ok = gSDK->SwitchToOpenFile(gNcMarkRef);
-		probe.log(tag + ": SwitchToOpenFile(" + std::to_string(gNcMarkRef) + ")=" + SdFlag(ok) +
-				  " 前面の fileRef=" + std::to_string(NcActiveRef()) +
-				  " 同じレイヤ=" + SdFlag(gSDK->GetCurrentLayer() == gNcMarkLayer) +
-				  " 前面=" + SdActivePath());
+		const bool sameLayer = gSDK->GetCurrentLayer() == gNcMarkLayer;
+		std::string line = tag + ": SwitchToOpenFile(" + std::to_string(gNcMarkRef) + ")=";
+		line += SdFlag(ok);
+		line += " 前面の fileRef=" + std::to_string(NcActiveRef());
+		line += " 同じレイヤ=" + SdFlag(sameLayer);
+		line += " 前面=" + SdActivePath();
+		probe.log(line);
 	}
 
 	void NcCloseDoc(vwprobe::Report& probe, const std::string& tag)
@@ -1354,11 +1359,13 @@ namespace
 #if GS_WIN
 		if (gNcHold != INVALID_HANDLE_VALUE)
 			::CloseHandle(gNcHold);
-		gNcHold = ::CreateFileW(SdPath(path).wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
-								FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
-								nullptr);
-		probe.log(tag + ": " +
-				  (gNcHold == INVALID_HANDLE_VALUE ? SdWinErr(::GetLastError()) : std::string("ok")));
+		const std::wstring wide = SdPath(path).wstring();
+		const DWORD access = GENERIC_READ | GENERIC_WRITE;
+		const DWORD share = FILE_SHARE_READ;
+		const DWORD open = OPEN_EXISTING;
+		gNcHold = ::CreateFileW(wide.c_str(), access, share, nullptr, open, 0, nullptr);
+		const DWORD err = gNcHold == INVALID_HANDLE_VALUE ? ::GetLastError() : 0;
+		probe.log(tag + ": " + SdWinErr(err));
 #else
 		(void)path;
 		probe.log(tag + ": mac では握らない（もう 1 つの Vectorworks で開く）");
