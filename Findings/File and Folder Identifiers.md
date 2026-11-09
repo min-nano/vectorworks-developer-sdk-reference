@@ -113,7 +113,7 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 ### 【対照】`SetAttributesTimeDateReference` は 4 つとも未実装
 
 - **タイムスタンプは読めても書けない**（4 つとも `6`）。読むほうも `LastAccessed`・`LastBackup` は
-  macOS で失敗する（Windows は `LastAccessed` が成功）（[表](../Metrics/File%20and%20Folder%20Identifiers.md#対照setattributestimedatereference-は-4-つとも未実装)）。
+  macOS で失敗する（Windows は `LastAccessed` が成功）（[表](../Metrics/File%20and%20Folder%20Identifiers.md#setattributestimedatereference-の-4-つの実測)）。
 - **`Set*` がまるごと死んでいるわけではない**——`IFileIdentifier::SetAttributes` は生きている——ので、
   この 2 つは別々に考える。
 
@@ -184,74 +184,29 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 
 ```cpp
 using namespace VectorWorks::Filing;
+bool exists = false;                     // 実在は出力引数で見る（戻り値は実在しなくても 0）
+if (VCOM_SUCCEEDED(folder->ExistsOnDisk(exists)) && exists) { /* 実在する */ }
 
-// ✗ 種類の判定に使わない（フォルダでもファイルでも常に false）
-SAttributes attrs = {};
-folder->GetAttributes(attrs);
-if (attrs.fbDirectory) { /* ここへは決して来ない */ }
+SAttributes attrs = {};                  // 書けるかの当たり（当たりまで。実際は書いてみる）
+bool writable = VCOM_SUCCEEDED(folder->GetAttributes(attrs)) && !attrs.fbReadOnly && attrs.fbCanWrite;
 
-// ✗ 戻り値だけ見ない（実在しなくても 0 が返る）
-bool exists = false;
-if (VCOM_SUCCEEDED(folder->ExistsOnDisk(exists))) { /* 実在の保証にならない */ }
-
-// ○ 実在は出力引数で見る
-bool exists = false;
-if (VCOM_SUCCEEDED(folder->ExistsOnDisk(exists)) && exists) { /* ここは実在する */ }
-
-// ○ 書けるかどうかの当たりは fbReadOnly / fbCanWrite で付けられる
-//    （ただし当たりまで。実際に書けるかは書いてみないと分からない）
-SAttributes attrs = {};
-if (VCOM_SUCCEEDED(folder->GetAttributes(attrs)) && !attrs.fbReadOnly && attrs.fbCanWrite)
+if (VCOM_SUCCEEDED(file->GetAttributes(attrs)))   // 読み取り専用にする: 読んでから 1 つだけ変える
 {
-    // …
-}
-
-// ✗ フォルダの属性は書き戻せない（kVCOMError_NotImplemented が返るだけ）
-folder->SetAttributes(attrs);          // 何も起きない
-
-// ✗ SAttributes を {} から作って書かない（Windows では構造体まるごとで属性が置き換わり、
-//    立っていた HIDDEN / SYSTEM / ARCHIVE / TEMPORARY を消す）
-SAttributes fresh = {};
-fresh.fbReadOnly = true;
-file->SetAttributes(fresh);            // Windows: READONLY だけが残り、ARCHIVE などが落ちる
-
-// ✗ fbHidden / fbSystem / fbArchive / fbTemporary / fbEncrypted / fbCanExecute を
-//    両 OS 共通の判定に使わない（前の 5 つは Windows でだけ、fbCanExecute は macOS でだけ生きている）
-
-// ✗ fbReadOnly と fbCanWrite を同時に指定しない（衝突して「書けない」側が勝つ）
-attrs.fbReadOnly = false;
-attrs.fbCanWrite = false;              // ← こちらが効いて読み取り専用になる
-file->SetAttributes(attrs);
-
-// ○ ファイルを読み取り専用にする（触るのは 1 つだけ）
-SAttributes attrs = {};
-if (VCOM_SUCCEEDED(file->GetAttributes(attrs)))
-{
-    attrs.fbReadOnly = true;           // macOS: chmod 0444 相当 / Windows: READONLY 属性
+    attrs.fbReadOnly = true;             // macOS: chmod 0444 相当 / Windows: READONLY 属性
     file->SetAttributes(attrs);
 }
-
-// ✗ 書いた fbCanRead を読み戻して確かめない（権限は変わるのに yes が返り続ける）
-attrs.fbCanRead = false;
-file->SetAttributes(attrs);
-file->GetAttributes(attrs);
-if (!attrs.fbCanRead) { /* ここへは決して来ない */ }
-
-// ○ フォルダとファイルの混在は EnumerateContents の振り分けで捌く
-class CListener : public IFolderContentListener
-{
-public:
-    virtual EFolderContentListenerResult VCOM_CALLTYPE OnFolderContent(IFolderIdentifier*) override
-    { /* ここへ来たものはフォルダ */ return eFolderContentListenerResult_Continue; }
-    virtual EFolderContentListenerResult VCOM_CALLTYPE OnFileContent(IFileIdentifier*) override
-    { /* ここへ来たものはファイル */ return eFolderContentListenerResult_Continue; }
-};
 ```
 
-- **`fbDirectory` で種類を判定しない**——混在は `EnumerateContents` の振り分けで捌く。
-- **書けるかの当たりは `!fbReadOnly && fbCanWrite`**（当たりまで。実際は書いてみないと分からない）。
-- **フォルダの属性は書き戻せない。** **`SAttributes` を `{}` から作って書かない。**
-  **`fbReadOnly` と `fbCanWrite` を同時に指定しない。** **書いた `fbCanRead` を読み戻して確かめない。**
+- **`fbDirectory` で種類を判定しない**（フォルダでもファイルでも常に `false`）。フォルダとファイルの
+  混在は `EnumerateContents` に渡す `IFolderContentListener` の `OnFolderContent` /
+  `OnFileContent` の振り分けで捌く。
+- **`ExistsOnDisk` は戻り値だけで分岐しない**——実在しなくても成功（0）が返る。
+- **フォルダの属性は書き戻せない**（`SetAttributes` は `kVCOMError_NotImplemented` が返るだけ）。
+- **`SAttributes` を `{}` から作って書かない**——Windows では構造体まるごとで属性が置き換わり、
+  立っていた `HIDDEN` / `SYSTEM` / `ARCHIVE` / `TEMPORARY` が落ちる（`READONLY` だけが残る）。
+- **`fbReadOnly` と `fbCanWrite` を同時に指定しない**（`fbReadOnly = false` と `fbCanWrite = false`
+  を一緒に書くと、「書けない」側が勝って読み取り専用になる）。
+- **書いた `fbCanRead` を読み戻して確かめない**（権限は変わるのに `yes` が返り続ける）。
 - **`fbHidden` / `fbSystem` / `fbArchive` / `fbTemporary` / `fbEncrypted` / `fbCanExecute` を
   両 OS 共通の判定に使わない**（前の 5 つは Windows でだけ、`fbCanExecute` は macOS でだけ生きている）。
 

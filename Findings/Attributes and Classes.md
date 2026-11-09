@@ -44,7 +44,7 @@
   実装ソース・`vs.py`）に 1 件も無い**。
 - いちばん近い `VWFC::Tools::VWAutoClassing::SetAttrsByClass(MCObjectHandle)` は**7 つを順に
   呼ぶだけ**で、書き込み回数は減らない（`SDKLib/Source/VWSDK/VWFC/Tools/AutoClassing.cpp:344`。
-  [実装](../Metrics/Attributes%20and%20Classes.md#全属性をまとめて-by-class-にする-isdk-の口は無いソース根拠)）。
+  [実装](../Metrics/Attributes%20and%20Classes.md#全属性をまとめて-by-class-にする口を探したvwfc-のソースを読んだ)）。
 - **「1 回で済ませる」道は無い。** 減らせるのは「呼ばずに済ませる」道だけ（次節）。
 
 ## 費用は「属性の書き込み」ではなく「それが起こす PIO の作り直し」に掛かる
@@ -442,7 +442,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 - **中口（`Get/SetMarker`）の `size`（`short`）は 1/16384 インチ**（11 点すべてで
   `dSize = size ÷ 16384`。ポイントではない）。上限 1.999939 = 32767 ÷ 16384 は `short` の上限
   （[#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116)。
-  [実測の表](../Metrics/Attributes%20and%20Classes.md#正体-大きさは-116384-インチの-16-ビット整数だから上限が約-2-インチになる)）。
+  [実測の表](../Metrics/Attributes%20and%20Classes.md#マーカーの大きさの格納形式116384-インチ単位の-16-ビット整数と上限の実測)）。
 - **新口の `dSize` も 1/16384 インチへ量子化される。** 文書の既定の「0.0100 → 0.0099」も同じ
   筋【推定】。
 - **同じ `short` でも `Get/SetArrowHeads` は 1/72 インチ、`Get/SetMarker` は 1/16384 インチ。**

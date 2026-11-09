@@ -157,7 +157,7 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
   プローブは `dlopen(RTLD_NOLOAD)`（mac）／`GET_MODULE_HANDLE_EX_FLAG_PIN`（Windows）で参照を
   増やして本体を留めた。
 
-### 5. 【訂正】「共通モードでは刻まない」は誤りだった
+### 5. 共通モードで刻むかの測り直し
 
 この調査の途中で**「`kCFRunLoopCommonModes` に入れた `CFRunLoopTimer` は、VW が
 アイドルのときには刻まない」と読んだ回がある**（`outside` 局面の刻みが 0 件）。
@@ -330,7 +330,7 @@ com.apple.run-loop-mode.view-bridge.blocks: 5 回 / __kCFPasteboardPrivateMode: 
   **既定モードだけの 1 本は十数秒〜30 秒止まり、レンダリングが入った回は 5 分 52 秒
   止まった**（そのぶんが後でまとめて来た）。
 
-#### 【落とし穴】**コマンドが undo イベントを開いたまま返すと、数十秒開いたままになる**
+#### コマンドが undo イベントを開いたまま返したときの実測
 
 狙って測ったものではなく、2 回目の計測を汚した事故から出た記録。
 `DeleteObject(h, useUndo=true)` が開けたイベントを**閉じずにメニューコマンドから返した**回では:
@@ -342,7 +342,7 @@ com.apple.run-loop-mode.view-bridge.blocks: 5 回 / __kCFPasteboardPrivateMode: 
   （上の表の clean な 4 回）。閉じるのを処理の途中に 1 度置いただけの回では、その後に
   開くものがあって残った（6 回目の回で 36 件出た）。
 
-#### 【道具について】**SDK から「描き直して、終わるまで待つ」ことはできない**（#215 で決着）
+#### 「描き直して、終わるまで待つ」口を探した記録（#215）
 
 **実測**（VW 2026 / macOS。`probes/runtime/render-sync-3d/` を 4 回。ビルド
 `230f69515fb9` / `c6f9a2cdbc98` / `db5473d03716` / `b9d83f799061`。

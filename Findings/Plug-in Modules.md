@@ -327,7 +327,7 @@ const char* DefaultPluginVWRIdentifier() { return "<vwr の基底名>"; }
 ```
 
 - ② を落とすと、**呼んでいる覚えのない場所（`TXResStr` など）から参照される未解決**になる
-  （[リンカの出力](../Metrics/Plug-in%20Modules.md#sdk-の静的ライブラリをリンクするモジュールはこの-2-つを定義しなければならない)）。
+  （[リンカの出力](../Metrics/Plug-in%20Modules.md#sdk-の静的ライブラリをリンクするモジュールで足りなかった定義リンクエラー)）。
 - `DefaultPluginVWRIdentifier` は **C++ リンケージ**（`extern "C"` を付けない）。
 
 ## 本体を外部モジュールへ出せば、再起動なしで入れ替えられる

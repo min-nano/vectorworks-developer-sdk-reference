@@ -6,7 +6,7 @@
 
 > ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
-## 「クラスに従わせる」口は per-object と「文書の既定」の 2 段で揃っている【ヘッダ根拠】
+## 「クラスに従わせる」口の一覧（ヘッダを読んだ）
 
 宣言の対応表（per-object と文書の既定の 2 段）は [Findings](../Findings/Attributes%20and%20Classes.md#クラスに従わせる口は-per-object-と文書の既定の-2-段で揃っているヘッダ根拠)。
 ここには実測で見つかった穴の記録だけを置く。
@@ -18,7 +18,7 @@
 **その後に作ったオブジェクトは 20/20 が不透明度 by-class** だった。per-object の
 `GetOpacityByClass(h)` は正しく返した。
 
-## 全属性をまとめて by-class にする ISDK の口は無い【ソース根拠】
+## 全属性をまとめて by-class にする口を探した（VWFC のソースを読んだ）
 
 - `SetAllAttributesByClass` も `AllAttr` も、**SDK 全体（ヘッダ・同梱の実装ソース・
   `vs.py`）に 1 件も無い**。`SetClassByName` も無い（どちらも VectorScript 風の名前で、
@@ -255,7 +255,9 @@ per-object で点けた対照でも、どちらもマーカーを映さなかっ
 ### 順序が効く——per-object へ書き写すのは `SetArrowByClass` より**先**
 
 `SetArrowByClass` を呼んだ後に per-object のマーカーを書くと、`GetArrowByClass` が
-`no` に戻った（上の表の「`SetArrowByClass` の後に per-object へ書き写す」行）。図形は出た。
+`no` に戻った。図形は出た（#120 の測り。**この順序の回は上の表に行として載っておらず、
+読みの値（`ok=` / `vis=` / 図形の大きさ）は記録に残っていない**——#120 の時点の文章が
+「上の表の行」を指していたが、その行は最初から無かった）。
 SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 
 ### by-class の線では、per-object の読みは信用できない
@@ -450,7 +452,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
   微小な量子化が出た）。
 - 2 インチより大きい値が入る口は、測った口には無かった。
 
-### 正体: 大きさは **1/16384 インチの 16 ビット整数**——だから上限が約 2 インチになる
+### マーカーの大きさの格納形式（1/16384 インチ単位の 16 ビット整数）と上限の実測
 
 **中口（`Get/SetMarker`）の `size` を掃引した**
 （[#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116)。

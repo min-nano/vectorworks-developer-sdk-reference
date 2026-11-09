@@ -132,7 +132,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 - 一度「`kCFRunLoopCommonModes` のタイマーはアイドルで刻まない」と読んだが、**仕掛けてから
   報告させるまでに 11 時間空き、その間に VW が終わっていた**のが原因。同じ起動のうちに測り
-  直したら 367 回刻んだ（[経緯](../Metrics/Timers%20and%20Notifications.md#5-訂正共通モードでは刻まないは誤りだった)）。
+  直したら 367 回刻んだ（[経緯](../Metrics/Timers%20and%20Notifications.md#5-共通モードで刻むかの測り直し)）。
 - **教訓: 「仕掛けて、後で報告させる」計測は同じ起動のうちに閉じる。** 刻み 0 件は「刻まない」
   ではなく「もう居ない」かもしれない。
 
@@ -226,13 +226,13 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
   閉じず**、その間の刻みの書き込みはそのイベントに入った。
 - **戻る直前に自分で `EndUndoEvent` で閉じる**と 0 件になった。処理の途中に 1 度閉じるだけでは
   足りない（後から開くものが残る）。[Undo](Undo.md) の「外部の終了時に自動で閉じる」は、
-  **少なくともコマンドが戻った時点では閉じない**（[実測](../Metrics/Timers%20and%20Notifications.md#落とし穴コマンドが-undo-イベントを開いたまま返すと数十秒開いたままになる)）。
+  **少なくともコマンドが戻った時点では閉じない**（[実測](../Metrics/Timers%20and%20Notifications.md#コマンドが-undo-イベントを開いたまま返したときの実測)）。
 
 #### 【道具について】**SDK から「描き直して、終わるまで待つ」ことはできない**（#215 で決着）
 
 （mac。[issue #215](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/215)。
 3D のビュー（`GetProjection(layer) != 6` で機械的に確認）・球 196 個で測った。
-[実測](../Metrics/Timers%20and%20Notifications.md#道具についてsdk-から描き直して終わるまで待つことはできない215-で決着)）
+[実測](../Metrics/Timers%20and%20Notifications.md#描き直して終わるまで待つ口を探した記録215)）
 
 #213 で「2D ビューのままだったから描けない」と見ていたのは誤りで、**3D でも描かない**。
 `GetProjection(layer) != 6` が「上面/平面を出た」の唯一の機械判定で、#213 に欠けていたのは

@@ -187,7 +187,7 @@ gSDK->ResetObject(h);
 - `SDK Index` を総当りして、「スタイル無しにする」口として当たったのは `ConvertToUnstyledWall` /
   `ConvertToUnstyledSlab` / `ConvertToUnstyledRoof` の 3 つだけだった。
 
-## **既定のレイアウトはスタイルが持っている**——だから外す順序が決まる
+## 既定のレイアウトの持ち主とスタイルを外す順序の実測
 
 スタイルの有無を変えて作り、レイアウトと絵を読んだ:
 

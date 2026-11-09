@@ -173,7 +173,7 @@ OS 側では `FILE_ATTRIBUTE_DIRECTORY` が立っている）とファイル 14 
 - フォルダとファイルは混ざって届いた（種類ごとにまとまらない）。実測の順は
   `Plant Database` → `Plug-Ins` → `Settings` → `.DS_Store` → `VWHelp` → `VWVersion.txt`。
 
-### 【拾い物】`Set(EFolderSpecifier)` が返すパスは、ディスク上の実名と大文字小文字が違うことがある
+### `Set(EFolderSpecifier)` が返すパスの大文字小文字（ディスク上の実名との比較）
 
 同じ 1 つのフォルダについて、2 つの経路が**綴りの違う文字列**を返した。
 
@@ -230,7 +230,7 @@ VW 2026 / macOS / Apple Silicon）。
 
 フォルダは**実在に関わらず `6`**、ファイルは実在しなければ `1` だった。
 
-### 【対照】`SetAttributesTimeDateReference` は 4 つとも未実装
+### `SetAttributesTimeDateReference` の 4 つの実測
 
 同じ識別子の「`Set*` の半分」も測った（`IFileIdentifier`。作ったばかりのファイルに
 `2001-02-03 04:05:06` を書こうとした）。

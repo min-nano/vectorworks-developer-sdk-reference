@@ -138,7 +138,7 @@ undo イベントを閉じた直後と、VW へ戻った後に名前から引き
 | 同じ配置 | −Y 側 | **T** | **F** | **空** |
 | 同じ配置 | −Y 側 | **F** | **T** | **描けた**（A 相当と同じ外接） |
 
-### 【罠】作ったばかりの押し出しは、外接を読むか `ResetObject` するまで断面に映らない（#248）
+### 作ったばかりの押し出しが断面に映るまで（#248）
 
 （実測。VW 2026 Update 6・Windows 11 ARM64 の VM。2026-10-27。
 [issue #248](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/248)。

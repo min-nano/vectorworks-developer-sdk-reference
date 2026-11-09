@@ -37,7 +37,7 @@ action で 1 度だけ OS タイマーを始めて 0 を返す（`plugin_module_
 - **留めない「拡張なし」のモジュールが Windows の読み込み直しの対象になるかは確かめていない**
   （#253 で読み込み直しを見たのは、メニューとプラグインライブラリ関数を登録した殻）。
 
-## 【罠】Windows の VW は起動時にモジュールを一度降ろして読み込み直す——OS に預けたコールバックは留めておく
+## Windows の VW の起動時のモジュールの読み込み直しと、OS に預けたコールバック
 
 （[issue #253](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/253)。
 Windows 11 ARM64 の VM（UTM）・VW 2026 は x64 のエミュレーション。）
@@ -608,7 +608,7 @@ Source/VWSDK/Kernel/API/MiniCadCallBacks.cpp:54   VectorWorks::ISDK* gSDK = NULL
 | `gCBP = (CallBackPtr)cbpParam` | 旧 `GS_` 系の呼び出し口 |
 | `VCOMPtr<ISDK>(IID_SDK)` | `gSDK` |
 
-### SDK の静的ライブラリをリンクするモジュールは、この 2 つを定義しなければならない
+### SDK の静的ライブラリをリンクするモジュールで足りなかった定義（リンクエラー）
 
 CI の実ビルドで、Vectorworks にプラグインとして登録されないモジュールでも、
 `plugin_module_ver` と `DefaultPluginVWRIdentifier` が無いとリンクが通らなかった。

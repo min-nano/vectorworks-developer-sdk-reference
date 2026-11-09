@@ -114,7 +114,7 @@
 ### 【罠】作ったばかりの押し出しは、外接を読むか `ResetObject` するまで断面に映らない（#248）
 
 VW 2026 Update 6・Windows で実測（[#248](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/248)。
-[腕 A〜G の表](../Metrics/Viewports.md#罠作ったばかりの押し出しは外接を読むか-resetobject-するまで断面に映らない248)）。
+[腕 A〜G の表](../Metrics/Viewports.md#作ったばかりの押し出しが断面に映るまで248)）。
 
 - **`VWExtrudeObj(VWPolygon2D, 基準高, 厚み)` で作った押し出しは、そのまま断面を作っても映らない。
   作った直後に `GetObjectBounds(h)` を読むか `ResetObject(h)` を呼べば映る。** 断面を作る順序・

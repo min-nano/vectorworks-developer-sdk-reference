@@ -92,7 +92,7 @@ struct PluginLibraryArg {
 「`kCharDynarray*` の欄に `SetArgString` を使うと Python 側で落ちる。
 `SetArgDynArrayChar` を使え」と書いている（`VWPluginLibraryArgTable.cpp:298-310`）。
 
-### 【罠】生の `PluginLibraryArgTable` を自分で宣言しない
+### 引数テーブルを自分で宣言したときの実測
 
 `PluginLibraryArg::argType` はコンストラクタで初期化されない。
 
@@ -176,7 +176,7 @@ struct SFunctionDef {
   実機の登録が通った（上の実測）。
 - 登録は殻に置き、呼ぶ側は本体に置いて呼べた（上の実測）。
 
-### 【罠】戻り値の型は `fParams` の**最後の欄**で伝える——書かないと署名がずれて書き出される
+### 戻り値の型の伝え方と、書き出される署名の実測
 
 **実測**（VW 2026。mac / Windows。[issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233) /
 [PR #237](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/237)）。
@@ -293,7 +293,7 @@ macOS / VW 2026。メニューコマンドの中（実機確認プラグイン�
   （`IVectorScriptEngine.h:37-38` / `IPythonScriptEngine.h:40-41`）。`functionRef` の出どころは
   `VWPluginLibraryArgument::GetArgFunctionRef()`（`kFunctionkArgType` = 37）。
 
-## 4. 勧めない経路: C の ABI（`dlsym` / `GetProcAddress`）
+## 4. C の ABI（`dlsym` / `GetProcAddress`）の経路
 
 この経路は実機で試していない。関連する実測は
 [プラグインモジュール](../Findings/Plug-in%20Modules.md) にある——mac で VW のプロセス内に

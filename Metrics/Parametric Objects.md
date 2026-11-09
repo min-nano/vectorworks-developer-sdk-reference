@@ -1382,7 +1382,7 @@ x＝材の幅(Y) / y＝材の高さ(Z)。下端は 0）:
 `0 < b ≤ B` かつ `0 ≤ d ≤ D/2` の範囲で試した個体はすべて実体があり、外接も `B` × `D` に
 一致した。範囲外の個体でも `ResetObject` は `true` を返した。
 
-#### **副を 1 文字も書かなくても壊れる**——既定が 100 / 100 だから
+#### 副を 1 文字も書かないときの実測（既定は 100 / 100）
 
 次の個体は `MinorBreadth` / `MinorDepth` へ**一度も `SetParamReal` していない**
 （`ResetObject` のあとに読み戻しても 100 / 100 のまま）:
@@ -1956,7 +1956,7 @@ VWParametricObj(target).SetStyle(ref);       // 当たる（styleRef が ref に
    [あちらの PR #124](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/124)）。
    絵は正しく描けている本での結果。
 
-### `CenterPointLength(長さ)` は部材長ではない——**センターマークの長さである**【推定】
+### `CenterPointLength(長さ)` の値と画面の突き合わせ
 
 「長さ」を名前に含むパラメータを全数列挙すると `CenterPointLength(長さ)` の 1 件だけが
 当たった。
@@ -1968,7 +1968,7 @@ VWParametricObj(target).SetStyle(ref);       // 当たる（styleRef が ref に
   `CenterPointMarkerWeight` と続き、その直後が **159 `CenterPointLength`（長さ）**、
   **160 `CenterPointGap`（間隔）**。
 
-## 構造材同士の「自動結合」を作る API は無い【ヘッダ根拠】
+## 構造材同士の「自動結合」を作る API を探した（ヘッダを読んだ）
 
 構造材ツールの **自動結合（Auto Join Members）**（[VW ヘルプ](https://app-help.vectorworks.net/2023/eng/VW2023_Guide/Structural/Creating_structural_members.htm)）を
 SDK から作る／読む口を、VW 2026 SDK（mac）の `SDKLib/Include` 全体（ヘッダ 456 本 ＋
@@ -2197,7 +2197,7 @@ VW 2026 / mac の実機で測った（`probes/runtime/batch-reset-styled/`。
 `SetObjectClass` も、PIO では 1 回ごとに作り直しを起こした（構造材 PIO で 1 回 9ms。
 非 PIO では無料。[Attributes and Classes](../Findings/Attributes%20and%20Classes.md)）。
 
-### 再生成・再描画を止めておく口は SDK に無い【ヘッダ根拠】
+### 再生成・再描画を止めておく口を探した（ヘッダを読んだ）
 
 VW 2026 SDK のヘッダと同梱の実装ソースを全文検索した。探した先と、見つかったものの正体:
 
@@ -2209,7 +2209,7 @@ VW 2026 SDK のヘッダと同梱の実装ソースを全文検索した。探�
 | `ISDK.h` の `Redraw` | `RedrawRect(const WorldRect&)` だけ——**描き直しを起こす**口で、止める口ではない。VectorScript 側も `RedrawSelection` のみ |
 | `SetPref` 相当（`SetProgramVariable` / `GetProgramVariable`）のセレクタ | `Regen` / `Redraw` / `Draw` / `Update` を名に持つセレクタはヘッダに 1 つも定義されていない |
 
-### ただし `CreateCustomObjectPath` だけは再生成を省ける（`doRegen`）【ヘッダ根拠】
+### `CreateCustomObjectPath` の `doRegen`（ヘッダを読んだ）
 
 ```cpp
 virtual MCObjectHandle CreateCustomObjectPath(

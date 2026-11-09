@@ -1044,7 +1044,7 @@ MCObjectHandle path = gSDK->GetCustomObjectPath(pio);   // 作り直しの「後
 構造材ツールの**自動結合（Auto Join Members）**は、置いた構造材同士に関連付け（association）を
 持たせて追随させる（[VW ヘルプ](https://app-help.vectorworks.net/2023/eng/VW2023_Guide/Structural/Creating_structural_members.htm)）。
 VW 2026 SDK（mac）の `SDKLib/Include` 全体（ヘッダ 456 本 ＋ `vs.py`）を全数検索して、**専用の
-API は 1 つも無い**（[検索結果の表](../Metrics/Parametric%20Objects.md#構造材同士の自動結合を作る-api-は無いヘッダ根拠)）。
+API は 1 つも無い**（[検索結果の表](../Metrics/Parametric%20Objects.md#構造材同士の自動結合を作る-api-を探したヘッダを読んだ)）。
 
 - 構造材について SDK が持つのは内部 ID（`kInternalID_StructuralMember = 537`）・フォルダ定数・
   `ovIsStructural`・VS 専用の `SM_FromShape` / `SM_Preferences` だけ。「結合」と名の付く API
@@ -1202,7 +1202,7 @@ SDK で登録した PIO には当てはまらない）。**`SetLinearObjectPos` 
 
 `Batch` / `Defer` / `Suspend` / `Freeze` / `DisableDrawing` / `SuspendRedraw` / `LockDrawing` /
 `BulkUpdate`、`Redraw`（`RedrawRect` は描き直す口）、プログラム変数のセレクタまで探して、止める・
-遅らせる口は無い（[探した先](../Metrics/Parametric%20Objects.md#再生成再描画を止めておく口は-sdk-に無いヘッダ根拠)）。
+遅らせる口は無い（[探した先](../Metrics/Parametric%20Objects.md#再生成再描画を止めておく口を探したヘッダを読んだ)）。
 呼び出し側が `ResetObject` の回数と順序を決めるしかない。
 
 ### ただし `CreateCustomObjectPath` だけは再生成を省ける（`doRegen`）【ヘッダ根拠】

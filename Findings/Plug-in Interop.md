@@ -63,7 +63,7 @@
 
 - **`argType` はコンストラクタで初期化されない**——埋めなかった欄はスタックのゴミ。SDK 同梱の
   唯一の用例（`IIFCSupport.h` の `IFC_QueryInterface`）がまさにそれをやっているので**真似しない**
-  （[引用](../Metrics/Plug-in%20Interop.md#罠生の-pluginlibraryargtable-を自分で宣言しない)）。
+  （[引用](../Metrics/Plug-in%20Interop.md#引数テーブルを自分で宣言したときの実測)）。
 - **呼ぶ側は `VWFC::PluginSupport::VWPluginLibraryArgTable` を使う**（全欄を `kNullArgType` で埋め、
   そのまま渡せる）【ソース根拠。上の実測もこれで組んだ】。
 - `IFC_QueryInterface` はこのビルドでは引けなかったが、「無い」のか IID が合わないのかは区別
@@ -97,7 +97,7 @@
 ### 【罠】戻り値の型は `fParams` の**最後の欄**で伝える——書かないと署名がずれて書き出される
 
 （#233 / [PR #237](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/237)。mac / Windows。
-[書き出しの比較](../Metrics/Plug-in%20Interop.md#罠戻り値の型は-fparams-の最後の欄で伝える書かないと署名がずれて書き出される)）
+[書き出しの比較](../Metrics/Plug-in%20Interop.md#戻り値の型の伝え方と書き出される署名の実測)）
 
 - **`fHasReturnValue = true` の関数は、`fParams` の最後に戻り値の欄（名前と型）を足す。** 戻り値の
   型を渡す口が無く【ソース根拠】、**VW は並びの最後の欄を戻り値として読む**。
@@ -168,7 +168,7 @@
 ## 4. 勧めない経路: C の ABI（`dlsym` / `GetProcAddress`）
 
 **技術的には可能だが設計として選ばない**（実機で試していない——試す値打ちが無いと判断した。
-[記録](../Metrics/Plug-in%20Interop.md#4-勧めない経路-c-の-abidlsym--getprocaddress)）。
+[記録](../Metrics/Plug-in%20Interop.md#4-c-の-abidlsym--getprocaddressの経路)）。
 
 - 相手の殻が公開しているのは `plugin_module_main` と `plugin_module_ver` だけで、それ以外は
   マングリング済み——**相手のコンパイラ・標準ライブラリ・ビルド設定に縛られ、版が上がると静かに

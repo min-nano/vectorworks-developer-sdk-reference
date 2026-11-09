@@ -77,7 +77,7 @@ bool VWThumbnailPopupCtrl::CreateControl(VWDialog* pDlg, ThumbnailSizeType sizeT
 bool CMyDialog::CreateDialogLayout()
 {
 	// 1) 図面のシンボル定義一覧（kSymDefNode = 16）を作る。
-	//    ★ このリストはダイアログが生きている間ずっと保持すること（後述）。
+	//    （このリストはダイアログが生きている間持っていた。寿命は下の「リソース一覧の寿命」）
 	fList.BuildList(kSymDefNode, /*sort*/ true);
 
 	// 2) 生成 → 積む。他のコントロールと同じ扱い。

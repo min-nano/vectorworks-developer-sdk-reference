@@ -345,7 +345,7 @@ virtual MCObjectHandle CreateLinearDimension(
 - `dimStd*` は **1〜52 で全部**（`Kernel/API/MiniCadCallBacks.h:1809-1860`）。文字に関わるのは
   `dimStdTextStyle`(51。`Sint32`。結び付いた文字スタイルの ref number)・
   `dimStdTextPos`(52)・公差用の `dimStdTolSizeFac`(26) だけ
-  （[表](../Metrics/Dimensions.md#①-セレクタに文字の大きさが無いヘッダ根拠)）。
+  （[表](../Metrics/Dimensions.md#①-セレクタに文字の大きさがあるかヘッダを読んだ)）。
 
 #### ② 規格の文字スタイルは書ける——カスタムだけ、組み込みは弾かれる
 
