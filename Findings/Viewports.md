@@ -83,7 +83,7 @@
 | T | T | **`pt3` の反対側（奥）だけ**（手前側は落ちる） |
 
 - **`1065` が主スイッチ**（`false` の間は `1064` を立てても空）。**`1064` は引き算**として働き、
-  手前側（`pt3` と同じ側）を落とす。
+  手前側（`pt3` と同じ側）を落とす（名前 `Display…BeyondCutPlane` から読める「奥を足す」ではない）。
 - **断面線の向き（`pt1`→`pt2`）は一切効かない。**
 - 群 4（断面群）は空でも必ず 2 件在るので判定に使えない。`CreateSectionViewport` が置く
   1064/1065 の既定値は測っていない（倒し方は既定値に依らない）。
@@ -123,6 +123,7 @@ VW 2026 Update 6・Windows で実測（[#248](https://github.com/min-nano/vector
   コンストラクタ（`:112`・`:138`）だけで、`(VWPolygon2D, 基準高, 厚み)`（`:25`）は呼ばない。
   外接を読むとそこで形が作られる【推定】。
 - **SDK で図形を作って同じ呼び出しの中で断面を作るなら、作った図形に `ResetObject` を呼んでから。**
+  実プラグインの押し出し（`VWExtrudeObj`）も同じ形で作っているなら当てはまる。
   他の種類の図形・`CreateExtrude` 系の直呼びで同じかは測っていない。
 - この VM では断面を作った後に描画のスレッド（`d3d10warp.dll`）で落ちることがあった——VM の描画の
   側の問題【推定】（[#270](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/270)）。
@@ -141,7 +142,7 @@ VW 2026 Update 6・Windows で実測（[#248](https://github.com/min-nano/vector
 ```cpp
 MCObjectHandle vp = gSDK->CreateSectionViewport(pt1, pt2, pt3, 0.0, startZ, endZ, sheetLayer);
 gSDK->ForEachLayerN([vp](MCObjectHandle layer) {               // 1) 表示レイヤを表示へ
-	gSDK->SetViewportLayerVisibility(vp, layer, 0 /* 表示 */);
+	gSDK->SetViewportLayerVisibility(vp, layer, 0 /* 表示 */);  // デザインレイヤだけ渡す
 });
 gSDK->ForEachClass(true, [vp](MCObjectHandle cls) {            // 2) クラスも表示へ（省くと 1050 は入らない）
 	gSDK->SetViewportClassVisibility(vp, gSDK->GetObjectInternalIndex(cls), 0);
