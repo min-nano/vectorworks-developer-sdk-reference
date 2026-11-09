@@ -17,8 +17,11 @@
   1 回）形にする（[実測](../Metrics/Layout%20Dialogs.md#レイアウトダイアログの大きさと横幅)）。
 - **横幅は「いちばん長い行」で決まり、作った後では縮められない。** 長い情報は見出しごとに
   行を分け、ブランチ名のように青天井で伸びる文字列は詰める（実装例:
-  `plugin/src/ProbeMenuText.h` の `StampLine` / `Ellipsize`）。プルダウンの幅は
-  `CreateControl(dlg, widthInStdChar)` の標準文字数で決まるので、項目の実際の長さに合わせる。
+  `plugin/src/ProbeMenuText.h` の `StampLine` / `Ellipsize`。詰める長さは
+  `plugin/tests/ProbeMenuTextTests.cpp` が見張っている）。高さと違って横の間延びは目に付く。
+  プルダウンの幅は `CreateControl(dlg, widthInStdChar)` の標準文字数で決まるので、項目の実際の
+  長さに合わせる（広く取ると、その幅までダイアログが広がる。
+  [実測](../Metrics/Layout%20Dialogs.md#レイアウトダイアログの大きさと横幅)）。
 - **作り直すときは位置を引き継ぐ**（`Get/SetDialogPosition`）。ハンドラの中からモーダルを
   閉じるのは `VWDialog::SetDialogClose(bCloseWithOK)`（protected）。
 - **ボタン行（OK のある行）へコントロールを足す API は無い。** OK の隣にボタンを出したい
@@ -41,7 +44,10 @@ VectorWorks 本体の「鋼材断面を選択」のような**サムネイル付
 - **`VWImagePopupCtrl::CreateControl(VWDialog*)` は実機で必ず false を返す。** SDK 同梱の
   実装（`ImagePopupCtrl.cpp`）が、生成をコメントアウトしたまま `return false` するスタブ
   （[ソース](../Metrics/Layout%20Dialogs.md#vwimagepopupctrl-では作れないsdk-の実装が空のスタブ)）。
-  呼ぶ順序・`SetAdvanced()`・`DialogImagePopup_Init` では直らない。
+  呼ぶ順序・`SetAdvanced()`・`DialogImagePopup_Init` では直らない（条件出しは要らない）。
+  同じクラスの他のメソッド（`AddItems` / `GetSelectedItemIndex` …）は実装されているが、
+  どれも `CreateControl` が覚える親ダイアログ（`fpParentDlg`）を使うため、生成に失敗した
+  ままでは呼べない。
 
 ### 代わりに `VWThumbnailPopupCtrl` を使う（実機確認済み）
 
@@ -52,12 +58,15 @@ VectorWorks 本体の「鋼材断面を選択」のような**サムネイル付
 - **項目は `AddImageFromResource` の順に並び、添字は一覧の添字と一致する**（0 始まり）。
 - **選択は添字でもリソースでも引ける。** `GetSelectedItemIndex()` は添字、`GetSelectedItem()`
   は `InternalIndex`（`InternalIndexToHandle` / `InternalIndexToNameN` で引ける）。一覧を
-  作り直す作りなら `InternalIndex` 側で持つ。
+  作り直したり項目を出し入れする作りなら `InternalIndex` 側で持つほうが崩れない
+  （`GetItemObject(i)` / `GetObjectItemIndex(item)` で相互に引ける）。
 - **「未選択」は読み取れない——項目を足した時点で先頭（`0`）が選ばれている。** 必要なら
   選択イベントが来たかを自分で覚える。
 - **選択イベントは `selected`（`IsImagePopupSelected()`）として届く。**
   `SetImagePopupResourceAdvanced` を立てると開く直前の `IsImagePopupBeforeOpen()` も届く。
+  選んだ値は `selected` で読んでも、OK のときにまとめて読んでもよい（同じ値が返る）。
 - **DDX では受けられない**（`AddDDX_ImagePopup` は `PullDownResourceLayout` 系専用）。
+  選択は自分で読む（イベントで読むか、OK のときに読む）。
 - **大きさは `kStandardSize = 0` / `kLineTypeSize = 1` の 2 種類だけ**。描画モード・視点は
   指定できない。
 - **リソース一覧（`VWResourceList`）はダイアログのメンバに置く。** 参照カウント式で、
@@ -68,8 +77,10 @@ VectorWorks 本体の「鋼材断面を選択」のような**サムネイル付
 - `SetCategories` / `AddItemSeparator` / `ShowImage` は `VWImagePopupCtrl` にしかない。
   **生成を `gSDK->CreateCustomThumbnailPopup` で行い、基底の
   `VWControl::CreateControl(this)` を明示的に呼ぶ**抜け道は文法上成立する（`compile` で
-  確認。**実機未確認**。[コード](../Metrics/Layout%20Dialogs.md#vwimagepopupctrl-の機能カテゴリ区切りがどうしても要るとき推定)）。
-  まず `VWThumbnailPopupCtrl` で足りるかを確かめる。
+  確認。**実機未確認**。[コード](../Metrics/Layout%20Dialogs.md#vwimagepopupctrl-を基底の-createcontrol-で結ぶ形の構文チェック)）。
+  両クラスとも中身は `(dialogID, controlID)` を使う `GS_*ImagePopup*` の薄い包みなので、
+  同じコントロールをどちらのクラスからでも触れる道理だが、実挙動は未確認。
+  まず `VWThumbnailPopupCtrl` で足りるかを確かめ、足りないときだけこの道を試す。
 
 ### 一覧には「ユーザが置くシンボル」以外も混ざる
 
@@ -111,7 +122,9 @@ VectorWorks 本体の「鋼材断面を選択」のような**サムネイル付
 - **Web Palette は公式リファレンス（[Plug-in Module](../Info/Plug-in%20Module.md#extensions)）
   未掲載の 5 つ目の拡張種別**で、`GROUPID_ExtensionMenu` などと同じ並びで定義されている。
   登録は [Menu General Info](../Info/Menu%20General%20Info.md#register-menu-extension) の
-  `REGISTER_Extension<…>` と同型で、group ID とクラスを差し替えるだけのはず（未確認）。
+  `REGISTER_Extension<…>` と同型で、group ID とクラスを差し替えるだけのはず（`GROUPID_ExtensionMenu` を
+  `GROUPID_ExtensionWebPalettes` に、`CExtMenu` を `VWExtensionWebPalette` を継承したクラスに。
+  この置き換え自体は未確認）。
 
 ### 1. モードレスに出す口はある
 

@@ -28,7 +28,7 @@
 - **「型で総なめ」して探すのは無駄。** `TaggedDataGetNumElements` は渡した型 ID を検証しない
   らしく、違う型でも同じ要素数を返し、`TaggedDataGet` はゴミを返す。
 - **型とタグが分かっていても `TaggedDataGet` の読み値は当てにならない——件数は正しく、値は
-  壊れる**（[実測](../Metrics/Tagged%20Data.md#読み出しは信用できない書き込みは効く)）。
+  壊れる**（[実測](../Metrics/Tagged%20Data.md#taggeddatagetnumelements--taggeddataget-の読み出しの実測)）。
   書き込み（`TaggedDataCreate` ＋ `TaggedDataSet`）は実機で効く。
 - **探索は 16 進ダンプでやる。** `MCObjectHandle` は `GSHandle`＝`char**` なので参照外しで
   中身が読める（大きさは `GSGetHandleSize`）。

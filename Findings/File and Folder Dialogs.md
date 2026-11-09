@@ -90,6 +90,7 @@ VwSdkProbes のプローブとして走らせた。**印の無い記述は実機
   `VCOM_SUCCEEDED(RunDialog())`（0 との厳密な一致）の真偽だけでよい。
 - **「ポインタが取れたか」で分岐してはいけない。** キャンセルでも `GetSelectedPath` は
   非 nullptr を返し、`GetFullPath` が空文字列と `50`（`kVCOMError_BadPathSpecified`）を返す
+  ——空文字列を掴まされるのが最悪の壊れ方で、黙って前回の値が残るようなことは無い
   （[戻り値の表](../Metrics/File%20and%20Folder%20Dialogs.md#戻り値-キャンセルは-rundialog-の失敗として返る)）。
 
 ### 受け取るパス: 絶対パス・**末尾に区切りが付く**・UTF-8
@@ -105,15 +106,16 @@ VwSdkProbes のプローブとして走らせた。**印の無い記述は実機
 ### `IFileIdentifier::GetFolder` は**フォルダ選択とまったく同じ文字列**を返す
 
 - **末尾の区切りまで含めて 1 バイトも違わない**ので、「フォルダを選ばせる」と「ファイルを
-  選ばせて親を採る」は受け取るパスとしては等価——差は利用者の操作だけ。
+  選ばせて親を採る」は受け取るパスとしては等価——差は利用者の操作（空のフォルダを
+  指せるか・見出しで断りが要るか）だけ。
 - フォルダ選択で得た `IFolderIdentifier` を `IFileChooserDialog::SetInitialFolder` に渡して
   `VCOMError=0`（初期位置として効いたかは目視の話なので言い切らない）
   （[実測](../Metrics/File%20and%20Folder%20Dialogs.md#ifileidentifiergetfolder-はフォルダ選択とまったく同じ文字列を返す)）。
 
 ### `GetAttributes` の `fbDirectory` は**フォルダでも `no` を返した**
 
-- **「フォルダかどうか」の判定に `fbDirectory` を使ってはいけない**——フォルダ 30 件・
-  ファイル 4 件のすべてで `false`（[issue #87](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/87)。
+- **「フォルダかどうか」の判定に `fbDirectory` を使ってはいけない**——ダイアログに固有の
+  話でも測った場所に固有の話でもなく、フォルダ 30 件・ファイル 4 件のすべてで `false`（[issue #87](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/87)。
   macOS 実測。Windows は未確認）。
 - 実在の確認は `ExistsOnDisk` で、**戻り値ではなく出力引数を見る**
   （[File and Folder Identifiers](File%20and%20Folder%20Identifiers.md)。
