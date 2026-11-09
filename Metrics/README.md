@@ -30,17 +30,12 @@
 
 | ファイル | 結論 |
 | --- | --- |
-| [VectorScript to SDK Mapping](VectorScript%20to%20SDK%20Mapping.md) | [Findings](../Findings/VectorScript%20to%20SDK%20Mapping.md) |
 | [Parametric Objects](Parametric%20Objects.md) | [Findings](../Findings/Parametric%20Objects.md) |
 | [Attributes and Classes](Attributes%20and%20Classes.md) | [Findings](../Findings/Attributes%20and%20Classes.md) |
 | [Symbols](Symbols.md) | [Findings](../Findings/Symbols.md) |
-| [Walls](Walls.md) | [Findings](../Findings/Walls.md) |
-| [Slabs and Extrudes](Slabs%20and%20Extrudes.md) | [Findings](../Findings/Slabs%20and%20Extrudes.md) |
-| [Roof Faces](Roof%20Faces.md) | [Findings](../Findings/Roof%20Faces.md) |
 | [Layers and Stories](Layers%20and%20Stories.md) | [Findings](../Findings/Layers%20and%20Stories.md) |
 | [Layer Objects](Layer%20Objects.md) | [Findings](../Findings/Layer%20Objects.md) |
 | [Viewports](Viewports.md) | [Findings](../Findings/Viewports.md) |
-| [Sheet Layers and Page Layout](Sheet%20Layers%20and%20Page%20Layout.md) | [Findings](../Findings/Sheet%20Layers%20and%20Page%20Layout.md) |
 | [Level Objects](Level%20Objects.md) | [Findings](../Findings/Level%20Objects.md) |
 | [Data Tags](Data%20Tags.md) | [Findings](../Findings/Data%20Tags.md) |
 | [Drawing Labels](Drawing%20Labels.md) | [Findings](../Findings/Drawing%20Labels.md) |
@@ -48,12 +43,10 @@
 | [Graphic Legends](Graphic%20Legends.md) | [Findings](../Findings/Graphic%20Legends.md) |
 | [Tagged Data](Tagged%20Data.md) | [Findings](../Findings/Tagged%20Data.md) |
 | [Undo](Undo.md) | [Findings](../Findings/Undo.md) |
-| [Progress and Diagnostics](Progress%20and%20Diagnostics.md) | [Findings](../Findings/Progress%20and%20Diagnostics.md) |
 | [Layout Dialogs](Layout%20Dialogs.md) | [Findings](../Findings/Layout%20Dialogs.md) |
 | [Timers and Notifications](Timers%20and%20Notifications.md) | [Findings](../Findings/Timers%20and%20Notifications.md) |
 | [File and Folder Dialogs](File%20and%20Folder%20Dialogs.md) | [Findings](../Findings/File%20and%20Folder%20Dialogs.md) |
 | [File and Folder Identifiers](File%20and%20Folder%20Identifiers.md) | [Findings](../Findings/File%20and%20Folder%20Identifiers.md) |
-| [TXString](TXString.md) | [Findings](../Findings/TXString.md) |
 | [Plug-in Interop](Plug-in%20Interop.md) | [Findings](../Findings/Plug-in%20Interop.md) |
 | [Plug-in Modules](Plug-in%20Modules.md) | [Findings](../Findings/Plug-in%20Modules.md) |
 | [Documents](Documents.md) | [Findings](../Findings/Documents.md) |
