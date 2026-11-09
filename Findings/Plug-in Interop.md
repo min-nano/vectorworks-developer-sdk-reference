@@ -28,7 +28,7 @@
 ## 1. `ISDK::CallPluginLibrary` — プラグインライブラリルーチンを名前で呼ぶ
 
 - 宣言は `ISDK.h:1712`（`CallPluginLibrary(routineName, PluginLibraryArgTable*, Sint32 status)`）。
-  `routineName` は提供側が `SFunctionDef::fName` に書いた名前で、**プラグインのユニバーサル名でも
+  `routineName` は提供側が `SFunctionDef::fName` に書いた名前（または VLIB リソースの名前）で、**プラグインのユニバーサル名でも
   ファイル名でもない**（[宣言](../Metrics/Plug-in%20Interop.md#1-isdkcallpluginlibrary--プラグインライブラリルーチンを名前で呼ぶ)）。
 
 ### 実測: 別々のモジュールの間で、名前だけで呼べた
@@ -37,7 +37,7 @@
 
 - **文字列・数値・真偽が双方向に通る。** 入力は `args[]`、結果は `functionResult`、
   **VAR（出力）引数は呼ぶ側が渡した `args[]` の欄に書き戻される。**
-- **居ない相手に当てても落ちない**——戻り値 `false`・結果欄は `kNullArgType` のまま。
+- **居ない相手に当てても落ちない**——戻り値 `false`・結果欄（`functionResult.argType`）は `kNullArgType` のまま。
   **成否は戻り値、値は結果欄。型を見てから読む**（getter は型が合わないと `VWFC_ASSERT`）。
 - 実装例: [`plugin/src/ProbeLibrary.cpp`](../plugin/src/ProbeLibrary.cpp)（登録は
   [`plugin/src/ModuleMain.cpp`](../plugin/src/ModuleMain.cpp)）。
@@ -67,7 +67,8 @@
 - **呼ぶ側は `VWFC::PluginSupport::VWPluginLibraryArgTable` を使う**（全欄を `kNullArgType` で埋め、
   そのまま渡せる）【ソース根拠。上の実測もこれで組んだ】。
 - `IFC_QueryInterface` はこのビルドでは引けなかったが、「無い」のか IID が合わないのかは区別
-  できない（範囲外。詰めていない）。
+  できない（範囲外。詰めていない）。あのコードは `#ifdef _VWFC_FOR_VW125x` の中——VW 12.5 時代の
+  互換層で、SDK の中で `_VWFC_FOR_VW125x` を定義している場所は無い【ヘッダ根拠】。
 
 ### `argType` は setter が立てる（ただし VAR の文字列だけは例外）
 
@@ -84,10 +85,14 @@
   `VWExtensionVSFunctions` / `VWVSFunctions_EventSink` / `VWPluginLibraryRoutine` と登録マクロで組む。
   関数の表 `SFunctionDef` は **`fName == nullptr` で終端**【ソース根拠】。
 - **`Execute` に来る `action` は関数名ではなく表の添字**【ソース根拠】。
-  **`BEGIN_LIB_DISPATCH_MAP_Ex` は添字の上限を見ないので、範囲検査は自分で書く。**
+  **`BEGIN_LIB_DISPATCH_MAP_Ex` は添字の上限を見ない**（想定外の添字が来たら表の外を読む）
+  **ので、範囲検査は自分で書く。**
 - **`Initialize()` が `kExtensionVSFunctionsInitFlag_DontOpenResource` を返せば `.vwr` の VLIB
-  リソースが要らない**（この形で実機の登録が通った）。
-- **登録は殻（起動時に読まれる側）に置くほかない**（VW が番地を握り続けるため）。**呼ぶ側は本体でよい。**
+  リソースが要らない**（この形で実機の登録が通った）。関数の定義はコードの表が持っているので、
+  リソース側に同じものを置かずに済む（既定の `_None` だと VW がリソースを探しにいく）。
+- **登録は殻（起動時に読まれる側）に置くほかない**（VW は `plugin_module_main` で受け取った番地を
+  握り続けるため。[プラグインモジュール](Plug-in%20Modules.md)「まだ確かめていないこと」の「本体側から
+  イベントを登録する」と同じ話）。**呼ぶ側は本体でよい。**
 
 ### 【罠】戻り値の型は `fParams` の**最後の欄**で伝える——書かないと署名がずれて書き出される
 
@@ -105,10 +110,12 @@
 
 - 足さないと、起動時に Plug-ins 直下へ書き出される `VWPluginLibraryRoutines.h` / `.p` の署名で
   **最後の引数が戻り値に化ける**。**`CallPluginLibrary` での受け渡しはどちらでも同じに通るので、
-  SDK から呼んでいるだけでは気付けない。** 書き出しは起動のたびに作り直される（Windows）。
+  SDK から呼んでいるだけでは気付けない。** 書き出しは起動のたびに作り直される（Windows）ので、
+  古い書き出しを手で退ける必要は無い。
 - **【訂正】ずれた書き出しが Windows の起動時の落ち（`0xe0000001`）を招く、は誤りだった。** 原因は
   殻の時計が起動時の読み込み直しで古い番地を指したまま残ること（[プラグインモジュール](Plug-in%20Modules.md)
-  「【罠】Windows の VW は起動時にモジュールを一度降ろして読み込み直す」）。
+  「【罠】Windows の VW は起動時にモジュールを一度降ろして読み込み直す」）。以前の「3 ファイルを
+  退けると起動した」は、留めない殻の落ち方が起動ごとの番地の巡り合わせで変わることで説明が付く。
 - 帰結: ライブラリ関数を足したら、**書き出された `VWPluginLibraryRoutines.p` を 1 度開いて署名を
   見る**。VectorScript から呼んだときにどうなるかは確かめていない。
 
@@ -117,11 +124,12 @@
 - **【訂正】ある。** 長らく 3 か所で「メニューコマンドを名前で起動する汎用 API は無い」と書いて
   いたが誤り（[Undo](Undo.md)「打ち切った調査: プラグインから `DoMenuTextByName` 相当を呼ぶ」・
   [VectorScript → SDK の対応](VectorScript%20to%20SDK%20Mapping.md)・[文書](Documents.md)）。
-- `ISDK.h:1722` の `DoMenuName(const TXString& name, short chunkIndex)`。**`DoMenuTextByName` の
+- `ISDK.h:1722` の `DoMenuName(const TXString& name, short chunkIndex)`。**`DoMenuTextByName(subMenu, index)` の
   SDK 版**で、指すのは**表示名ではなく内部名**（内蔵は MITM リソース名、プラグインはファイル名）
-  ——ローカライズ版でもそのまま動く。chunk でなければ `chunkIndex` は 0。再帰的に呼んでよい
+  （`vs.py` の `DoMenuTextByName` の注記も同じことを言う）——ローカライズ版でもそのまま動く。chunk でなければ `chunkIndex` は 0。再帰的に呼んでよい
   （doc コメント。【ソース根拠】。[引用](../Metrics/Plug-in%20Interop.md#2-メニューコマンドを内部名で起動するisdkdomenuname)）。
-- **引数と結果は渡せない**（戻りは `short` 1 つ）。**ダイアログを抑える引数も無い**【ヘッダ根拠】。
+- **引数と結果は渡せない**（戻りは `short` 1 つ）。往復させたいなら経路 1。**ダイアログを抑える
+  引数も無い**ので、ダイアログを出すコマンドはダイアログを出す【ヘッダ根拠】。
   「とにかくあのコマンドを走らせる」専用。
 
 ### 実測: 名前で引けて、コマンドが実際に走る
@@ -133,7 +141,8 @@
   `DoMenuName("Undo", 0)` を呼ぶと、積んだレイヤが消えた（空の図面では何も起きないので、確かめる
   なら積んでから）。
 - **取り消しの実行は、開いていた undo イベントを終わらせる**（`yes` → `no`）。取り消しを起こす
-  コマンドを呼ぶなら、**自分の undo イベントを開いたままにしない**（[Undo](Undo.md)）。
+  コマンドを呼ぶなら、**自分の undo イベントを開いたままにしない**——`EndUndoEvent` を RAII で
+  呼ぶ作りは「もう無いイベントを閉じにいく」ことになる（[Undo](Undo.md)）。
 
 ### なぜ「無い」と確定してしまったか（取りこぼしの教訓）
 
@@ -159,13 +168,16 @@
 ## 4. 勧めない経路: C の ABI（`dlsym` / `GetProcAddress`）
 
 **技術的には可能だが設計として選ばない**（実機で試していない——試す値打ちが無いと判断した。
-[理由の全文](../Metrics/Plug-in%20Interop.md#4-勧めない経路-c-の-abidlsym--getprocaddress)）。
+[記録](../Metrics/Plug-in%20Interop.md#4-勧めない経路-c-の-abidlsym--getprocaddress)）。
 
 - 相手の殻が公開しているのは `plugin_module_main` と `plugin_module_ver` だけで、それ以外は
-  マングリング済み——**相手のビルドに縛られ、版が上がると静かに壊れる**。`CallPluginLibrary` なら
-  **壊れ方が「戻り値 `false`」に収まる**。
+  マングリング済み——**相手のコンパイラ・標準ライブラリ・ビルド設定に縛られ、版が上がると静かに
+  壊れる**（名前解決は実行時なので、コンパイルもリンクも通る）。`CallPluginLibrary` は VW が名前で
+  仲介するので、相手の実装が変わっても署名が同じなら壊れない——**壊れ方が「戻り値 `false`」に
+  収まる**のが決定的な違い（居ない相手でも落ちないことは実測した）。
 - 自分の殻と本体の間の C の ABI は別の話（同じ zip で配り、`VW_PAYLOAD_ABI_VERSION` で検出できる。
-  [プラグインモジュール](Plug-in%20Modules.md)）。`dlopen` 自体はできる——**できても得が無い**。
+  [プラグインモジュール](Plug-in%20Modules.md)）。他人のプラグインとは版を揃えられない。mac で
+  `dlopen` 自体はできる（アドホック署名で足りる）——**できても得が無い**。
 
 ## 打ち切った調査: `ISDK::DoProgramAction`
 
@@ -187,7 +199,8 @@
 - **`CallPluginLibrary` は居ない相手に `false` を返す**ので、呼んでみて `false` なら相手が居ない
   （か失敗した）。`DoMenuName` も居ないコマンドで `-3`。
 - 事前に確かめる道具はどれも使えない: **`HasPlugin`** は VectorScript にしか無く【ヘッダ根拠】、
-  しかも「いまのワークスペースに在るか」を見るだけ【ソース根拠】。**`ExternalNameToID`** は在る
+  しかも「いまのワークスペースに在るか」を見るだけ【ソース根拠】——ワークスペースに並べていない
+  コマンドを持つプラグインは、入っていても `false` になる。**`ExternalNameToID`** は在る
   名前でも `-1`（[詳細](../Metrics/Plug-in%20Interop.md#事前確認は要らない戻り値で足りる)）。
 
 ### 読み込み順は気にしなくてよい
@@ -199,7 +212,9 @@
 
 - **呼べる（実機確認済み。macOS）。** `CFRunLoopTimer` の刻みの中から `CallPluginLibrary` が
   `true` と結果を返した（[実測](../Metrics/Plug-in%20Interop.md#呼べる時機-os-タイマーの刻みの中からも呼べる)）。
-  **外部からの要求を OS タイマーで受けて、ほかのプラグインの機能を呼ぶ**形（CLI ブリッジ）が成り立つ。
+  **メニューコマンドの中でなくても呼べる**——[周期実行と通知](Timers%20and%20Notifications.md) で
+  確かめた「OS のタイマーから `gSDK` を読める・書ける」の延長線上。**外部からの要求を OS タイマーで
+  受けて、ほかのプラグインの機能を呼ぶ**形（CLI ブリッジ）が成り立つ。
 - undo の記録は経路ではなく**呼ばれた側が何をするか**で決まる。刻みが VW の undo イベント中に
   当たったときは [周期実行と通知](Timers%20and%20Notifications.md)「VW が undo イベントを開いたまま
   回している最中」（**読むのは安全・書くと混ざる**）。

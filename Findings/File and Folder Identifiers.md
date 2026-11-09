@@ -36,7 +36,8 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
   **ヘッダを読んでも何が入るかは分からない**。以下はすべて実機の値。
 - **Windows 版 SDK のヘッダも macOS 版と改行コードしか違わない**（OS 分岐 0 件。SDK 全体の
   961 ファイルでも同じ——[調査の作法](Investigation%20Techniques.md)「Windows 版 SDK を引き直しても
-  同じものしか出ない」）。**プラットフォーム差は実機で測るしかない**
+  同じものしか出ない」）。**プラットフォーム差は実機で測るしかない**（`sdk-grep` / `sdk-ls` を
+  引き直しても答えは出ない）
   （[突き合わせ](../Metrics/File%20and%20Folder%20Identifiers.md#sattributes-の中身ヘッダ)）。
 
 ## 実機で確かめたこと（VW 2026 / macOS / Apple Silicon）
@@ -73,7 +74,8 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 ### `ExistsOnDisk` の戻り値は「実在するか」ではない
 
 - **実在しなくても戻り値は `0`（成功）。** 実在は出力引数（`bool&`）にしか出ない。
-  **必ず `exists` のほうを見る**（[Investigation Techniques](Investigation%20Techniques.md)「setter の
+  `if (VCOM_SUCCEEDED(folder->ExistsOnDisk(exists)))` だけで分岐すると、無い場所を在るものと
+  して扱う。**必ず `exists` のほうを見る**（[Investigation Techniques](Investigation%20Techniques.md)「setter の
   戻り値を信用しない」と同じ形の罠）。
 
 ### `EnumerateContents` の実測
@@ -112,6 +114,8 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 
 - **タイムスタンプは読めても書けない**（4 つとも `6`）。読むほうも `LastAccessed`・`LastBackup` は
   macOS で失敗する（Windows は `LastAccessed` が成功）（[表](../Metrics/File%20and%20Folder%20Identifiers.md#対照setattributestimedatereference-は-4-つとも未実装)）。
+- **`Set*` がまるごと死んでいるわけではない**——`IFileIdentifier::SetAttributes` は生きている——ので、
+  この 2 つは別々に考える。
 
 ## 旗は OS の何に対応しているのか（macOS で作った標本）
 
@@ -141,7 +145,9 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 
 - `HIDDEN` / `SYSTEM` / `ARCHIVE` / `TEMPORARY` / EFS の `ENCRYPTED` がそのまま旗に出る。
   `fbArchive` はふつうに書き込んだだけで立つ（[表](../Metrics/File%20and%20Folder%20Identifiers.md#getattributesfile_attribute_-をそのまま映す)）。
-- **フォルダの `READONLY` 属性は `fbReadOnly` に出ない。**
+- **フォルダの `READONLY` 属性は `fbReadOnly` に出ない。** Windows ではフォルダの `READONLY` は
+  「中へ書けない」という意味ではない（Explorer の表示用の印）ので、映さないほうが正しいとも
+  言える。ただ、フォルダの `fbReadOnly` が何を見ているのかは分からなかった。
 
 ### システム領域の標本（読むだけ）
 
@@ -149,7 +155,9 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 
 - **`fbReadOnly` / `fbCanWrite` は ACL を見ていない**（`cmd.exe` でも `fbCanWrite=yes`）。書けるかの
   当たりとしては macOS より弱い。**フォルダの `fbReadOnly` / `fbCanWrite` は Windows では当てに
-  しない**（`System Volume Information` だけ `fbReadOnly=yes` になった理由は【推定】止まり）。
+  しない**（`System Volume Information` だけ `fbReadOnly=yes` になった。`READONLY` 属性は
+  立っていないので、属性ビットではない何か（このフォルダは管理者でも開けない）を見ている
+  らしいが【推定】、`C:\Program Files\` が `no` / `yes` なので規則は分からない）。
 - **`fbCanExecute` は Windows では常に `no`**（拡張子でも決まらない）。**`fbCanRead` も常に `yes`。**
 - **使用中のファイル（`pagefile.sys`）では `GetAttributes` が失敗する**（`ExistsOnDisk` は `yes`。
   中で同じ口を使っているのだろう【推定】）。「失敗したら実在しない」とは読まない。
@@ -174,20 +182,70 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 
 ## 実務上どう書くか
 
-（✗ / ○ を並べたコードの全体は [計測記録](../Metrics/File%20and%20Folder%20Identifiers.md#実務上どう書くかコードの全体)）
-
 ```cpp
+using namespace VectorWorks::Filing;
+
+// ✗ 種類の判定に使わない（フォルダでもファイルでも常に false）
+SAttributes attrs = {};
+folder->GetAttributes(attrs);
+if (attrs.fbDirectory) { /* ここへは決して来ない */ }
+
+// ✗ 戻り値だけ見ない（実在しなくても 0 が返る）
+bool exists = false;
+if (VCOM_SUCCEEDED(folder->ExistsOnDisk(exists))) { /* 実在の保証にならない */ }
+
 // ○ 実在は出力引数で見る
 bool exists = false;
 if (VCOM_SUCCEEDED(folder->ExistsOnDisk(exists)) && exists) { /* ここは実在する */ }
 
-// ○ ファイルを読み取り専用にする（読んだ値を書き換えて、触るのは 1 つだけ）
+// ○ 書けるかどうかの当たりは fbReadOnly / fbCanWrite で付けられる
+//    （ただし当たりまで。実際に書けるかは書いてみないと分からない）
+SAttributes attrs = {};
+if (VCOM_SUCCEEDED(folder->GetAttributes(attrs)) && !attrs.fbReadOnly && attrs.fbCanWrite)
+{
+    // …
+}
+
+// ✗ フォルダの属性は書き戻せない（kVCOMError_NotImplemented が返るだけ）
+folder->SetAttributes(attrs);          // 何も起きない
+
+// ✗ SAttributes を {} から作って書かない（Windows では構造体まるごとで属性が置き換わり、
+//    立っていた HIDDEN / SYSTEM / ARCHIVE / TEMPORARY を消す）
+SAttributes fresh = {};
+fresh.fbReadOnly = true;
+file->SetAttributes(fresh);            // Windows: READONLY だけが残り、ARCHIVE などが落ちる
+
+// ✗ fbHidden / fbSystem / fbArchive / fbTemporary / fbEncrypted / fbCanExecute を
+//    両 OS 共通の判定に使わない（前の 5 つは Windows でだけ、fbCanExecute は macOS でだけ生きている）
+
+// ✗ fbReadOnly と fbCanWrite を同時に指定しない（衝突して「書けない」側が勝つ）
+attrs.fbReadOnly = false;
+attrs.fbCanWrite = false;              // ← こちらが効いて読み取り専用になる
+file->SetAttributes(attrs);
+
+// ○ ファイルを読み取り専用にする（触るのは 1 つだけ）
 SAttributes attrs = {};
 if (VCOM_SUCCEEDED(file->GetAttributes(attrs)))
 {
     attrs.fbReadOnly = true;           // macOS: chmod 0444 相当 / Windows: READONLY 属性
     file->SetAttributes(attrs);
 }
+
+// ✗ 書いた fbCanRead を読み戻して確かめない（権限は変わるのに yes が返り続ける）
+attrs.fbCanRead = false;
+file->SetAttributes(attrs);
+file->GetAttributes(attrs);
+if (!attrs.fbCanRead) { /* ここへは決して来ない */ }
+
+// ○ フォルダとファイルの混在は EnumerateContents の振り分けで捌く
+class CListener : public IFolderContentListener
+{
+public:
+    virtual EFolderContentListenerResult VCOM_CALLTYPE OnFolderContent(IFolderIdentifier*) override
+    { /* ここへ来たものはフォルダ */ return eFolderContentListenerResult_Continue; }
+    virtual EFolderContentListenerResult VCOM_CALLTYPE OnFileContent(IFileIdentifier*) override
+    { /* ここへ来たものはファイル */ return eFolderContentListenerResult_Continue; }
+};
 ```
 
 - **`fbDirectory` で種類を判定しない**——混在は `EnumerateContents` の振り分けで捌く。
