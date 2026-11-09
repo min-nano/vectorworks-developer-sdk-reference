@@ -5,6 +5,8 @@
 「ビューポートでフィルタ」の保存先を探した調査（[Graphic Legends](../Findings/Graphic%20Legends.md)）で
 得たもの。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 ## 読み出しは信用できない（書き込みは効く）
 
 - **「型で総なめ」して探すのは無駄**（1 度やって騙された）。`TaggedDataGetNumElements` は

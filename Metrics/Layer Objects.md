@@ -3,6 +3,8 @@
 結論は [Findings「Layer Objects」](../Findings/Layer%20Objects.md)。ここには測った環境・見本・
 実測の表と、Windows の VM で落ち続けた切り分けを置く。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 [issue #282](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/282) の調査。
 [vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)
 の `layer_objects` / `object_counts` / `layers` の `objects` のため、レイヤの中の図形を

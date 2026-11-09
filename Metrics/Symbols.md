@@ -4,6 +4,8 @@
 定義を `ResetObject` の前後で覗いたダンプ・用紙基準の外接の実測・シンボル定義の
 `subType` を数えた表を置く。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 ## 配置の作法（事故の記録）
 
 `VWSymbolObj(name, VWPoint2D, angleDeg)`（レガシーの `PlaceSymbol` の包み）で、生成後に

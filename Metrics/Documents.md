@@ -3,6 +3,8 @@
 結論は [Findings「Documents」](../Findings/Documents.md)。ここには測った環境・プローブ・見本・手順・
 実測の表とログ・ダイアログの文言・切り分けの経緯・落ちた記録を置く。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 プラグインの実行中に**別の図面（文書）を開いて、以後の描画をそちらへ向けられるか**の
 調査（[issue #34](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/34)）。
 背景は [issue #23](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/23) /

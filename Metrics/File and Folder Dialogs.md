@@ -4,6 +4,8 @@
 ここにはヘッダの抜き書きと、実機で測った戻り値・受け取ったパスの実物を置く
 （[issue #85](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/85)）。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 ## `IFolderChooserDialog` の全体（口は 5 つだけ）
 
 ```cpp

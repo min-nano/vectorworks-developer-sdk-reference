@@ -4,6 +4,8 @@
 ここには SDK のヘッダ・ソースを引いた結果と、実機のプローブで測った環境・手順・実測の表・
 ログ・切り分けの経緯を置く。節の番号と見出しは Findings と同じにしてある。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 [issue #204](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/204) の調査。
 出どころは MCP ブリッジ——外からの要求を拾うために、ウェブパレットの HTML の
 `setInterval`（250 ms）から C++ を呼んでいたが、**パレットを隠すと 60 秒に 1 回まで

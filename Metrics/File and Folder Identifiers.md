@@ -4,6 +4,8 @@
 ここには標本の一覧・プローブの出力・旗ごとの実測の表（macOS / Windows）・ヘッダの突き合わせを
 元の文言のまま置く。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 [issue #87](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/87)・
 [issue #91](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/91)・
 [issue #93](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/93) の調査。

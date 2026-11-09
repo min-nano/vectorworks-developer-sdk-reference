@@ -3,6 +3,8 @@
 結論は [Findings「Graphic Legends」](../Findings/Graphic%20Legends.md)。ここには全欄ダンプの
 読み・タグ付きデータの生バイト・節点型の数・打ち切った調査で潰した道を置く。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 `GraphicLegend` PIO を SDK から生成・制御するときの実測（VW 2026。後半の確認は
 [#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。
 タグ付きデータの一般的な読み書きの癖は [Tagged Data](../Findings/Tagged%20Data.md) にある。

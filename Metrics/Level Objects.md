@@ -3,6 +3,8 @@
 結論は [Findings「Level Objects」](../Findings/Level%20Objects.md)。ここには実測の表・
 読み戻しの記録・訂正に至った切り分けの経緯を置く。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 軸組図（断面ビューポート）へ **GL・1FL・2FL・軒高**のような高さの印を置くための調査。
 [issue #130](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/130) の
 実機確認（VW 2026 / mac）による。続きは

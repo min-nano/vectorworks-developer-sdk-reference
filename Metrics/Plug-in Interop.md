@@ -4,6 +4,8 @@
 宣言とソースの引用・登録のコード・#233 の書き出しのずれと訂正の経緯・`DoMenuName` の
 確かめ方・打ち切った経路の実測を元の文言のまま置く。
 
+> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+
 [issue #217](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/217)・
 [issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233) の調査。
 
