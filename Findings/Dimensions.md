@@ -229,6 +229,8 @@ virtual MCObjectHandle CreateLinearDimension(
 - `ovDimTextSizeInPoints`(40) は**寸法が持っている値ではない**。読むたびに
   **`ovDimFontSize` ÷（そのときアクティブなレイヤの縮尺）** を pt に直したものが返る
   （容れ物の縮尺ですらない）。同じ 1 本がアクティブを替えただけで `6` → `300` になった。
+- シートレイヤやビューポートの注釈を触っている最中はアクティブがシートレイヤ（1:1）に
+  なっていることが多く、そこでの読みは **`ovDimFontSize` を mm→pt に直しただけの数字**になる。
 - **書くときも同じ縮尺で解釈される**（1:1 がアクティブなときに `6` を書くと
   `ovDimFontSize` = `2.1167`。戻り値は `true` なので気付けない）。
 - **判断にも指定にも `ovDimFontSize` を使う**: 紙で `P` pt なら
@@ -250,7 +252,9 @@ virtual MCObjectHandle CreateLinearDimension(
 - **端記号は外接矩形に入らず、`GetMarkerPolys` も寸法には「なし」を返す**——端記号の大きさを
   機械で測る道は無い（絵で確かめた）。
 - **`SetLayerScaleN` が効いたことを読み戻して確かめる**（効かない文書が実在する。
-  [Layers and Stories](Layers%20and%20Stories.md)「レイヤの縮尺」）。式と校正の詳細は
+  [Layers and Stories](Layers%20and%20Stories.md)「レイヤの縮尺」）。効かないまま先へ進むと、
+  後で作る寸法も全部「変える前の縮尺で生まれる」ので、生まれの違う 2 本を比べたつもりが
+  比べ物になっていない。式と校正の詳細は
   [計測記録](../Metrics/Dimensions.md#測り方文字を消した寸法の外接矩形で線の幾何を測る)。
 
 #### ① レイヤの縮尺を変えると、既にある寸法の線の幾何は追随する
@@ -308,6 +312,7 @@ virtual MCObjectHandle CreateLinearDimension(
 - **それでも名前で書くほうを勧める**（index の意味は図面ごとに変わる）。
 - カスタム規格の本数は `ISDK::NumberCustomDimensionStandards()`。書けるのはカスタムだけ
   （`SetCustomDimensionStandardVariable`）。作る口は `ISDK::CreateCustomDimensionStandard(name)`
+  だが、**利用者が図面に持っている規格を名前で選ばせる用途では使わない**
   （[総当たりの結果](../Metrics/Dimensions.md#index-の体系)）。
 
 ### 一覧の取り方
@@ -386,7 +391,8 @@ virtual MCObjectHandle CreateLinearDimension(
 
 - **注釈へ置くなら (b)**（手順は「[注釈へ寸法を置くときの作り方（文字スタイル版）](#注釈へ寸法を置くときの作り方文字スタイル版157-以降はこちら)」）。
 - **「アクティブレイヤを合わせてから繋ぐ」（#155）が要るのは、(a) も (b) もせずに by-class の
-  まま繋ぐときだけ**（[実測の出どころ](../Metrics/Dimensions.md#⑥-逃げ道は-2-つあるどちらも規格ではない)）。
+  まま繋ぐときだけ**——by-class では左の因子がこちらから決められない（③ のとおり規格でも
+  動かせない）ので、縮尺のほうを合わせるしか残らない（[実測の出どころ](../Metrics/Dimensions.md#⑥-逃げ道は-2-つあるどちらも規格ではない)）。
 
 #### 付け足し: `CreateCustomDimensionStandard` の実測（この調査で分かったこと）
 
@@ -687,13 +693,34 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 | 向くところ | 図面の中で大きさを揃えたい・利用者が後から触る | 1 本ずつ大きさを決めたい・図面を汚したくない |
 
 ```cpp
-// vpScale は ovViewportScale(1003) から読む（1/125 なら 125）。
+// 1. ビューポートの縮尺を読む（1/125 なら 125）。
+double vpScale = 1.0;
+TVariableBlock scaleVar;
+if (gSDK->GetObjectVariable(viewport, ovViewportScale, scaleVar))
+{
+    Real64 s = 0.0;
+    if (scaleVar.GetReal64(s) && s > 0.0)
+        vpScale = s;
+}
+
+// 2. そのビューポート用の文字スタイルを 1 つ用意する（縮尺ごとに 1 つ要る）。
+//    **ovTextStyleSize の単位はインチ**。紙で 6pt にしたいなら 6/72 × 縮尺。
 MCObjectHandle style = gSDK->CreateTextStyleResource("注釈 6pt 1-125");
 TVariableBlock sizeVar;
-sizeVar = static_cast<Real64>(6.0 / 72.0 * vpScale);   // インチ。紙で 6pt
+sizeVar = static_cast<Real64>(6.0 / 72.0 * vpScale);
 gSDK->SetObjectVariable(style, ovTextStyleSize, sizeVar);
-gSDK->SetTextStyleRef(dim, gSDK->GetObjectInternalIndex(style));
-gSDK->AddViewportAnnotationObject(viewport, dim);      // 連続寸法なら 2 本済ませてから繋ぐ
+const InternalIndex styleRef = gSDK->GetObjectInternalIndex(style);
+
+// 3. ふつうに寸法を作り、**文字スタイルを明示する**。
+MCObjectHandle dim = gSDK->CreateLinearDimension(p1, p2, startOffset, 0, Vector2(0, 0), 0);
+// … ovDimStandardName / ovDimShowValue などをここで当てる
+gSDK->SetTextStyleRef(dim, styleRef);      // ← これを呼ばないと値が描かれない
+
+// 4. **ovDimFontSize は触らない**（この版では文字スタイルに決めさせる。触るなら
+//    書いたあとに ResetObject まで呼ぶこと——中途半端だと読み戻しと絵がずれる）。
+// 5. 連続寸法にするなら、ここまでを 2 本ぶん済ませてから CreateChainDimension。
+// 6. 注釈へ移す。
+gSDK->AddViewportAnnotationObject(viewport, dim);
 ```
 
 - **文字スタイルはビューポートの縮尺ごとに要る**（名前に縮尺を入れる）。既にある文字スタイルを
@@ -701,7 +728,7 @@ gSDK->AddViewportAnnotationObject(viewport, dim);      // 連続寸法なら 2 �
 - **規格の文字スタイル（`寸法(6pt)` など）をそのまま使い続けたいなら、「当てた後に
   `ovDimFontSize` を書いて引き直す」道を使う**（連続寸法なら繋ぐ前に書けば `ResetObject` は
   要らない。[#164](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/164)）。
-  省略の無いコードは [計測記録](../Metrics/Dimensions.md#注釈へ寸法を置くときの作り方文字スタイル版157-以降はこちら)。
+- 根拠の実測は [計測記録](../Metrics/Dimensions.md) の D 表（D2 / D3 / D6）・F 表（F2 / F3）・H 表（H5）。
 
 ### #143 の「`ovDimFontSize` を書く」手順は正しかった——抜けていたのは `ResetObject`
 
@@ -710,7 +737,8 @@ gSDK->AddViewportAnnotationObject(viewport, dim);      // 連続寸法なら 2 �
   [#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143) が再現
   しなかったのは、**`ovDimFontSize` を書いたあと寸法を引き直していなかった**から。
 - 当初の見立て「文字スタイルが当たっているときだけ効かない」は**反証された**——外しても外さなくても
-  同じで、効くかどうかは `ResetObject` を通したかだけで決まった
+  同じで、効くかどうかは `ResetObject` を通したかだけで決まった。#157 が「規格を `JIS` に替えても
+  `GetTextStyleRef` が `30` のまま」で行き詰まったのも、そもそも外す必要が無かったからである
   （[実測](../Metrics/Dimensions.md#143-のovdimfontsize-を書く手順は正しかった抜けていたのは-resetobject)）。
 
 ## 連続寸法（チェーン寸法）
@@ -747,7 +775,9 @@ gSDK->AddViewportAnnotationObject(viewport, dim);      // 連続寸法なら 2 �
   あっても同じ**。#164）。**通るのは型 86 へ `SetTextStyleRef` を掛け直すことだけ**（上記
   「[既に注釈へ置いてしまった連続寸法を後から直す](#既に注釈へ置いてしまった連続寸法を後から直す通る道は-1-つだけ確定)」）。
 - **中の値が後から動くのはビューポートの縮尺を変えたときだけ**（比例で書き換わる）。
-  「中へ書く ＋ 縮尺の往復」で絵を合わせる手は**手順にしてはいけない**。
+  「中へ書く ＋ 縮尺の往復」で絵を合わせる手は**手順にしてはいけない**（縮尺を触らない限り
+  絵は直らず、比例で戻っているだけなので書いた値が正しい保証もない）。逆に言えば、
+  **正しく作ってあれば後からビューポートの縮尺を変えても崩れない。**
 - 対照: **単独の直線寸法は書いて `ResetObject` すれば効く**（[表と潰した道](../Metrics/Dimensions.md#クラスの文字スタイルのままなら文字の大きさは繋ぐときのアクティブレイヤで決まる)）。
 
 #### by-class の連続寸法で狙った大きさを出す手順
@@ -945,11 +975,34 @@ gSDK->UpdateConstraintModel();               // ③ 解く。呼ばないと測�
 紙で 6pt に見せたい寸法を、ビューポートの注釈へ置く手順（`vpScale` は `ovViewportScale` から読む）:
 
 ```cpp
+// 1. ビューポートの縮尺を読む（1/50 なら 50。既定は 1 なので、自分で書いたなら その値）。
+double vpScale = 1.0;
+TVariableBlock scaleVar;
+if (gSDK->GetObjectVariable(viewport, ovViewportScale, scaleVar))
+{
+    Real64 s = 0.0;
+    if (scaleVar.GetReal64(s) && s > 0.0)
+        vpScale = s;
+}
+
+// 2. ふつうに作る（アクティブレイヤが何であってもよい）。
 MCObjectHandle dim = gSDK->CreateLinearDimension(p1, p2, startOffset, 0, Vector2(0, 0), 0);
+// … ovDimStandardName / ovDimShowValue などをここで当てる
+
+// 3. **文字の大きさを、そのビューポートの縮尺で割り戻して書く。**
 TVariableBlock fontSize;
-fontSize = static_cast<Real64>(6.0 * 25.4 / 72.0 * vpScale);   // 3. 紙で 6pt
+fontSize = static_cast<Real64>(6.0 * 25.4 / 72.0 * vpScale);   // 紙で 6pt
 gSDK->SetObjectVariable(dim, ovDimFontSize, fontSize);
-gSDK->ResetObject(dim);              // 4. 書いたら引き直す（連続寸法へ繋ぐなら繋ぐことが引き直し）
+
+// 4. **書いたら引き直す。これを忘れると絵は 1 ミリも変わらない**（#161）。
+//    読み戻しは書いた値を返すので、呼び忘れても読み戻しでは気付けない。
+gSDK->ResetObject(dim);
+
+// 5. **連続寸法へ繋ぐなら、繋ぐこと自体が引き直しになる**ので 4 は省いてよい
+//    （#161 の実測で、繋ぐ前に書いた値が中の直線寸法に残って絵にも出た）。
+//    ただし by-class のままだと「繋ぐときのアクティブレイヤ」で焼き直される道もある
+//    ——上記「[連続寸法](#クラスの文字スタイルのままなら文字の大きさは繋ぐときのアクティブレイヤで決まる)」。
+// 6. 注釈へ移す。
 gSDK->AddViewportAnnotationObject(viewport, dim);
 ```
 
@@ -962,11 +1015,13 @@ gSDK->AddViewportAnnotationObject(viewport, dim);
   > **`SetCurrentLayerN(MCObjectHandle, Boolean bAllowUnifiedViewMaintenance = false)`**
   > （`ISDK.h:2761`）があり、いまのアクティブは **`ISDK::GetActiveLayer()`**（`ISDK.h:2020`）。
   > [#175](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/175) で効くことを確かめた。
-- **`ovDimTextSizeInPoints` へ書く道は勧めない**（読む時点のアクティブレイヤの縮尺で解釈される）。
+- **`ovDimTextSizeInPoints` へ書く道は勧めない**（読む時点のアクティブレイヤの縮尺で解釈される
+  ので、アクティブが何かを知らないと何を書けばよいかが決まらない——アクティブが 1:1 なら
+  `6` ではなく `6 × ビューポート縮尺` を書くことになる。`ovDimFontSize` なら容れ物にも状態にも依らない）。
 - **直すのは注釈へ移す前でも後でもよい。どちらでも書いたあとに `ResetObject` が要る**
   （`AddViewportAnnotationObject` も `UpdateViewport` も引き直しではない）。
 - **書くのは `ovDimFontSize`（と `ResetObject`）だけでよい**——補助線・出・端記号・間隔は
   ビューポートの縮尺で描くたびに解き直される（[#145](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/145)）。
   1:1 生まれに書いた 1 本と 1/50 生まれの 1 本は注釈で見分けが付かなかった。
 - **後からビューポートの縮尺を変えても崩れない**——一度正しく作れば、以後は触らなくてよい
-  （省略の無いコードは [計測記録](../Metrics/Dimensions.md#注釈へ寸法を置くときの作り方ここだけ読めばよい)）。
+  （[実測](../Metrics/Dimensions.md#注釈へ寸法を置くときの作り方ここだけ読めばよい)）。
