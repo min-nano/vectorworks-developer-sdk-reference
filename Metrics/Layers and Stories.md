@@ -276,6 +276,109 @@ ForEachLayer 件数=4
   同じで、`GetReferencedFilesInfo` の `saveCache` が `1`（A は `0`）、`lastUpdate` / `lastModified` が
   `0` だった。
 
+#### F. Windows で B〜D をなぞった（レイヤの参照）
+
+VW 2026 / Windows 11（ARM64 の VM、x64 エミュレーション）・2026-11-10。ビルド `6dc6cff53525`。
+`orgref-prep` は新規の空図面で、`orgref-inspect` は `new_document=false` で、MCP ブリッジの
+スプール（`%TEMP%\VwSdkProbes-mcp`）から回した。ブリッジの返り値は「例外: No mapping for the
+Unicode character exists in the target multi-byte code page.」で崩れたが、プローブのログ
+（`%TEMP%\VwSdkProbes-orgref-*.log`）は「結果: 成功」まで出ていたので、そちらを読んだ。
+画面の操作は人が行い、画面はスクリーンショットで見た。
+
+- 1 回目は、参照の前の `orgref-inspect` の後、オーガナイザの「詳細設定」へ届く前に VW が落ちた
+  （Sentry に `level: fatal` の記録だけ）。起動し直して `orgref-prep` から回し直した。2 回目は
+  オーガナイザを **Ctrl+Shift+O** で開き、メニューには触らなかった。
+- 参照元はファイル選択のダイアログのファイル名欄へ一時フォルダのパス
+  （`C:\Users\h-ikeda\AppData\Local\Temp\VwSdkProbes-orgref-src.vwx`）を貼って選べた。
+
+参照の前（host のまま）:
+
+```
+■ GetReferencedFilesInfo
+  件数=0
+■ レイヤの列
+  [0] type=31 name="レイヤ-1" fromRef=no ovLayerType=s16:1 scale=1 current=yes 直下=2（矩形＋型 0）
+  [1] type=0 （レイヤではない）
+ForEachLayer 件数=1
+GetNamedLayer("1F") / ("2F") / ("NNA#1_1F") → 0x0
+```
+
+**B をなぞる**: 「詳細設定…」（参照設定）の「Vectorworks ファイルの参照方法」は既定が
+「デザインレイヤにビューポート図形として参照(P)」で、「レイヤを参照(L)」に切り替えて OK した。
+「新規ファイル参照」の参照レイヤの一覧は `2F`・`1F`・`レイヤ-1` で、`2F`・`1F` の左の欄に
+チェックを付けた。オプションは既定のまま（目視: 「ディスクに参照キャッシュを保存」だけ入り、
+「ファイルオープン時に自動更新」「クラス属性の更新」「参照ファイルのユーザー原点を無視」
+「レイヤリンクを作成」は切）。
+
+```
+■ GetReferencedFilesInfo
+  [0] id=1 type=0 mac="" win="C:\Users\h-ikeda\AppData\Local\Temp\VwSdkProbes-orgref-src.vwx"
+      updateOnOpen=0 ignoreUserOrigin=0 updateClasses=0 createLayerLinks=0 saveCache=1 useLayerColors=0 lastUpdate=3877190853 lastModified=3877190489
+■ レイヤの列
+  [0] 000001E8637E0030 type=31 name="1F" fromRef=yes ovLayerType=s16:1 scale=50 current=no
+      - type=3  class="OR-cls" bounds=(0,0)-(2000,1000)   fromRef=yes parent==layer:yes
+      - type=2  class="OR-cls" bounds=(0,0)-(3000,1500)   fromRef=yes parent==layer:yes
+      - type=17 class="一般"   bounds=(500,500)-(500,500) fromRef=yes parent==layer:yes
+      - type=0                                            fromRef=yes parent==layer:yes
+      直下の件数=4 うち fromRef=4
+  [1] 000001E8637DF9B0 type=31 name="2F" fromRef=yes ovLayerType=s16:1 scale=100 current=no
+      - type=4  class="一般" bounds=(0,0)-(400,400)         fromRef=yes
+      - type=4  class="一般" bounds=(1000,1000)-(1400,1400) fromRef=yes
+      - type=0                                              fromRef=yes
+      直下の件数=3 うち fromRef=3
+  [2] 000001E858DCF910 type=31 name="レイヤ-1" fromRef=no ovLayerType=s16:1 scale=1 current=yes 直下=2 うち fromRef=0
+  [3] type=0 （レイヤではない）
+ForEachLayer 件数=3
+GetNamedLayer("1F") → [0] / ("2F") → [1] / ("NNA#1_1F") 等 → 0x0
+```
+
+- `1F`・`2F` のオブジェクト変数 149〜168 は `レイヤ-1` と同じ値（156=`true`、165〜168 は
+  `8.26833` / `11.6933`）。補助リストは `1F` 6 件・`2F` 7 件・`レイヤ-1` 8 件。
+- オーガナイザのデザインレイヤのタブは `レイヤ-1`（# 1、1:1）・*`2F`*（# 2、1:100）・
+  *`1F`*（# 3、1:50）で、`2F`・`1F` は斜体（目視）。
+
+**C をなぞる**: src2 を「レイヤを参照」で新規に参照し、`1F` だけにチェックを付けて OK した。
+
+- 警告 2 つ（目視）は mac と同じ文面:「参照ファイル「VwSdkProbes-orgref-src2.vwx」のレイヤ「1F」は
+  同じ名前があるため参照できません。参照する前に開いているファイルのレイヤ名を変更してください。」
+  （状態欄は「参照を更新中… 33%」）→「参照ファイル「VwSdkProbes-orgref-src2.vwx」からの更新中に
+  エラーが発生しました。」
+- 一覧の src2 は赤字・「未更新」。`GetReferencedFilesInfo` は 2 件で、src2 は
+  `id=2`・`updateOnOpen=0`・`saveCache=1`・`lastUpdate=0`・`lastModified=0`。レイヤの列は B と同じ。
+
+src の参照を「削除…」で外した（「ファイル参照を解除」: 参照レイヤ「ファイルに残す(K)」・
+参照リソース「ファイルに残す(E)」の既定のまま OK）。
+
+- `GetReferencedFilesInfo` は src2 の 1 件。`1F`（`…E0030`）・`2F`（`…DF9B0`）は同じハンドルで残り、
+  レイヤも直下の図形もすべて `fromRef=no`。オーガナイザでも斜体でなくなった（目視）。
+- src2 の行を選んで「更新」→ 上と同じ文面の警告（相手が自分の `1F`）。
+
+**D をなぞる**: 自分の `1F` をオーガナイザで削除（「「1F」レイヤを削除しますか?」→ はい）し、
+src2 を「更新」した。警告は出ず、一覧の src2 は「最新」になった（赤字でなくなった）。
+
+```
+■ GetReferencedFilesInfo
+  [0] id=2 type=0 mac="" win="…\VwSdkProbes-orgref-src2.vwx"
+      updateOnOpen=0 … saveCache=1 … lastUpdate=3877191397 lastModified=3877190489
+■ レイヤの列
+  [0] 000001E8637E1070 type=31 name="1F" fromRef=yes ovLayerType=s16:1 scale=50 current=no
+      - type=3 class="OR-cls" / type=2 class="OR-cls" / type=17 class="一般" / type=0（どれも fromRef=yes）
+      直下の件数=4 うち fromRef=4
+  [1] 000001E797299140 type=90 （レイヤではない）
+  [2] 000001E8637DF9B0 type=31 name="2F"      fromRef=no scale=100 直下=3 うち fromRef=0
+  [3] 000001E858DCF910 type=31 name="レイヤ-1" fromRef=no scale=1   current=yes 直下=2 うち fromRef=0
+  [4] type=0 （レイヤではない）
+ForEachLayer 件数=3
+GetNamedLayer("1F") → [0]（…E1070）
+```
+
+- 入り直した `1F` は、消す前の `1F`（`…E0030`）と別のハンドルで、列の先頭に入った。後ろの型 `90` は
+  `kUndoPlaceholderNode`（`Objs.TDType.h:156`）。
+- 上部ツールバーのレイヤの選択欄で `1F` を選ぶと、mac と同じ確認（「参照中のレイヤを
+  アクティブレイヤにしますか?」）が出た（目視）。「はい」を押したあたりで VW が落ちた（固まったのが
+  「はい」の前か後かは人にも分からなかった。`%LOCALAPPDATA%\CrashDumps\Vectorworks2026.exe.11528.dmp`、
+  21:39。中は見ていない）。**「すべてを選択」の数は Windows では見られなかった。**
+
 ### 列の順序とオーガナイザの並びの比較
 
 | | 列（`NextObject` / `ForEachLayer`） | オーガナイザの `#` 列 |
