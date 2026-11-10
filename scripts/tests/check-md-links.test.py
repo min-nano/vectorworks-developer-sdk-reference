@@ -76,5 +76,31 @@ with tempfile.TemporaryDirectory() as d:
     eq('parens-and-angle', sorted(p.split(': ', 1)[1] for p in cml.check(b)),
        sorted(['アンカーが無い: A (B).md#無い', 'リンク先が無い: A%20(C).md']))
 
+with tempfile.TemporaryDirectory() as d:
+    a = os.path.join(d, 'a.md')
+    with open(a, 'w', encoding='utf-8') as f:
+        f.write('## Foo 節\n'
+                # 4 つの ` の囲みの中の ``` は閉じではない。~~~ も ``` では閉じない
+                '````md\n```\n## 囲みの中\n```\n````\n'
+                '~~~\n```\n## これも囲みの中\n~~~\n'
+                '## 囲みの後\n')
+    eq('nested-fences', sorted(cml.anchors(a)), sorted(['foo-節', '囲みの後']))
+    with open(os.path.join(d, 'A (B).md'), 'w', encoding='utf-8') as f:
+        f.write('# 題\n')
+    b = os.path.join(d, 'b.md')
+    with open(b, 'w', encoding='utf-8') as f:
+        # エスケープした括弧は外して読む。アンカーは大文字小文字まで一致を求める
+        f.write('[e](A%20\\(B\\).md) [ok](a.md#foo-節) [ng](a.md#Foo-節)\n')
+    eq('escape-and-case', sorted(p.split(': ', 1)[1] for p in cml.check(b)),
+       ['アンカーが無い: a.md#Foo-節'])
+    # SECTION_ONLY: 指定の節（とその下の階層）だけを見る
+    r = os.path.join(d, 'r.md')
+    with open(r, 'w', encoding='utf-8') as f:
+        f.write('# 上流\n[up](nai1.md)\n## このフォークについて\n[mine](nai2.md)\n'
+                '### 小節\n[mine2](nai3.md)\n## 上流の続き\n[up2](nai4.md)\n')
+    cml.SECTION_ONLY[os.path.normpath(r)] = 'このフォークについて'
+    eq('section-only', sorted(p.split(': ', 1)[1] for p in cml.check(r)),
+       ['リンク先が無い: nai2.md', 'リンク先が無い: nai3.md'])
+
 print('check-md-links tests:', 'FAILED' if failed else 'ok')
 sys.exit(1 if failed else 0)

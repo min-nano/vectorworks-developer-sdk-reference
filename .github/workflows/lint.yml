@@ -156,9 +156,10 @@ jobs:
       # Findings/ の結論から Metrics/ の節へは数百本のアンカーを張っている。Metrics の
       # 見出しを言い換えるとリンクが黙って切れるので、GitHub と同じ規則でアンカーを
       # 計算して確かめる（Metrics/README.md「見出しも記録の言い方にする」）。
-      # 範囲は既定（Findings/・Metrics/ と、そこへリンクする CLAUDE.md・README.md・
-      # plugin/ と probes/ の README）。承知のうえで切れているリンクはスクリプトの
-      # KNOWN_BROKEN に理由つきで書く。
+      # 範囲は既定（Findings/・Metrics/ と、そこへリンクする CLAUDE.md・plugin/ と
+      # probes/ の README）。README.md は上流の文書で、上流の取り込みは lint を起こさずに
+      # main へ入るので、このフォークの「このフォークについて」の節だけを見る
+      # （スクリプトの SECTION_ONLY）。
       - name: Check links in Findings, Metrics and the docs that point at them
         run: python3 scripts/check-md-links.py
 

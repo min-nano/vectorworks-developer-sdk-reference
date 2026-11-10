@@ -2,8 +2,8 @@
 """Markdown の相対リンクとアンカーを、GitHub と同じ規則で点検する。
 
     scripts/check-md-links.py [ファイルかディレクトリ ...]
-        # 既定は Findings/ Metrics/ と、そこへリンクする読み物（CLAUDE.md・README.md・
-        # plugin/README.md・probes/README.md・probes/runtime/README.md）
+        # 既定は Findings/ Metrics/ と、そこへリンクする読み物（CLAUDE.md・plugin/README.md・
+        # probes/README.md・probes/runtime/README.md・README.md の「このフォークについて」の節）
 
 Findings/ の結論から Metrics/ の節へは `（[実測](../Metrics/X.md#見出し)）` で数百本の
 アンカーを張っている。見出しを 1 つ言い換えるとリンクが黙って切れるので、lint で
@@ -17,7 +17,13 @@ Findings/ の結論から Metrics/ の節へは `（[実測](../Metrics/X.md#見
     重なるときは番号を進める（github-slugger と同じ）。
 リンク先は CommonMark のとおりに読む（`<…>` で囲めば空白を含められる。囲まないときは
 対になった括弧を含められる——`Info/VCOM%20(…).md` のような名前のため）。
+リンク先の `\\(` などのエスケープは外して読む。アンカーは大文字小文字まで一致を求める
+（GitHub が作るアンカーは小文字だけなので、大文字の混じったアンカーは切れている）。
 外部 URL（`http:` など）は見ない。切れたリンクが 1 本でもあれば exit 1。
+
+README.md は上流（Vectorworks/developer-sdk）の文書で、上流の取り込みは lint を
+起こさずに main へ入る。上流が切ったリンクで関係ない PR が落ちないよう、README.md は
+このフォークで足した節（SECTION_ONLY）だけを点検する。
 """
 import os
 import re
@@ -25,14 +31,37 @@ import sys
 import unicodedata
 import urllib.parse
 
-FENCE = re.compile(r'^\s*(```|~~~)')
+FENCE = re.compile(r'^\s*(`{3,}|~{3,})(.*)$')
 HEADING = re.compile(r'^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$')
 
 DEFAULT_ROOTS = ['Findings', 'Metrics', 'CLAUDE.md', 'README.md', 'plugin/README.md',
                  'probes/README.md', 'probes/runtime/README.md']
 
-# 承知のうえで切れているリンク（{ファイル: {リンク先: 理由}}）。足すときは理由を書く。
-KNOWN_BROKEN = {}
+# 一部の節だけを点検するファイル（{パス: 見出しの書き出し}）。その見出しから、同じか
+# 上の階層の次の見出しまでを見る。
+SECTION_ONLY = {'README.md': 'このフォークについて'}
+
+_ESCAPE = re.compile(r'\\([!-/:-@\[-`{-~])')  # CommonMark のエスケープ（ASCII の記号）
+
+
+class Fence:
+    """``` / ~~~ の囲みを追う。閉じるのは同じ記号で、開きと同じか長い列だけ。"""
+
+    def __init__(self):
+        self.open = None
+
+    def step(self, line):
+        """この行が囲みの中（または区切り）なら True。"""
+        m = FENCE.match(line)
+        if self.open is None:
+            if m and not (m.group(1)[0] == '`' and '`' in m.group(2)):
+                self.open = m.group(1)
+                return True
+            return False
+        if m and m.group(1)[0] == self.open[0] and len(m.group(1)) >= len(self.open) \
+                and not m.group(2).strip():
+            self.open = None
+        return True
 
 
 def link_targets(text):
@@ -48,7 +77,7 @@ def link_targets(text):
         if j < len(text) and text[j] == '<':
             k = text.find('>', j + 1)
             if k > 0:
-                yield text[j + 1:k]
+                yield _ESCAPE.sub(r'\1', text[j + 1:k])
             i = j + 1
             continue
         depth, k = 0, j
@@ -67,7 +96,7 @@ def link_targets(text):
                 depth -= 1
             k += 1
         if k > j:
-            yield text[j:k]
+            yield _ESCAPE.sub(r'\1', text[j:k])
         i = k
 
 
@@ -110,13 +139,10 @@ _anchor_cache = {}
 def anchors(path):
     if path in _anchor_cache:
         return _anchor_cache[path]
-    occurrences, fence = {}, False
+    occurrences, fence = {}, Fence()
     with open(path, encoding='utf-8') as f:
         for line in f:
-            if FENCE.match(line):
-                fence = not fence
-                continue
-            if fence:
+            if fence.step(line):
                 continue
             m = HEADING.match(line)
             if m:
@@ -134,14 +160,21 @@ def anchors(path):
 
 
 def check(path):
-    problems, fence = [], False
+    problems, fence = [], Fence()
+    section = SECTION_ONLY.get(os.path.normpath(path))
+    level = None if section else 0  # 0 = ファイル全体を見る
     with open(path, encoding='utf-8') as f:
         for lineno, line in enumerate(f, 1):
-            if FENCE.match(line):
-                fence = not fence
+            if fence.step(line):
                 continue
-            if fence:
-                continue
+            if section:
+                h = HEADING.match(line)
+                if h and h.group(2).startswith(section):
+                    level = len(h.group(1))
+                elif h and level and len(h.group(1)) <= level:
+                    level = None
+                if level is None:
+                    continue
             text = re.sub(r'`[^`]*`', '', line)
             for target in link_targets(text):
                 if re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', target):
@@ -151,14 +184,11 @@ def check(path):
                 if file_part:
                     dest = os.path.normpath(
                         os.path.join(os.path.dirname(path), urllib.parse.unquote(file_part)))
-                known = KNOWN_BROKEN.get(os.path.normpath(path), {})
-                if target in known:
-                    continue
                 if not os.path.exists(dest):
                     problems.append(f'{path}:{lineno}: リンク先が無い: {target}')
                     continue
                 if frag and dest.endswith('.md'):
-                    want = urllib.parse.unquote(frag).lower()
+                    want = urllib.parse.unquote(frag)
                     if want not in anchors(dest):
                         problems.append(f'{path}:{lineno}: アンカーが無い: {target}')
     return problems
