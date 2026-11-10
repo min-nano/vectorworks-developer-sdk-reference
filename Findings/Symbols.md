@@ -15,7 +15,7 @@ ISDK にシンボルを配置する呼び出しは無く（在るのは `CreateS
    `VWSymbolObj::IsSymbolObject(handle, name)` まで確かめてから成功と数える。
 
 これが無かったために 4 種 472 件が現れず、完了報告は全数成功だった事故が実際に起きた
-（[記録](../Metrics/Symbols.md#配置の作法事故の記録)）。
+（[記録](../Metrics/Symbols.md#配置で起きた事故の記録)）。
 
 - **事前ガードを置かない。** `VWSymbolDefObj::IsSymbolDefObject` で先に弾く形にすると、
   その判定が期待どおりでないとき**1 つも置けないうえ原因を誤って指す**。配置そのものを
@@ -31,7 +31,7 @@ ISDK にシンボルを配置する呼び出しは無く（在るのは `CreateS
   **抜けやすいのは入れた後の `gSDK->ResetObject(定義)`** で、無いと**定義の外接が計算され
   ない**——編集で何も選べず、インスタンスの外接が `-2147483648`、図に何も出ない。
 - **中身は前後で同じで、変わるのは定義の外接と種別だけ。「中身がある」は「絵になる」を
-  意味しない**（[前後のダンプ](../Metrics/Symbols.md#定義を-sdk-から組み立てる--中身を入れたら-resetobject-を呼ぶ)）。
+  意味しない**（[前後のダンプ](../Metrics/Symbols.md#定義を-sdk-から組み立てたときの-resetobject-の前後の実測)）。
 
 ### 付随して分かったこと
 
@@ -59,7 +59,7 @@ ISDK にシンボルを配置する呼び出しは無く（在るのは `CreateS
 
 `VWSymbolDefObj::SetPageBased(true)`（`ovSymDefPageBased` = 130）は効くが、**用紙基準の
 「紙」はインスタンスが載っているレイヤの縮尺で決まる**（300mm の定義が 30000mm になった。
-[実測](../Metrics/Symbols.md#用紙基準縮尺無視の大きさは定義の図形--そのレイヤの縮尺)）。
+[実測](../Metrics/Symbols.md#用紙基準縮尺無視の定義を置いた外接の実測)）。
 「紙の上で一定の大きさ」を得るには**3 つで 1 組**（実機で確認）:
 
 1. 定義を `SetPageBased(true)` にする。
@@ -100,7 +100,7 @@ ISDK にシンボルを配置する呼び出しは無く（在るのは `CreateS
 - **`renderMode = 0`（ワイヤーフレーム）・`view = 2`（Top/Plan）を渡すと、2D 部品だけの
   シンボルでも絵が出る**（`SymbolImgInfo` の既定構築子の値【ヘッダ根拠】）。
   **`standardViewTop`（7）は別物で、渡すと 2D 部品が映らない**（実機で確認。
-  [根拠](../Metrics/Symbols.md#シンボル定義のサムネイル一覧を-ui-に出す)）。
+  [根拠](../Metrics/Symbols.md#シンボル定義のサムネイル一覧を採った実測)）。
   「Top（真上からの 3D 直交視点）」と「Top/Plan（画面平面＝2D 部品を特別扱いする視点）」は
   同じ「上から見る」でも別の値なので、名前で類推して 7 を選ぶと取り違える。
 
@@ -109,7 +109,7 @@ ISDK にシンボルを配置する呼び出しは無く（在るのは `CreateS
 - **`BuildList(kSymDefNode, true)` は、VW が PIO のスタイルとして持つシンボル定義も返す**
   （`図面ラベル - 図番` や `断面寸法` など）。
 - **切り分けは `gSDK->GetSymbolDefSubType(hSymDef)`。** 0 なら普通のシンボル定義、0 以外は
-  その値の型の PIO のスタイル（[16 件の内訳](../Metrics/Symbols.md#一覧にはユーザが置く部品以外も混ざるgetsymboldefsubtype-で分ける)）。
+  その値の型の PIO のスタイル（[16 件の内訳](../Metrics/Symbols.md#一覧の定義ごとの-getsymboldefsubtype-の実測)）。
 - **フォルダ名でも 2D / 3D の別でも切り分けられない**——判定に使えるのは `subType` だけ。
   特定の PIO のスタイルだけなら `subType == <その型>` で絞る。
 

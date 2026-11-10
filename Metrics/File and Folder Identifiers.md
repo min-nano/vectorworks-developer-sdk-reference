@@ -58,7 +58,7 @@ struct SAttributes
 
 SDK 全体（`SDKLib/` の 961 ファイル）を同じやり方で突き合わせても、**CR を落とした集約
 ハッシュが両プラットフォームで完全に一致した**（`a859b31735d9572d2b7c967aa3512a19`。
-ディレクトリ単位でも全 19 群が一致。[調査の作法](../Metrics/Investigation%20Techniques.md#windows-版-sdk-は-mac-版と同一)）。
+ディレクトリ単位でも全 19 群が一致。[調査の作法](../Metrics/Investigation%20Techniques.md#windows-版-sdk-と-mac-版-sdk-の比較)）。
 
 `fbHidden` / `fbSystem` / `fbArchive` / `fbEncrypted` は Windows のファイル属性
 （`FILE_ATTRIBUTE_HIDDEN` / `_SYSTEM` / `_ARCHIVE` / `_ENCRYPTED`）そのものの名前だが、
@@ -86,7 +86,7 @@ SDK 全体（`SDKLib/` の 961 ファイル）を同じやり方で突き合わ�
 | クラウドストレージ（`~/Library/CloudStorage/` 自体と、その直下の `Box-Box` / `GoogleDrive-…`） | 3 |
 | ファイル（`.DS_Store` ×2・`VWVersion.txt`・絶対パスで掴み直した `.DS_Store`） | 4 |
 
-### `fbDirectory` は**フォルダでもファイルでも常に `false`**
+### `fbDirectory` の実測（フォルダとファイル）
 
 ```
 フォルダ: 測れた=30  そのうち fbDirectory=yes は 0 件
@@ -111,7 +111,7 @@ OS 側では `FILE_ATTRIBUTE_DIRECTORY` が立っている）とファイル 14 
 `SetAttributes` で `true` を書いても読み戻しもディスクも動かなかった（下記「Windows で
 確かめたこと」）。
 
-### 他の 10 項目——`fbReadOnly` / `fbCanRead` / `fbCanWrite` は生きている
+### 他の 10 項目の実測（`fbReadOnly` / `fbCanRead` / `fbCanWrite` ほか）
 
 34 件のうち 2 件で既定と違う値が出た。
 
@@ -140,7 +140,7 @@ OS 側では `FILE_ATTRIBUTE_DIRECTORY` が立っている）とファイル 14 
 `fbSystem` / `fbEncrypted` / `fbArchive` については、#91 で**「立つはずの標本」を
 用意して測り直した**（下記「旗は OS の何に対応しているのか」）。
 
-### `GetAttributes` は**実在しない場所では失敗する**——番号はフォルダとファイルで違う
+### 実在しない場所への `GetAttributes` の実測（フォルダとファイル）
 
 | 対象 | `ExistsOnDisk` の出力 | `GetAttributes` の戻り値 |
 | --- | --- | --- |
@@ -154,7 +154,7 @@ OS 側では `FILE_ATTRIBUTE_DIRECTORY` が立っている）とファイル 14 
 失敗したとき、**呼び出し側が `{}` で 0 初期化した `SAttributes` は 1 つも書き換わらなかった**
 （11 項目すべて `false` のまま）。
 
-### `ExistsOnDisk` の戻り値は「実在するか」ではない
+### `ExistsOnDisk` の戻り値の実測
 
 ```
 実在しないフォルダ: ExistsOnDisk=0（成功） 実在=no
@@ -185,7 +185,7 @@ EnumerateContents が返した実名: /Applications/VW2026/Plug-Ins/    ← I �
 macOS の既定のファイルシステムは大文字小文字を区別しないのでどちらでも開けるが、
 パスを文字列として比較すると一致しない。
 
-## `SetAttributes` は「ファイルの権限」だけを書く（フォルダは未実装）
+## `SetAttributes` で書いた実測（フォルダとファイル）
 
 `SetAttributes(const SAttributes&)` は `IFileIdentifier` と `IFolderIdentifier` の
 **両方**にある（`IFileIdentifier.h:37` / `IFolderIdentifier.h:110`）
@@ -203,7 +203,7 @@ VW 2026 / macOS / Apple Silicon）。
 
 読み取り専用にしたつもりのフォルダへ `CreateOnDisk()` すると**ふつうに作れた**。
 
-### ファイルで効くのは 4 つ、読み戻せるのは 3 つ
+### ファイルに書いた旗と読み戻しの実測
 
 | 書いた旗 | ディスク | 読み戻し |
 | --- | --- | --- |
@@ -283,7 +283,7 @@ Windows の API に置き換えて同じ順に測った。実行環境はログ�
 `chmod` / `chflags` の代わりに `SetFileAttributesW` と `EncryptFileW`（EFS）で作った。
 落ちていない（所要 2.13 秒）。
 
-### `SetAttributes`——フォルダは未実装のまま、ファイルは「ファイル属性」を書く
+### `SetAttributes` の実測（Windows。フォルダとファイル）
 
 | 対象 | 戻り値 | ディスク（`GetFileAttributesW`） |
 | --- | --- | --- |
@@ -329,7 +329,7 @@ macOS と同じで、フォルダ `6`・ファイル `1`（`GetAttributes` は�
 | `LastAccessed` | **`1`** | **`0`**（成功） |
 | `LastBackup` | `1` | `1` |
 
-### `GetAttributes`——`FILE_ATTRIBUTE_*` をそのまま映す
+### `GetAttributes` と `FILE_ATTRIBUTE_*` の突き合わせ
 
 `SetFileAttributesW` で属性を 1 つずつ立てて読んだ（基準はファイル `NORMAL`・フォルダ
 `DIRECTORY` だけ）。
@@ -378,7 +378,7 @@ macOS と同じで、フォルダ `6`・ファイル `1`（`GetAttributes` は�
 
 ## 打ち切った調査
 
-### `fbArchive` / `fbEncrypted` を立てた標本は、macOS では作れない
+### `fbArchive` / `fbEncrypted` を立てた標本を macOS で作ろうとした
 
 「`no` を返す」ところまでは測った。「立つはずの標本」を作ろうとした道:
 

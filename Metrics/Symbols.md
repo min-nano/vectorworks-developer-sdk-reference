@@ -6,14 +6,14 @@
 
 > ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
-## 配置の作法（事故の記録）
+## 配置で起きた事故の記録
 
 `VWSymbolObj(name, VWPoint2D, angleDeg)`（レガシーの `PlaceSymbol` の包み）で、生成後に
 `AddObjectToContainer` で入れ直さず、非 nil のハンドルを成功と数えていた。
 この状態で、定義・レイヤ・名前・座標がすべて正しいのに 4 種 472 件が図面に現れず、
 完了報告は全数成功だった、という事故が実際に起きた。
 
-## 定義を SDK から組み立てる — 中身を入れたら `ResetObject` を呼ぶ
+## 定義を SDK から組み立てたときの `ResetObject` の前後の実測
 
 `gSDK->CreateSymbolDefinition(name)`（`VWSymbolDefObj` の名前の構築子の中身）で定義を作り、
 `gSDK->AddObjectToContainer(shape, definition)` で図形を入れた。入れた後に
@@ -50,7 +50,7 @@ ResetObject 後 type=16 defType=1 外接=300x150  中身[0] type=5 外接=300x15
 
 実装例: ホームズ君プラグインの `draw/ShearWall` の `EnsureMarkSymbols` / `PrepareDefinition`。
 
-## 用紙基準（縮尺無視）の大きさは「定義の図形 × そのレイヤの縮尺」
+## 用紙基準（縮尺無視）の定義を置いた外接の実測
 
 `VWSymbolDefObj::SetPageBased(true)`（オブジェクト変数 `ovSymDefPageBased` = 130）を
 呼ぶと、`GetPageBased()` が true を返した。
@@ -60,7 +60,7 @@ ResetObject 後 type=16 defType=1 外接=300x150  中身[0] type=5 外接=300x15
 [Findings](../Findings/Symbols.md#用紙基準縮尺無視の大きさは定義の図形--そのレイヤの縮尺) の
 3 点を揃えたうえで、狙いどおりの紙寸法で出ることを実機で見た。
 
-## シンボル定義のサムネイル・一覧を UI に出す
+## シンボル定義のサムネイル・一覧を採った実測
 
 シンボル選択 UI 用に、**図面のシンボル定義一覧**と**選んだ定義の絵**を採った
 （実機・VW 2026 / macOS）。
@@ -79,7 +79,7 @@ ResetObject 後 type=16 defType=1 外接=300x150  中身[0] type=5 外接=300x15
 - `TStandardView` の名前つき定数 `standardViewTop` は 7（既定構築子が使う `2` とは
   別の値）。`standardViewTop`（7）を渡すと、実機で 2D 部品が映らなかった。
 
-### 一覧には「ユーザが置く部品」以外も混ざる——`GetSymbolDefSubType` で分ける
+### 一覧の定義ごとの `GetSymbolDefSubType` の実測
 
 `BuildList(kSymDefNode, true)` で図面のシンボル定義を全部取り、1 件ずつ
 `gSDK->GetSymbolDefSubType(hSymDef)` を読んだ（`VWFC::VWObjects::VWSymbolDefObj::HasPluginStyleSupport()`

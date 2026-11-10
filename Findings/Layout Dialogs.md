@@ -43,7 +43,7 @@ VectorWorks 本体の「鋼材断面を選択」のような**サムネイル付
 
 - **`VWImagePopupCtrl::CreateControl(VWDialog*)` は実機で必ず false を返す。** SDK 同梱の
   実装（`ImagePopupCtrl.cpp`）が、生成をコメントアウトしたまま `return false` するスタブ
-  （[ソース](../Metrics/Layout%20Dialogs.md#vwimagepopupctrl-では作れないsdk-の実装が空のスタブ)）。
+  （[ソース](../Metrics/Layout%20Dialogs.md#vwimagepopupctrlcreatecontrol-の実測と実装ソース)）。
   呼ぶ順序・`SetAdvanced()`・`DialogImagePopup_Init` では直らない（条件出しは要らない）。
   同じクラスの他のメソッド（`AddItems` / `GetSelectedItemIndex` …）は実装されているが、
   どれも `CreateControl` が覚える親ダイアログ（`fpParentDlg`）を使うため、生成に失敗した
@@ -54,7 +54,7 @@ VectorWorks 本体の「鋼材断面を選択」のような**サムネイル付
 - **同じ種別（`eCompThumbnailPopup`）の `VWThumbnailPopupCtrl` は実装が生きていて、実機で
   シンボルのサムネイルが並ぶポップアップが出る。** 手順は `fList.BuildList(kSymDefNode, true)`
   → `fThumb.CreateControl(this, kStandardSize)` → `AddImageFromResource(fList.GetListID(), i)`
-  （[最小の手順と実測](../Metrics/Layout%20Dialogs.md#代わりに-vwthumbnailpopupctrl-を使う実機確認済み)）。
+  （[最小の手順と実測](../Metrics/Layout%20Dialogs.md#vwthumbnailpopupctrl-の実装ソースと実測)）。
 - **項目は `AddImageFromResource` の順に並び、添字は一覧の添字と一致する**（0 始まり）。
 - **選択は添字でもリソースでも引ける。** `GetSelectedItemIndex()` は添字、`GetSelectedItem()`
   は `InternalIndex`（`InternalIndexToHandle` / `InternalIndexToNameN` で引ける）。一覧を

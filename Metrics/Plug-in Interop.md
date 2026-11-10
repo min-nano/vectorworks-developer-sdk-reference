@@ -26,7 +26,7 @@ virtual Boolean CallPluginLibrary(const TXString& routineName,
 //   /* Call an SDK Plug-in Library Routine. */   ← doc コメントはこの 1 行だけ
 ```
 
-### 実測: 別々のモジュールの間で、名前だけで呼べた
+### 実測: 別々のモジュールの間で名前だけで呼んだ
 
 呼ぶ側を**入れ替わる本体モジュール**（`.vwpayload`）に、呼ばれる側を
 **殻**（`.vwlibrary`）に置いて測った。**2 つは別々の dylib で、互いのシンボルを一切
@@ -44,7 +44,7 @@ virtual Boolean CallPluginLibrary(const TXString& routineName,
 [`plugin/src/ProbeLibrary.cpp`](../plugin/src/ProbeLibrary.cpp)（登録は
 [`plugin/src/ModuleMain.cpp`](../plugin/src/ModuleMain.cpp)）。
 
-### 呼べるかは提供側の `scope` 次第
+### 提供側の `scope` の定義（`MiniCadCallBacks.h`）
 
 `Kernel/API/MiniCadCallBacks.h:1224-1227` の定義:
 
@@ -120,7 +120,7 @@ if ( ::GS_CallPluginLibrary( gCBP, TXString("IFC_QueryInterface"),
 `_VWFC_FOR_VW125x` を定義している場所は無かった。渡した IID が何にも一致しないときも戻り値は
 `false` なので、この走行では両者を区別していない（issue #217 の範囲外）。
 
-### `argType` は setter が立てる（ただし VAR の文字列だけは例外）
+### setter ごとに立った `argType`（ソースと実測）
 
 | したいこと | 書き方 | 立つ `argType` |
 | --- | --- | --- |
@@ -136,7 +136,7 @@ if ( ::GS_CallPluginLibrary( gCBP, TXString("IFC_QueryInterface"),
 第 3 引数 `status` の用途は SDK のどこにも書かれていなかった（doc コメントは 1 行だけ、
 `MockSDK.h` の実装も素通し）。SDK 自身の用例はどれも `0` を渡しており、上の実測も全部 `0`。
 
-### 呼ばれる側を C++ で提供する
+### 呼ばれる側を C++ で提供した構成
 
 登録するのは **`IExtensionVSFunctions`**（グループ `GROUPID_ExtensionVSFunctions`。
 `Interfaces/VectorWorks/Extension/IExtensionVSFunctions.h`）で、呼び出しの受け口は
@@ -242,7 +242,7 @@ doc コメント（`APIBase.Legacy.Defs.h:6632-6639`）:
 `vs.py` の `DoMenuTextByName` の注記は「when calling VS plug-ins, you have to use the
 filename」と書いている。
 
-### 実測: 名前で引けて、コマンドが実際に走る
+### 実測: 名前で引いてコマンドを走らせた
 
 macOS / VW 2026。メニューコマンドの中（実機確認プラグインの本体）から呼んだ:
 
@@ -273,7 +273,7 @@ macOS / VW 2026。メニューコマンドの中（実機確認プラグイン�
 ——[Undo](../Findings/Undo.md) でスクリプト経由の `DoMenuTextByName('Undo', 0)` について測った
 挙動と同じ。
 
-### なぜ「無い」と確定してしまったか（取りこぼしの教訓）
+### 「無い」と記録した経緯（#27）
 
 [issue #27](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/27)
 は「メニュー項目を実行する」に当たりそうな語を総当たりした——`ExecuteMenuItem` /
@@ -337,7 +337,7 @@ enum { doSelector0 = 0, doSelector1 = 1, ..., doSelector9 = 9 };
 
 ## 相手が居ないとき・読み込み順・呼べる時機
 
-### 事前確認は要らない——戻り値で足りる
+### 相手が居ないときの戻り値と `HasPlugin` の宣言
 
 - 居ない相手への `CallPluginLibrary` は `false`、居ないコマンドへの `DoMenuName` は `-3`
   （上の実測）。
@@ -345,12 +345,12 @@ enum { doSelector0 = 0, doSelector1 = 1, ..., doSelector9 = 9 };
   > Returns whether tool item or menu command is **in current workspace**.
 - `ExternalNameToID` は在る名前でも `-1`（上記）。
 
-### 読み込み順は気にしなくてよい
+### 読み込み順の実測
 
 上の実測では、**呼ぶ側（本体モジュール）は呼ばれる側（殻）より後から `dlopen` された**
 ——その順でも名前で引けた。
 
-### 呼べる時機: OS タイマーの刻みの中からも呼べる
+### 呼べる時機: OS タイマーの刻みの中から呼んだ実測
 
 `CFRunLoopTimer` を `kCFRunLoopCommonModes` に仕掛け、その刻みの中から
 `CallPluginLibrary("VwSdkProbes_Echo", …)` を呼んだところ、**戻り値 `true`・結果欄に

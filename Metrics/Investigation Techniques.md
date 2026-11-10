@@ -50,7 +50,7 @@ run へのリンク）——を元の文言のまま置く。各作法の環境�
   `GetObjectBounds` は `true` を返し、`left` = `bottom` = `+DBL_MAX`（1.7976931348623157e308）、
   `right` = `top` = `-DBL_MAX` が入っていた。幅・高さを計算すると `-inf` になった。
 
-### 前提を測る・輪郭は頂点で・3D の有無（#169・#173）
+### 断面の輪郭と 3D の有無を測った例（#169・#173）
 
 - 構造材の断面は外接（`GetObjectBounds`）が「主幅 × 主高さ」に一致したので**矩形だと
   読んでしまったが、実際は I 形**で、断面群の子の**12 頂点を 1 点ずつ出して初めて**
@@ -62,14 +62,14 @@ run へのリンク）——を元の文言のまま置く。各作法の環境�
   群の外接も正しかった。
 - 同じ入力の範囲外でも、3D が作られない個体と、作られるが寸法が違う個体があった。
 
-### 正解と並べて差分を取る
+### 設定の前後のダンプを並べて diff を取った例
 
 - 読み取り専用のダンプ（パラメトリックレコード・付いているレコード・オブジェクト変数・
   補助オブジェクト）を、UI で設定する前と後で 2 回取って diff を見る手順で、`ModifySlab` の
   噛み合わせも断面ビューポートの範囲も凡例のフィルタも決着した（実装例: ホームズ君
   プラグインの `scripts/vw-dump-pio-fields.py`）。
 
-### 描かれている文字を測る（#161・#177・#156）
+### 描かれている文字を測ったコード（#161・#177・#156）
 
 寸法や PIO は、描いた結果を子の図形として持っている。深さ数段まで潜って最初の型 `10`
 （`kTextNode`）を拾い、`GetTextSize(text, 1, charSize)` で 1 文字目の大きさを読んだ
@@ -121,7 +121,7 @@ bool FindDrawnTextSize(MCObjectHandle container, int depth, double& outMM)
   （[issue #156](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/156)
   で実際に踏んだ）。
 
-### 型で数える・欄ごとに個体を分ける（#166）
+### 節点型を数えた例・欄ごとに個体を分けた例（#166）
 
 - 実例: コンテナの中の節点型（`GetObjectTypeN`）を数える 1 行を診断へ出して、凡例イメージが
   ビューポートだと分かった。中を見ずにヘッダだけで推測していた間はずっと外していた。
@@ -145,7 +145,7 @@ bool FindDrawnTextSize(MCObjectHandle container, int depth, double& outMM)
   `GS_IsSectionLineLinkedToViewport(CallBackPtr, MCObjectHandle inSectionLine)` が
   `sdk-grep` で出た（[issue #151](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/151)）。
 
-### 呼べない `APP_API_*` の 12 本
+### `APP_API_*` の 12 本の一覧とリンクエラー
 
 - `APP_API_FUNCTION` / `APP_API_PROCEDURE` について、ヘッダのコメントは
   *SDK APIs waiting to be published for external use* と書いている。マクロが作るのは
@@ -170,7 +170,7 @@ bool FindDrawnTextSize(MCObjectHandle container, int depth, double& outMM)
 - `APIBase.Legacy.Defs.h` に `extern "C" … GS_…(CallBackPtr, …);` として並んでいる
   ふつうの旧 API は、`libVWSDK.a` に実体がある。
 
-### 絵に出ているか・双方向で測る
+### 絵と読み戻しが食い違った例・片方ずつ変えた例
 
 - 実例: 連続寸法の中の直線寸法は、`ovDimFontSize` を読み戻すと書き換わっていたのに、
   文字の大きさが変わらなかった（[Dimensions](../Findings/Dimensions.md)）。
@@ -200,7 +200,7 @@ bool FindDrawnTextSize(MCObjectHandle container, int depth, double& outMM)
   決まる (3) 指数には依らないらしい——の 3 つに畳み、**その 3 つを正面から試す群**を
   プローブに置いた。結果、(3) が確定して「危ない値の話は仮数だけの話」に縮んだ。
 
-### Windows 版 SDK は mac 版と同一
+### Windows 版 SDK と mac 版 SDK の比較
 
 - `ci-debug` の `--platform windows` と `--platform mac` が用意する SDK を比べた。
   **`SDKLib/` の 961 ファイルすべてが改行コードを除いて同一**だった（CR を落とした集約ハッシュが
@@ -262,7 +262,7 @@ bool FindDrawnTextSize(MCObjectHandle container, int depth, double& outMM)
   `Area` / `SurfaceArea` / `ProjectedArea` / `FootPrintArea` / `CrossSectionArea` /
   `SpecialArea` / `Volume` / `ObjectData` / `Thickness` の 17 個）がある。
 
-## いつ読むか——同じ呼び出しの中・undo イベントの後・VW へ戻った後
+## 読む時機を 4 つ比べた実測（同じ呼び出しの中・undo イベントの後・VW へ戻った後）
 
 [#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)
 で、過去に「効かない／変わらない」と結論した項目を、同じ図形について次の 4 時点で

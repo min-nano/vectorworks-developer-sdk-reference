@@ -33,7 +33,7 @@
 
 ### 実測: 別々のモジュールの間で、名前だけで呼べた
 
-（macOS。互いのシンボルを知らない別々の dylib の間。[実測](../Metrics/Plug-in%20Interop.md#実測-別々のモジュールの間で名前だけで呼べた)）
+（macOS。互いのシンボルを知らない別々の dylib の間。[実測](../Metrics/Plug-in%20Interop.md#実測-別々のモジュールの間で名前だけで呼んだ)）
 
 - **文字列・数値・真偽が双方向に通る。** 入力は `args[]`、結果は `functionResult`、
   **VAR（出力）引数は呼ぶ側が渡した `args[]` の欄に書き戻される。**
@@ -46,7 +46,7 @@
 
 - `kVLIBScopeUniversal`（0）は VS・SDK・VW のどこからでも、`kVLIBScopeSDKOnly`（2）は SDK だけ、
   **`kVLIBScopeVSOnly`（1）は SDK から呼べない**、`kVLIBScopeNemetschekOnly`（255）は VW 本体だけ
-  【ソース根拠】（[表](../Metrics/Plug-in%20Interop.md#呼べるかは提供側の-scope-次第)）。
+  【ソース根拠】（[表](../Metrics/Plug-in%20Interop.md#提供側の-scope-の定義minicadcallbacksh)）。
 - VSOnly の相手に残るのは経路 3 だけ【ソース根拠。実機で試してはいない】。
 
 ### 引数テーブル（最大 11 本＋結果 1 つ）
@@ -74,12 +74,12 @@
 
 - `SetArgLong` / `SetArgString` / `GetArgLongVar()` が型を立てる。**VAR の文字列には setter が無い**
   ——**先に `raw->args[1].argType = kStringVarArgType;` を立ててから** `SetArgString` で書けば VAR の
-  まま保たれ、実際に `"out:i217"` が返った（[表](../Metrics/Plug-in%20Interop.md#argtype-は-setter-が立てるただし-var-の文字列だけは例外)）。
+  まま保たれ、実際に `"out:i217"` が返った（[表](../Metrics/Plug-in%20Interop.md#setter-ごとに立った-argtypeソースと実測)）。
 - 第 3 引数 `status` の用途は SDK に書かれていない。**`0` を渡す**（SDK の用例も実測も `0`）。
 
 ### 呼ばれる側を C++ で提供する
 
-（[VWFC の足場と `SFunctionDef`](../Metrics/Plug-in%20Interop.md#呼ばれる側を-c-で提供する)）
+（[VWFC の足場と `SFunctionDef`](../Metrics/Plug-in%20Interop.md#呼ばれる側を-c-で提供した構成)）
 
 - 登録するのは **`IExtensionVSFunctions`**、受け口は **`IVSFunctionsEventSink`**。VWFC の
   `VWExtensionVSFunctions` / `VWVSFunctions_EventSink` / `VWPluginLibraryRoutine` と登録マクロで組む。
@@ -134,7 +134,7 @@
 
 ### 実測: 名前で引けて、コマンドが実際に走る
 
-（macOS。[手順と表](../Metrics/Plug-in%20Interop.md#実測-名前で引けてコマンドが実際に走る)）
+（macOS。[手順と表](../Metrics/Plug-in%20Interop.md#実測-名前で引いてコマンドを走らせた)）
 
 - **居ないコマンドは `-3`、実在する `"Undo"` は `0`**——落ちず、戻り値で失敗を知れる。
 - **本当にコマンドを実行する。** スクリプトエンジンで取り消しスタックに 1 つ積んでから
@@ -146,7 +146,7 @@
 
 ### なぜ「無い」と確定してしまったか（取りこぼしの教訓）
 
-- #27 の語の総当たりに `DoMenuName` が入っていなかった（[試した語](../Metrics/Plug-in%20Interop.md#なぜ無いと確定してしまったか取りこぼしの教訓)）。
+- #27 の語の総当たりに `DoMenuName` が入っていなかった（[試した語](../Metrics/Plug-in%20Interop.md#無いと記録した経緯27)）。
 - **教訓: 語の総当たりで「無い」と確定させない。** [`SDK Index/`](../SDK%20Index/README.md) で
   **「`Menu` を含む `ISDK` の宣言」を機械的に並べて目で見る**。「無い」と書く前にこれをやる。
 
@@ -201,7 +201,7 @@
 - 事前に確かめる道具はどれも使えない: **`HasPlugin`** は VectorScript にしか無く【ヘッダ根拠】、
   しかも「いまのワークスペースに在るか」を見るだけ【ソース根拠】——ワークスペースに並べていない
   コマンドを持つプラグインは、入っていても `false` になる。**`ExternalNameToID`** は在る
-  名前でも `-1`（[詳細](../Metrics/Plug-in%20Interop.md#事前確認は要らない戻り値で足りる)）。
+  名前でも `-1`（[詳細](../Metrics/Plug-in%20Interop.md#相手が居ないときの戻り値と-hasplugin-の宣言)）。
 
 ### 読み込み順は気にしなくてよい
 
@@ -211,7 +211,7 @@
 ### 呼べる時機: OS タイマーの刻みの中からも呼べる
 
 - **呼べる（実機確認済み。macOS）。** `CFRunLoopTimer` の刻みの中から `CallPluginLibrary` が
-  `true` と結果を返した（[実測](../Metrics/Plug-in%20Interop.md#呼べる時機-os-タイマーの刻みの中からも呼べる)）。
+  `true` と結果を返した（[実測](../Metrics/Plug-in%20Interop.md#呼べる時機-os-タイマーの刻みの中から呼んだ実測)）。
   **メニューコマンドの中でなくても呼べる**——[周期実行と通知](Timers%20and%20Notifications.md) で
   確かめた「OS のタイマーから `gSDK` を読める・書ける」の延長線上。**外部からの要求を OS タイマーで
   受けて、ほかのプラグインの機能を呼ぶ**形（CLI ブリッジ）が成り立つ。

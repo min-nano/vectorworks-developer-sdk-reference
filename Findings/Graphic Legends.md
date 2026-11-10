@@ -11,7 +11,7 @@
 - 見た目（枠線・セル）は**クラスでは制御できない**ので属性として直接与える。
 - スタイルを当てない場合は `SetPluginObjectStyle` も `UpdateStyledObjects` も呼ばない
   （中身は置いた時点の `ResetObject` で決まる）。**VW へ戻った後も追い付かない**
-  （[実測](../Metrics/Graphic%20Legends.md#基本の作法)）。
+  （[実測](../Metrics/Graphic%20Legends.md#resetobject-を呼ばずに置いた凡例の実測245)）。
 - **スタイルを当てる場合、スタイルの無い文書では凡例が空の箱**になる（名前が 1 文字
   違うだけで同じことが起きる）。処理の結果が図面の外の資源に左右される。
 
@@ -22,7 +22,7 @@
 - **「ビューポートでフィルタ」を設定する API も SDK に無い**【ヘッダ根拠】。公開されて
   いるのは `ovGraphicLegend*`（リセット中しか有効でない）と `eGraphicLegendCriteria` だけ。
   `IGraphicLegendCoreSupport` などはヘッダが SDK に同梱されていない
-  （[検索の記録](../Metrics/Graphic%20Legends.md#ソース定義何を並べるかは公開-api-では設定できない)）。
+  （[検索の記録](../Metrics/Graphic%20Legends.md#ソース定義何を並べるかを設定する口を探した)）。
 - 下の `'GrLe'` / `'GrLg'` を直に書くのが、いま分かっている唯一の道。
 
 ## パラメトリックレコードに載っているもの・いないもの
@@ -43,7 +43,7 @@
   型 15 は `kTaggedDataObjectRefArrayTypeID`、値は**フィルタ先ビューポートの
   `InternalIndex`**。`'GrLg'` は `0x47724C67` と書く。
 - **フィルタ先が複数なら同じ配列の要素数が増えるだけ**（要素数は `TaggedDataCreate` の
-  最後の引数）（[実測](../Metrics/Graphic%20Legends.md#ビューポートでフィルタの保存先はタグ付きデータ-grlg)）。
+  最後の引数）（[実測](../Metrics/Graphic%20Legends.md#ビューポートでフィルタの保存先を探したタグ付きデータ-grlg)）。
 
 ## ソース定義の保存先は `'GrLe'`（条件はトークン列）
 
@@ -58,7 +58,7 @@
 - 複数条件の文法（セレクタ・文字列・比較の向き）は割れたが、**`1637` / `1608` / `1615`
   （AND / OR の入れ子）の対応は【未解決】**——グループの種類だけを変えた 2 枚を差分に
   取れば決まる
-  （[バイト列と文法](../Metrics/Graphic%20Legends.md#ソース定義の保存先は-grle条件はトークン列)）。
+  （[バイト列と文法](../Metrics/Graphic%20Legends.md#ソース定義の保存先を探したgrle)）。
 
 ## 凡例イメージの正体はビューポート
 
@@ -69,7 +69,7 @@
 - `kWorksheetImageNode`（56）は入っていない（`Get/SetWorksheetImageScaleFactor` は無関係）。
   **イメージは作り直しの後にしか無い**（中身を流し込んだときに作られる）。
 - **ビューポートの中へは潜らない**（デザインレイヤ全体を歩くことになる）
-  （[節点型の数](../Metrics/Graphic%20Legends.md#凡例イメージの正体はビューポート)）。
+  （[節点型の数](../Metrics/Graphic%20Legends.md#凡例イメージの中身内部-id-と節点型)）。
 
 ## 打ち切った調査: 凡例のイメージの縮率を外から合わせる
 

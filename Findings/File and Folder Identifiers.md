@@ -52,12 +52,12 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
   問題ではない（[File and Folder Dialogs](File%20and%20Folder%20Dialogs.md) の Google ドライブの
   観測もこれ）。
 - **Windows でも同じ**（フォルダ 10・ファイル 14 のすべて。`true` を書いても動かない）。
-  **`fbDirectory` は両 OS で死んでいる**（[実測](../Metrics/File%20and%20Folder%20Identifiers.md#fbdirectory-はフォルダでもファイルでも常に-false)）。
+  **`fbDirectory` は両 OS で死んでいる**（[実測](../Metrics/File%20and%20Folder%20Identifiers.md#fbdirectory-の実測フォルダとファイル)）。
 
 ### 他の 10 項目——`fbReadOnly` / `fbCanRead` / `fbCanWrite` は生きている
 
 - **`GetAttributes` は中身を埋めている**——34 件のうち 2 件（`SystemTempDirectory`・Google
-  ドライブのアカウント直下）で既定と違う値が出た（[実測](../Metrics/File%20and%20Folder%20Identifiers.md#他の-10-項目fbreadonly--fbcanread--fbcanwrite-は生きている)）。
+  ドライブのアカウント直下）で既定と違う値が出た（[実測](../Metrics/File%20and%20Folder%20Identifiers.md#他の-10-項目の実測fbreadonly--fbcanread--fbcanwrite-ほか)）。
 - **`fbReadOnly` と `fbCanWrite` は連動し、書けるかの当たりに使える。** `fbCanRead` は単独で
   信じない（読み取り権限を映していない。下記「旗は OS の何に対応しているのか」）。
 - 残りは 34 件すべて `no`。**`fbHidden` は dot ファイルでも `no`**（dot ファイルの検出に使えない）、
@@ -67,7 +67,7 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 
 - 実在しないフォルダは **`51` = `kVCOMError_FileNotFound`**、ファイルは **`1` = `kVCOMError_Failed`**。
   `CreateOnDisk()` の前後で `51` → `0` に変わり、実在に追随する。**判定は
-  `VCOM_SUCCEEDED(GetAttributes(attrs))` で**（[実測](../Metrics/File%20and%20Folder%20Identifiers.md#getattributes-は実在しない場所では失敗する番号はフォルダとファイルで違う)）。
+  `VCOM_SUCCEEDED(GetAttributes(attrs))` で**（[実測](../Metrics/File%20and%20Folder%20Identifiers.md#実在しない場所への-getattributes-の実測フォルダとファイル)）。
 - **失敗したとき構造体は書き換わらない。失敗時に受け取った `SAttributes` を読まない**
   （「全部 `false`」と見分けが付かない）。
 
@@ -93,7 +93,7 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 ## `SetAttributes` は「ファイルの権限」だけを書く（フォルダは未実装）
 
 （#91・macOS。11 旗を 1 つずつ反転し、前後の `stat` でディスクまで見た。
-[実測](../Metrics/File%20and%20Folder%20Identifiers.md#setattributes-はファイルの権限だけを書くフォルダは未実装)）
+[実測](../Metrics/File%20and%20Folder%20Identifiers.md#setattributes-で書いた実測フォルダとファイル)）
 
 - **フォルダは `6` = `kVCOMError_NotImplemented`** でディスクは動かない（読み取り専用にした
   つもりのフォルダへも `CreateOnDisk()` で作れる）。**ファイルは `0` で、権限ビットだけが動く**。
@@ -101,7 +101,7 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 ### ファイルで効くのは 4 つ、読み戻せるのは 3 つ
 
 - 効くのは `fbReadOnly` / `fbCanWrite`（`0444`）・`fbCanExecute`（`0744`）・`fbCanRead`（`0244`）。
-  **本当に書けなくなる**（ディスクの権限そのもの）（[表](../Metrics/File%20and%20Folder%20Identifiers.md#ファイルで効くのは-4-つ読み戻せるのは-3-つ)）。
+  **本当に書けなくなる**（ディスクの権限そのもの）（[表](../Metrics/File%20and%20Folder%20Identifiers.md#ファイルに書いた旗と読み戻しの実測)）。
 - **書き込み権は `fbCanWrite == true && fbReadOnly == false` の AND。** 同時に立てると衝突する
   ので片方だけ触る。
 - **`fbCanRead` は書けるのに読み戻せない**（`yes` のまま）。**残り 7 つは成功を返して捨てられる。**
@@ -136,7 +136,7 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 
 - フォルダは macOS と同じく `6`。ファイルは **`FILE_ATTRIBUTE_*` が動く**——`fbReadOnly` /
   `fbCanWrite` / `fbHidden` / `fbSystem` / `fbTemporary` / `fbArchive` の **6 つが書けて読み戻せる**。
-  `fbEncrypted` は書けない（成功が返るだけ）（[表](../Metrics/File%20and%20Folder%20Identifiers.md#setattributesフォルダは未実装のままファイルはファイル属性を書く)）。
+  `fbEncrypted` は書けない（成功が返るだけ）（[表](../Metrics/File%20and%20Folder%20Identifiers.md#setattributes-の実測windowsフォルダとファイル)）。
 - **書き込みの可否は macOS と同じく AND。** **構造体まるごとで置き換わる**ので、1 つだけ変える
   ときも**必ず `GetAttributes` で読んだ値を書き換えて渡す**（`{}` から作ると立っていた属性を消す）。
 - `fbCanRead` / `fbCanExecute` を書いたときに ACL が変わったかは見ていない。
@@ -144,7 +144,7 @@ VW 2026 の macOS（Apple Silicon）と Windows 11（NTFS）で確認。標本�
 ### `GetAttributes`——`FILE_ATTRIBUTE_*` をそのまま映す
 
 - `HIDDEN` / `SYSTEM` / `ARCHIVE` / `TEMPORARY` / EFS の `ENCRYPTED` がそのまま旗に出る。
-  `fbArchive` はふつうに書き込んだだけで立つ（[表](../Metrics/File%20and%20Folder%20Identifiers.md#getattributesfile_attribute_-をそのまま映す)）。
+  `fbArchive` はふつうに書き込んだだけで立つ（[表](../Metrics/File%20and%20Folder%20Identifiers.md#getattributes-と-file_attribute_-の突き合わせ)）。
 - **フォルダの `READONLY` 属性は `fbReadOnly` に出ない。** Windows ではフォルダの `READONLY` は
   「中へ書けない」という意味ではない（Explorer の表示用の印）ので、映さないほうが正しいとも
   言える。ただ、フォルダの `fbReadOnly` が何を見ているのかは分からなかった。
@@ -215,6 +215,6 @@ if (VCOM_SUCCEEDED(file->GetAttributes(attrs)))   // 読み取り専用にする
 ### `fbArchive` / `fbEncrypted` を立てた標本は、macOS では作れない
 
 - macOS の `SF_ARCHIVED` は root でないと立てられず、ファイル単位の暗号化属性はそもそも無い
-  ので、**立つはずの標本を作れない**（[潰した道](../Metrics/File%20and%20Folder%20Identifiers.md#fbarchive--fbencrypted-を立てた標本はmacos-では作れない)）。
+  ので、**立つはずの標本を作れない**（[潰した道](../Metrics/File%20and%20Folder%20Identifiers.md#fbarchive--fbencrypted-を立てた標本を-macos-で作ろうとした)）。
 - `SetAttributes` で書いてもディスクは動かなかったので、**macOS の VW はこの 2 つを扱っていない**
   ことまでは言える。**Windows では 2 つとも読めた**（#93 で解決）。特権を取ってまで測り直さない。

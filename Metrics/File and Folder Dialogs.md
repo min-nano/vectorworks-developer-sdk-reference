@@ -6,7 +6,7 @@
 
 > ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
-## `IFolderChooserDialog` の全体（口は 5 つだけ）
+## `IFolderChooserDialog` のヘッダ
 
 ```cpp
 // Interfaces/VectorWorks/Filing/IFolderChooserDialog.h（全文に近い）
@@ -34,7 +34,7 @@ typedef VCOMPtr<IFolderChooserDialog>		IFolderChooserDialogPtr;
 出した本体（ペイロード）側で**、実機確認プラグイン（VwSdkProbes）のプローブとして
 走らせた実測。プローブは 1 回走らせ、落ちていない。
 
-### 本体（ペイロード）側から開ける
+### 本体（ペイロード）側から開いた実測
 
 `IFolderChooserDialogPtr folderDlg(IID_FolderChooserDialog);` が**非 nullptr**を返し、
 `RunDialog()` が実際に OS のフォルダ選択ダイアログを出した（[Plug-in
@@ -44,7 +44,7 @@ Modules](../Findings/Plug-in%20Modules.md)「本体側からダイアログを�
 `SetTitle` / `SetDescription` に**日本語の UTF-8 リテラルを渡して `VCOMError=0`**。
 （見出しが実際にどう出たかは見ていない。記録は戻り値だけ。）
 
-### 戻り値: **キャンセルは `RunDialog` の失敗として返る**
+### 戻り値の実測（選んだとき・キャンセルしたとき）
 
 | 呼び出し | 選ばれたとき | キャンセルしたとき |
 | --- | --- | --- |
@@ -58,7 +58,7 @@ Modules](../Findings/Plug-in%20Modules.md)「本体側からダイアログを�
 - キャンセルしたときに `GetSelectedPath` が返した `IFolderIdentifier` は中身が空で、
   `GetFullPath` が空文字列と `50` を返した。
 
-### 受け取るパス: 絶対パス・**末尾に区切りが付く**・UTF-8
+### 受け取るパスの実測
 
 選ばれたフォルダを Google ドライブ上の日本語名のフォルダにして測った実測値:
 
@@ -77,7 +77,7 @@ GetName  = [20260529_遠山信夫アトリエ_安藤邸]      ← こちらは�
 - 継ぎ足しの口 `IFileIdentifier::Set(IFolderIdentifier*, const TXString& fileName)` は
   [Documents](../Findings/Documents.md) の `CatchSystemTest.cpp` の用例と同じ形。
 
-### `IFileIdentifier::GetFolder` は**フォルダ選択とまったく同じ文字列**を返す
+### `IFileIdentifier::GetFolder` とフォルダ選択の文字列の突き合わせ
 
 同じフォルダの中のファイル（`…/安藤邸.vwx`）を `IFileChooserDialog` で選ばせ、その
 `IFileIdentifier::GetFolder()` から採った親フォルダのパスと、上のフォルダ選択で得た

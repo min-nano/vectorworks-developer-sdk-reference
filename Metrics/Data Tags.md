@@ -1,8 +1,8 @@
 # データタグ — 計測記録
 
 結論は [Findings「Data Tags」](../Findings/Data%20Tags.md)。ここには各節の測った環境（VW の版・OS・
-舞台）・使ったプローブ・式ごとの実測の表（実行ログそのまま）・訂正の経緯を置く。節の見出しは
-Findings と同じ。
+舞台）・使ったプローブ・式ごとの実測の表（実行ログそのまま）・訂正の経緯を置く。節の並びは
+Findings に対応する。
 
 > ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
@@ -45,7 +45,7 @@ Findings と同じ。
 - 図面ラベル（`Drawing Label2`）: 式は `#Drawing Label2#.#Title#` の形。`IDataTagTextLinkSupport`
   の `IsSupported` が `false` を返した（[Drawing Labels](../Findings/Drawing%20Labels.md)）。
 
-## タグフィールドの式——文法は 2 系統あり、綴りは SDK に 1 文字も書いていない
+## タグフィールドの式——綴りを SDK に探した
 
 式は `IDataTagTextLinkSupport::SetFormula` / `GetFormula` で読み書きした。
 
@@ -60,7 +60,7 @@ Findings と同じ。
   `DialogEndElevationReference` / `DialogEndElevation` / `StartElevation` / `EndElevation`）。
 - 構造材のパラメータ**181 件の表に `IPZL` は無い**が、`#IPZL#` は値を返した。
 
-### 式の評価結果は機械で読み戻せる——目視は要らない
+### 式の評価結果を機械で読み戻した方法
 
 以下の表の値は、プローブのログへ文字列で読み戻したもの。
 
@@ -71,7 +71,7 @@ Findings と同じ。
 - ワークシート式は `ISDK::CompileCriteriaExpression` ＋ `ISDK::ExecWSExpression` でハンドルへ直接
   評価した（[調査の作法](../Findings/Investigation%20Techniques.md)「ワークシート式は…」）。
 
-### `#…#` 記法の文法——**実測**（VW 2026 / mac）
+### `#…#` 記法の文法の実測（VW 2026 / mac）
 
 [issue #187](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/187) で
 **実機確認済み**（`probes/runtime/datatag-formula-grammar/`。値は実行ログそのまま。
@@ -270,7 +270,7 @@ Findings と同じ。
 （エラーにはならない）だった。この走行で「レコードのフィールドでない綴り」として値を返したのは
 `#IPZL#` だけだった。
 
-### ワークシート式モードは効く——ただし高さを返す関数は見つからない
+### ワークシート式モードと、高さを返す関数の候補の実測
 
 `SetFormula(hText, 式, /*isWorksheetFormula=*/true)` で入れた。書いた式は先頭に `=` が付いて
 保存された（`GetFormula` の読み戻しが `=1+1` になる）。
@@ -299,7 +299,7 @@ Findings と同じ。
   | `OBJECTDATA('StructuralMember','StartElevation')` | コンパイルは通るが**実行が `false`** |
 
 
-## 式から読める高さ——**末尾 1 文字が基準を決める。どれも連動する**
+## 式から読める高さの実測
 
 [issue #187](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/187) で
 **実機確認済み**（VW 2026 / mac。プローブ 2 本・計 8 回走らせた
@@ -313,7 +313,7 @@ Findings と同じ。
 | 引いたもの | 出た値 | 動かすと（+1000） |
 | --- | --- | --- |
 | **`#IPZL#`** | **−2699** | **−1699**（**追随する**） |
-| `#StructuralMember#.#StartElevation#` / `#EndElevation#` | `0` | `0`（**この舞台では**常に 0。[訂正](#傾斜材の両端の天端ipzs-が始端ztbbs-が高い端連結だけで-2fl--872-40-が出る)） |
+| `#StructuralMember#.#StartElevation#` / `#EndElevation#` | `0` | `0`（**この舞台では**常に 0。[訂正](#傾斜材の両端の天端の実測ipzs--ztbbs)） |
 | `#StructuralMember#.#DialogStartElevation#`（バウンドだけ書いた本） | **`0`** | `0` |
 | `#StructuralMember#.#DialogStartElevation#`（**パラメータへ書いた本**） | **−872** | **−872 のまま（追随しない）** |
 | `#StructuralMember#.#DialogStartElevationReference#`（バウンドを書いた本） | **`T187-FL [上階]`** | 同じ（保たれる） |
@@ -356,9 +356,9 @@ Findings と同じ。
   > （その後の実測は下記）。
 - 推測した綴り——`#…#` 記法で `#LAYERELEVATION#` / `#STORYELEVATION#` / `#LAYERNAME#` / `#Z#` の
   4 本、ワークシート式で 37 本——は全部外れた。ワークシート式で取れたのは名前（`LAYER` /
-  `STORY`）だけだった（上記「ワークシート式モードは効く」）。
+  `STORY`）だけだった（上記「ワークシート式モードと、高さを返す関数の候補の実測」）。
 
-### 高さの綴りは「量 × 基準」——**末尾の 1 文字が基準を決める**
+### 高さの綴り（量 × 基準）の実測
 
 **実機確認済み**（VW 2026 / mac。`probes/runtime/datatag-height-tokens/`。
 **階とレイヤの高さをわざと 40 ずらした舞台**で測った——階 `T187-PLAN` の高さ **2699**、
@@ -416,7 +416,7 @@ Findings と同じ。
 | `" (2FL "#IPZL#"-872)"` | `` (2FL -1659-872)``（**`-872` が文字として出る**） |
 
 
-### 連動する注記の作り方——**`" (2FL "#IPZS#")"`**（実測）
+### 連動する注記の式 `" (2FL "#IPZS#")"` の実測
 
 **実機確認済み**（VW 2026 / mac。**Findings の注記の式そのものを走らせた**実行ログ。
 階 `T187-2F` の高さ **3571**、その階のレイヤに**絶対Z 2699** で置いた構造材）。
@@ -439,7 +439,7 @@ Findings と同じ。
   `#IPZL#` は **`-400`** になった（[Layers and Stories](../Findings/Layers%20and%20Stories.md)
   「レイヤの高さ」）。
 
-### 傾斜材の両端の天端——**`#IPZS#` が始端、`#ZTBBS#` が高い端。連結だけで `(2FL -872~-40)` が出る**
+### 傾斜材の両端の天端の実測（`#IPZS#` / `#ZTBBS#`）
 
 **実機確認済み**（VW 2026 / mac。[issue #196](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/196)。
 `probes/runtime/datatag-slope-top-elevation/` を **3 版・計 3 回**走らせた。舞台は**プラグインが実際に
@@ -472,7 +472,7 @@ Findings と同じ。
   水平材では せい ぶん下がった（2699 → **2459**、実測）。
 
 注記の式（連結だけで演算を混ぜない形。
-[上記の「連結と演算は混ざらない」](#連結と演算を混ぜた式の実測括弧で括った場合を含む)）を引いた:
+[上記の「連結と演算を混ぜた式の実測」](#連結と演算を混ぜた式の実測括弧で括った場合を含む)）を引いた:
 
 | 入れた式 | 傾斜材 S | 水平材 N |
 | --- | --- | --- |
@@ -498,9 +498,9 @@ Findings と同じ。
 - この舞台は**レベルの階内相対Zが 0** なので、`#ZTBBS#` と `#ZTBBL#`（`#IPZS#` と
   `#IPZL#` も）が同じ値を返した（`S` と `L` の違いは
   [#187](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/187)
-  の 40 ずらした舞台で測った。上記「高さの綴りは『量 × 基準』」）。
+  の 40 ずらした舞台で測った。上記「高さの綴り（量 × 基準）の実測」）。
 
-### `#sign#` は `#IPZS#` の直後でも効く——**ただし 0 では `±0` と出る**
+### `#IPZS#` の直後に置いた `#sign#` の実測
 
 **実機確認済み**（VW 2026 / mac。[issue #196](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/196)。
 同じ走行。水平材を 3 本、バウンドの offset で **+128 / 0 / −872** に置いて同じ綴りを

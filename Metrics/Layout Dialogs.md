@@ -30,7 +30,7 @@ VectorWorks 本体の「鋼材断面を選択」のような**サムネイル付
 レイアウトダイアログ（`VWFC::VWUI::VWDialog` を継承し `CreateDialogLayout()` を自分で
 書く形）で出す話。
 
-### `VWImagePopupCtrl` では作れない（SDK の実装が空のスタブ）
+### `VWImagePopupCtrl::CreateControl` の実測と実装ソース
 
 `VWFC::VWUI::VWImagePopupCtrl::CreateControl(VWDialog*)` は**実機（VW 2026 / macOS）で
 false を返した**。SDK に同梱された実装ソースを読むと、**生成の呼び出しがコメントアウト
@@ -52,7 +52,7 @@ DialogImagePopup_Init(dialog, id)` で分かれる道が無い。同じクラス
 （`AddItems` / `GetSelectedItemIndex` …）は実装されていて、どれも `CreateControl` が覚える
 親ダイアログ（`fpParentDlg`）を使っている。
 
-### 代わりに `VWThumbnailPopupCtrl` を使う（実機確認済み）
+### `VWThumbnailPopupCtrl` の実装ソースと実測
 
 同じコンポーネント種別（`VWControlType::eCompThumbnailPopup`）を指す双子のクラス
 `VWFC::VWUI::VWThumbnailPopupCtrl`（`VWFC/VWUI/ThumbnailPopupCtrl.h`）の実装を読んだ。
@@ -141,7 +141,7 @@ popup.AddItems(fList);
 両クラスとも中身は `(dialogID, controlID)` を使う `GS_*ImagePopup*` の薄い包みだった
 （ソース）。
 
-### 一覧には「ユーザが置くシンボル」以外も混ざる
+### `BuildList(kSymDefNode)` の一覧の内訳
 
 `VWResourceList::BuildList(kSymDefNode, true)` は**図面にあるシンボル定義を全部**返す。
 実測（16 件）の内訳には、ユーザが置く部品（`アンカーボルト_M12` / `床束` / `仕口` …）に
@@ -150,7 +150,7 @@ popup.AddItems(fList);
 `グリッド線`・`遠山信夫アトリエ一級建築士事務所`（図面枠）など。
 
 `gSDK->GetSymbolDefSubType(hSymDef)` で分けた 16 件の表は
-[Symbols の計測記録](Symbols.md#一覧にはユーザが置く部品以外も混ざるgetsymboldefsubtype-で分ける)。
+[Symbols の計測記録](Symbols.md#一覧の定義ごとの-getsymboldefsubtype-の実測)。
 
 ## モードレス（非モーダル）なパレット（`IExtensionWebPalette`）
 

@@ -44,13 +44,13 @@
 - **外接は「形」を教えてくれない——輪郭は頂点で読む**（`VWPolygon2DObj` の `GetVertexCount` /
   `GetVertexPoint`）。**3D があることを 2D の測り値で判定しない**（`GetObjectCube` の高さか子の型）。
   **「壊れた」と「意図と違う」を分けて**、実体の有無と実測寸法を両方並べる
-  （[実例](../Metrics/Investigation%20Techniques.md#前提を測る輪郭は頂点で3d-の有無169173)）。
+  （[実例](../Metrics/Investigation%20Techniques.md#断面の輪郭と-3d-の有無を測った例169173)）。
 - **同じ文書に「正解」を並べて差分を取る。** 全欄を比べれば「欄が足りない」のか「書き込み
   経路が違う」のかが分かる。API の無い設定は、UI で手作業したものの
-  ダンプを設定の前後で取り diff を見る（[実例](../Metrics/Investigation%20Techniques.md#正解と並べて差分を取る)）。
+  ダンプを設定の前後で取り diff を見る（[実例](../Metrics/Investigation%20Techniques.md#設定の前後のダンプを並べて-diff-を取った例)）。
 - **描かれている文字を測る**——「絵で読める大きさか」は目視に頼らず、PIO・寸法の中を再帰で
   潜って最初の型 `10` の `GetTextSize` を読む（容れ物の縮尺で割れば紙の pt）。**実機の絵と
-  一致を確かめてある**（#161。コードは [計測記録](../Metrics/Investigation%20Techniques.md#描かれている文字を測る161177156)）。
+  一致を確かめてある**（#161。コードは [計測記録](../Metrics/Investigation%20Techniques.md#描かれている文字を測ったコード161177156)）。
   - **`ISDK` の読み戻しが当てにならない場面で効く**（#157 の行き止まりがその場で割れた）。
   - **落とし穴: レイアウト（プロファイルグループ）が混ざる。** レイアウトを持つ PIO では再帰が
     レイアウトの値（紙の上の値）も拾い、**文字を描いていない個体ではそれが「描かれた文字」に
@@ -62,7 +62,7 @@
 - **中身を型で数えるのがいちばん早い。ただし数える型を決め打ちしない**——置き石以外を全部
   数え、型の内訳ごと出す（決め打ちの網は、漏れたときにいちばん間違えやすい形で嘘をつく）。
   **1 個体に複数の欄を順に書いて測ると原因が 1 段前へずれる**ので、
-  欄ごとに個体を分けるか 1 段ごとに差分で読む（[実例](../Metrics/Investigation%20Techniques.md#型で数える欄ごとに個体を分ける166)）。
+  欄ごとに個体を分けるか 1 段ごとに差分で読む（[実例](../Metrics/Investigation%20Techniques.md#節点型を数えた例欄ごとに個体を分けた例166)）。
 - **「ヘッダに書いていないから分からない」で止めない——SDK は VWFC の実装ソースを同梱している**
   （`SDKLib/Source/VWSDK/`。`sdk-grep` / `sdk-ls` で見る）。**`SDK Index/` に無くても「無い」と
   決めない**——`APIBase.Legacy.h` の `APP_API_*` マクロの中の宣言は索引に載らないので
@@ -72,11 +72,11 @@
   **宣言が `APIBase.Legacy.h` の `APP_API_*` の中なら呼べない**、`APIBase.Legacy.Defs.h` の
   ふつうの旧 API は呼べる。`GS_DisplayImagePopup` が呼べないことは、`VWImagePopupCtrl::CreateControl`
   が `return false` のスタブだったこと（[Layout Dialogs](Layout%20Dialogs.md)）と同じ話の裏表
-  （[12 本の一覧とリンクエラー](../Metrics/Investigation%20Techniques.md#呼べない-app_api_-の-12-本)）。
+  （[12 本の一覧とリンクエラー](../Metrics/Investigation%20Techniques.md#app_api_-の-12-本の一覧とリンクエラー)）。
 - **「絵に出ているか」も描かれている図形を測って判別する**（文字の `GetTextSize`・外接の高さ）。
   目視を頼む前に試す。**2 つの要因がいつも一致しているなら、入れ替えて双方向で測る**——
   片方だけ変えた A と、もう片方だけ変えた B を同じ 1 回の実行に並べると 1 往復で決着する
-  （[実例](../Metrics/Investigation%20Techniques.md#絵に出ているか双方向で測る)）。
+  （[実例](../Metrics/Investigation%20Techniques.md#絵と読み戻しが食い違った例片方ずつ変えた例)）。
 - **信用できるのはハンドルの生バイト**（タグ付きデータは 16 進ダンプで。[Tagged Data](Tagged%20Data.md)）。
 - **浮動小数の走査**（[実例](../Metrics/Investigation%20Techniques.md#生バイトと浮動小数の走査677173)）:
   - **1 ULP を追うならプローブの中で予測式を計算しない**——clang は FMA へ縮約する
@@ -92,7 +92,7 @@
   **`Include/OnlyWin` も `Include/OnlyMac` も両方に入っている**。プラットフォーム差は実機で
   測るしかない（[File and Folder Identifiers](File%20and%20Folder%20Identifiers.md) の
   `SAttributes`）。比べるときは BSD の `tr -d '\r'` を使わず `perl` で
-  （[実測](../Metrics/Investigation%20Techniques.md#windows-版-sdk-は-mac-版と同一)）。
+  （[実測](../Metrics/Investigation%20Techniques.md#windows-版-sdk-と-mac-版-sdk-の比較)）。
 - **図面ラベルの調査で踏んだもの**（[実例](../Metrics/Investigation%20Techniques.md#図面ラベルの調査で踏んだもの175177179)）:
   - **PIO が描いた図形は入れ子になっている**——走査は再帰で書き、深さも記録する。
   - **`GetTextSize` だけでは紙の pt は決まらない**——同じ容れ物に紙の pt が分かっている物差しを
@@ -126,7 +126,7 @@
 
 **同じ呼び出しの中で読んだ値は、利用者の図面に残る値と同じとは限らない**
 （[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。4 時点
-T0・T1・Te・T2 の読み比べは [計測記録](../Metrics/Investigation%20Techniques.md#いつ読むか同じ呼び出しの中undo-イベントの後vw-へ戻った後)）。
+T0・T1・Te・T2 の読み比べは [計測記録](../Metrics/Investigation%20Techniques.md#読む時機を-4-つ比べた実測同じ呼び出しの中undo-イベントの後vw-へ戻った後)）。
 
 - **後から変わるものは 2 種類**: **ランループで作り直されるもの**（連続寸法の中の寸法の大きさ。
   [Dimensions](Dimensions.md)）と、**undo イベントの終わりで更新されるもの**（`ResetObject` 後に

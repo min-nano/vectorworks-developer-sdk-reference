@@ -35,7 +35,7 @@ Dialogs.md`](../Info/Working%20with%20File-Folder%20Choose%20Dialogs.md)）。**
 ## `IFolderChooserDialog` の全体（口は 5 つだけ）
 
 - 口は `SetTitle` / `SetDescription` / `GetSelectedPath` / `SetSelectedPath` / `RunDialog` の
-  5 つ（[ヘッダの抜き書き](../Metrics/File%20and%20Folder%20Dialogs.md#ifolderchooserdialog-の全体口は-5-つだけ)）。
+  5 つ（[ヘッダの抜き書き](../Metrics/File%20and%20Folder%20Dialogs.md#ifolderchooserdialog-のヘッダ)）。
 - **`IFileChooserDialog` にあるフィルタ・複数選択・既定の拡張子・初期フォルダ
   （`SetInitialFolder`）は、フォルダ側には無い。** 初期位置は `SetSelectedPath` だけ。
 
@@ -81,7 +81,7 @@ VwSdkProbes のプローブとして走らせた。**印の無い記述は実機
   返し、`RunDialog()` が OS のフォルダ選択ダイアログを出す**（[Plug-in
   Modules](Plug-in%20Modules.md)「本体側からダイアログを開ける」と同じ）。日本語の UTF-8 の
   見出しを渡して `VCOMError=0`（見え方は目視の話なので言わない）
-  （[実測](../Metrics/File%20and%20Folder%20Dialogs.md#本体ペイロード側から開ける)）。
+  （[実測](../Metrics/File%20and%20Folder%20Dialogs.md#本体ペイロード側から開いた実測)）。
 
 ### 戻り値: **キャンセルは `RunDialog` の失敗として返る**
 
@@ -91,7 +91,7 @@ VwSdkProbes のプローブとして走らせた。**印の無い記述は実機
 - **「ポインタが取れたか」で分岐してはいけない。** キャンセルでも `GetSelectedPath` は
   非 nullptr を返し、`GetFullPath` が空文字列と `50`（`kVCOMError_BadPathSpecified`）を返す
   ——空文字列を掴まされるのが最悪の壊れ方で、黙って前回の値が残るようなことは無い
-  （[戻り値の表](../Metrics/File%20and%20Folder%20Dialogs.md#戻り値-キャンセルは-rundialog-の失敗として返る)）。
+  （[戻り値の表](../Metrics/File%20and%20Folder%20Dialogs.md#戻り値の実測選んだときキャンセルしたとき)）。
 
 ### 受け取るパス: 絶対パス・**末尾に区切りが付く**・UTF-8
 
@@ -99,7 +99,7 @@ VwSdkProbes のプローブとして走らせた。**印の無い記述は実機
   **UTF-8** である（日本語のパスのバイト数で確かめた）。
 - **継ぎ足しは自前でやらず `IFileIdentifier::Set(IFolderIdentifier*, const TXString&
   fileName)` を使う**（自前で `/` を足すと `//` になる。[Documents](Documents.md)）
-  （[実測](../Metrics/File%20and%20Folder%20Dialogs.md#受け取るパス-絶対パス末尾に区切りが付くutf-8)）。
+  （[実測](../Metrics/File%20and%20Folder%20Dialogs.md#受け取るパスの実測)）。
 - **`TXString` の `operator const char*` は UTF-8 を返す**という [TXString](TXString.md) の
   前提がここでも保たれる。
 
@@ -110,7 +110,7 @@ VwSdkProbes のプローブとして走らせた。**印の無い記述は実機
   指せるか・見出しで断りが要るか）だけ。
 - フォルダ選択で得た `IFolderIdentifier` を `IFileChooserDialog::SetInitialFolder` に渡して
   `VCOMError=0`（初期位置として効いたかは目視の話なので言い切らない）
-  （[実測](../Metrics/File%20and%20Folder%20Dialogs.md#ifileidentifiergetfolder-はフォルダ選択とまったく同じ文字列を返す)）。
+  （[実測](../Metrics/File%20and%20Folder%20Dialogs.md#ifileidentifiergetfolder-とフォルダ選択の文字列の突き合わせ)）。
 
 ### `GetAttributes` の `fbDirectory` は**フォルダでも `no` を返した**
 
