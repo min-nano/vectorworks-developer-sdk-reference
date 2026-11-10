@@ -27,7 +27,8 @@
     再現しなかった——**`SetDirty(true)` はどのビューポートでも立った**。取り違えと見られる
     【推定】。**印だけ立てて VW に描かせると絵の順序が直るかは確かめていない。**
   - SDK に遅延実行の口は無い（`RegisterDialogForTimerEvents`＝ダイアログのタイマーだけ）。
-    周期的に呼んでもらう口の一覧は [周期実行と通知](Timers%20and%20Notifications.md)。
+    周期的に呼んでもらう口の一覧は [周期実行と通知](Timers%20and%20Notifications.md)（アイドルの口は無い・
+    通知は出来事用・ツール拡張の `kAction_OnIdle` は選ばれている間だけ）。
 - **「動かせた数」を並べ替えの成否と読まない。** 既に希望どおりでも失敗しても 0 件。
   並びそのものを読み戻して確かめる。
 - **【訂正】レイヤ高さを読む口も書く口も ISDK にある**（下記「レイヤの高さ」。当初の
@@ -61,7 +62,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
   前）。`ForEachLayer` も配る。**型だけでは自分のレイヤと見分けられない**——
   `ovLayerType == 3` か `IsObjectFromReferencedFile(layer)` で見分ける（同じ結果）。
 - **名前は `NNA#1_<元の名前>` に変わる。** `GetNamedLayer` は元の名前では `nullptr`、接頭辞付きで
-  引ける。`#1` / `NNA` の由来は【未確認】。
+  引ける。元の名前で引きたいなら接頭辞を剥がす必要がある。`#1` / `NNA` の由来は【未確認】。
 - 現在のレイヤにでき（`SetCurrentLayer` → `GetCurrentLayer` と `==`）、縮尺も `GetLayerScaleN` で
   読める（参照元の縮尺を写すかは未確認）。`ovGuestLayerHasRelativePath`(163) は `false` だった。
 - **参照で入ったレイヤの直下には図形が見えない**（型 0 だけ）。参照の中身は `FirstMemberObj` →
@@ -73,6 +74,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 - **列はデザインもシートも作った順**（両者が入り混じる。タブごとに分けるなら `ovLayerType` で
   振り分ける）。**オーガナイザの `#` は、デザインレイヤだけ列の逆順、シートは同じ順**
   （[表](../Metrics/Layers%20and%20Stories.md#順序列は作った順オーガナイザはデザインだけ逆に見せる)）。
+  オーガナイザと同じ並びで見せたいなら、デザインだけ反転する。
 - 作った後に高さを変えても、オーガナイザを開閉しても列は変わらなかった（「高さの降順」は
   ストーリに結んだレイヤを作ったときの規則で、食い違わない）。
 
@@ -134,7 +136,8 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
   ストーリ由来でも素のレイヤでも同じ。
 - **`AddObjectToContainer` で別のレイヤへ移したオブジェクトは、移した時点の絶対Z を保ち、
   以後レイヤ高さに追随しない**（VW へ戻った後・undo イベントを閉じた後も同じ。#245）。
-  **レイヤ面に置くなら `gSDK->SetCurrentLayer(layer)` してから作る。** `#IPZL#` / `#ZTBBL#`
+  **レイヤ面に置くなら `gSDK->SetCurrentLayer(layer)` してから作る**（作ってから移すと、
+  そのレイヤの面から見た高さが意図しない値になる。実測では −200）。 `#IPZL#` / `#ZTBBL#`
   （レイヤ基準）に直接効き、`#IPZS#`（階基準）は掛からない。
 - `#IPZS#` は「絶対Z − 階の高さ」なので、レイヤ面上の部材では階内相対Z（例 `-40`）が出る。
 
@@ -210,7 +213,7 @@ SetLayerLevelType(layer, "");           // → true。階はそのまま、種�
   レイヤも弾かれる**（レベルを持たない階でも `false`）。**戻り値は実態と一致した。**
   一方 `SetLayerLevelType` は結ばれていないレイヤにも使用中の種別にも `true` を返す——
   setter の `true` を信用しない事例（[Investigation Techniques](Investigation%20Techniques.md)）
-  （[表](../Metrics/Layers%20and%20Stories.md#結論-未使用のレベル種別を先に与えれば結べ結んだあとに種別だけ外せる)）。
+  （[表](../Metrics/Layers%20and%20Stories.md#2-周目未使用のレベル種別を先に与えて結び種別を外す)）。
 - **結んだレイヤの高さは「階の高さ」**（相対Z を持たない）で、種別を外した後も
   `SetStoryElevation` に追随する。
 - **バウンドの解決は基準のレベル付きレイヤと同値**で、種別を外した後も変わらない——宛先は

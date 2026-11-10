@@ -3,7 +3,7 @@
 結論は [Findings「Layer Objects」](../Findings/Layer%20Objects.md)。ここには測った環境・見本・
 実測の表と、Windows の VM で落ち続けた切り分けを置く。
 
-> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+> ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
 [issue #282](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/282) の調査。
 [vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)
@@ -104,9 +104,8 @@
 - `GetNamedObject("LO-直線")` は消去の後は nil、取り消した後は戻った図形を返した。
 - 消去を取り消して戻った図形の番地: `0x7c0341b980` → `0x7bfa9b0140`。並べ替えでは番地は
   変わらなかった。
-- ブリッジの別名保存を挟んでも、メニューの「取り消し」は 1 段で消去や複製を戻した。空の段を積むのは
-  図面に PIO を初めて足したあとの最初の保存だけで、見本を作った回のブリッジの保存で使い切っていた
-  ためと読める【推定】（#288。[Undo](../Findings/Undo.md)）。
+- ブリッジの別名保存を挟んでも、メニューの「取り消し」は 1 段で消去や複製を戻した（見本を作った回に
+  ブリッジの保存を 1 度通している。#288 の記録は [Undo](Undo.md)）。
 
 ## 5. 種別の名前
 
@@ -162,8 +161,8 @@
 見本を作ったあとの画面の操作で、**VW が 7 回落ちた**（`0xc0000005`・番地 0 の実行）。
 WER のダンプを読むと、**落ちたスレッドには `d3d10warp.dll`（Windows のソフトウェア描画）の
 番地しか無く、VW 本体・プラグインのコードは無かった**。主スレッドは待ちの中。
-[Viewports](../Findings/Viewports.md)（#248）・[Plug-in Modules](../Findings/Plug-in%20Modules.md) にある、
-この VM の描画の側の落ちと同じ形である。
+[Viewports](Viewports.md)（#248）・[Plug-in Modules](Plug-in%20Modules.md) にも、
+この VM の描画の側で落ちた記録がある。
 
 中身を変えて切り分けた（見本を作り、アクティブレイヤを `LO-S` から `LO-A` へ切り替える）:
 
@@ -179,4 +178,4 @@ WER のダンプを読むと、**落ちたスレッドには `d3d10warp.dll`（W
 - 同じ時刻に Windows のサービス（`webthreatdefsvc`）も落ちていた。
 - mac では、同じ見本でアクティブレイヤの切り替え・選択・並べ替え・消去・複製・取り消し・保存の
   どれでも落ちなかった。
-- Windows の 1〜3・5〜8 の値は、落ちる前にプローブが成功で返したログであり、落ちとは関係しない。
+- Windows の 1〜3・5〜8 の値は、落ちる前にプローブが成功で返したログから採った。

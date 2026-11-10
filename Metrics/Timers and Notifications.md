@@ -4,7 +4,7 @@
 ここには SDK のヘッダ・ソースを引いた結果と、実機のプローブで測った環境・手順・実測の表・
 ログ・切り分けの経緯を置く。節の番号と見出しは Findings と同じにしてある。
 
-> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+> ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
 [issue #204](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/204) の調査。
 出どころは MCP ブリッジ——外からの要求を拾うために、ウェブパレットの HTML の
@@ -16,7 +16,7 @@
 ## 1. ISDK に「暇なとき・周期的に」の口は無い
 
 `ISDK.h`（VW 2026 SDK）で「登録」「タイマー」「アイドル」に関わる宣言を**全部**並べると
-8 本しかなく、周期実行に使えるものは**ダイアログのタイマー 1 種類だけ**である。
+8 本だった。
 
 ```
 $ grep -nIE 'virtual .*(Register|Unregister|Timer|Idle|Periodic|Tick|Yield)' ISDK.h
@@ -30,22 +30,17 @@ $ grep -nIE 'virtual .*(Register|Unregister|Timer|Idle|Periodic|Tick|Yield)' ISD
 2524:  Uint32  TickCount()   // returns 1/60th of a second. Approx: mili_sec = TickCount() * 17;
 ```
 
-- **`RegisterDialogForTimerEvents(dialogID, ms)` は「ダイアログが開いている間」の時計である。**
-  VWFC 側の口は `VWDialog::RegisterForTimerEvents(ms)` / `DeregisterForTimerEvents()` で、
+- `RegisterDialogForTimerEvents(dialogID, ms)` はダイアログの ID を取る。VWFC 側の口は
+  `VWDialog::RegisterForTimerEvents(ms)` / `DeregisterForTimerEvents()` で、
   受けるのは `VWDialog::OnDialogTimer()`（`Dialog.h:355-356, 400`）。VectorScript にも
   同じものがある（`RegisterDialogForTimerEvents` / `DeregisterDialogFromTimerEvents`）。
-  **`VWDialog::RunDialogLayout` はモーダル**（[Layout Dialogs](../Findings/Layout%20Dialogs.md)）なので、
-  これを常駐の受け付けには使えない——使うと利用者は図面を触れない。
-- **ウェブパレットには渡せる `dialogID` が無い。** パレットの中身は HTML であって
-  `VWDialog` ではなく（[Layout Dialogs](../Findings/Layout%20Dialogs.md)「モードレスなパレット」）、
-  レイアウトダイアログの ID を持たない。【ヘッダ根拠】
-- **`TickCount()` は「いま何時か」を読む口で、呼んでもらう口ではない**（1/60 秒単位）。
-- `RegisterMenuForCallback` はメニュー項目が**通知を受け取る**ための登録（`whichChange` は
-  下記の `kNotify*`）で、周期ではない。`RegisterExternal` は外部モジュールの登録。
-
-**つまり「SDK に常時開けておく口（アイドルコールバック）は無い」という前提は正しい。**
-（[Layers and Stories](../Findings/Layers%20and%20Stories.md) の「SDK に遅延実行の口は無い」も同じ話で、
-あちらはビューポートの描き直しを遅らせようとして突き当たったもの。）
+  `VWDialog::RunDialogLayout` はモーダル（[Layout Dialogs](Layout%20Dialogs.md)）。
+- ウェブパレットの中身は HTML であって `VWDialog` ではなく
+  （[Layout Dialogs](../Findings/Layout%20Dialogs.md)「モードレスなパレット」）、
+  レイアウトダイアログの ID を持たない。
+- `TickCount()` は 1/60 秒単位の時刻を返す。
+- `RegisterMenuForCallback` の `whichChange` は下記の `kNotify*`。`RegisterExternal` は
+  外部モジュールの登録。
 
 ## 2. 通知（`RegisterNotificationProcedure` ＋ `kNotify*`）は「出来事」用で、周期ではない
 
@@ -60,20 +55,14 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 - **`whichChange` に渡す値は `Include/Kernel/Core/MCNotification.h` の `kNotify*`**（4 文字の
   OSType。VW 2026 SDK に **184 個**ある）。**公式リファレンス（`Info/` / `Versions/`）には
-  1 行も載っていない**（`kNotify` で 0 件）。拾えるものの例:
+  1 行も載っていない**（`kNotify` で 0 件）。例:
   `kNotifyDocOpen` / `kNotifyDocClose` / `kNotifyDocPostSaved` / `kNotifySelChange` /
   `kNotifyLayerChange` / `kNotifyClassChange` / `kNotifyViewChange` /
   `kNotifyDynamicViewChange`（対話的な 1 フレームごと——コメントに
   「!!CAUTION - check routine performance!!」とある）/ `kNotifyApplicationActivate`
   （アプリが前面に来た）/ `kNotifyBeforeApplicationQuit` / `kNotifyAutosaveDone` ほか。
-- **出来事が起きなければ 1 度も呼ばれない。** 「外からの要求を定期的に拾う」用途の時計には
-  ならない（利用者が何も触らずにいれば永久に呼ばれない）。
-- **ただし `kNotifyApplicationActivate` は「戻ってきたら拾い直す」のに使える**——間引かれる
-  JS タイマーと組み合わせると、**前面に戻った瞬間の取りこぼしだけは埋められる**【ヘッダ根拠】。
 - `kNotifyBeforePendingUpdate` / `kNotifyAfterPendingUpdate` のコメントには
-  「Many notifications are handed out in a loop (**From OnIdle**)」とあり、**VW 本体には
-  アイドルのループがある**ことが読み取れる。しかし**そこへ自分のコードを差し込む口は
-  公開されていない**（上記 1 の 8 本しかない）。
+  「Many notifications are handed out in a loop (**From OnIdle**)」とある。
 
 ## 3. ツール拡張だけは「アイドル」を受け取れる（が、選ばれている間だけ）
 
@@ -81,23 +70,16 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
 ```
 
-- **ツール拡張（`GROUPID_ExtensionTool`）には `kAction_OnIdle` が来る。** メニュー・PIO・
-  ウェブパレットの拡張には同じものが無い（`OnIdle` は SDK 全体でこの 1 行と、上記
-  `MCNotification.h` のコメント 1 行だけ）。
-- **届くのは自分のツールがアクティブな間だけ**なので、**常駐の受け付けには使えない**
-  ——利用者が別のツールを選んだ瞬間に止まる。「ツールを選んでいる間だけ動く監視」
-  （カーソル追従など）には使える。【ヘッダ根拠】
+- `kAction_OnIdle` はツール拡張（`GROUPID_ExtensionTool`）の `ToolMessage::EAction` の値。
+  `OnIdle` は SDK 全体でこの 1 行と、上記 `MCNotification.h` のコメント 1 行だけで、
+  メニュー・PIO・ウェブパレットの拡張には同じものが無い。
 
 ## 4. OS のタイマーから `gSDK` を呼ぶ——**できる**（mac / Windows とも実測）
 
 **実測**（VW 2026。macOS arm64 ＋ Windows の両方。`probes/runtime/runloop-timer-sdk/` を
 各プラットフォームで「仕掛ける → 2 分ほど置く → 報告させる」の 2 回に分けて実行。
-ビルド `7fbdbc35d939`。以下の数値は実行ログそのまま）。
-
-**ウェブパレットの外に時計を置ける。** OS のタイマー（mac: `CFRunLoopTimer` をメインの
-ランループへ / Windows: `SetTimer(nullptr, 0, ms, proc)`）は、**メニューコマンドが戻った
-後も刻み続け、その刻みから `gSDK` を読むことも図面に書くこともできた**。JS タイマーの
-ような間引きも起きない。**ただし間隔は保証されない**（下記）。
+ビルド `7fbdbc35d939`。以下の数値は実行ログそのまま）。タイマーは mac: `CFRunLoopTimer` を
+メインのランループへ / Windows: `SetTimer(nullptr, 0, ms, proc)`。
 
 ### 局面ごとの実測
 
@@ -118,51 +100,37 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
   読んで、**mac で 881 回・Windows で 423 回すべて成功、例外は 0 回**。
 - **書き**: **こちらのコードがスタックに 1 本も無い刻みから `CreateLocus` が通った**
   ——mac は `write ## src=cf ## locus=作れた ## objs_after=5`（4 → 5）、Windows は
-  `objs_after=4`（3 → 4）。**図面に図形を作れている。**
-- **mac は 2 回まわして同じ結果になった**（③ の刻みが 367/369 回と 343/342 回、
-  **どちらの回も書き込みが通った**）。**つまり「コマンドが戻った後も刻む」は再現する。**
-  ばらつきの最大値は回によって違う（1.5 秒の回と 3.6 秒の回）ので、**下記 2 の
-  「最大」は「その回で観測した最悪値」として読むこと**——**上限は決まっていない。**
-- **図面が 1 枚も開いていなくても刻みは続く**（ログ末尾の刻みが `docs=0 ## objs=-1`）。
-  `gSDK` は落ちずに「文書が無い」を返しただけで、**例外も異常も出ていない**。
-  **＝ウェブパレット（文書が無いと出ない。下記 6）と違い、OS のタイマーは文書の有無に
-  関わらず動く。**
+  `objs_after=4`（3 → 4）。
+- **mac は 2 回まわした**（③ の刻みが 367/369 回と 343/342 回、**どちらの回も書き込みが
+  通った**）。最大の空きは回によって違った（1.5 秒の回と 3.6 秒の回）。
+- **図面が 1 枚も開いていなくても刻みは続いた**（ログ末尾の刻みが `docs=0 ## objs=-1`）。
+  `gSDK` は落ちずに「文書が無い」を返し、**例外も異常も出ていない**。
 
 ### 2. ただし**間隔は保証されない**（「250 ms ごと」と当てにしてはいけない）
 
-コマンドが戻った後の `dt` は**平均 252〜273 ms** だが、**最大で 1.5〜4.9 秒空き**
-（回によって違う。上限は決まっていない）、**最小は 16〜69 ms**
-（空いたぶんが後でまとめて来る）。配り手は OS ではなく
-**Vectorworks のイベント処理**なので、VW が同期処理で詰まっている間は刻みが止まり、
-明いてから続く（下記 3 がその裏返し）。**受け付けの間隔に意味のある設計
-（タイムアウト・一定周期のポーリング）は、刻みの回数ではなく時刻で測ること。**
+コマンドが戻った後の `dt` は**平均 252〜273 ms**、**最大で 1.5〜4.9 秒空き**
+（回によって違う）、**最小は 16〜69 ms**（空いたぶんが後でまとめて来た）。
 
 ### 3. こちらの同期処理には割り込まれない（両プラットフォーム）
 
 **ランループを回さずに 3 秒働いた間の刻みは 0 回**だった（mac / Windows とも）。
-つまり**プラグインが自分の処理をしている最中——自分が undo イベントを開いて図面を
-描いている最中——に刻みが割り込むことはない。** 刻みは「VW がイベントを回す瞬間」に
-挟まるだけである。
 
-- **VW が自分でイベントを回す場面では挟まる**: モーダルダイアログが開いている間
-  （mac / Windows とも 250 ms 前後で正確）と、**mac の `DoYield` の最中**。
-- **`DoYield` はプラットフォームで違う。** mac は刻むが**間隔が荒い**（平均 500 ms・
-  最大 3 秒）。**Windows は 1 回も刻まない。** 進捗を出しながら受け付けを回す設計は、
-  Windows では成立しない。
+- **刻んだ場面**: モーダルダイアログが開いている間
+  （mac / Windows とも 250 ms 前後）と、**mac の `DoYield` の最中**。
+- **`DoYield` の最中**: mac は刻んだが間隔が荒い（平均 500 ms・最大 3 秒）。
+  **Windows は 1 回も刻まなかった。**
 - **刻みが VW の undo イベント中に当たった例は、この計測では 0 回**
   （`undo 中 0 回`。刻みごとに `IsCurrentlyBuildingAnUndoEvent()` を記録した。
-  2 プラットフォーム・計 1304 刻み）。**「当たらなかった」だけで「当たらない」ではない**
-  ——ふつうに 2 分触っている限りでは当たらない、ということである。
-  **狙って当てたときに何が起きるかは下記 6**（[issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)。**答えが出ている**）。
+  2 プラットフォーム・計 1304 刻み。ふつうに 2 分触っていた）。
+  狙って当てた計測は下記 6（[issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)）。
 
 ### 4. プラットフォームごとの作法
 
-- **macOS: メニューコマンドはメインスレッドで走る**（`thread=main` /
+- **macOS: メニューコマンドはメインスレッドで走った**（`thread=main` /
   `runloop=same-as-main`）。
-- **macOS: `CFRunLoopRunInMode` は「短く刻んで何度も呼べば」回る**（【訂正】。
-  [issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)
-  の実機で判明）。当初ここには「**自分で回すことはできない**——即座に戻る」と書いて
-  いたが、それは**1 回の呼び出しを長く取ったときの話**だった。実測:
+- **macOS: `CFRunLoopRunInMode` の回し方**（[issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)
+  の実機）。当初ここには「**自分で回すことはできない**——即座に戻る」と書いていたが、
+  #206 で 1 回の呼び出しの長さを変えて測り直した:
 
   | 回し方 | 結果 |
   | --- | --- |
@@ -170,10 +138,7 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
   | `CFRunLoopRunInMode(default, 0.6, false)` を **1 回**（#206 の 1 回目） | **0 回** |
   | **`CFRunLoopRunInMode(default, 0.05, false)` を 12 回**（#206 の 2・3 回目） | **8 回届いた**。戻り値 **3 ＝ `kCFRunLoopRunTimedOut`**、実際に費やした時間 **0.611 秒**（0.6 が期待値） |
 
-  **＝短い刻みで呼べば、ちゃんと時間を使って刻みを配ってから `TimedOut` で戻る。**
-  2 回の実機で同じ結果（どちらも 8 回）。**「待ちたいなら 0.05 秒ずつ回す」が使える。**
-  ただし**これはこちらがランループを回している間の話**で、上記 3 のとおり
-  **自分の同期処理が割り込まれるわけではない**（回さなければ 0 回のまま）。
+  2 回の実機で同じ結果（どちらも 8 回）。
 - **macOS: 主ランループが知っているモードは 13 個**
   （`kCFRunLoopDefaultMode` / `NSEventTrackingRunLoopMode` / `NSModalPanelRunLoopMode` /
   `NSGraphicsRunLoopMode` / `NSAnimationRunLoopMode` / `CoreDragMode` /
@@ -182,36 +147,22 @@ MiniCadCallBacks.h:6376   kAction_OnIdle = 112,        // ToolMessage::EAction
   `dockmsg-mode` / `kCFRunLoopCommonModes`）。**アイドル時に実際に刻みが届いたモードは
   `kCFRunLoopDefaultMode` / `NSEventTrackingRunLoopMode` / `NSModalPanelRunLoopMode` /
   `__kCFPasteboardPrivateMode` / `view-bridge.blocks`** で、**`kCFRunLoopCommonModes`
-  だけでも届く**（既定モードが共通モードに入っているため）。全モードへ入れると
-  取りこぼしが減る（ペーストボード・view-bridge のモードはそれで拾えた）。
-- **macOS: メインキューの `dispatch_source` も同じように使える**（`src=dq`。アイドルで
-  369 回・平均 272 ms）。**CFRunLoopTimer とほぼ同じ振る舞い**なので、どちらでもよい。
-- **Windows: `SetTimer(nullptr, 0, ms, proc)`（ウィンドウ無し）で足りる。** `WM_TIMER` は
-  VW のメッセージポンプが配る。**自分で `PeekMessage` を回せば、その場でも配られる**
-  （mac と違ってこちらは効く）。ピン留めも `GetModuleHandleExW` の
-  `GET_MODULE_HANDLE_EX_FLAG_PIN` で効いた。
-- **【罠】Windows では、VW が起動時に読み込む殻でも留める。** VW は起動時にモジュールを
-  一度降ろして読み込み直すので（-1・-3 の後に -2 無しで降ろす）、最初の呼び出しで作った
-  タイマーが**もう無い番地を呼び続けて起動中に落ちる**。作る前に
-  `GET_MODULE_HANDLE_EX_FLAG_PIN` で自分を留める（[Plug-in Modules](../Findings/Plug-in%20Modules.md)
-  「【罠】Windows の VW は起動時にモジュールを一度降ろして読み込み直す」。issue #253）。
-- **入れ替えできるモジュールへ置くなら、降ろさせない手当てが要る。** 殻はプローブが
-  終わると本体を `dlclose` する（[Plug-in Modules](../Findings/Plug-in%20Modules.md)）ので、
-  `dlopen(RTLD_NOLOAD)`（mac）／`GET_MODULE_HANDLE_EX_FLAG_PIN`（Windows）で参照を
-  増やして留めた。**実プラグインでは殻（起動時に読まれる側）に置けば済む。**
+  だけでも届いた**。全モードへ入れるとペーストボード・view-bridge のモードの分も拾えた。
+- **macOS: メインキューの `dispatch_source`**（`src=dq`）はアイドルで
+  369 回・平均 272 ms。
+- **Windows: `SetTimer(nullptr, 0, ms, proc)`（ウィンドウ無し）で刻んだ。** `WM_TIMER` は
+  VW のメッセージポンプが配った。**自分で `PeekMessage` を回すと、その場でも配られた**
+  （上の表の ①）。ピン留めも `GetModuleHandleExW` の `GET_MODULE_HANDLE_EX_FLAG_PIN` で効いた。
+- 殻はプローブが終わると本体を `dlclose` する（[Plug-in Modules](../Findings/Plug-in%20Modules.md)）ので、
+  プローブは `dlopen(RTLD_NOLOAD)`（mac）／`GET_MODULE_HANDLE_EX_FLAG_PIN`（Windows）で参照を
+  増やして本体を留めた。
 
-### 5. 【訂正】「共通モードでは刻まない」は誤りだった
+### 5. 共通モードで刻むかの測り直し
 
 この調査の途中で**「`kCFRunLoopCommonModes` に入れた `CFRunLoopTimer` は、VW が
 アイドルのときには刻まない」と読んだ回がある**（`outside` 局面の刻みが 0 件）。
-**これは誤りで、原因は仕掛けてから報告させるまでに 11 時間が空いたこと**——その間に
-Vectorworks が終了していれば、ピン留めした本体ごとタイマーが消えるので、書き溜めは
-増えない。**同じ起動のうちに 2 分で測り直したら 367 回刻んだ**（しかも届いたモードには
-`kCFRunLoopDefaultMode` が入っている＝共通モードで足りる）。
-
-**教訓: 「仕掛けて、後で報告させる」形の計測は、同じ起動のうちに閉じること。**
-プロセスが終われば仕掛けも消えるので、**刻みが 0 件なのは「刻まない」ではなく
-「もう居ない」**かもしれない。
+その回は**仕掛けてから報告させるまでに 11 時間が空いていた**。**同じ起動のうちに 2 分で
+測り直したら 367 回刻んだ**（届いたモードには `kCFRunLoopDefaultMode` が入っている）。
 
 ### 6. **VW が undo イベントを開いたまま回している最中**に当たったら——読むのは安全、**書くと混ざる**
 
@@ -219,25 +170,20 @@ Vectorworks が終了していれば、ピン留めした本体ごとタイマ�
 ビルド `1d5b70f53506` / `782dd705b13f` / `7fbdbc35d939`。
 [issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)）。
 
-上記 3 で分かったとおり、危ないのは「**VW が undo イベントを開けたまま、VW 自身が
-イベントを回している**」場面だけである。そこを狙って作って測った。
+「**VW が undo イベントを開けたまま、VW 自身がイベントを回している**」場面を狙って作って測った。
 
 **測ったのは「VW が出したモーダルダイアログの最中」である。** #206 はこの場面のほかに
 **ツールのドラッグ中・レンダリング中**も挙げていたが、そちらは**コマンドが戻った後も
-生きるタイマー**が要るので、この調査では作らなかった。
-**そちらは [issue #213](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/213)
-で測り終えている——下記 7。** 結論を先に書くと、**ドラッグ中もレンダリング中も刻みは
-届いて `gSDK` を読めるが、そのとき VW は undo イベントを開いていない**（clean な 4 回・
-3976 刻みで `building=yes` は 0 件）。**だから「書くと混ざる」が当てはまるのは、
-ここで測ったモーダルダイアログの最中だけである**——VW がイベントを開けたまま入れ子の
-ランループを回すのは、その場面だけだから（機構は下記 7）。
+生きるタイマー**が要るので、この調査では作らなかった
+（[issue #213](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/213)
+で測った——下記 7）。
 
 **作り方（梃子 2 つ）。プローブは 1 度も `SetUndoMethod` / `NameUndoEvent` を呼ばない:**
 
 1. **VW にイベントを開かせる**——`DeleteObject(h, useUndo=true)` は開いていなければ
    自分で開き、**こちらが return するまで開いたまま**（[Undo](../Findings/Undo.md)）。
 2. **VW にイベントループを回させる**——`ISDK::AlertQuestion`（VW 自身のモーダル確認
-   ダイアログ）。上記 3 のとおり、両プラットフォームで効く唯一の場面である。
+   ダイアログ。上記 ② の場面）。
 
 #### 刻みは届く。ただし **`kCFRunLoopCommonModes` に登録した 1 本だけ**
 
@@ -247,13 +193,12 @@ Vectorworks が終了していれば、ピン留めした本体ごとタイマ�
 | VW のモーダル確認ダイアログの最中 | **`kCFRunLoopDefaultMode` だけ** | **0 / 0 / 0 回** | — | — |
 | 自分でランループを回した（0.05 秒 × 12） | 両方（札ごとに 4 回） | 4 ＋ 4 回 | **回による**（下記） | 全件 |
 
-- **モードは `NSModalPanelRunLoopMode`。** だから**`kCFRunLoopDefaultMode` だけに
-  登録したタイマーは 1 回も届かない**——**同じ図面・同じ瞬間に 2 本並べて**、
-  登録モードだけを変えて測ったので、ここは取り違えようがない。
-  **刻みを VW のループへ当てたいなら `kCFRunLoopCommonModes`（か全モード）が要る。**
-- **刻みの中から `gSDK` を読める。** `IsCurrentlyBuildingAnUndoEvent()` と
+- **モードは `NSModalPanelRunLoopMode` だった。** `kCFRunLoopDefaultMode` だけに
+  登録したタイマーは 1 回も届かなかった——**同じ図面・同じ瞬間に 2 本並べて**、
+  登録モードだけを変えて測った。
+- **刻みの中から `gSDK` を読めた。** `IsCurrentlyBuildingAnUndoEvent()` と
   `GetNamedObject()` が全件成功し、例外も異常も出ていない。
-- **刻みの中の `IsCurrentlyBuildingAnUndoEvent()` は信用できる**——**同じ局面（自分で
+- **刻みの中の `IsCurrentlyBuildingAnUndoEvent()`**——**同じ局面（自分で
   ランループを回した 4 ＋ 4 回）で、イベントの状態だけを変えて両方の値が出た**:
 
   | 回 | その局面でイベントは | 刻みの中の `building` |
@@ -261,8 +206,8 @@ Vectorworks が終了していれば、ピン留めした本体ごとタイマ�
   | 2 回目（`782dd705b13f`） | 開いたまま（`CreateLocus` が開いたものを放置） | **8 回すべて `yes`** |
   | 3 回目（`7fbdbc35d939`） | `EndUndoEvent` で閉じてある | **8 回すべて `no`** |
 
-  そして同じ 3 回目の中で、**VW が開いている局面（モーダル中）では 50 回すべて `yes`**
-  に戻った。**＝刻みの中で「いま開いているか」を問うことは、ちゃんとできる。**
+  同じ 3 回目の中で、**VW が開いている局面（モーダル中）では 50 回すべて `yes`**
+  だった。
 
 #### **書くと、そのとき開いていた undo イベントに混ざる**
 
@@ -273,43 +218,28 @@ Vectorworks が終了していれば、ピン留めした本体ごとタイマ�
 | 対照 | **作り、その直後にイベントを閉じた**（＝閉じた別の段に入る） | **残った** | 消えた |
 | **刻みが作ったもの** | **VW が開いている最中**（刻みの中） | **消えた** | — |
 
-- **1 段目で刻みが作ったものだけが消え、対照は残った。** → 刻みの中での書き込みは
-  **そのとき開いていた undo イベントに入る**。
-- **2 段目で対照が消えた。** → 2 つは**本当に別の段に居た**。つまり 1 段目の結果は
-  「取り消しが広く効いた」のではない。**推論ではなく段の境目の観測である。**
-- **帰結: 利用者が 1 回取り消すだけで、刻みが作ったものが、刻みとまったく無関係な
-  作業と一緒に消える。** 逆に、刻みが作ったものだけを狙って残すことはできない。
+- **1 段目で刻みが作ったものだけが消え、対照は残った。**
+- **2 段目で対照が消えた。**
 
-#### 「いま触ってよいか」を問える口は 1 つだけ。しかも `yes` の意味が広い【ヘッダ根拠】
+#### 「いま触ってよいか」を問える口は 1 つだけ。しかも `yes` の意味が広い
 
 ```cpp
 // ISDK.h:2612 —— **コメントが 1 行も付いていない**（前 6 行まで出しても無い）
 virtual bool VCOM_CALLTYPE IsCurrentlyBuildingAnUndoEvent() = 0;
 ```
 
-- **`yes` は「利用者が操作中」を意味しない。** [Undo](../Findings/Undo.md) の実測どおり、
-  **SDK 内部が勝手に開く**（PIO ＋ `ResetObject`・ビューポートの生成と更新・
-  `DeleteObject(useUndo=true)`・**`CreateLocus` 1 つでも**）し、
-  **スクリプトエンジンはコマンドをまたいで `yes` を居座らせる**。しかも
-  **文書ごとの状態**である（[Documents](../Findings/Documents.md)）。
-  → **`yes` を「触るな」の旗にすると、置き土産ひとつで旗が立ったまま居座り、
-    以後の刻みが永久に何もできなくなる。** 信用できるのは `no` の側である。
-- **通知に「undo イベントが開いた」は無い。** `MCNotification.h` 全体で undo に
-  触れる定数は**1 本だけ**（`grep -i undo` の結果が 1 行）:
+- `MCNotification.h` 全体で undo に触れる定数は**1 本だけ**（`grep -i undo` の結果が 1 行）:
 
   ```cpp
   // MCNotification.h:179
   const Sint32 kNotifyUndoEndEvent = 'Udee';	// Send immediatelly before ending an undo event
   ```
 
-  **閉じる直前しか来ない。** だから「開いた瞬間に旗を立てる」作りは `kNotify*` では
-  **原理的に書けない**（立てられるのは下ろす側だけ）。**刻みの中で毎回問い直すしかない。**
-- **囲める通知があるのはツールの点取りだけ**: `kNotifyBeginToolMode`（`'BTOO'`、
+- ツールの点取りの両端の通知: `kNotifyBeginToolMode`（`'BTOO'`、
   "Sent when the current tool begins collecting points"）→ `kNotifyEndToolMode`
-  （`'ETOO'`、"finishes collecting points"）。**レンダリング中と VW のダイアログは
-  囲めない**——`kNotifyRenderModeAboutToChange` / `Changed` は「レンダリング方法の設定が
-  変わった」で「いま描いている最中」ではなく、`kNotifyDialogDisplayImminent`（`'DlgO'`）は
-  開く側だけで閉じたことを知らせる対が無い。
+  （`'ETOO'`、"finishes collecting points"）。`kNotifyRenderModeAboutToChange` / `Changed` は
+  「レンダリング方法の設定が変わった」の通知で、`kNotifyDialogDisplayImminent`（`'DlgO'`）は
+  開く側だけで、閉じたことを知らせる対が無い。
 
 ### 7. **ツールのドラッグ中・レンダリング中**に当たったら——届いて読めるが、**VW はイベントを開いていない**
 
@@ -321,7 +251,7 @@ virtual bool VCOM_CALLTYPE IsCurrentlyBuildingAnUndoEvent() = 0;
 上記 6 で測ったのは「VW が出したモーダル確認ダイアログの最中」だけだった。残る 2 つ
 ——**ツールのドラッグ中（点取りの最中）とレンダリング中**——をここで測る。ドラッグの
 最中に当てるには**メニューコマンドが戻った後も生きるタイマー**が要るので、上記 4 の 4 の
-ピン留めの作法で仕掛け、1 回目で仕掛け・2 回目で報告させた（**同じ起動のうちに閉じる**）。
+ピン留めの作法で仕掛け、1 回目で仕掛け・2 回目で報告させた（同じ起動のうちに閉じた）。
 
 **「ドラッグされたか」は機械で押さえた。** 利用者がドラッグしたかどうかはログに写らない
 ので、`kNotifyBeginToolMode`（`'BTOO'`）→ `kNotifyEndToolMode`（`'ETOO'`）で**点取りの
@@ -338,35 +268,22 @@ virtual bool VCOM_CALLTYPE IsCurrentlyBuildingAnUndoEvent() = 0;
 | **レンダリング中**（仕上げ Renderworks。下記） | **1427 回** | **0 回** | **全件** | **`NSModalPanelRunLoopMode`** |
 | clean な 4 回の全部 | **3976 回** | **0 回** | **全件・異常 0 件** | — |
 
-- **刻みは届く。** ドラッグ中・レンダリング中とも、共通モード（か全モード）へ登録した
+- ドラッグ中・レンダリング中とも、共通モード（か全モード）へ登録した
   タイマーは **250 ms ちょうど**で刻み続けた。
-- **その刻みから `gSDK` を読める**（`IsCurrentlyBuildingAnUndoEvent` / `GetNamedObject` /
-  図形の数え上げが**全件成功・例外 0 件**）。
-- **そのとき VW の undo イベントは開いていない**——clean な 4 回・**3976 刻みで
-  `building=yes` は 0 件**。だから**「書くと混ざる」（上記 6）が当てはまる場面が、
-  ドラッグ中にもレンダリング中にも現れない。**
+- その刻みからの読み（`IsCurrentlyBuildingAnUndoEvent` / `GetNamedObject` /
+  図形の数え上げ）は**全件成功・例外 0 件**。
+- clean な 4 回・**3976 刻みで `building=yes` は 0 件**。
 
 #### なぜ開いていないか——**VW はランループが回っていない区間でイベントを開閉している**
 
-機構は通知そのものに写っていた。**VW はドラッグの最中にイベントを開いて閉じている**
-——`kNotifyUndoEndEvent` が**点取りの囲みの中（`tool_depth=1`）で飛んでいる**。
-ところがその瞬間に `CFRunLoopCopyCurrentMode(CFRunLoopGetMain())` を読むと、
-**どの回も nil**（ログの `mode=(not-running)`）である:
+`kNotifyUndoEndEvent` が**点取りの囲みの中（`tool_depth=1`）で飛んでいた**。
+その瞬間に `CFRunLoopCopyCurrentMode(CFRunLoopGetMain())` を読むと、
+**どの回も nil**（ログの `mode=(not-running)`）だった:
 
 ```
 note ## what=undo-end ## t_ms=31653 ## tool_depth=1 ## building=yes ## mode=(not-running)
 note ## what=tool-end ## t_ms=31663 ## tool_depth=0 ## building=no  ## mode=(not-running)
 ```
-
-- **VW が undo イベントを開いてから閉じるまでの区間は、主ランループが回っていない**
-  ——VW 自身の同期処理の中である。
-- **ランループタイマーの刻みは、ランループが回る瞬間にしか配られない。**
-- → **だから刻みはその窓に入れない。** 上記 4 の 3「こちらの同期処理には割り込まれない」
-  の裏返しが、**VW 側の同期処理についても成り立つ**ということ。**推論ではなく観測である**
-  （通知が飛んだ時点のモードを読んでいる）。
-
-**上記 6（モーダル確認ダイアログの最中）だけが例外なのは、そこが「VW がイベントを
-開けたまま、入れ子のランループを回す」唯一の場面だから**である。
 
 #### レンダリング中は **`NSModalPanelRunLoopMode`**——既定モードだけのタイマーは**6 分止まる**
 
@@ -378,7 +295,7 @@ note ## what=tool-end ## t_ms=31663 ## tool_depth=0 ## building=no  ## mode=(not
 | **共通モード ＋ 全モード** | **1635 回** | 1 / 261 / 9711 ms |
 | **`kCFRunLoopDefaultMode` だけ** | **161 回** | 30 / 2625 / **351603 ms（5 分 52 秒）** |
 
-モードごとに割ると答えが出る:
+モードごとに割ったもの:
 
 ```
 NSModalPanelRunLoopMode:    1427 回（building=yes 0 回）  ← これがレンダリング中
@@ -387,16 +304,13 @@ NSEventTrackingRunLoopMode:   45 回（building=yes 0 回）
 com.apple.run-loop-mode.view-bridge.blocks: 5 回 / __kCFPasteboardPrivateMode: 1 回
 ```
 
-- **VW は進捗を出しながら、入れ子の `NSModalPanelRunLoopMode` でイベントを回す。**
-  利用者がレンダリングを選んだのが `t_ms=77154`（`kNotifyRenderModeChanged`）で、
-  そこから終わりまで**モーダルのモードの刻みが 1427 回（≒ 357 秒）**続いた。
-  **＝上記 6 のモーダルダイアログと同じモード**である。
+- 利用者がレンダリングを選んだのが `t_ms=77154`（`kNotifyRenderModeChanged`）で、
+  そこから終わりまで**モーダルのモードの刻みが 1427 回（≒ 357 秒）**続いた
+  （上記 6 のモーダルダイアログと同じモード）。
 - **その間、共通モードのタイマーは 250 ms ちょうどで刻み続けた**
   （最後の刻みまで `dt_ms=249〜251`・`mode=NSModalPanelRunLoopMode`）。
 - **既定モードだけのタイマーは、その間まるごと止まった**——1 度の間隔が **351.6 秒**。
-  **＝レンダリング中は既定モードが 1 度も回らない。**
-- **読みは全件通り、`building=yes` は 1 件も無い**（レンダリングのために VW が undo
-  イベントを開くことはない）。
+- **読みは全件通り、`building=yes` は 1 件も無かった。**
 
 #### 既定モードだけのタイマーは、ふつうの操作でも十数秒から数分止まる
 
@@ -414,30 +328,21 @@ com.apple.run-loop-mode.view-bridge.blocks: 5 回 / __kCFPasteboardPrivateMode: 
 
 - **7 回とも同じ形。** 共通モードの 1 本は 1〜2 秒（重い回で 9.7 秒）で戻ってくるのに、
   **既定モードだけの 1 本は十数秒〜30 秒止まり、レンダリングが入った回は 5 分 52 秒
-  止まった**（そのぶんが後でまとめて来る）。
-- 上記 6 の「モーダル中は共通モードの 1 本だけが届く」に加えて、**ふつうに触っている
-  間でも共通モード（か全モード）への登録が要る**。**既定モードだけで組むと、受け付けが
-  分単位で止まる。**
+  止まった**（そのぶんが後でまとめて来た）。
 
-#### 【落とし穴】**コマンドが undo イベントを開いたまま返すと、数十秒開いたままになる**
+#### コマンドが undo イベントを開いたまま返したときの実測
 
-狙って測ったものではなく、2 回目の計測を汚した事故から出たものだが、**実装に効く**ので残す。
+狙って測ったものではなく、2 回目の計測を汚した事故から出た記録。
 `DeleteObject(h, useUndo=true)` が開けたイベントを**閉じずにメニューコマンドから返した**回では:
 
-- **コマンドが戻っても閉じない。** 書き溜めの `kNotifyUndoEndEvent` が来たのは **53 秒後**で、
+- **コマンドが戻っても閉じなかった。** 書き溜めの `kNotifyUndoEndEvent` が来たのは **53 秒後**で、
   それまで**刻み 181 回すべてが `building=yes`** を読んだ。
-- **その間に刻みが作った図形は、その置き土産のイベントに入った**（利用者が 1 回取り消せば
-  一緒に消える関係になる）。
+- **その間に刻みが作った図形は、その置き土産のイベントに入った。**
 - **戻る直前に `EndUndoEvent` で閉じるようにしたら、`building=yes` は 0 件になった**
-  （上の表の clean な 4 回）。**閉じるのを処理の途中に 1 度置くだけでは足りない**
-  ——その後に開くものがあると残る（6 回目の回で 36 件出た）。
+  （上の表の clean な 4 回）。閉じるのを処理の途中に 1 度置いただけの回では、その後に
+  開くものがあって残った（6 回目の回で 36 件出た）。
 
-→ [Undo](../Findings/Undo.md) の「`EndUndoEvent` を呼ばなくても外部の終了時に自動で閉じる」は、
-**少なくとも「コマンドが戻った時点では閉じない」**。OS のタイマーを併用する実装では、
-**自分が開けたイベントは戻る直前に自分で閉じる**こと。閉じ忘れると、以後の刻みの
-書き込みがそのイベントへ流れ込む。
-
-#### 【道具について】**SDK から「描き直して、終わるまで待つ」ことはできない**（#215 で決着）
+#### 「描き直して、終わるまで待つ」口を探した記録（#215）
 
 **実測**（VW 2026 / macOS。`probes/runtime/render-sync-3d/` を 4 回。ビルド
 `230f69515fb9` / `c6f9a2cdbc98` / `db5473d03716` / `b9d83f799061`。
@@ -445,40 +350,36 @@ com.apple.run-loop-mode.view-bridge.blocks: 5 回 / __kCFPasteboardPrivateMode: 
 プローブは役目を終えたので消してある）。
 
 #213 では 4 つ試してどれも描かせられず、**原因は「2D（上面/平面）ビューのままだった
-から」**と見ていた。**3D へ切り替えて測り直した結果、原因はそこではなかった。**
+から」**と見ていた。#215 で 3D へ切り替えて測り直した。
 
-**切り替わったことは機械で押さえてある**——`ISDK::SetProjection(layer,
+**切り替わったことは機械で押さえた**——`ISDK::SetProjection(layer,
 projectionOrthogonal, false, true)` ＋ VectorScript の `SetView(-60,0,30,0,0,0)` の後、
-`GetProjection(layer)` が `projectionOrthogonal`(0) を返す（`projectionPlan` は **6**）。
-**`GetProjection(layer) != 6` が「上面/平面を出た」の唯一の機械判定**で、#213 に
-欠けていたのはこの 1 行である。図面には球を 196 個（画面に見えている範囲の 60% に
+`GetProjection(layer)` が `projectionOrthogonal`(0) を返した（`projectionPlan` は **6**）。
+図面には球を 196 個（画面に見えている範囲の 60% に
 収まる大きさ・位置。`GetViewCenter` ＋ `ViewPt2WorldPt` で割り出す）置いてある。
 
 ##### 「戻るまでの時間」で測ってはいけない
 
 最初は所要時間で測ろうとして**2 度しくじった**。決め手は利用者のスクリーンショットで、
 プローブが戻った後もステータスバーに **「Viewport-1 の更新 0:16」**（16 秒経過）が
-出ていた——`UpdateViewport` は 283 ms で戻っているのに、**VW はその後も描き続けて
-いた**。**＝「戻るまでの時間」は描画の量を測っていない。**
+出ていた——`UpdateViewport` は 283 ms で戻っているのに、VW はその後も描き続けていた。
 
-正しい道具は上記 4 節と同じ——**ランループを短い刻みで回し、1 周が伸びるかを見る**。
-伸びれば、その仕事は**呼び出しの後、イベントループで**行われている。
+道具を変えて、**ランループを短い刻みで回し、1 周が伸びるかを見た**:
 
 | 経路（**すべて 3D のビュー・球 196 個**） | 呼び出しが戻るまで | **戻った後にランループを回して吸われた時間** |
 | --- | --- | --- |
 | `SetRenderMode(layer, renderFinalRenderWorks, immediate=true, doProgress=true)` | **0 ms** | **0 ms**（5002 ms 回して **1 周の最長 53 ms**・100 ms 超の周 **0 回**） |
 | 中身を入れたビューポートの `UpdateViewport` | 355 ms（初回）/ 68 ms（2 度目） | **545 ms**（2563 ms 回して **1 周の最長 301 ms**・100 ms 超の周 **3 回**） |
 
-**同じ 1 回の実行・同じ道具で取った対照なので、取り違えようがない。**
+同じ 1 回の実行・同じ道具で取った対照である。
 
-**回数は正直に書いておく**——「0 ms で戻る」は **4 回**（32 呼び出し）の再現だが、
+**回数**——「0 ms で戻る」は **4 回**（32 呼び出し）の再現だが、
 **「戻った後にランループを回しても何も出てこない」はこの 1 回だけ**である
-（ランループで測る道具は 4 回目で入れた）。ただし**同じ実行の中で `UpdateViewport`
-の側は 545 ms 拾えている**ので、「道具が仕事を拾えないのでは」という疑いは潰れている。
+（ランループで測る道具は 4 回目で入れた）。同じ実行の中で `UpdateViewport`
+の側は 545 ms 拾えている。
 
 **測っていないこと**: **コマンドが終わって VW が自分のイベントループへ戻ってから
 描くのかどうか**は、プローブの中からは追えないので測っていない。
-**プラグインの用途——「描き直して、終わるまで待つ」——には、どちらでも答えは変わらない。**
 （「戻った後に VW が何をするか」は [#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)
 で一部を測った——**ランループで連続寸法が作り直され、undo イベントの終わりで PIO の外接と
 ビューポートの dirty の印が更新される**。断面の中身は戻った後も変わらなかった。
@@ -486,67 +387,46 @@ projectionOrthogonal, false, true)` ＋ VectorScript の `SetView(-60,0,30,0,0,0
 
 ##### 1. `SetRenderMode` は **`immediate=true` でも描かない**——先送りですらない
 
-- **3D でも 2D でも 0 ms で戻る。** 4 つのモード（`renderOpenGL` / `renderFinalShaded` /
+- **3D でも 2D でも 0 ms で戻った。** 4 つのモード（`renderOpenGL` / `renderFinalShaded` /
   `renderFinalHiddenLine` / `renderFinalRenderWorks`）× 2 つの投影（3D / 上面平面）を
-  4 回ずつ測って、**32 回すべて 0 ms**。**3D か 2D かで何ひとつ変わらない。**
-- **戻った後にランループを 5 秒ぶん回しても、VW は何もしない**（1 周の最長 53 ms）。
-  **同じ実行の中で `UpdateViewport` の後は 1 周が 301 ms まで伸びている**ので、
-  道具が仕事を拾えないのではない。**この経路では、そもそも描画が起きていない。**
-- → **ヘッダのコメントは実際と合わない**（`APIBase.Legacy.Defs.h:4225`。"If immediate
-  is true, then all rendering will take place before the call returns."）。かといって
-  次の文の「背景で描けるぶんはメインのイベントループへ入り直すまで先送りされる」でも
-  ない——**こちらがイベントループを回してやっても、何も出てこない。**
-  **この口がするのはモードを書くことだけだと思ってよい。**
-- **戻り値はモードによって違う。** `renderFinalShaded`(5) だけ **`true`**、
+  4 回ずつ測って、**32 回すべて 0 ms**。3D か 2D かで何ひとつ変わらなかった。
+- **戻った後にランループを 5 秒ぶん回しても、1 周の最長は 53 ms**。同じ実行の中で
+  `UpdateViewport` の後は 1 周が 301 ms まで伸びた。
+- ヘッダのコメント（`APIBase.Legacy.Defs.h:4225`）は "If immediate
+  is true, then all rendering will take place before the call returns."、続く文は
+  「背景で描けるぶんはメインのイベントループへ入り直すまで先送りされる」。
+- **戻り値はモードによって違った。** `renderFinalShaded`(5) だけ **`true`**、
   `renderOpenGL`(11) / `renderFinalHiddenLine`(6) / `renderFinalRenderWorks`(14) は
   **`false`**。**3D でも 2D でも、4 回とも同じ組み合わせ**だった。
-  **どちらでもモードは変わっている**（直後の `GetRenderMode` が狙った値を返す）ので、
-  **`false` を失敗と読んではいけない**（#213 から変わらず）。`true` を成功と読むのも
-  同じく誤りで、**戻り値からは何も分からない**。
-- **`SetProjection` も 0 ms で戻る**（ヘッダは "a long re-render … as a result of the
-  projection change" と書いているが、描画は起きない）。VectorScript の `SetView` は
-  1〜5 ms。
+  どちらでも、直後の `GetRenderMode` は狙った値を返した（#213 から変わらず）。
+- **`SetProjection` も 0 ms で戻った**（ヘッダは "a long re-render … as a result of the
+  projection change" と書いている）。VectorScript の `SetView` は 1〜5 ms。
 
 ##### 2. `UpdateViewport` は描く——が、**戻った時点では描き終わっていない**
 
-- **中身は入る。** 表示レイヤを入れれば（`SetViewportLayerVisibility(vp, layer, 0)`）、
+- **中身は入った。** 表示レイヤを入れれば（`SetViewportLayerVisibility(vp, layer, 0)`）、
   更新後のキャッシュ群（`kViewportGroupCache` = **3**）に **2 件**・外接
-  `左-1341.3 上1341.3 右1323.6 下-1323.6` が入る。**空枠を描いていたのではない。**
-  段取りは [Viewports](../Findings/Viewports.md) のとおりで、**`SetDirty(true)` と「ワイヤフレーム／
-  スケッチ以外の描画種別」が要る**（ヘッダ: "a **dirty** viewport, **whose render type is
+  `左-1341.3 上1341.3 右1323.6 下-1323.6` が入った。
+  段取りは [Viewports](../Findings/Viewports.md) のとおり（ヘッダ: "a **dirty** viewport, **whose render type is
   other than wireframe or sketch**, will be re-rendered."）。
-  **作りたてのままの `UpdateViewport` は 0 ms で戻り、何も起きない**（#213 の 131 ms は
+  **作りたてのままの `UpdateViewport` は 0 ms で戻り、何も起きなかった**（#213 の 131 ms は
   再現しなかった）。
-- **ただし戻っても終わっていない。** 戻った後にランループを回すと **545 ms ぶん**
-  仕事が出てくる（1 周が 301 ms まで伸びる）。利用者の画面では、プローブが戻った後も
+- 戻った後にランループを回すと **545 ms ぶん**
+  仕事が出てきた（1 周が 301 ms まで伸びる）。利用者の画面では、プローブが戻った後も
   ステータスバーに「Viewport-1 の更新」が**16 秒**出ていた。
-- **`IsDirty()` は完了の合図ではない。** 更新の直後に読むと **`no`** を返すのに、
-  描画はまだ続いている。**戻り値（`void`）も `IsDirty()` も当てにできない。**
-
-##### 3. 帰結——プラグインから「描き直して、終わるまで待つ」はできない
-
-- **描かせる口は `UpdateViewport`（ビューポート）だけ**で、レイヤの画面描画を
-  プログラムから起こす道は無い。
-- **終わりを知る道が無い。** 「いま描いているか」を問う口も、レンダリングの開始・終了の
-  通知も無い（下記）。`IsDirty()` も戻り値も完了を表さない。
-- **唯一の近道は「ランループを回して、1 周が伸びなくなるまで待つ」**——このプローブが
-  使った道具そのものである。**信号ではなく当て推量**なので、「静かになったら終わった
-  ことにする」以上のことは言えない。待つ側は締切を必ず持つこと。
-- **刻み（OS のタイマー）との関係**: `SetRenderMode` の呼び出し中も `UpdateViewport` の
-  呼び出し中も、250 ms のタイマーは **0 回**（VW は入れ子のランループを回さない）。
-  **利用者がメニューから描かせたとき**は `NSModalPanelRunLoopMode` で 250 ms ちょうど
-  届く（上記の 1427 回）——**SDK から起こした描画とは別物である。**
-  `UpdateViewport` の**先送りされたぶん**は普通のランループで走るので、そこでは届く。
+- **`IsDirty()`** は更新の直後に読むと **`no`** を返した。そのとき描画はまだ続いていた。
+- **刻み（OS のタイマー）**: `SetRenderMode` の呼び出し中も `UpdateViewport` の
+  呼び出し中も、250 ms のタイマーは **0 回**。利用者がメニューから描かせたときは
+  `NSModalPanelRunLoopMode` で 250 ms ちょうど届いた（上記の 1427 回）。
 
 ##### 効かなかった口（測ったので残す）
 
-- **`VWLayerObj::SetSheetPrintDPI(300)` は効かない**——書いた直後の
-  `GetSheetPrintDPI()` が **72** を返す（シートレイヤに対して。2 回再現）。
-- **`VWViewportObj::SetScale()` の数が大きいほど絵は大きくなる。** 100 → 50 にしたら
-  キャッシュ群の外接が ±2682.5 → ±1341.3 と**半分**になった（縮尺の分母のつもりで
-  小さくすると、絵も小さくなる）。
+- **`VWLayerObj::SetSheetPrintDPI(300)`**——書いた直後の
+  `GetSheetPrintDPI()` が **72** を返した（シートレイヤに対して。2 回再現）。
+- **`VWViewportObj::SetScale()`**——100 → 50 にしたら
+  キャッシュ群の外接が ±2682.5 → ±1341.3 と**半分**になった。
 
-**「いま描いているか」を問う口と、レンダリングの開始・終了の通知は無い**:
+「いま描いているか」を問う口と、レンダリングの開始・終了の通知を探した:
 
 - `ISDK` を `Render` で引いて出るのは `GetRenderMode` / `SetRenderMode` /
   `RefreshRenderingForSelectedObjects` ほか数本だけ。
@@ -554,12 +434,10 @@ projectionOrthogonal, false, true)` ＋ VectorScript の `SetView(-60,0,30,0,0,0
   `kNotifyAfterPendingUpdate` は**通知の取りまとめ用**（"help optimize pending
   notifications … (From OnIdle)"）、`kNotifyUndrawScrMods` / `kNotifyDrawScrMods` は
   **ツールの画面補助線の消し書き**、`kNotifyRenderModeAboutToChange` / `Changed` は
-  **モードの変更**。**描画そのものを囲む通知は無い。**
-- しかも **`kNotifyRenderModeAboutToChange` / `Changed` は、SDK からの `SetRenderMode`
-  では飛ばない**（11 → 14 の変更で 0 件。飛ぶのは**利用者がメニューで変えたときだけ**）。
-  **プログラムからの変更の目印には使えない。**
-- → **レンダリング中を測るなら、利用者にメニューから描かせて刻みの `mode=` で読み取る**
-  （`NSModalPanelRunLoopMode` が印になる）。上の数字はその道で取ったものである。
+  **モードの変更**。
+- **`kNotifyRenderModeAboutToChange` / `Changed` は、SDK からの `SetRenderMode`
+  では飛ばなかった**（11 → 14 の変更で 0 件。飛んだのは**利用者がメニューで変えたときだけ**）。
+- 上のレンダリング中の数字は、利用者にメニューから描かせて刻みの `mode=` で読み取ったもの。
 
 ### 8. **図面が 1 枚も開いていないとき**の `GetCurrentLayer()`——**nullptr が返り、落ちない**（件数と常に一致）
 
@@ -570,7 +448,7 @@ Claude Code から MCP ブリッジで回した。ビルド `26b6337dfcc7` / `44
 [issue #224](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/224)）。
 
 上記 1 で「図面が無くても刻みは続き、`GetOpenFilesList()` などは落ちずに『文書が無い』を
-返す」ことは分かっていたが、**`GetCurrentLayer()` を図面の無い状態で呼んだ記録は無かった**。
+返す」ことは測ってあったが、**`GetCurrentLayer()` を図面の無い状態で呼んだ記録は無かった**。
 20 ms の刻み（`kCFRunLoopCommonModes`）から、毎回 `GetOpenFilesList()` の件数 →
 `GetCurrentLayer()` →（ハンドルがあれば）`GetObjectName` / `GetObjectTypeN` を読み、
 図面あり → 全部閉じる → 新規を開く を通して並べた。
@@ -584,14 +462,14 @@ Claude Code から MCP ブリッジで回した。ビルド `26b6337dfcc7` / `44
 
 （Windows の 3 回目は閉じずに 20 分置いて上限で止まった回。）
 
-- **落ちない。** 件数が 0 になった最初の刻みから `nullptr` が返り、以後ずっと `nullptr`。
+- **落ちなかった。** 件数が 0 になった最初の刻みから `nullptr` が返り、以後ずっと `nullptr`。
   例外も異常終了も無い（落ちれば最後に残るよう、件数が変わった刻みでは呼ぶ前に 1 行
   書いていた）。
 - **起動直後（一度も図面を開いていない状態）も `nullptr`。** 再起動した直後、図面 0 枚の
   まま、殻のブリッジの刻み（`kCFRunLoopDefaultMode` の `CFRunLoopTimer`）から
   `GetCurrentLayer()` を呼ぶと `nullptr`、件数も 0 で、落ちなかった（`vw_ping` の
   `document_open=false` / `open_documents=0`。図面なしの `vw_run_probe` も同じ判定で
-  断られた）。**閉じた後と起動直後で振る舞いは変わらない。**
+  断られた）。
   **殻の時計の最初の刻みからも測った（mac / Windows）。** プローブは図面が無いと走らせ
   られず（メニューは `DocIsActive`）、ブリッジ（MCP サーバ）は mac のローカルにしか無いので、
   殻に「頼み札があるときだけ、起動直後の刻みから件数と `GetCurrentLayer()` を書く」記録を
@@ -605,45 +483,35 @@ Claude Code から MCP ブリッジで回した。ビルド `26b6337dfcc7` / `44
   | mac（ビルド `b11ecfd3c565`） | t=0 ms | **58 刻み（30 秒）すべて `nullptr`** | 20 刻みすべてハンドル（「レイヤ-1」・型 31） |
   | Windows（殻 `701945345747`） | t=2 ms | **560 刻み（3 分）すべて `nullptr`** | （開く前に記録の上限 3 分で終わった） |
 
-  **どちらも食い違い 0・落ちない。** モジュールが読み込まれた直後の刻み——起動画面が
+  **どちらも食い違い 0・落ちなかった。** モジュールが読み込まれた直後の刻み——起動画面が
   出ている頃——から呼んでも `nullptr` が返るだけだった。
   （**殻の差し替えそのもので Windows の VW が起動時に落ちる**事故を、この測定の途中で
-  踏んだ。原因は記録のコードではなく、**起動時の読み込み直しで古い番地を指したまま残った
-  殻の時計**だった——[issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233)。
-  当初はプラグインライブラリ関数の書き出しのせいと見ていたが誤り。[プラグインモジュール](../Findings/Plug-in%20Modules.md)
+  踏んだ。当初はプラグインライブラリ関数の書き出しのせいと見ていたが、後に
+  [issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233) で、
+  記録のコードではなく**起動時の読み込み直しで古い番地を指したまま残った殻の時計**と分かった
+  ——[プラグインモジュール](../Findings/Plug-in%20Modules.md)
   「【罠】Windows の VW は起動時にモジュールを一度降ろして読み込み直す」。）
 - **件数と `nullptr` かどうかは、刻みごとに常に一致した**（mac 1 万 2 千回余り・Windows
   3 万 5 千回余りで食い違い 0 回）。**閉じる途中・開く途中の刻みは 1 つも来なかった**——`CloseDocument` /
   `OpenDocumentPath` はブリッジの刻みの中で同期的に終わり、その間に入れ子の刻みは
-  配られていない。**だから「中途半端な状態」を刻みが見る場面は、少なくともこの道では
-  現れない。** **利用者が手で閉じて・開いた Windows の 2 周でも同じ**で、件数 1 → 0 →
+  配られていない。**利用者が手で閉じて・開いた Windows の 2 周でも同じ**で、件数 1 → 0 →
   1 と切り替わる刻みのどれにも食い違いは無かった（mac の、人が UI から閉じる道は測っていない
-  が、Windows で人の道・mac でブリッジの道が揃ったので、ここで止める）。
-- **【注意】別の文書のレイヤが同じアドレスで返る。** 閉じた文書のレイヤ
+  ——Windows で人の道・mac でブリッジの道が揃ったので、ここで止めた）。
+- **別の文書のレイヤが同じアドレスで返った。** 閉じた文書のレイヤ
   `0x7904530380` と、後で新規に開いた文書のレイヤが**同じ値**だった（別の回でも再現）。
   **Windows でも同じ**——`000001FE552347F0` / `000001FE55232AB0` がそれぞれ別の文書の
   レイヤとして 2 度ずつ返った。
-  **ハンドルを刻みをまたいで持ち越すと、閉じた後に別の文書のレイヤを指しうる**——
-  刻みのたびに `GetCurrentLayer()` を引き直すこと。
 
-**帰結（使い道）:** 刻みの中で「図面が開いているか」を判定するのに、
-`GetCurrentLayer() != nullptr` と `GetOpenFilesList()` の件数のどちらを使っても答えは
-同じで、**図面が無いときに `GetCurrentLayer()` を呼ぶのを避ける必要は無い**（mac / Windows）。
-殻のブリッジ（`plugin/src/McpBridge.cpp` の `PrepareRun` / `vw_ping`）も前者で判定して
-いる。安上がりなのは `GetCurrentLayer()`（配列を作らない）。
-
-**ついでに見えたこと（Windows）【推定】:** 報告の実行のとき、書き溜めの心拍が
+**ついでに見えたこと（Windows）:** 報告の実行のとき、書き溜めの心拍が
 **9.4 秒・9.9 秒古かった**（ふだんの間隔は最大 1.7 秒）。図面を開いてからメニューで
-プローブを選び終えるまでのどこかで、**`SetTimer` の刻みが 10 秒近く止まっていた**ことになる。
+プローブを選び終えるまでのどこかで、**`SetTimer` の刻みが 10 秒近く止まっていた**。
 どの局面で止まったか（メニューの追跡中か・ピッカーのダイアログ中か）は記録していない。
 殻の McpBridge.h は「Windows の WM_TIMER はモーダルダイアログの中でも配られる」前提で
-ピッカー中の受け付けを見送っており、上記 4 の ②（`AlertQuestion`）でも刻んだので、
-**止まった場所は未特定**のまま置く。
+ピッカー中の受け付けを見送っており、上記 4 の ②（`AlertQuestion`）でも刻んだ。
 （後に [#235](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/235) で、
-**メニューを開いてからダイアログが出るまでの間に 7〜14 秒止まる**ことを実測した——下記 9
-「利用者が開いたモーダルの最中」。VW 自身のダイアログ（環境設定など）の最中は止まらない。
-この 9.4 / 9.9 秒もメニューの追跡中だった見込みが高いが、ピッカー（レイアウトダイアログ）の
-最中は測っていない。）
+**メニューを開いてからダイアログが出るまでの間に 7〜14 秒止まる**ことを測った——下記 9
+「利用者が開いたモーダルの最中」。VW 自身のダイアログ（環境設定など）の最中は止まらなかった。
+ピッカー（レイアウトダイアログ）の最中は測っていない。）
 
 ### 9. 刻みから **`CloseAllFilesAndQuitVectorworks(true, false)`** を呼ぶ——**呼べる。呼び出しは戻り、終了はその後のイベントループで起きる**
 
@@ -653,7 +521,6 @@ Claude Code から MCP ブリッジで回した。ビルド `26b6337dfcc7` / `44
 5 段を回した（ビルド `0522e32b6127`。仮想環境で、メモリの割り当てが少なかった——時間の
 数値は膨らんでいるかもしれない）。
 [issue #230](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/230)）。
-**mac と Windows で、刻みの振る舞いがはっきり違う**（下記「Windows」）。
 
 Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ一時ファイルへ書き（書くたびに
 閉じる）、起動し直した後に読んだ。** タイマーは 2 本——終了を呼ぶ「駆動」（100 ms）と、
@@ -671,45 +538,35 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 
 （上は mac。Windows は下記の表。）
 
-- **落ちない。** mac で 6 回・Windows で 3 回終了させて、すべて `atexit` まで届いた——**C ランタイムの `exit()`
-  を通る正常な終了**である。
-- **呼び出しはプロセスを終わらせずに戻る。終了は、戻った後のイベントループで起きる**
-  （問い 3）。戻るのは**図面を閉じ終えた後**（`DocClose` → 戻る）で、そこから
-  **約 4〜8 秒**後にプロセスが終わる。**＝「応答を書いてから呼ぶ」順序で足りる**し、
-  呼び出しから戻った後に何かを書いても間に合う。
+- **落ちなかった。** mac で 6 回・Windows で 3 回終了させて、すべて `atexit`（C ランタイムの
+  `exit()` が呼ぶ）まで届いた。
+- **呼び出しはプロセスを終わらせずに戻った**（問い 3）。戻るのは**図面を閉じ終えた後**
+  （`DocClose` → 戻る）で、そこから**約 4〜8 秒**後にプロセスが終わった。
 - **mac では、戻った後も刻みは届き、`gSDK` を読めた**（問い 5）。終了する回では、戻った後に
   **約 2 秒空いて**（`max_gap_ms` 2128〜2754）`NSEventTrackingRunLoopMode` で刻みが
   1〜数回届き、`GetOpenFilesList()`（0 件）・`IsCurrentlyBuildingAnUndoEvent()`（`no`）・
   `GetCurrentLayer()`（`nullptr`）がどれも落ちずに返った。**最後の刻みから `atexit` まで
-  1.3〜2.0 秒**は刻みが来ない。**タイマーを止めなくても、この 4 回では何も起きなかった。**
-- **保存の確認は「未保存の変更」があるときだけ出る。** 刻みの中で `CreateLine` しただけでは
-  **確認が出ずに終わった**（最初の版で踏んだ）。`MarkCurrentDocChanged()` を足すと出た。
-  **刻みの中で（undo イベントの外で）図面に書いても、文書は「変更あり」にならない**
-  ——上記 4 の 1 の「書ける」は、
-  保存の確認に引っ掛からないという意味でもある（[Documents](../Findings/Documents.md)「未保存の変更ありは
-  読めない」で、保存済みの図面に刻みの中から書いて「閉じる」の確認が出ないことを確かめた。#240）。
-  なお、ここで使った「新規の図面」は**ブリッジが実行のたびに一時ファイルへ保存していた**ので、
-  実際には保存済みの図面だった【推定】——**無題のままの図面は、何もしていなくても確認を出す**
-  （同上）。
+  1.3〜2.0 秒**は刻みが来なかった。タイマーは止めず、この 4 回では何も起きなかった。
+- **保存の確認**: 刻みの中で `CreateLine` しただけでは
+  **確認が出ずに終わった**（最初の版で踏んだ）。`MarkCurrentDocChanged()` を足すと出た
+  （[Documents](../Findings/Documents.md)「未保存の変更ありは読めない」の #240 で、保存済みの
+  図面に刻みの中から書いて「閉じる」の確認が出ないことを確かめた）。ここで使った「新規の図面」は
+  **ブリッジが実行のたびに一時ファイルへ保存していた**。
 
 #### 保存の確認の最中（問い 4）
 
 - **観測のタイマーは刻み続けた**（17.8 秒で 353 刻み、間隔は最大 164 ms）。モードは
   **`NSModalPanelRunLoopMode`**。図面 1 枚・`GetCurrentLayer()` は読めた。
 - **`IsCurrentlyBuildingAnUndoEvent()` は `no`**——`AlertQuestion` の最中
-  （上記 4 の 6 は `yes`）とは違う。保存の確認は undo イベントを開いたまま出るものではない。
+  （上記 4 の 6 は `yes`）とは違った。
 - **mac では、終了を呼んだタイマー自身は呼び出しの最中に 1 度も入り直さなかった**（駆動の
-  入り直し 0 回・全 5 回）。**`CFRunLoopTimer` は自分の callout の最中に同じタイマーを
-  発火しない**。
-- **Windows では入り直す。** 確認の最中、終了を呼んだ同じ `SetTimer` の刻みが
+  入り直し 0 回・全 5 回）。
+- **Windows では入り直した。** 確認の最中、終了を呼んだ同じ `SetTimer` の刻みが
   **35〜86 回入り直した**（確認ダイアログのメッセージループが `WM_TIMER` をそのまま配る）。
   段 1 では**その入り直した刻みから 2 度目を呼べてしまった**（呼び出しの 1.5 秒後）。
-  ＝**「1 本のタイマーの中で呼ぶから入れ子は起きない」は mac でしか成り立たない。**
-- **2 度目を呼ぶと、保存の確認が 2 つ重なって出る**（mac・Windows とも人の目視）。落ちは
-  せず、両方キャンセルすると内側 → 外側の順に戻った。**終了を頼まれる作りなら、
-  「終了の呼び出しの最中」を旗で持って、入れ子の要求を見送る**（Windows では必須）。
-  `IsCurrentlyBuildingAnUndoEvent()` は確認の最中も `no`（mac・Windows とも）なので、
-  この判定には使えない。
+- **2 度目を呼ぶと、保存の確認が 2 つ重なって出た**（mac・Windows とも人の目視）。落ちは
+  せず、両方キャンセルすると内側 → 外側の順に戻った。
+  `IsCurrentlyBuildingAnUndoEvent()` は確認の最中も `no`（mac・Windows とも）。
 
 #### 利用者が開いたモーダル（環境設定・オーガナイザ・ファイル設定）の最中
 
@@ -731,28 +588,24 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 | オーガナイザ | 届く | 落ちない | 同上（オーガナイザの上） | 18955 ms | 同上 |
 | ファイル設定（ファイル ＞ 書類設定） | 届く | 落ちない | 同上（ファイル設定の上） | 31113 ms | 同上 |
 
-- **刻みは届く**（問い 1）。3 種とも VW の窓のクラスは `#32770`（Win32 のダイアログ）で、
-  そのメッセージループが `WM_TIMER` を配る。上記 8 の「刻みが 10 秒近く止まっていた」は、
-  少なくともこの種のダイアログの最中ではない（下記「止まるのはメニューの追跡中」）。
-- **呼ぶと、保存の確認がダイアログの上に重なって出る**（問い 2。目視——computer use の
+- **刻みは届いた**（問い 1）。3 種とも VW の窓のクラスは `#32770`（Win32 のダイアログ）で、
+  そのメッセージループが `WM_TIMER` を配る。
+- **呼ぶと、保存の確認がダイアログの上に重なって出た**（問い 2。目視——computer use の
   画面で確かめた。機械でも、確認の最中は前面が題 `Vectorworks` の `#32770` になり、
-  元のダイアログは無効で残っていた）。**ダイアログを閉じもしないし、閉じるのを待ちもしない。**
-  `kNotifyBeforeApplicationQuit` は呼んだ刻みと同じミリ秒に届く（上記と同じ）。
-- **「キャンセル」で呼び出しから戻り、元のダイアログはそのまま開いている**（問い 3。
+  元のダイアログは無効で残っていた）。**ダイアログを閉じもしなかったし、閉じるのを待ちも
+  しなかった。** `kNotifyBeforeApplicationQuit` は呼んだ刻みと同じミリ秒に届いた（上記と同じ）。
+- **「キャンセル」で呼び出しから戻り、元のダイアログはそのまま開いていた**（問い 3。
   戻った直後の刻みで前面が元のダイアログに戻り、`IsWindowEnabled` が `yes` に戻った）。
   その後キャンセルで閉じても何も起きなかった。
-- **確認の最中も刻みは入り直す**（呼び出しの最中に 225 / 286 / 297 回）。上記と同じく、
-  **「終了の呼び出しの最中」を旗で持って入れ子の要求を見送る**のが要る。
+- **確認の最中も刻みは入り直した**（呼び出しの最中に 225 / 286 / 297 回）。
 - **このダイアログの最中は `IsCurrentlyBuildingAnUndoEvent()` が `yes`**（3 種とも、
-  呼ぶ前から）。保存の確認だけの最中（上記。`no`）とは違う——上記 6 の「VW が undo
-  イベントを開いたまま回している最中」に当たる。**この間に刻みから図面へ書くと、その undo
-  イベントに混ざる**（上記 6）。終了を呼ぶだけなら書いていないので関係しない。
-- **止まるのはメニューの追跡中。** 刻みが長く来なかったのは**メニューを開いてからダイアログが
-  出るまで**の 4 回だけ（6.9 / 14.4 / 7.3 / 8.8 秒。どれも空きの終わりがダイアログの最初の
+  呼ぶ前から）。保存の確認だけの最中（上記。`no`）とは違った。
+- **刻みが長く来なかったのは、メニューを開いてからダイアログが出るまで**の 4 回だけ
+  （6.9 / 14.4 / 7.3 / 8.8 秒。どれも空きの終わりがダイアログの最初の
   刻み）。ダイアログの最中の空きは最大 2.3 秒（確認が出る瞬間）。メニューの追跡とダイアログの
   組み立てのどちらで止まっているかは、この記録では分けられない。
 
-**mac でも同じ**（VW 2026 Update 6 / macOS 27.0.1。同じプローブ、ビルド `5e9af2e4bed5`。
+**mac**（VW 2026 Update 6 / macOS 27.0.1。同じプローブ、ビルド `5e9af2e4bed5`。
 2026-10-27。ローカルの Claude Code から MCP ブリッジで走らせ、ダイアログの開閉と保存の
 確認のボタンは computer use の AX（`AXPress`）で押した）。タイマーは 50 ms の
 `CFRunLoopTimer` 1 本を `kCFRunLoopCommonModes` に登録し、「モーダルの最中」は
@@ -764,38 +617,35 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 | オーガナイザ | 届く（26.3 秒で 520 刻み） | 落ちない | 同上 | 18405 ms | 同上 |
 | ファイル設定（ファイル ＞ 書類設定） | 届く（26.6 秒で 525 刻み） | 落ちない | 同上 | 18603 ms | 同上 |
 
-- **刻みは届く**（問い 1）。3 種とも、開いている間のモードは `NSModalPanelRunLoopMode`
-  （上記 4 の 6・保存の確認と同じ）。**既定のモードにだけ登録したタイマーはこの間 0 回**
-  になる（上記 6）。
-- **呼ぶと、保存の確認がダイアログを開いたまま出る**（問い 2）。窓の一覧（AX）で、確認の
+- **刻みは届いた**（問い 1）。3 種とも、開いている間のモードは `NSModalPanelRunLoopMode`
+  （上記 4 の 6・保存の確認と同じ）。
+- **呼ぶと、保存の確認がダイアログを開いたまま出た**（問い 2）。窓の一覧（AX）で、確認の
   窓（260×286）と元のダイアログが同時にあり、確認は**元のダイアログの左上から (+66, +66)**
-  の位置——ダイアログの内側——に出た（3 種とも同じ）。**閉じもしないし、閉じるのを待ちも
-  しない**のは Windows と同じ。前後（確認が上か）は画面で見ていない【推定】（後から開いた
-  モーダルなので上と見ている）。`kNotifyBeforeApplicationQuit` は呼んだ刻みと同じミリ秒。
-- **「キャンセル」で呼び出しから戻り、元のダイアログはそのまま開いている**（問い 3。
+  の位置——ダイアログの内側——に出た（3 種とも同じ）。ダイアログを閉じもせず、閉じるのを
+  待ちもしなかった（Windows と同じ）。前後（確認が上か）は画面で見ていない。
+  `kNotifyBeforeApplicationQuit` は呼んだ刻みと同じミリ秒。
+- **「キャンセル」で呼び出しから戻り、元のダイアログはそのまま開いていた**（問い 3。
   戻った直後の刻みのモードは `NSModalPanelRunLoopMode` のまま・図面 1 枚。窓の一覧にも
   ダイアログが残り、その後キャンセルで閉じても何も起きなかった）。オーガナイザ・ファイル
   設定では戻った後の 20 秒に 401 刻み届いた（環境設定の回はプローブの 5 分の上限に先に
   当たって 1 刻みで止まった——確認を 5 分以上置いたのは、画面を見る承認を待ったため）。
-- **確認の最中、呼んだタイマーは 1 度も入り直さない**（3 回とも 0 回）。上記「保存の確認の
-  最中」の **mac の `CFRunLoopTimer` は自分の callout の最中に発火しない**と同じで、Windows
-  （225〜297 回）とはここが違う。
+- **確認の最中、呼んだタイマーは 1 度も入り直さなかった**（3 回とも 0 回）。上記「保存の確認の
+  最中」の mac と同じで、Windows（225〜297 回）とは違った。
 - **このダイアログの最中は `IsCurrentlyBuildingAnUndoEvent()` が `yes`**（3 種とも、呼ぶ前
-  から）。閉じると `no` に戻る。Windows と同じ。
+  から）。閉じると `no` に戻った。Windows と同じ。
 - メニューを押してから最初の刻みまでの空きは 0.4〜1.2 秒（Windows は 7〜14 秒）。ただし
   ここではメニューを **AX で押した**（メニューを追跡していない）ので、Windows の「メニューの
   追跡中に止まる」とは比べられない。
 
 #### 終了を知らせる通知（問い 5 の後半）
 
-- **`kNotifyBeforeApplicationQuit` は「終わる」合図にならない。** 呼び出しと**同じミリ秒**に、
+- **`kNotifyBeforeApplicationQuit`** は呼び出しと**同じミリ秒**に、
   **保存の確認より前に**届き、**キャンセルされて終わらなかった回にも届いた**（2 度呼べば
   2 回届く）。SDK のコメントは「Sent immediately before the application quits」
-  （`MCNotification.h:274`）だが、実際は「終了の手続きに入った」である。これを見て
-  タイマーを止めると、キャンセルされたときに止まったままになる。
-- **`kNotifyDocClose` は図面が閉じた時点で届く**（呼び出しの中・戻る直前）。図面 0 枚なら
-  届かない。
-- **`plugin_module_main` に `kPluginModuleDeinit`（-2）が届く——刻みが止まった後に 1 回**
+  （`MCNotification.h:274`）。
+- **`kNotifyDocClose` は図面が閉じた時点で届いた**（呼び出しの中・戻る直前）。図面 0 枚なら
+  届かなかった。
+- **`plugin_module_main` に `kPluginModuleDeinit`（-2）が届いた——刻みが止まった後に 1 回**
   （mac は `atexit` の約 0.1 秒前、Windows は約 20 秒前。Windows は下記の表）。殻に action を時刻付きで書かせて（`plugin/src/ModuleMain.cpp`。
   頼み札があるときだけ書く）、刻み・`atexit` と突き合わせた（ビルド `e0331468016c` /
   `4ac3163369f7`）:
@@ -805,17 +655,14 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
   | 保存済みの図面 1 枚 | 6.2 秒 | **1.21 秒** | **0.12 秒** |
   | 図面 0 枚 | 3.8 秒 | **1.42 秒** | **0.10 秒** |
 
-  - **-2 の後に刻みは 1 度も来ていない。** 刻みが止まるのが先（イベントループを抜けた）で、
-    -2 はその後、プロセスが `exit()` へ入る直前に来る。-2 の直後に -5（インタフェースの解放）
-    が 1 回続く。起動では -1 が 1 回、その後に -3 / -4 / -5 が 8 回。
-  - **だから -2 は「タイマーを止める入口」として遅すぎも早すぎもしない**——キャンセルされた
-    回には来ず（終わらないので）、来た時点ではもう刻みは来ない。止めるなら -2 で止めればよいが、
-    **止めなくても何も起きなかった**（上記）。
+  - **-2 の後に刻みは 1 度も来ていない。** 刻みが止まるのが先で、
+    -2 はその後、プロセスが `exit()` へ入る直前に来た。-2 の直後に -5（インタフェースの解放）
+    が 1 回続いた。起動では -1 が 1 回、その後に -3 / -4 / -5 が 8 回。キャンセルされた回には
+    -2 は来なかった。
   - SDK 側がこの値でしていることは、`MiniCadCallBacks.cpp:256` の
-    `GS_ReleaseStandardVCOMGlobals` で `gIFC` などのグローバルを手放すことだけ
-    【ソース根拠】。**-2 の中で `gSDK` を呼べるかは測っていない**（殻は呼ばずに書くだけ）。
-  - **-2 は VW が読み込んだモジュール（殻）にしか届かない。** 殻が自分で読み込む本体には
-    VW から `plugin_module_main` は呼ばれない。
+    `GS_ReleaseStandardVCOMGlobals` で `gIFC` などのグローバルを手放すことだけ（ソースを
+    読んだ）。**-2 の中で `gSDK` を呼べるかは測っていない**（殻は呼ばずに書くだけ）。
+  - 殻が自分で読み込む本体には、VW から `plugin_module_main` は呼ばれない。
 
 #### Windows
 
@@ -827,26 +674,23 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 | 保存済み | 出ない | **1287 ms**（`DocClose` の 1245 ms 後） | — | **0 回** | 8.0 秒 → 20.0 秒（計 28.0 秒） |
 | 図面 0 枚 | 出ない | **711 ms** | — | **0 回** | 8.0 秒 → 20.1 秒（計 28.1 秒） |
 
-- **終わっていく回では、呼び出しの後に刻みが 1 回も来ない**（観測も駆動も。最後の刻みは
-  呼び出しの直前か確認ダイアログの中）。mac のように「戻った後に刻みが来て `gSDK` を読む」
-  場面そのものが無い。**＝ Windows では終了の途中で `gSDK` を呼ぶ心配は無い。**
-- **呼び出しは mac より遅く戻り（0.7〜1.3 秒）、プロセスはその後 28〜30 秒生きている。**
-  -2 は戻ってから 8〜10 秒後、`atexit` は -2 の約 20 秒後。**呼ぶ側が「プロセスが終わって
-  ロックが放される」ことで見届けるなら、30 秒以上待つ前提にする**（仮想環境での値）。
+- **終わっていく回では、呼び出しの後に刻みが 1 回も来なかった**（観測も駆動も。最後の刻みは
+  呼び出しの直前か確認ダイアログの中）。
+- **呼び出しは mac より遅く戻り（0.7〜1.3 秒）、プロセスはその後 28〜30 秒生きていた。**
+  -2 は戻ってから 8〜10 秒後、`atexit` は -2 の約 20 秒後（仮想環境での値）。
 - **利用者が閉じる道（メニューの「終了」＝`CloseMainWindow`）でも並びは同じ**——閉じる指示の
-  7〜14 秒後に -2、その 19〜21 秒後にプロセスが終わる（3 回。issue #257。
-  [Plug-in Modules](../Findings/Plug-in%20Modules.md)「OS タイマーを持つ常駐プラグイン…は、終了時の
+  7〜14 秒後に -2、その 19〜21 秒後にプロセスが終わった（3 回。issue #257。
+  [Plug-in Modules](Plug-in%20Modules.md)「OS タイマーを持つ常駐プラグイン…は、終了時の
   落ち方を変えない」）。タイマーを止めない常駐プラグインが入っていても、閉じたときの
   終わり方は変わらなかった（同じ節。82 回）。刻みがいつまで来るかは下の「利用者が閉じる道の
   刻み」。
-- `kNotifyBeforeApplicationQuit` が確認より前に届き、キャンセルされても届くのは mac と同じ。
+- `kNotifyBeforeApplicationQuit` が確認より前に届き、キャンセルされても届いたのは mac と同じ。
 - 確認の最中の `IsCurrentlyBuildingAnUndoEvent()` は `no`（mac と同じ）。
 - この間、利用者の側で**起動時のクラッシュが何度かあった**。当時は「古いインスタンスが
   終わる前に起動し直した」形を疑ったが、**その後の調査（issue #253）で、殻のタイマーが
   起動時の読み込み直しで古い番地を指したまま残り、起動中に落ちることが分かった**
   （[Plug-in Modules](../Findings/Plug-in%20Modules.md)「【罠】Windows の VW は起動時にモジュールを一度
-  降ろして読み込み直す」。殻を留めて直した）。【推定】この節の測定中のクラッシュも同じもの
-  （当時の回は記録が無く、突き合わせられない）。
+  降ろして読み込み直す」。殻を留めて直した）。この節の測定中の回は記録が無く、突き合わせられない。
 
 #### 利用者が閉じる道の刻み（Windows）
 
@@ -875,10 +719,9 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 | 10 | 0 枚 | 読まない | 0 | +10 | +7304 | +26855 | +26922 |
 | 11 | 0 枚 | 読まない | 0 | +3 | +7391 | +26668 | +26661 |
 
-- **`BApQ` の後に刻みは 1 度も来ない**（11 回とも）。閉じる指示の後に来た刻みは 3 回だけで、
+- **`BApQ` の後に刻みは 1 度も来なかった**（11 回とも）。閉じる指示の後に来た刻みは 3 回だけで、
   どれも `BApQ` より前（閉じる指示がまだキューにあった数 ms〜63 ms）。最後の刻みから
-  `BApQ` まで 11〜73 ms。**刻みから終了を呼ぶ道（上の表）と同じく、閉じていく途中に刻みが
-  当たって `gSDK` を呼ぶ場面は無い**——タイマーを止めておく必要も無い。
+  `BApQ` まで 11〜73 ms。
 - 並びは **閉じる指示 → （数 ms）`BApQ` → `DocClose`（図面があれば +46〜+5921 ms）→
   -2（+7.3〜9.5 秒）→ -5（-2 の約 0.6 秒後）→ `atexit`（-2 の約 19〜20 秒後）→ 終了
   （`atexit` の 0〜80 ms 後）**。1・2 回目だけ -2 が 41〜59 秒と遅いのは、VM の起動が
@@ -891,9 +734,9 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
   いない（起動が遅かった回）。
 - **7 回目は `atexit` に届かず、`libcef.dll_unloaded` の中の `0xC0000005` で落ちた**
   （Windows の異常終了記録・WER のフルダンプ。Sentry には無し）。-2・-5 は届いており、
-  落ちたのは -2 の 36 秒後。プローブの刻みは `BApQ` 以降 0 回なので、刻みが落としたもの
-  ではない。#257 で 82 回再現しなかった `cli` の終了時の落ち方と同じモジュール
-  （[Plug-in Modules](../Findings/Plug-in%20Modules.md)「OS タイマーを持つ常駐プラグイン…」）。
+  落ちたのは -2 の 36 秒後。プローブの刻みは `BApQ` 以降 0 回。#257 で 82 回再現しなかった
+  `cli` の終了時の落ち方と同じモジュール
+  （[Plug-in Modules](Plug-in%20Modules.md)「OS タイマーを持つ常駐プラグイン…」）。
   この回は**ブリッジが図面を閉じてホーム画面へ戻った後**に閉じていた（#257 は起動して
   ホーム画面から閉じただけ）。同じ形の 0 枚の回は 5 回中 1 回。
 
@@ -904,10 +747,10 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 [issue #204](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/204)）:
 
 - **パレットを閉じた（隠した）とき、または Vectorworks がほかのアプリの裏に回ったとき、
-  JS の `setInterval`（250 ms）がちょうど 60 秒に 1 回まで間引かれる。** パレットを出し直すと
-  すぐ 250 ms ごとに戻る。
+  JS の `setInterval`（250 ms）がちょうど 60 秒に 1 回まで間引かれた。** パレットを出し直すと
+  すぐ 250 ms ごとに戻った。
 - `NSProcessInfo beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep` で
-  **App Nap から外しても変わらない**（＝ OS の省電力ではなく、埋め込みブラウザ側の間引き）。
+  **App Nap から外しても変わらなかった**。
 - 埋め込みブラウザは **Chromium Embedded Framework**（`Vectorworks Web Helper` が
   `--type=gpu-process` 等で走る。SDK のヘルプにも
   `<user folder>/Plug-ins/**ChromiumEF**/WebBrowser_Console_Output.txt` という道が出てくる）。
@@ -928,37 +771,26 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
   CEF のコマンドラインスイッチ（`--disable-background-timer-throttling` など）を
   プラグインから足す口は無い。`varTestWebPalette`(6793) は「Internal」と注記された
   書き込み専用の Boolean。
-- **したがって手当ては「パレットの外に時計を置く」しかない。そしてそれは成り立つ**
-  ——OS のタイマーなら間引かれず、文書が無くても刻む（上記 4 で実測）。【ソース根拠】
 
 ### 代わりに使える 2 つの口（どちらも SDK 側にある）
 
 - **`IWebJavaScriptProvider::OnPaletteVisibilityChange(bool visible, IWebPaletteFrame* frame)`**
-  ——**隠れた／出たことが C++ 側で分かる**（`IExtensionWebPalette.h:144`）。
-  「隠れている間は JS を当てにしない」と切り替える足場になる。【ヘッダ根拠】
-- **`IWebPaletteFrame::ExecuteJavaScript(code)`** ——C++ から JS を叩ける。
-  **時計を C++ 側へ移せば、間引かれたページを C++ から起こす形にできる**
-  （`ExecuteJavaScript(code, onCompleteCallback)` の方は、SDK のコメントに
-  「callback is executed **outside UI thread**」とあるので、そこから `gSDK` を触らない）。【ヘッダ根拠】
+  （`IExtensionWebPalette.h:144`）。
+- **`IWebPaletteFrame::ExecuteJavaScript(code)`**。`ExecuteJavaScript(code, onCompleteCallback)`
+  の方は、SDK のコメントに「callback is executed **outside UI thread**」とある。
 
 ## 6. 図面が 1 枚も開いていないと、ウェブパレットは出ない
 
 **実測**（VW 2026 / macOS arm64。出所は上と同じ issue #204）:
 
-- **Vectorworks を再起動した直後、図面が 1 枚も開いていない画面ではパレットが出ない**
+- **Vectorworks を再起動した直後、図面が 1 枚も開いていない画面ではパレットが出なかった**
   ——メニューから `gSDK->SetWebPaletteVisibility(iid, true)` を呼んでも出ず、JS タイマーは
-  一度も動かない。**図面を新規作成して編集画面になると、パレットは開いた状態で現れる。**
-- **SDK 側に出す手立ては無い。** パレットに触れる口は
+  一度も動かない。**図面を新規作成して編集画面になると、パレットは開いた状態で現れた。**
+- パレットに触れる口は
   `GetWebPaletteVisibility` / `SetWebPaletteVisibility`（`ISDK.h:3543-3544`）と
   `GetWebPaletteFrame`（`ISDK.h:3800`）の 3 つで、どれも引数は `VWIID` 1 つ
-  （＋ `bool`）。文書が無いときの扱いを変える引数も設定も無い。【ヘッダ根拠】
-- **拡張は「文書があること」を前提にしている**——メニュー拡張も `SMenuDef` の
-  `Needs = EMenuEnableFlags::DocIsActive` を立てれば文書が無い間はグレーアウトする
-  （実機確認プラグインで実測。`plugin/src/ProbeMenu.cpp`）。VW 側がパレットを
-  文書の窓に紐付けていると見るのが自然だが、**それが仕様として明記された文書は無い**。
-- したがって**「文書が開いていない間はウェブパレットは動かない」前提で設計する**。
-  文書が開いたことを知りたいなら `kNotifyDocOpen`（上記 2）で拾う。【ヘッダ根拠】
-- **ただし受け付けそのものは、文書が無くても動かせる。** OS のタイマーは**図面が 1 枚も
-  開いていない状態でも刻み続け**、`gSDK` は落ちずに「文書が無い」を返した（上記 4 の 1。
-  実測）。**＝起動直後の取りこぼしを無くしたいなら、時計をパレットから OS のタイマーへ
-  移すのがそのまま答えになる。**
+  （＋ `bool`）。文書が無いときの扱いを変える引数も設定も無い。
+- メニュー拡張は `SMenuDef` の `Needs = EMenuEnableFlags::DocIsActive` を立てると、文書が
+  無い間はグレーアウトした（実機確認プラグインで実測。`plugin/src/ProbeMenu.cpp`）。
+- OS のタイマーは**図面が 1 枚も開いていない状態でも刻み続け**、`gSDK` は落ちずに
+  「文書が無い」を返した（上記 4 の 1）。

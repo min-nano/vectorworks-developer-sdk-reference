@@ -5,27 +5,25 @@
 「ビューポートでフィルタ」の保存先を探した調査（[Graphic Legends](../Findings/Graphic%20Legends.md)）で
 得たもの。
 
-> 結論は Findings が正。ここには測った当時の読みも残っているので、食い違えば Findings を信じる。
+> ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
-## 読み出しは信用できない（書き込みは効く）
+## `TaggedDataGetNumElements` / `TaggedDataGet` の読み出しの実測
 
-- **「型で総なめ」して探すのは無駄**（1 度やって騙された）。`TaggedDataGetNumElements` は
-  **渡した型 ID を検証しない**らしく、実際に入っている型と違っていても同じ要素数を返し、
-  `TaggedDataGet` はその型の大きさで切り出したゴミを返す（同じタグが 13 種類すべての型で
-  「見つかる」。文字列に見える値も出るが偽物）。
-- **型とタグが分かっていても `TaggedDataGet` の読み値は当てにならない**（正しい容れ物 ID・
-  型・タグで読ませたら、件数は生バイトと一致したのに値はポインタらしき数——`-523223174`
-  など——が返った）。**件数は正しく、値は壊れる**。書き込み（`TaggedDataCreate` ＋
-  `TaggedDataSet`）は実機で効いているので、読みだけの問題。
-- したがって**探索は 16 進ダンプでやる**。`MCObjectHandle` は `GSHandle`＝`char**` なので、
-  参照外しでそのまま中身が読める（大きさは `GSGetHandleSize`）。
+- 型 ID を総なめして読ませた（1 度）。実際に入っている型と違う型 ID を渡しても
+  `TaggedDataGetNumElements` は同じ要素数を返し、`TaggedDataGet` はその型の大きさで
+  切り出した値を返した（同じタグが 13 種類すべての型で「見つかった」。文字列に見える
+  値も出た）。
+- 正しい容れ物 ID・型・タグで読ませたら、件数は生バイトと一致し、値はポインタらしき数
+  （`-523223174` など）が返った。
+- 書き込み（`TaggedDataCreate` ＋ `TaggedDataSet`）は実機で効いた。
+- 生バイトは `MCObjectHandle`（`GSHandle`＝`char**`）を参照外しして読み、大きさは
+  `GSGetHandleSize` で取った（下の表）。
 
 ## 補助オブジェクトの連鎖と `'DMDT'`
 
-UI にしか無い設定は、オブジェクトの**補助オブジェクトの連鎖**（オブジェクト変数 703 ＝
-`ovFirstAuxObject`。"read/write : used to manipulate the Aux list - Public for VS"）に
-データオブジェクトとしてぶら下がっていることがある。実機の生バイト（フィルタを掛けた
-グラフィック凡例の先頭の補助オブジェクト）:
+フィルタを掛けたグラフィック凡例の**補助オブジェクトの連鎖**（オブジェクト変数 703 ＝
+`ovFirstAuxObject`。ヘッダの説明は "read/write : used to manipulate the Aux list - Public for VS"）を
+たどり、先頭の補助オブジェクトの生バイトを読んだ:
 
 | オフセット | 中身 |
 | --- | --- |
@@ -36,5 +34,5 @@ UI にしか無い設定は、オブジェクトの**補助オブジェクトの
 | +110 | `01 00` ＝ 要素数 1 |
 | +114 | `c0 01 00 00` ＝ 448 ＝ 参照先オブジェクトの `InternalIndex` |
 
-同じ構造の補助オブジェクトが複数ぶら下がり、+86 は `'ptd_'` `'rwtt'`（SDK ヘッダの
+同じ構造の補助オブジェクトが複数ぶら下がっていた。+86 は `'ptd_'` `'rwtt'`（SDK ヘッダの
 `kTaggedDataContainerNNA_Internal*` そのもの）や `'GrLe'` `'modl'` `'FSTL'`（文字スタイル）など。

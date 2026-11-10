@@ -44,7 +44,7 @@
   実装ソース・`vs.py`）に 1 件も無い**。
 - いちばん近い `VWFC::Tools::VWAutoClassing::SetAttrsByClass(MCObjectHandle)` は**7 つを順に
   呼ぶだけ**で、書き込み回数は減らない（`SDKLib/Source/VWSDK/VWFC/Tools/AutoClassing.cpp:344`。
-  [実装](../Metrics/Attributes%20and%20Classes.md#全属性をまとめて-by-class-にする-isdk-の口は無いソース根拠)）。
+  [実装](../Metrics/Attributes%20and%20Classes.md#全属性をまとめて-by-class-にする口を探したvwfc-のソースを読んだ)）。
 - **「1 回で済ませる」道は無い。** 減らせるのは「呼ばずに済ませる」道だけ（次節）。
 
 ## 費用は「属性の書き込み」ではなく「それが起こす PIO の作り直し」に掛かる
@@ -56,7 +56,8 @@
 - **`SetArrowByClass`（マーカー）だけは PIO でも無料**——マーカーの by-class 化は作り直しを
   起こさない。「文書の既定で既に by-class だから」ではない（新規の図面では 7 つとも既定は `false`）。
 - **費用は「書き込み」ではなく「状態の変化」に掛かる。** 既に by-class のものへ同じ書き込みを
-  もう一度しても 0.00ms。**`SetObjectClass` も同額**（9.27ms）。
+  もう一度しても 0.00ms。**`SetObjectClass` も同額**（9.27ms）——クラスの割り当てそのものが
+  作り直しを起こす。
 - 作り直しは [Parametric Objects](Parametric%20Objects.md) の「リセット（再生成）をまとめられるか」
   と同じ機構で、**止める口もまとめる口も無い**。残る道は「作り直しを起こさせない」（次節）。
 
@@ -170,14 +171,18 @@ successful」＝**成否**である。**クラス属性の口を全数当たっ�
   （[校正の表](../Metrics/Attributes%20and%20Classes.md#物差しの校正getmarkerpolys-は描かれるかを映すgetobjectbounds-は映さない)）。
 - **線の `GetObjectBounds` はマーカーを含まない**（1.9999 インチのマーカーでも幅 0 のまま）。
   場所を計算するなら `GetMarkerPolys` の図形の境界を自分で足す。図形の種別はどの様式でも 21。
-- **`ConvertToGroup` / `ConvertObjectToLines` はマーカーを映さない**（前者は素の線で `nil`、
-  後者は線の芯だけ）。図形として取り出せるのは `GetMarkerPolys` だけ。
+- **`ConvertToGroup` / `ConvertObjectToLines` はマーカーを映さない**（前者は素の線で `nil`
+  ——シンボルや PIO のように「中身を持つもの」専用らしい。後者は線の芯だけを写す）。
+  図形として取り出せるのは `GetMarkerPolys` だけ。
 
 ### クラス経由の道は、どれも描かれない（7 通り試した）
 
 - **`GetArrowByClass` が `yes` でも絵には何も無い。** `ResetObject`・`SetClUseGraphic(true)`・
   クラス側を中口（`SetClMarker`）で書く・順序を逆にする、のどれでも出ない。出るのは
   per-object へ書き写した線だけ（[実測の表](../Metrics/Attributes%20and%20Classes.md#クラス経由の道はどれも描かれない7-通り試した)）。
+- **`SetClUseGraphic`（クラスの「グラフィック属性を使用」）は関係ない。** VWFC の参照実装が
+  この旗で `SetArrowByClass` を囲っているのは**ほかの 5 つの属性と揃えているだけ**で、
+  マーカーが出る条件ではない。
 
 ### 目で見ても同じだった
 
@@ -196,6 +201,8 @@ successful」＝**成否**である。**クラス属性の口を全数当たっ�
 
 - **`SetArrowByClass` の後に per-object のマーカーを書くと、by-class の旗が下りる**
   （`GetArrowByClass` が `no`）。図形は出るが per-object の値で、クラスに追随しない。
+  **SDK の参照実装が「書き写し → `SetArrowByClass`」の順である理由がこれ**で、逆順では
+  by-class にならない（[実測](../Metrics/Attributes%20and%20Classes.md#順序が効くper-object-へ書き写すのは-setarrowbyclass-より先)）。
 
 ### by-class の線では、per-object の読みは信用できない
 
@@ -255,7 +262,8 @@ successful」＝**成否**である。**クラス属性の口を全数当たっ�
 - **対応は 1 対 1**（色だけが 1 対 2——`SetDefaultColors` 1 本でペン色と面色の両方が下りる）
   （[実測の表](../Metrics/Attributes%20and%20Classes.md#既定の値を書くとその属性の旗だけが下りる)）。
 - **同じ値を書いても旗は下りる**（退避した値そのものを書いて下りた）。
-- **値は完全に往復する。旗を立てても値は壊れない**（旗と値は別に持たれている）。
+- **値は完全に往復する。旗を立てても値は壊れない**（旗と値は別に持たれている）。退避を
+  「立てる前」に済ませ忘れても取り返せる（とはいえ、退避は先に済ませるのが素直）。
 
 ### 戻した後に作ったものは by-instance で生まれる
 
@@ -434,7 +442,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 - **中口（`Get/SetMarker`）の `size`（`short`）は 1/16384 インチ**（11 点すべてで
   `dSize = size ÷ 16384`。ポイントではない）。上限 1.999939 = 32767 ÷ 16384 は `short` の上限
   （[#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116)。
-  [実測の表](../Metrics/Attributes%20and%20Classes.md#正体-大きさは-116384-インチの-16-ビット整数だから上限が約-2-インチになる)）。
+  [実測の表](../Metrics/Attributes%20and%20Classes.md#マーカーの大きさの格納形式116384-インチ単位の-16-ビット整数と上限の実測)）。
 - **新口の `dSize` も 1/16384 インチへ量子化される。** 文書の既定の「0.0100 → 0.0099」も同じ
   筋【推定】。
 - **同じ `short` でも `Get/SetArrowHeads` は 1/72 インチ、`Get/SetMarker` は 1/16384 インチ。**
@@ -488,7 +496,8 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 
 - `EMarkerType`（`VWFC/VWFCLibrary.h:62`。`kMarkerFilledArrow = 0` … `kMarkerCross = 6`）の番号で、
   `0`→`0` / `1`→`256` / `2`→`1280` / `3`→`2` / `4`→`130` / `5`→`259` / `6`→`260` の `MarkerType` に
-  なる。`nAngle` も様式ごとの既定（矢印 15 / 丸 0 / スラッシュ・十字 45）が入る
+  なる。`nAngle` も様式ごとの既定（矢印 15 / 丸 0 / スラッシュ・十字 45）が入る（#108 で
+  「全区間 `15`」と読めたのは、振っていた様式がすべて矢印の仲間だったから）
   （[対応表](../Metrics/Attributes%20and%20Classes.md#per-object-の旧口setarrowheadsnは-emarkertype-の番号-06)）。
 - **VWFC の名前と入る値は言葉として一致しない**（`kMarkerEmptyArrow` は塗り無し `256`、
   `kMarkerEmptyBall` は白塗り `130`）。名前ではなく数値で読む。
@@ -496,12 +505,14 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 ### 範囲外は飽和でも下位ビットでもない——per-object は一律 `2048`
 
 - **0〜6 以外は負も含め一律 `2048`**（`kAngleBaseMarker`。25 点で確認）。飽和・下位ビット・
-  剰余のどれでもない。
+  剰余のどれでもない。#110 で `1280` を書いて `2048` が読めたのは、`1280` が範囲外だった
+  というだけのこと。
 
 ### 文書の既定の旧口（`SetDefaultArrowHeadsN`）は**別の表**——`ArrowType` の enum 0〜4
 
 - `MiniCadCallBacks.h:756` の `ArrowType`（`arArrow = 0` / `arTightArrow = 1` / `arBall = 2` /
-  `arSlash = 3` / `arCross = 4`）で解釈され、`0` / `1` / `2` / `259` / `260` になる。**範囲外は `0`**
+  `arSlash = 3` / `arCross = 4`）で解釈され、`0` / `1` / `2` / `259` / `260` になる。**範囲外は `0`**。
+  生まれた線も同じ値を持つので、既定の読みの嘘ではなく本当にその値が書かれている
   （[対応表](../Metrics/Attributes%20and%20Classes.md#文書の既定の旧口setdefaultarrowheadsnは別の表arrowtype-の-enum-04)）。
 - **同じ番号が 2 つの口で別の様式を指す**（`3` は per-object で丸、既定でスラッシュ）。
   **だから旧口では様式を指定しない。**
@@ -535,7 +546,8 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 ### 角度（`nAngle`）——**書ける。ただし角度を持たない様式がある**
 
 - **新口（`SMarkerStyle.nAngle`）でも書ける**（矢印で 14 点が往復。以前の「中口だけ」は誤りで
-  [#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116) で訂正）。
+  [#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116) で訂正。
+  #113 が 9 点すべてで `1` を読んだのは、角度を振るときの様式を丸に固定していたため）。
   `nAngle` は `Sint8`（`MiniCadCallBacks.h:841`）で `-128`〜`127`。
 - **新口で書くと、根が丸 `2`・投げ縄 `5`・`10`・矩形 `11`・二重線 `12` の様式では `1` になる**
   （[実測](../Metrics/Attributes%20and%20Classes.md#角度nangle書けるただし角度を持たない様式がある)）。
@@ -646,7 +658,7 @@ std::function<void(MCObjectHandle h)>)`（`ISDK.h:2697`）ひとつ。VWFC の
   この図面のクラス表に実在し、ID は `MaxClassID()` を超える
   （[実測の表](../Metrics/Attributes%20and%20Classes.md#doguestclasses-は参照している図面のクラスを足す)）。
 - `<n>` は参照の番号と見られる【推定】（参照 1 つでしか測っていない）。
-- **オーガナイザとナビゲーションパレットにゲストは出ない。** 画面と揃えるなら `false`。
+- **オーガナイザとナビゲーションパレットにゲストは出ない。** 画面と揃えるなら `doGuestClasses=false`。
 - ゲストの見分けは「`false` の列挙に無い」か名前の `NNA#` 接頭辞（前者が確か）。
 - デザインレイヤビューポートで参照した場合の顔ぶれは測っていない。
 

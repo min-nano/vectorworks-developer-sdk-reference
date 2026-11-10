@@ -29,7 +29,8 @@
   （[一覧](../Metrics/Timers%20and%20Notifications.md#1-isdk-に暇なとき周期的にの口は無い)）。
 - **`RegisterDialogForTimerEvents(dialogID, ms)` は「ダイアログが開いている間」の時計。**
   VWFC は `VWDialog::RegisterForTimerEvents` → `OnDialogTimer()`。**`RunDialogLayout` は
-  モーダル**（[Layout Dialogs](Layout%20Dialogs.md)）なので常駐の受け付けには使えない。
+  モーダル**（[Layout Dialogs](Layout%20Dialogs.md)）なので常駐の受け付けには使えない——使うと利用者は
+  図面を触れない。
 - **ウェブパレットには渡せる `dialogID` が無い**（中身は HTML で `VWDialog` ではない）【ヘッダ根拠】。
 - `TickCount()` は時刻を読む口（1/60 秒単位）。`RegisterMenuForCallback` は通知の受け取り、
   `RegisterExternal` は外部モジュールの登録で、どちらも周期ではない。
@@ -46,7 +47,8 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - **`whichChange` は `Include/Kernel/Core/MCNotification.h` の `kNotify*`**（VW 2026 SDK に
   **184 個**）。**公式リファレンス（`Info/` / `Versions/`）には 1 行も載っていない**
   （[型と例](../Metrics/Timers%20and%20Notifications.md#2-通知registernotificationprocedure--knotifyは出来事用で周期ではない)）。
-- **出来事が起きなければ 1 度も呼ばれない**ので、外からの要求を拾う時計にはならない。
+- **出来事が起きなければ 1 度も呼ばれない**ので、外からの要求を拾う時計にはならない（利用者が
+  何も触らずにいれば永久に呼ばれない）。
 - **`kNotifyApplicationActivate` は「前面に戻った瞬間に拾い直す」のに使える**——間引かれる
   JS タイマーの取りこぼしだけは埋められる【ヘッダ根拠】。
 - VW 本体にはアイドルのループがある（`kNotifyBeforePendingUpdate` のコメント「From OnIdle」）が、
@@ -56,7 +58,8 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 - **ツール拡張（`GROUPID_ExtensionTool`）には `kAction_OnIdle`（112）が来る**。メニュー・PIO・
   ウェブパレットの拡張には無い。
-- **届くのは自分のツールがアクティブな間だけ**——常駐の受け付けには使えず、「ツールを選んで
+- **届くのは自分のツールがアクティブな間だけ**——利用者が別のツールを選んだ瞬間に止まるので
+  常駐の受け付けには使えず、「ツールを選んで
   いる間だけ動く監視」（カーソル追従など）向き【ヘッダ根拠】。
 
 ## 4. OS のタイマーから `gSDK` を呼ぶ——**できる**（mac / Windows とも実測）
@@ -88,7 +91,9 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 ### 2. ただし**間隔は保証されない**（「250 ms ごと」と当てにしてはいけない）
 
 - コマンドが戻った後の `dt` は**平均 252〜273 ms・最大 1.5〜4.9 秒・最小 16〜69 ms**
-  （空いたぶんが後でまとめて来る）。配り手は **Vectorworks のイベント処理**。
+  （空いたぶんが後でまとめて来る）。配り手は OS ではなく **Vectorworks のイベント処理**なので、
+  VW が同期処理で詰まっている間は刻みが止まり、明いてから続く（下記 3 がその裏返し）。
+  最大値は「その回で観測した最悪値」として読む。
 - **タイムアウトや一定周期のポーリングは、刻みの回数ではなく時刻で測ること。**
 
 ### 3. こちらの同期処理には割り込まれない（両プラットフォーム）
@@ -106,11 +111,12 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - **macOS: メニューコマンドはメインスレッドで走る。**
 - **macOS: `CFRunLoopRunInMode` は「短く刻んで何度も呼べば」回る**【訂正】。1 回で 0.6〜1.5 秒を
   取ると即座に戻り刻みは 0 回だが、**0.05 秒 × 12 回なら 8 回届き `kCFRunLoopRunTimedOut` で戻る**
-  （[実測](../Metrics/Timers%20and%20Notifications.md#4-プラットフォームごとの作法)）。待ちたいなら
-  0.05 秒ずつ回す。当初の「自分で回すことはできない」は誤り。
+  （[実測](../Metrics/Timers%20and%20Notifications.md#4-プラットフォームごとの作法)）——短い刻みで呼べば、
+  ちゃんと時間を使って刻みを配ってから `TimedOut` で戻る。待ちたいなら 0.05 秒ずつ回す。当初の「自分で回すことはできない」は誤り。
 - **macOS: 登録は `kCFRunLoopCommonModes` で足りる**（既定モードが共通モードに入っている）。
   全モードへ入れるとペーストボード・view-bridge のモードの分も拾える。主ランループのモードは 13 個。
-- **macOS: メインキューの `dispatch_source` も `CFRunLoopTimer` とほぼ同じ振る舞い。**
+- **macOS: メインキューの `dispatch_source` も `CFRunLoopTimer` とほぼ同じ振る舞い**なので、
+  どちらでもよい。
 - **Windows: `SetTimer(nullptr, 0, ms, proc)`（ウィンドウ無し）で足りる。** `WM_TIMER` は VW の
   メッセージポンプが配り、自分で `PeekMessage` を回してもその場で配られる。
 - **【罠】Windows では、起動時に読み込まれる殻でも、タイマーを作る前に
@@ -126,7 +132,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 - 一度「`kCFRunLoopCommonModes` のタイマーはアイドルで刻まない」と読んだが、**仕掛けてから
   報告させるまでに 11 時間空き、その間に VW が終わっていた**のが原因。同じ起動のうちに測り
-  直したら 367 回刻んだ（[経緯](../Metrics/Timers%20and%20Notifications.md#5-訂正共通モードでは刻まないは誤りだった)）。
+  直したら 367 回刻んだ（[経緯](../Metrics/Timers%20and%20Notifications.md#5-共通モードで刻むかの測り直し)）。
 - **教訓: 「仕掛けて、後で報告させる」計測は同じ起動のうちに閉じる。** 刻み 0 件は「刻まない」
   ではなく「もう居ない」かもしれない。
 
@@ -152,7 +158,8 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 - **刻みの中で作ったものは、そのとき VW が開いていた undo イベントに入る。** 1 段目の取り消しで
   それだけが消え、別の段の対照は 2 段目で消えた（段の境目の観測。[表](../Metrics/Timers%20and%20Notifications.md#書くとそのとき開いていた-undo-イベントに混ざる)）。
-- **利用者が 1 回取り消すだけで、刻みが作ったものが無関係な作業と一緒に消える。**
+- **利用者が 1 回取り消すだけで、刻みが作ったものが無関係な作業と一緒に消える。** 逆に、刻みが
+  作ったものだけを狙って残すことはできない。
 
 #### 線引き——刻みの中で何をしてよいか
 
@@ -164,12 +171,14 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 #### 「いま触ってよいか」を問える口は 1 つだけ。しかも `yes` の意味が広い【ヘッダ根拠】
 
 - 口は `IsCurrentlyBuildingAnUndoEvent()`（`ISDK.h:2612`。コメント無し）だけ。
-- **`yes` は「利用者が操作中」を意味しない。** SDK 内部が勝手に開き（`CreateLocus` 1 つでも）、
+- **`yes` は「利用者が操作中」を意味しない。** SDK 内部が勝手に開き（PIO ＋ `ResetObject`・
+  ビューポートの生成と更新・`DeleteObject(useUndo=true)`・`CreateLocus` 1 つでも）、
   スクリプトエンジンはコマンドをまたいで居座らせ、文書ごとの状態である（[Undo](Undo.md)・
   [Documents](Documents.md)）。**`yes` を「触るな」の旗にすると永久に何もできなくなりうる。
   信用できるのは `no` の側。**
 - **通知に「undo イベントが開いた」は無い。** undo に触れるのは `kNotifyUndoEndEvent`
-  （`MCNotification.h:179`、閉じる直前）だけ——**刻みの中で毎回問い直すしかない。**
+  （`MCNotification.h:179`、閉じる直前）だけ——「開いた瞬間に旗を立てる」作りは `kNotify*` では
+  原理的に書けない（立てられるのは下ろす側だけ）。**刻みの中で毎回問い直すしかない。**
 - 囲める通知はツールの点取り（`kNotifyBeginToolMode` / `kNotifyEndToolMode`）だけ。
   **レンダリング中と VW のダイアログは囲めない**（`kNotifyRenderModeAboutToChange` / `Changed` は
   設定の変更、`kNotifyDialogDisplayImminent` は開く側だけ）。
@@ -191,6 +200,8 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - `kNotifyUndoEndEvent` は点取りの中で飛ぶが、**その瞬間の主ランループのモードは毎回 nil**
   （回っていない）。**刻みはランループが回る瞬間にしか配られないので、その窓に入れない**
   （観測。[ログ](../Metrics/Timers%20and%20Notifications.md#なぜ開いていないかvw-はランループが回っていない区間でイベントを開閉している)）。
+- 上記 4 の 3「こちらの同期処理には割り込まれない」の裏返しが、**VW 側の同期処理についても
+  成り立つ**（推論ではなく、通知が飛んだ時点のモードを読んだ観測）。
 - **モーダル確認ダイアログ（上記 6）だけが、「VW がイベントを開けたまま入れ子のランループを回す」
   唯一の場面**。
 
@@ -200,7 +211,8 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
   イベントを回す**（上記 6 と同じモード）。共通モードのタイマーは 250 ms ちょうどで刻み続け、
   **既定モードだけのタイマーは 351.6 秒（5 分 52 秒）まるごと止まった**
   （[実測](../Metrics/Timers%20and%20Notifications.md#レンダリング中は-nsmodalpanelrunloopmode既定モードだけのタイマーは6-分止まる)）。
-- レンダリングのために VW が undo イベントを開くことはない。
+- ＝レンダリング中は既定モードが 1 度も回らない。レンダリングのために VW が undo イベントを
+  開くことはない。
 
 #### 既定モードだけのタイマーは、ふつうの操作でも十数秒から数分止まる
 
@@ -214,15 +226,18 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
   閉じず**、その間の刻みの書き込みはそのイベントに入った。
 - **戻る直前に自分で `EndUndoEvent` で閉じる**と 0 件になった。処理の途中に 1 度閉じるだけでは
   足りない（後から開くものが残る）。[Undo](Undo.md) の「外部の終了時に自動で閉じる」は、
-  **少なくともコマンドが戻った時点では閉じない**（[実測](../Metrics/Timers%20and%20Notifications.md#落とし穴コマンドが-undo-イベントを開いたまま返すと数十秒開いたままになる)）。
+  **少なくともコマンドが戻った時点では閉じない**（[実測](../Metrics/Timers%20and%20Notifications.md#コマンドが-undo-イベントを開いたまま返したときの実測)）。
 
 #### 【道具について】**SDK から「描き直して、終わるまで待つ」ことはできない**（#215 で決着）
 
 （mac。[issue #215](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/215)。
 3D のビュー（`GetProjection(layer) != 6` で機械的に確認）・球 196 個で測った。
-[実測](../Metrics/Timers%20and%20Notifications.md#道具についてsdk-から描き直して終わるまで待つことはできない215-で決着)）
+[実測](../Metrics/Timers%20and%20Notifications.md#描き直して終わるまで待つ口を探した記録215)）
 
 #213 で「2D ビューのままだったから描けない」と見ていたのは誤りで、**3D でも描かない**。
+`GetProjection(layer) != 6` が「上面/平面を出た」の唯一の機械判定で、#213 に欠けていたのは
+この 1 行だった。コマンドが終わって VW が自分のイベントループへ戻ってから描くのかは測って
+いないが、プラグインの用途（描き直して、終わるまで待つ）には、どちらでも答えは変わらない。
 
 ##### 「戻るまでの時間」で測ってはいけない
 
@@ -242,15 +257,16 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - **中身は入る**（表示レイヤを入れ、`SetDirty(true)` とワイヤフレーム／スケッチ以外の描画種別が
   要る。[Viewports](Viewports.md)）。作りたてのままの `UpdateViewport` は 0 ms で何も起きない。
 - **戻った後にランループへ 545 ms ぶんの仕事が出てくる。** **`IsDirty()` は更新直後に `no` を返す
-  が完了の合図ではない。**
+  が完了の合図ではない。** 戻り値（`void`）も当てにできない。
 
 ##### 3. 帰結——プラグインから「描き直して、終わるまで待つ」はできない
 
 - **描かせる口は `UpdateViewport` だけ**で、レイヤの画面描画を起こす道は無い。
 - **終わりを知る口・通知が無い。** 近道は「ランループを回して 1 周が伸びなくなるまで待つ」だけで、
   **信号ではなく当て推量**——締切を必ず持つ。
-- SDK から起こした描画の呼び出し中は 250 ms のタイマーは 0 回。**利用者がメニューから描かせた
-  とき**だけ `NSModalPanelRunLoopMode` で届く。
+- SDK から起こした描画の呼び出し中は 250 ms のタイマーは 0 回（VW は入れ子のランループを回さない）。
+  **利用者がメニューから描かせたとき**だけ `NSModalPanelRunLoopMode` で届く——SDK から起こした
+  描画とは別物。`UpdateViewport` の先送りされたぶんは普通のランループで走るので、そこでは届く。
 - 戻った後に VW が何をするかは [#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)
   で一部を測った（[Investigation Techniques](Investigation%20Techniques.md)「いつ読むか」）。
 
@@ -260,7 +276,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - **`VWViewportObj::SetScale()` は数が大きいほど絵が大きくなる**（縮尺の分母ではない）。
 - **「いま描いているか」を問う口と、レンダリングの開始・終了の通知は無い。**
   **`kNotifyRenderModeAboutToChange` / `Changed` は SDK からの `SetRenderMode` では飛ばない**
-  （利用者がメニューで変えたときだけ）。レンダリング中を測るなら、利用者にメニューから描かせて
+  （利用者がメニューで変えたときだけ）——プログラムからの変更の目印には使えない。レンダリング中を測るなら、利用者にメニューから描かせて
   刻みの `mode=`（`NSModalPanelRunLoopMode`）で読む。
 
 ### 8. **図面が 1 枚も開いていないとき**の `GetCurrentLayer()`——**nullptr が返り、落ちない**（件数と常に一致）
@@ -272,11 +288,12 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
   （mac / Windows）。
 - **件数（`GetOpenFilesList()`）と `nullptr` かどうかは刻みごとに常に一致**（mac 1 万 2 千回余り・
   Windows 3 万 5 千回余りで食い違い 0）。閉じる途中・開く途中の刻みは来なかった（ブリッジの道でも、
-  Windows の人が閉じて開く道でも）。
+  Windows の人が閉じて開く道でも）——「中途半端な状態」を刻みが見る場面は、少なくともこの道では
+  現れない。
 - **【注意】閉じた文書のレイヤと後で開いた別の文書のレイヤが同じアドレスで返る**（mac / Windows）。
   **ハンドルを刻みをまたいで持ち越さず、刻みのたびに引き直す。**
 - **帰結**: 「図面が開いているか」は `GetCurrentLayer() != nullptr` で判定してよく（安上がり。
-  殻の `plugin/src/McpBridge.cpp` もそうしている）、**図面が無いときに呼ぶのを避ける必要は無い**。
+  殻の `plugin/src/McpBridge.cpp` の `PrepareRun` / `vw_ping` もそうしている）、**図面が無いときに呼ぶのを避ける必要は無い**。
 - 測定中に踏んだ Windows の起動時クラッシュは殻の時計の古い番地が原因だった
   （[issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233)。
   [プラグインモジュール](Plug-in%20Modules.md)「【罠】Windows の VW は起動時にモジュールを一度降ろして
@@ -299,14 +316,17 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
   何も起きなかった。
 - **保存の確認は「未保存の変更」があるときだけ出る。刻みの中で（undo イベントの外で）図面に
   書いても文書は「変更あり」にならない**（`MarkCurrentDocChanged()` で出る。[Documents](Documents.md)
-  「未保存の変更ありは読めない」。#240）。ここで使った新規の図面は実際には保存済みだった【推定】。
+  「未保存の変更ありは読めない」。#240）。ここで使った新規の図面は実際には保存済みだった【推定】
+  ——無題のままの図面は、何もしていなくても確認を出す（同上）。
 
 #### 保存の確認の最中（問い 4）
 
 - **観測のタイマーは刻み続ける**（mac。モードは `NSModalPanelRunLoopMode`）。
-  **`IsCurrentlyBuildingAnUndoEvent()` は `no`**（mac・Windows。`AlertQuestion` の最中とは違う）。
+  **`IsCurrentlyBuildingAnUndoEvent()` は `no`**（mac・Windows。`AlertQuestion` の最中とは違う）
+  ——保存の確認は undo イベントを開いたまま出るものではない。
 - **呼んだタイマー自身は、mac では入り直さない**（`CFRunLoopTimer` は自分の callout の最中に発火
-  しない）。**Windows では入り直す**（35〜86 回）——そこから 2 度目を呼べてしまう。
+  しない）。**Windows では入り直す**（35〜86 回）——そこから 2 度目を呼べてしまう。＝「1 本の
+  タイマーの中で呼ぶから入れ子は起きない」は mac でしか成り立たない。
 - **2 度目を呼ぶと保存の確認が 2 つ重なる**（落ちない）。**「終了の呼び出しの最中」を旗で持って
   入れ子の要求を見送る**（Windows では必須）。`IsCurrentlyBuildingAnUndoEvent()` はこの判定に
   使えない。
@@ -323,7 +343,8 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - **「キャンセル」で戻り、元のダイアログは開いたまま操作できる**（mac・Windows）。
 - **確認の最中の入り直しは Windows だけ**（225〜297 回）。mac は 0 回。
 - **このダイアログの最中は `IsCurrentlyBuildingAnUndoEvent()` が `yes`**（3 種とも、mac・Windows）
-  ——**この間に刻みから図面へ書くと、その undo イベントに混ざる**（上記 6）。
+  ——**この間に刻みから図面へ書くと、その undo イベントに混ざる**（上記 6）。終了を呼ぶだけなら
+  書いていないので関係しない。
 - **Windows で刻みが止まるのはメニューの追跡中**（メニューを開いてからダイアログが出るまで
   6.9〜14.4 秒）。ダイアログの最中は止まらない。
 - **線引き**: ダイアログを開いたまま `quit` が来ても落ちず、キャンセルすれば元どおり。**避ける
@@ -339,7 +360,8 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - **`kNotifyDocClose` は図面が閉じた時点で届く**（図面 0 枚なら届かない）。
 - **`plugin_module_main` に `kPluginModuleDeinit`（-2）が、刻みが止まった後に 1 回届く**（mac は
   `atexit` の約 0.1 秒前、Windows は約 20 秒前）。**-2 の後に刻みは来ない**ので、止めるなら -2 で
-  止める（止めなくても何も起きなかった）。キャンセルされた回には来ない。直後に -5 が 1 回続く。
+  止める（止めなくても何も起きなかった）。-2 は「タイマーを止める入口」として遅すぎも早すぎも
+  しない——キャンセルされた回には来ず、来た時点ではもう刻みは来ない。キャンセルされた回には来ない。直後に -5 が 1 回続く。
 - SDK が -2 でしているのは `GS_ReleaseStandardVCOMGlobals`（`MiniCadCallBacks.cpp:256`）で
   グローバルを手放すことだけ【ソース根拠】。**-2 の中で `gSDK` を呼べるかは測っていない。**
 - **-2 は VW が読み込んだモジュール（殻）にしか届かない**（殻が読み込む本体には来ない）。
@@ -385,7 +407,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 - **パレットを閉じた（隠した）とき、または VW が裏に回ったとき、JS の `setInterval`（250 ms）が
   ちょうど 60 秒に 1 回まで間引かれる。** 出し直すとすぐ戻る。
-- **App Nap から外しても変わらない**——埋め込みブラウザ（**Chromium Embedded Framework**）の
+- **App Nap から外しても変わらない**（＝ OS の省電力ではない）——埋め込みブラウザ（**Chromium Embedded Framework**）の
   intensive wake-up throttling と見られる。
 
 ### SDK に間引きを止める口は無い
@@ -399,7 +421,8 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 ### 代わりに使える 2 つの口（どちらも SDK 側にある）
 
 - **`IWebJavaScriptProvider::OnPaletteVisibilityChange(bool visible, IWebPaletteFrame* frame)`**
-  ——隠れた／出たことが C++ 側で分かる（`IExtensionWebPalette.h:144`）【ヘッダ根拠】。
+  ——隠れた／出たことが C++ 側で分かる（`IExtensionWebPalette.h:144`）。「隠れている間は JS を
+  当てにしない」と切り替える足場になる【ヘッダ根拠】。
 - **`IWebPaletteFrame::ExecuteJavaScript(code)`**——時計を C++ 側へ移し、間引かれたページを C++ から
   起こせる（`ExecuteJavaScript(code, onCompleteCallback)` のコールバックは「**outside UI thread**」
   なので、そこから `gSDK` を触らない）【ヘッダ根拠】。

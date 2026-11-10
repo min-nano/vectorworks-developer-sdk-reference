@@ -9,16 +9,19 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 ## パスの型を間違えると「生成できるのに何も描かれない」
 
 - **水平材は 2D ポリライン**（`VWPolygon2DObj`）を渡す。2 頂点の 3D ポリラインに絶対 Z を
-  持たせると、構造材は生成されるのに**長さ 0 で何も出ない**（OIP は「スパン 0 / 長さ 0」）。
+  持たせると、構造材は生成されるのに**長さ 0 で何も出ない**（OIP は「スパン 0 / 長さ 0」。
+  PIO がパスを挿入点としてしか読んでいない）。
   構造材では 3D ポリゴンのパスはバウンドも無視される（下記「構造材のパスは **2D で渡す**」）。
 - **鉛直材（柱・小屋束）は `CreateNurbsCurve` ＋ `Add3DVertex`** で下端 → 上端の 2 点。
+  平面へ落とすと 1 点に潰れるので 2D ポリラインでは表せない。
   `Add3DVertex` が VS の `AddVertex3D` に当たる（`Insert3DVertex` は別物で頂点が増えない）。
   `VWNURBSCurve` は評価専用で制御点から構築できない。
 
 ## `VWPolygon2DObj` は既定で「開いた」折れ線
 
 `SetClosed(true)` を呼ばないと**最後の頂点から最初の頂点へ戻る辺が描かれない**（直角三角形の
-斜辺だけが出ない形で現れる）。閉じ／開きは呼び出しごとに明示する。
+斜辺だけが出ない形で現れる。塗りが要らない図形ほど気付きにくい）。閉じ／開きは呼び出しごとに
+明示する（[実測](../Metrics/Parametric%20Objects.md#vwpolygon2dobj-は既定で開いた折れ線)）。
 
 ## 高さ・実体を最終的に決めるのは「解決済みストーリバウンドから `ResetObject` が作り直すパス」
 
@@ -48,11 +51,14 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
   ただし `ResetObject` を呼ばない経路ではパスの絶対 Z がそのまま実体になる。
 - **`doRegen=false` で作るなら、パスの両端の Z を等しくする**（下記「`doRegen=false` は速い…」）。
 - **上下端が同じ絶対 Z へ解決されないことを書き込み側で保証する。** `SetObjectStoryBound` の
-  戻り値も読み戻しも潰れを示さないので、`GetObjectBoundElevation` で両端を読み比べる。
+  戻り値も読み戻しも潰れを示さない（record は書いたとおりに読み戻る。実際に潰れるかは解決結果
+  次第）ので、`GetObjectBoundElevation` で両端を読み比べ、一致していたら手前で弾く・別の基準へ
+  振り替える。
 - **スタイルを当てるなら、その検査は作り直しを通した後に行う**——バウンドはスタイルのものへ
-  置き換わる（「[スタイルを当てると書いたバウンドはスタイルのものへ置き換わる](#スタイルを当てると書いたバウンドはスタイルのものへ置き換わる)」）。
+  置き換わり、書いた直後に読み比べた値は最終形ではない（順序を入れ替えても避けられない）（「[スタイルを当てると書いたバウンドはスタイルのものへ置き換わる](#スタイルを当てると書いたバウンドはスタイルのものへ置き換わる)」）。
   置き換えを避けるなら `DialogStartElevationReference` だけを by-instance にする
-  （「[バウンドだけ by-instance のスタイルは作れる](#バウンドだけ-by-instance-のスタイルは作れる握っているのは-dialogstartelevationreference-1-件)」）。
+  （「[バウンドだけ by-instance のスタイルは作れる](#バウンドだけ-by-instance-のスタイルは作れる握っているのは-dialogstartelevationreference-1-件)」。
+  全パラメータを切り替える必要は無い）。
 - **`SetCustomObjectPath` で差し替えたパスは以後作り直されず、バウンドのほうが書き換わる**
   （下記）。差し替えるなら渡す形が最終形であること。
 
@@ -60,7 +66,7 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 ビット一致で残る（#73 / #75）。**バウンドの差がそのまま高さ＝長さになるのは鉛直材だけ**。
 
 **ヘッダ／同梱ソースからの補足**【ヘッダ根拠】: 入口には別に `CreateCustomObjectPathNoOffset`
-がある。VWFC のラッパー（`VWParametricObj` のパス付きコンストラクタ・`GetObjectPath`・
+がある（名前どおり、上記 1 の「挿入点への変換」を飛ばす入口と読める）。VWFC のラッパー（`VWParametricObj` のパス付きコンストラクタ・`GetObjectPath`・
 `SetObjectPath`）は `GS_CreateCustomObjectPath` 等を素通しで呼ぶだけで、変換・再構築は VW 本体の
 クローズドな実装。`SStoryObjectData` は `fBound` / `fBoundStory` / `fLayerLevelType` / `fOffset`
 の受け渡しレコードで、解決した絶対 Z は `GetObjectBoundElevation(hObject, id)` で読める。
@@ -129,11 +135,15 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 [実測](../Metrics/Parametric%20Objects.md#どの長さ-l-が残差を残すのか大きさは式で言える出るかどうかは言えない)）。
 
 - **大きさは `round(m) × ULP(L)`**（`m` は L の仮数。m < 1.5 なら 1 ULP、m > 1.5 なら 2 ULP）。
-  残差の出た 116 件すべてがビット一致。**`|L| < 3e8 mm` なら残差は必ず 1e-7 未満**——
+  残差の出た 116 件すべてがビット一致。残差 ≒ `L × 2.22e-16` なので、**`|L| < 3e8 mm`（300 km）なら
+  残差は必ず 1e-7 未満**（残差 ≤
+  `2 × ULP(L)` なので、L に対する比は高々 `2.96e-16`）——
   「残差が出た」と「作り直しが止まる」は現実の図面では同じこと。
 - **出るかどうかは仮数だけで決まる**（`L` と `2L` と `L/2` は同じ結果）。単位を変えて逃げられない。
 - **出る L は飛び飛びで密度 14〜23%**。整数 mm 特有でも、切りのいい値が安全でもない
-  （例: 2959・3428 は出る、3000・4000 は出ない。一覧は計測記録）。
+  （例: 2959・3428 は出る、3000・4000 は出ない。一覧は計測記録）。隣り合う double でまとまって
+  出るが、まとまりの長さも間隔も場所ごとに違う——丸めが 1 回で決まっているなら間隔は一定に
+  なるはずなので、**内部では丸めが 2 回以上起きている**と読める（「式にならない」ことの説明）。
 - **当てはめ（単位往復・定数倍・等分加算・数値積分）は全滅。危ない L の一覧は式で作れない。**
   検出は「作り直しの後に長さを読んで `round(m) × ULP(L)` と比べる」、避け方は L = 0 に退化。
 - **以上は鉛直（`dx = dy = 0`）の話。** 水平成分があると別の規則（下記）。
@@ -144,11 +154,16 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 [実測](../Metrics/Parametric%20Objects.md#鉛直でないパスでは潰れるのは-z-の差だけ水平成分は残り残差の規則は別物になる)）。
 
 - **作り直しが触るのは Z の差だけ。** `dx` / `dy` はビット一致で残り（1119 / 1119）、0 長へ潰すと
-  斜め材は「水平材に倒れる」（`(dx, dy, 残差)`）。
+  斜め材は「水平材に倒れる」（`(dx, dy, 残差)`）。水平パスが「潰れない」のは、Z の差が元から 0
+  だからではなく、X / Y が作り直しの対象外だから。
 - **残差は `k × ULP(dz)`（`k` は整数・`|k| ≤ 3`）。** `k` は鉛直の式から外れ、**符号が L と逆にも
-  なる**（負は水平成分があるときだけ）。**3 次元長では決まらない**（同じ 3 次元長で食い違う）。
+  なる**（負は水平成分があるときだけ）。**3 次元長では決まらない**（同じ 3 次元長で食い違う。
+  決めているのは `dz` と水平成分の「組」。「見ているのは 3 次元の長さ」は作り直すかどうかの判定の
+  話で、残差の規則とは別物）。符号は隣り合う `dx` でも飛び、鉛直と同じく危ない組み合わせの一覧を
+  式で作ることはできない。
 - **`dx = 0.001 mm` の水平成分でも結果が変わる。** 水平成分が入ると残差の出る確率は 56〜65% へ
-  上がる。X と Y は完全に同じ効き方。始点の絶対座標には依らない。
+  上がる（水平成分が入ると大きさは `ULP(dz)` のまま、水平成分に引きずられない）。X と Y は完全に
+  同じ効き方。始点の絶対座標には依らない。
 - **実務**: 避け方は鉛直と同じ（両端に同じ Z）。**検出は「Z の差が厳密に 0 か」だけを見る**
   （`round(m)` の式は斜めでは使えない）。潰れた斜め材は水平成分があるので死角に落ちない（下記）。
 
@@ -192,8 +207,10 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 - **長さ ＝ 現在の階間隔 − 差し替え時点の階間隔 ＋ 差し替えたパスの長さ。** 0 長へ差し替えた
   部材は、階高を 100 上げると 100 の部材として生え、自階を上げると符号が反転する。
 - **`SetStoryElevation` の後、`ResetObject` を呼ぶ前から変わっている**（引き金が
-  `SetStoryElevation` か読み出しかは切り分けていない）。バウンドのレコードは二度と書き換わらず、
-  動くのは解決 Z だけ。**可逆**（階を戻せば完全に元どおり）。
+  `SetStoryElevation` か読み出しかは切り分けていない）。差し替え経路の「パスが正」はその直後の
+  `ResetObject` 限り。バウンドのレコードは二度と書き換わらず、動くのは解決 Z だけ——嘘の
+  `fOffset` は固定されたまま効き続ける（ふつうの部材も同じ規則で階に追従するので、直さない限り
+  ついて回る）。**可逆**（階を戻せば完全に元どおり）。
 - **直し方**: バウンドを正しい値（`fOffset = 0` など）へ書き直して `ResetObject` に作り直させるか、
   部材ごと作り直す。
 
@@ -229,7 +246,8 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 **`GetStoryBoundChoiceStrings` → `GetStoryBoundDataFromChoiceString` で正解の
 `SStoryObjectData` を取り出し、`GetStoryObjectDataBoundHeight(data, hContainer)` でオブジェクトを
 作らずに解決先を検算する。** 階やレベルを指す選択肢はすべて `fBound = eStoryObjectBound_Story`
-で、`LayerElevation` の選択肢は「レイヤの高さ」1 つ（`fLayerLevelType` は空）だけ
+で、`LayerElevation` の選択肢は「レイヤの高さ」1 つ（`fLayerLevelType` は空）だけ——「レベル種別を
+書いた `LayerElevation`」という組み合わせは VW 自身は一度も作らない
 （[選択肢と復号結果](../Metrics/Parametric%20Objects.md#正しい書き方は-vw-自身に聞ける)）。
 
 #### 上下端とも `LayerElevation` で書くと 0 長へ潰れる（機構）
@@ -239,7 +257,9 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 - `SetObjectStoryBound` は `LayerElevation` ＋ レベル種別も `true` で受け取り、書いたとおりに
   読み戻る。**気付けるのは `GetObjectBoundElevation`（または `GetStoryObjectDataBoundHeight`）で
   解決結果を読んだときだけ。** 書いた後は必ず解決結果を読む。
-- 階内相対 Z が各階で揃ったモデルほど当たりやすいが、原因は相対 Z の一致ではない。
+- 階内相対 Z が各階で揃ったモデルほど当たりやすいが、原因は相対 Z の一致ではない（ストーリレイヤ
+  テンプレートから階を作れば同名レベルの階内相対 Z は揃うので目立って見えるだけで、相対 Z が
+  揃っていなくても offset が同じなら同じように潰れる）。
 - **【推定】解決できないレベル種別を指すと「レイヤの高さ」へ落ちる**（`{Story, −1, FL}` が
   572。データ点 1 つ）。
 
@@ -358,11 +378,16 @@ VW 標準のツールは PIO として実装されており、SDK から生成�
 
 - **与えた方向がそのまま行列の i 軸になる。** `Set…` の効き目は `ResetObject` を待たずに読み戻せる。
   ただし**絵（外接）を測るなら `ResetObject` の後**。
-- **`LineLength` を書いても行列は動かない。** 長さだけなら `LineLength`、向きも変えるなら
-  `SetLinearObjectPos`。
-- **`gSDK->SetEndPoints` と `SetLinearObjectPos` は同じもの**【ソース根拠】（VWFC は
+- **`LineLength` を書いても行列は動かない。** 長さだけなら `SetParamReal("LineLength", 長さ)` ＋
+  `ResetObject`、
+  位置・向き・長さをまとめて決めるなら `SetLinearObjectPos(始端, 終端)`（始端に渡した点へ
+  オブジェクトが移る。「始端も含めて上書きしたい」ときの口）。
+- **`gSDK->SetEndPoints` と `VWParametricObj::SetLinearObjectPos` は同じもの**【ソース根拠】（VWFC は
   `GS_SetEndPoints` を素通し）。「例外が出ないのに効かない」はカーネルが線分でない PIO を黙って
   無視するため（[実測](../Metrics/Parametric%20Objects.md#set-が効く-pio-では行列の-i-軸と-linelength-が同時に書かれる)）。
+  SDK の中でこの口を使っているのは線分（`VWLine2DObj`）と壁（`VWWallObj`）だけで、PIO のために
+  使っている箇所は 1 つも無い【ヘッダ根拠】——PIO で使えるのは、その PIO が線分として登録されて
+  いるときに限られると読める。
 
 ### 両端の正体は「始端＝行列の offset」「終端＝offset ＋ `LineLength` × i 軸」
 
@@ -405,7 +430,8 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 - **スタイルの素性は、そのシンボル定義を `FirstMemberObj` で辿れば分かる**（その種別の PIO が
   1 つ入っている）。`SetStyle` / `SetPluginObjectStyle` は `IsPluginStyle` しか見ないので**別種別の
   スタイルでも当たってしまう**——「当てられた」を「その種別だった」と読み替えない。
-- 当てただけではパラメータの値は流れない（値は `UpdateStyledObjects` で流れる）。
+- 当てただけではパラメータの値は流れない（値は `UpdateStyledObjects` で流れる）。表（件数・名前・
+  選択肢）の出どころはレコードフォーマットであって値ではないので、表の結論は変わらない。
 - **`CreatePluginStyle` は使えない**（下記「**`CreatePluginStyle` を呼んではいけない**」）。
 
 #### ローカライズ名はアプリの資源から来る（文書ではない）
@@ -418,14 +444,17 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 #### キャッシュはいつ捨てるか
 
 - **文書が変わったら捨てる**（古い文書は古いフォーマットを持ちうる）。**UI の言語が変わったら
-  捨てる**（ローカライズ名を鍵にしているなら）。コマンド 1 回に閉じたキャッシュなら考えなくてよい。
+  捨てる**（ローカライズ名を鍵にしているなら）。コマンド 1 回に閉じたキャッシュなら考えなくてよい
+  （その間に文書も言語も変わらない）。
 
 #### コスト（VW 2026 / mac。181 件の構造材で実測）
 
-- **ローカライズ名 1 件 0.435us、フルスキャン 0.079ms**——「描画時間の 51〜68% がここ」という
-  見立て（#82）はこの経路では説明が付かない。
-- **高いのは universal 名で引く呼び出し（`GetParamIndex` 4.236us。線形探索）。** 名前で読み書き
-  する呼び出しは毎回これを払う——**キャッシュすべきは解決した索引**
+- **ローカライズ名 1 件 0.435us、フルスキャン 0.079ms**（部材 1 本につき 4 回落ちても 0.32ms、
+  400 本で 0.13 秒）——「描画時間の 51〜68% がここ」という見立て（#82）はこの経路では説明が
+  付かない（取り込みプラグイン側で内訳を測り直す価値がある）。
+- **高いのは universal 名で引く呼び出し（`GetParamIndex` 4.236us。線形探索なので表の後ろにある
+  パラメータほど高い）。** 名前で読み書き
+  する呼び出し（`GetParamReal(univ 名)` など）は毎回これを払う——**キャッシュすべきは解決した索引**
   （[表](../Metrics/Parametric%20Objects.md#コストvw-2026--mac181-件の構造材で実測)）。
 
 #### 構造材（`StructuralMember`）のパラメータ表（VW 2026 / mac・日本語 UI）
@@ -437,7 +466,8 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 `AxisAlign`（25）・`DialogStartElevationReference`（28）・`AttributesMode`/`AttributesMode3D`（179/180）。
 索引 0 と 48〜152・154〜158・161〜168・171〜176 はローカライズ名が `__NNA_DO_NOT_CHANGE`
 （中身は「[構造材の 2D / 3D 属性パラメータ（索引 48〜168）](#構造材の-2d--3d-属性パラメータ索引-48168面--パーツ--欄)」）。
-`B` / `D` / `StartOffset` は universal 名として実在する。
+`B` / `D` / `StartOffset` は universal 名として実在する——これらが universal 名で引けずローカライズ名の
+経路へ落ちているなら、落ちる理由は「名前が無いこと」ではない。
 
 ## 構造材の 2D / 3D 属性パラメータ（索引 48〜168）——「面 × パーツ × 欄」
 
@@ -457,6 +487,8 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
   `FillTile` / `FillGradient`（後ろ 3 つは資源の索引【推定】）。
 - **センターマーク（153〜160）と 3D 属性（161〜168。`MemberClass_3D` / `MemberAttributes_3D` /
   `MemberTextureByClass_3D` / `MemberTexture_3D` と `Cover…` の 4 欄）は面を持たない。**
+  センターマークは 3 面で共有され、面ごとに変えることはできない。中心線・端部・センターマークに
+  3D は無い。
 - **171〜176 の `B` / `B1` / `D` / `D1` は欄型 14 の読み取り専用表示欄**——寸法欄の鏡で、絵は
   動かない（#169 で確定）
   （[一覧](../Metrics/Parametric%20Objects.md#構造)）。
@@ -474,6 +506,8 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 `VWRecordFormatObj::PopupGetChoicesCount(索引, useParametric=true)` ＋ `PopupGetChoice`。**
 `VWParametricObj::PopupGetChoicesCount` と `useParametric=false` は常に 0——「選択肢が無い」ではなく
 「その経路では見えない」（[実測](../Metrics/Parametric%20Objects.md#選択肢を採る経路popupgetchoicescount-は-0-を返す)）。
+選択肢はインスタンスのポップアップ表には入っておらず、PIO のパラメータプロバイダ
+（`IParametricParamsProvider`）から来る。
 
 ### 「線の属性」「面の属性」「使用する属性設定」の選択肢
 
@@ -484,7 +518,8 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 | `AttributesMode`（179）/ `AttributesMode3D`（180） | 0＝オブジェクト / 1＝線種 / 2＝クラス / 3＝マテリアル |
 | `Member/CoverAttributes_3D`（162 / 166） | 0＝オブジェクト別 / **1＝クラス属性** |
 
-**「クラススタイルにする値」は、線が 4・面が 6。**
+**「クラススタイルにする値」は、線が 4・面が 6。** どちらの欄も「塗り方（線の引き方）の種類」が
+先に並び、そのあとに「どこから取るか」が続く組み立てになっている。
 
 ### クラス属性は効く——`FillStyle`=6 / `PenStyle`=4 で描画がクラスのものになる
 
@@ -505,7 +540,7 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 
 - Z=0 に置いて平面図で描いた材では、**描かれた子の属性はすべて `_Below` から来た**（材が切断面より
   下にあるため）。`_At` を振って何も変わらないのを「効かない」と読まない。
-- **面を選ばずに効かせたいなら 3 面とも同じ値を書く。** 書いた値は `ResetObject` を通ってそのまま
+- **面を選ばずに効かせたいなら 3 面とも同じ値を書く**（切断面の高さにも材の高さにも依らない）。 書いた値は `ResetObject` を通ってそのまま
   描画に効く（[実測](../Metrics/Parametric%20Objects.md#平面図で使われるのは-_below3-面のどれが描かれるかは切断面との関係で決まる)）。
 
 ### 子（描かれた実体）の素性
@@ -569,6 +604,7 @@ gSDK->ResetObject(member);                   // 1 回で足りる
   残る。被覆では子が減らない（既定では被覆が描かれていないため【推定】）——「書けていない」と
   読まない（[実測](../Metrics/Parametric%20Objects.md#取り込みで使う形構造材クラススタイル被覆と中心線は非表示端部は両端)）。
 - **「端部は両端」はポップアップではなく、`StartCapDisplay_<面>` と `EndCapDisplay_<面>` の真偽 2 つ。**
+  両方 true が「両端」、片方だけが「始端のみ」「終端のみ」、両方 false が「なし」に当たる。
 
 ## 構造材の断面は `MemberType`（材質）が決める——`MajorDepth` が効くかどうかもここで決まる
 
@@ -582,6 +618,7 @@ gSDK->ResetObject(member);                   // 1 回で足りる
 | `2` | 木 | **寸法 4 欄**（同上） | 同上 |
 | `3` | カスタム | **`ProfileSymbol`**（シンボル定義の 2D 図形） | 寸法 4 欄・`ProfileShape` / `ProfileSize` |
 
+- **断面をどこから採るかは `MemberType` の 1 欄で切り替わり、残りの欄はそのモードでしか効かない。**
 - **新規に作った 1 本は `0`（スチール）**（この文書では。既定値は文書に記録される）。だから
   **「`MajorDepth` を書いても断面が変わらない」は既定の挙動**で、`1` か `2` にすれば効く。
 - **`ProfileShape` / `ProfileSeries` / `ProfileSize` は欄型 14（静的テキスト）だが、
@@ -623,7 +660,8 @@ gSDK->ResetObject(member);                   // 1 回で足りる
 
 - **`2d > D` で上下のフランジが交差すると型 84 が作られない**（`GetObjectCube` の高さ 0・子が
   9 → 8。平面図には出るのに 3D が無い）。境界は `D/2` で、絶対値ではない。
-- **ただし `b ≥ B` なら `2d > D` でも実体はできる**（張り出しが無くなるため【推定】）。
+- **ただし `b ≥ B` なら `2d > D` でも実体はできる**（フランジの張り出し `(B-b)/2` が無くなると、
+  上下が交差しても輪郭が破綻しないためと読める【推定】）。
 - **安全域は `0 < b ≤ B` かつ `0 ≤ d ≤ D/2`。** 範囲外は「作られない」か「寸法が違う」で、
   **どちらも `ResetObject` は `true`**
   （[壊し方の全体](../Metrics/Parametric%20Objects.md#3d-実体が消えるのは輪郭が自己交差したとき境界は-majordepth-の半分)）。
@@ -664,7 +702,7 @@ gSDK->ResetObject(member);                   // 1 回で足りる
 
 `0` の 1 本へ寸法 4 欄を書くと、`ResetObject` は `true`、読み戻しは一致、`B`/`B1`/`D`/`D1` は
 追随するが、外接は不変。**気付ける道は幾何を測ることだけ**（安いのは
-`GetCustomObjectProfileGroup(h)` の外接）
+`GetCustomObjectProfileGroup(h)` の外接——断面と一致し、パスの長さが混ざらない）
 （[実測](../Metrics/Parametric%20Objects.md#効かない欄を書いたときに手がかりは残るか残らない)）。
 
 ### 取り込みでどう書くか
@@ -767,7 +805,8 @@ gSDK->ResetObject(h);                         // ここで 1 回だけ描く
 ```
 
 - 実測でずれが出たのは線の種類（欄型 26）だけ。他の枝は同じ理由で落ちうるから足したもの。
-- 見本は図面に 1 本残る（消してよいかは確かめていない）。文書をまたいで使い回さない【推定】。
+- 見本は図面に 1 本残る（消してよいかは確かめていない）。見本の値は「その文書でダイアログを出さずに
+  作ったときの初期値」なので、文書をまたいで使い回さない【推定】。
 - 減るのは作成時の 1 回ぶん（1 回 10〜20ms）。
 
 ### 位置と角度は `SetEntityMatrix` で与える（描き直しを起こさない）
@@ -778,7 +817,9 @@ gSDK->ResetObject(h);                         // ここで 1 回だけ描く
   閉じるまで古い位置のまま**（原点は動いている）。もう一度 `ResetObject` すれば追い付く。
   **置き場所は `ResetObject` の前に決める。**
 - 【訂正】以前「古い位置のまま残る」と書いたのは同じ呼び出しの中で読んでいたため。引き金は時間でも
-  アイドルでもなく **undo イベントの終わり**で、利用者の図面では新しい位置になっている
+  アイドルでもなく **undo イベントの終わり**で、プラグインは自分のイベントを閉じて戻るので利用者の
+  図面では新しい位置になっている。外接を同じ呼び出しの中で読んで位置合わせに使うなら `ResetObject`
+  を挟む
   （[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。
   [実測](../Metrics/Parametric%20Objects.md#位置と角度は-setentitymatrix-で与える描き直しを起こさない)）。
 
@@ -814,6 +855,7 @@ gSDK->ResetObject(h);                         // ここで 1 回だけ描く
 
 - **バウンドの検査はスタイルを当てて作り直しを通した後に行う。**
 - **本ごとに違う高さを持たせるなら `DialogStartElevationReference` だけを by-instance にする**（下記）。
+  by-style のまま当てると、そのスタイルを当てた全部の材がスタイルの高さに揃う。
 - **そのスタイルでは 1 本ごとの `ResetObject` を省かない**（バウンドを書き換えたときもそのたび）。
 - **バウンドは必ず自分で両端とも書く。** バウンドを持たない材にスタイルを当てて `ResetObject`
   すると、実体はスタイルどおりに建つのに、**生えた 2 本の `fBound` が `EStoryObjectBound` のどの値
@@ -835,7 +877,8 @@ gSDK->SetPluginStyleParameterType(hSymDef, "DialogStartElevationReference",
 
 1. **バウンドの持ち主は `DialogStartElevationReference`。** 由来表（`'PSMP'`）の鍵はパラメータ名
    だけ【ソース根拠】で、181 件を両方向に総当たりして動いたのはこの 1 件だけ。
-2. **この 1 件で ID 0 も ID 1 も握る**（`DialogEndElevationReference` を裏返す必要は無い）。
+2. **この 1 件で ID 0 も ID 1 も握る**（`Start` という名前に反して終端も動く。バウンドのためだけなら
+   `DialogEndElevationReference` を裏返す必要は無い）。
 3. **`SetAllPluginStyleParameters(ByInstance)` が効いていたのはこの 1 件も裏返していた副作用。**
 4. `SetPluginStyleParameterType` / `GetPluginStyleParameterType` で 1 つずつ読み書きできる。
    **ただし表に無い名前は `by-instance`（0）が返る**——綴りを間違えても静かに 0。
@@ -861,7 +904,8 @@ gSDK->SetPluginStyleParameterType(hSymDef, "DialogStartElevationReference",
 - **終端だけがずれる**（始端＝挿入点はバウンドどおり）。ずれ幅はスタイルの span に追随する。
 - **2 度流すと 2 回ぶん足される**（収束しない）。途中で何度も呼ぶのは正しさの問題。
 - **一度 `ResetObject` した本でも、バウンドを書き換えて Update だけを流すとずれる。**
-- **`ResetObject` を 1 度通せば直る**（レコードは正しい）。ずれは VW へ戻った後もそのまま残る（#245）。
+- **`ResetObject` を 1 度通せば直る**（レコードは正しいのでバウンドを書き直す必要は無い。取り込みの
+  事故としては軽い）。**`UpdateStyledObjects` は最後に 1 回だけ**呼ぶ。ずれは VW へ戻った後もそのまま残る（#245）。
 - **バウンドが by-style なら起きない**（本当に作り直している。#81 の 5 本が Update だけで建ったのは
   この経路だったから）。**【訂正】** #118 が書いた「span が同じなので差が 0」という説明は誤り。
 - 【推定】`ResetObject` は「いまの形はこのバウンドのもの」と覚え、Update は覚えずに差分を足す
@@ -970,13 +1014,14 @@ VWParametricObj(target).SetStyle(ref);       // 当たる（styleRef が ref に
 2. **SDK の全数検索【ヘッダ根拠】**——`[Ss]pan` で構造材に関わるものは無く、部材長を返すオブジェクト
    変数も無い。
 3. **実運用（実機）**——取り込みで `"Span"` / `"スパン"` が横架材 266 本・垂木 54 本の全数で
-   解決しなかった（[根拠の詳細](../Metrics/Parametric%20Objects.md#無いと言い切れる根拠3-つが独立に同じ答えを出している)）。
+   解決しなかった（絵は正しく描けている本での結果なので「描けていないから引けない」ではない。
+   [根拠の詳細](../Metrics/Parametric%20Objects.md#無いと言い切れる根拠3-つが独立に同じ答えを出している)）。
 
 ### `CenterPointLength(長さ)` は部材長ではない——**センターマークの長さである**【推定】
 
 「長さ」で引き当たる唯一のパラメータだが、実長 5333mm の柱で **100**（既定も 100）。表の並び
 （153〜160 のセンターマーク群）からセンターマークの線の長さ【推定】。**教訓: ローカライズ名だけで
-当てない。引き当てたら値を実測と突き合わせる。**
+当てない。引き当てたら値を実測と突き合わせる**（1 本でも桁が合わなければ別物）。
 
 ### では OIP の「スパン」欄は何か——**パラメータではなく計算値**【推定】
 
@@ -999,14 +1044,16 @@ MCObjectHandle path = gSDK->GetCustomObjectPath(pio);   // 作り直しの「後
 構造材ツールの**自動結合（Auto Join Members）**は、置いた構造材同士に関連付け（association）を
 持たせて追随させる（[VW ヘルプ](https://app-help.vectorworks.net/2023/eng/VW2023_Guide/Structural/Creating_structural_members.htm)）。
 VW 2026 SDK（mac）の `SDKLib/Include` 全体（ヘッダ 456 本 ＋ `vs.py`）を全数検索して、**専用の
-API は 1 つも無い**（[検索結果の表](../Metrics/Parametric%20Objects.md#構造材同士の自動結合を作る-api-は無いヘッダ根拠)）。
+API は 1 つも無い**（[検索結果の表](../Metrics/Parametric%20Objects.md#構造材同士の自動結合を作る-api-を探したヘッダを読んだ)）。
 
 - 構造材について SDK が持つのは内部 ID（`kInternalID_StructuralMember = 537`）・フォルダ定数・
   `ovIsStructural`・VS 専用の `SM_FromShape` / `SM_Preferences` だけ。「結合」と名の付く API
   （`JoinWalls` など）は全部よそのもの。
 - **汎用の関連付けは ISDK では「読む・消す」しか無い**（`GetNumAssociations` / `GetAssociation` /
   `DeleteAssociations`。**足す**口は VS の `AddAssociation` だけ）。`associationKind` の定数は
-  SDK に無い。`kKludgeAddAssociation` は使用禁止の private API。
+  SDK に無い（VW 開発者 wiki にある `kOnDeleteDelete = 4` / `kOnDeleteReset = 5` は寿命の連動で、
+  構造材の自動結合とは別物の可能性が高い）。`kKludgeAddAssociation` は使用禁止の private API で
+  逃げ道にならない。
 - VS を SDK から流す道（`IVectorScriptEngine::ExecuteScript`）はあるが、`AddAssociation` で自動結合が
   作れるかは未確認。
 - **作成**: 公開 API は無い。見た目だけならパスを詰めて突き付ける（関連付けではないので追随しない）。
@@ -1030,7 +1077,9 @@ CI が緑でも実機で初めて出る。**新しい PIO を足すときは最�
 
 1. **設定ダイアログ抑止**（`DefineCustomObject(..., kCustomObjectPrefNever)`）。
 2. **PIO のジオメトリは PIO 自身のローカル座標で持たれる。** 対象のワールド座標は
-   `GetObjectToWorldTransform` ＋ `InversePointTransform` でローカルへ落としてから描く。
+   `GetObjectToWorldTransform` ＋ `InversePointTransform` でローカルへ落としてから描く（ワールド座標へ
+   そのまま描くと PIO を動かした量だけ絵がずれ、リセットしても直らない。ローカルへ落とせば回転も
+   戻るので、PIO を回しても絵は対象の上に残る）。
 3. **リセットの契機は自分で宣言する**（既定では印刷でも再オープンでも描き直されない）。
    `ResetOnMove` / `ResetOnRotate` と `kObjXPropResetBeforeExport` を立てる。
 
@@ -1059,7 +1108,8 @@ CI が緑でも実機で初めて出る。**新しい PIO を足すときは最�
 | `gSDK->ResetObject` | `16` `kObjectExternalReset` → `Recalculate` |
 | OIP でパラメータを 1 つ編集 | `3` `kParameterChangedReset` → `Recalculate` |
 
-立てなければ `ObjectState::kAction` 自体が来ない（[`Info/Parametric Extended Properties.md`](../Info/Parametric%20Extended%20Properties.md)）。
+**PIO 側から文脈を見分けられる**——立てなければ `ObjectState::kAction` 自体が来ないので「区別
+できない」と見えるだけ（[`Info/Parametric Extended Properties.md`](../Info/Parametric%20Extended%20Properties.md)）。
 OIP の編集 1 回で `Recalculate` は 1 回。
 
 ### 最初の `Recalculate` では**自分の外接が読めない**
@@ -1071,7 +1121,8 @@ OIP の編集 1 回で `Recalculate` は 1 回。
 ### SDK で登録した線分 PIO に `LineLength` は**無い**
 
 `kParametricSubType_Linear` で登録した PIO の表には登録した 3 つしか出ず、`GetParamIndex("LineLength")`
-は `(size_t)-1`。**`SetLinearObjectPos` も効かない**（`A=(0,0) B=(0,0)` のまま）。**SDK で登録した
+は `(size_t)-1`（`Info/Parametric Object Types.md` の「隠しパラメータ `LineLength`」は、少なくとも
+SDK で登録した PIO には当てはまらない）。**`SetLinearObjectPos` も効かない**（`A=(0,0) B=(0,0)` のまま）。**SDK で登録した
 線分 PIO の長さを与える口はこの経路には無い。**
 
 ### 測り方（この節の数値の出どころ）
@@ -1085,7 +1136,7 @@ OIP の編集 1 回で `Recalculate` は 1 回。
 【ヘッダ根拠】（同梱の VWFC 実装を読んだ結果。[表](../Metrics/Parametric%20Objects.md#pio-の行列を読む口名前は-4-つ実体は-2-つ)）:
 
 - **`VWParametricObj::GetObjectToWorldTransform` と `VWObject::GetObjectMatrix` は完全に同じ**
-  （どちらも `GS_GetEntityMatrix`）。片方が駄目でももう片方に変えても変わらない。
+  （どちらも `GS_GetEntityMatrix`）。`GetObjectToWorldTransform` が駄目でも `GetObjectMatrix` に変えても 1 ビットも変わらない。
 - `VWObject::GetObjectModelMatrix` は `gSDK->GetEntityMatrix`（底）。違いは旧 callback が
   **`bUseLegacyZ = true`** を渡す 1 点で、**差が出うるのは Z だけ**。
 - **`GetObjectToWorldTransform` の「world」は「レイヤ座標」の意味**——シンボル内・グループ内で
@@ -1098,7 +1149,9 @@ OIP の編集 1 回で `Recalculate` は 1 回。
 `kParameterChangedReset`）× 入口・出口の 20 件がすべて外から読んだ真値と一致
 （[実測](../Metrics/Parametric%20Objects.md#どの口もどの文脈でも実際の配置を返す行列は化けない)）。
 
-- **行列は最初の `Recalculate` から正しい**（外接と対照的）。描く前後でも変わらない。
+- **行列は最初の `Recalculate` から正しい**（外接と対照的）。描く前後でも変わらない。旧 callback
+  経由と ISDK 経由の差も出なかった（Z=0 の平面上の PIO なので `bUseLegacyZ` の差が出る余地は
+  無かった）。
 - `InversePointTransform` も毎回同じ値を返す。`CreateCustomObject(名前, 位置, 角度)` の位置と角度
   （度）はそのまま行列になる（線分サブタイプでも）。
 - **「OIP 編集時にどの口で読むか」は前提が成り立たない——どれでも正しい。**
@@ -1114,11 +1167,13 @@ OIP の編集 1 回で `Recalculate` は 1 回。
 [PR #186](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/186)。同じ測り方を
 するときに必ず要る 2 点（教訓）:
 
-1. **被験 PIO を原点から離し、軸に乗らない角度で置く**（単位行列に化けても同じ値が出ないように）。
+1. **被験 PIO を原点から離し、軸に乗らない角度で置く**（単位行列に化けても同じ値が出ないように。
+   `90°` `180°` 等は成分が `0` と `±1` だけになり、取り違えが数値に出ない）。
 2. **`Recalculate` の外から読んだ値を真値として突き合わせる**（中と中を比べても正しさは決まらない）。
 
-書き溜めの区切りは値に現れない `鍵 ## 値` にする。殻を触る調査は公開ビルド（転がりタグ `probes`）
-では確かめられない——PR の Actions の成果物を手で入れる
+書き溜めの区切りは値に現れない `鍵 ## 値` にする（突き合わせの読み違えが起きない）。殻を触る調査は
+公開ビルド（転がりタグ `probes`）では確かめられない（ピッカー先頭の入れ替えでもリリースの zip でも
+入らない）——PR の Actions の成果物を手で入れ、結果の「ビルドの素性」の `殻:` の行で入ったかを見る
 （[`plugin/README.md`](../plugin/README.md)「PR のビルドを手で入れて確かめるとき」。
 [詳細](../Metrics/Parametric%20Objects.md#測り方この節の数値の出どころ-1)）。
 
@@ -1147,7 +1202,7 @@ OIP の編集 1 回で `Recalculate` は 1 回。
 
 `Batch` / `Defer` / `Suspend` / `Freeze` / `DisableDrawing` / `SuspendRedraw` / `LockDrawing` /
 `BulkUpdate`、`Redraw`（`RedrawRect` は描き直す口）、プログラム変数のセレクタまで探して、止める・
-遅らせる口は無い（[探した先](../Metrics/Parametric%20Objects.md#再生成再描画を止めておく口は-sdk-に無いヘッダ根拠)）。
+遅らせる口は無い（[探した先](../Metrics/Parametric%20Objects.md#再生成再描画を止めておく口を探したヘッダを読んだ)）。
 呼び出し側が `ResetObject` の回数と順序を決めるしかない。
 
 ### ただし `CreateCustomObjectPath` だけは再生成を省ける（`doRegen`）【ヘッダ根拠】
