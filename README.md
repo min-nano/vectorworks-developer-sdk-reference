@@ -14,6 +14,8 @@ The SDK https://www.vectorworks.net/en-US/support/custom/sdk/sdkdown provides OS
 - **[実測知見の索引 — `Findings/`](Findings/README.md)** … PIO・シンボル・壁・スラブ・
   屋根面・レイヤ・ビューポート・用紙・データタグ・グラフィック凡例・タグ付きデータ・
   Undo・ダイアログ・調査の作法
+- **[計測記録 — `Metrics/`](Metrics/README.md)** … `Findings/` の結論の根拠。測った環境・
+  見本・手順・計測用のコード・実測の表とダンプを、同じトピック名のファイルに置く
 - **[SDK の宣言索引 — `SDK Index/`](SDK%20Index/README.md)** … SDK の宣言（シグネチャ・
   enum の値・宣言位置）と VectorScript の書式の一覧。週次の CI が最新の SDK から作り直す
 - **[実機確認プラグイン — `plugin/`](plugin/README.md)** … 実機の VectorWorks で

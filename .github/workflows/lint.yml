@@ -18,6 +18,10 @@ name: Lint
 #                     プラットフォームにも依存しないので普通のコンパイラで走る。**壊れても
 #                     静かに壊れる**（更新が来ない／常に来る／再起動が空振りする／実機でだけ
 #                     落ちる）ので、mac / Windows の実ビルドとは別に、ここで確かめる。
+#   * md-links      — Findings/・Metrics/ と、そこへリンクする読み物の相対リンクと
+#                     アンカー（unit-tests の中の 1 段。scripts/check-md-links.py）。
+#                     Markdown の中身はここでは見ないが、リンクが切れていないかだけは
+#                     機械で分かる。
 #   * pwsh          — Windows 版の同梱スクリプト（plugin/scripts/*.ps1）。ランナーに
 #                     入っている pwsh で、取得まわりの振る舞い（mac 側と対の試験）と
 #                     構文を見る。shellcheck に相当するものが無いぶん、ここが唯一の門。
@@ -147,6 +151,17 @@ jobs:
         run: |
           bash scripts/tests/open-prs.test.sh
           bash scripts/tests/wait-successor.test.sh
+          python3 scripts/tests/check-md-links.test.py
+
+      # Findings/ の結論から Metrics/ の節へは数百本のアンカーを張っている。Metrics の
+      # 見出しを言い換えるとリンクが黙って切れるので、GitHub と同じ規則でアンカーを
+      # 計算して確かめる（Metrics/README.md「見出しも記録の言い方にする」）。
+      # 範囲は既定（Findings/・Metrics/ と、そこへリンクする CLAUDE.md・plugin/ と
+      # probes/ の README）。README.md は上流の文書で、上流の取り込みは lint を起こさずに
+      # main へ入るので、このフォークの「このフォークについて」の節だけを見る
+      # （スクリプトの SECTION_ONLY）。
+      - name: Check links in Findings, Metrics and the docs that point at them
+        run: python3 scripts/check-md-links.py
 
       # Windows 側の同梱スクリプト（.ps1）。実機は Windows だが、**ランナーには pwsh が
       # 入っている**ので、ここで構文と——mac 側と同じように——取得まわりの振る舞いを

@@ -2,335 +2,161 @@
 
 コンパイル済みプラグイン（`.vwlibrary` / `.vlb`）が**いつ読み込まれ、いつなら入れ替えられるか**。
 そして「Vectorworks を起動したまま中身を差し替えられないか」という問い（issue #15）の調査。
+測った環境・被験体・手順・実測の表・ダンプは [計測記録](../Metrics/Plug-in%20Modules.md)。
 
 ## 読み込みは起動時の 1 度きり
 
-Vectorworks はコンパイル済みプラグインを**起動時に走査して読み込む**。読み込み済みの
-モジュールは、そのプロセスが生きている間は差し替えられない——ファイルを新しいものへ
-置き換えても、**次に起動するまで反映されない**。
-
-実機確認プラグイン（`plugin/`）の自動アップデートが、入れ替えのあとに必ず
-「再起動しますか？」と尋ねるのはこのため（[`plugin/README.md`](../plugin/README.md)
-「自動アップデート」）。
-
-- macOS では**読み込み中のバンドルのファイルを置き換えること自体はできる**（Unix の
-  ファイル置き換えの作法どおり）。それでも動いているコードは古いままである。
-- Windows は**読み込み中の DLL を消すことも上書きすることもできない**（共有違反）。
-  入れ替えは Vectorworks を終了させてからになる。
+- **VW はコンパイル済みプラグインを起動時に走査して読み込み、そのプロセスの間は差し替えられない**
+  ——ファイルを置き換えても**次に起動するまで反映されない**。実機確認プラグインの自動アップデートが
+  殻の入れ替えで再起動を尋ねるのはこのため（[`plugin/README.md`](../plugin/README.md)「自動アップデート」）。
+- macOS は**読み込み中のバンドルのファイルを置き換えること自体はできる**が、動くコードは古いまま。
+- Windows は**読み込み中の DLL を消すことも上書きすることもできない**（共有違反）。入れ替えは VW を
+  終了させてから。
 
 ## 拡張機能を 1 つも登録しないモジュールも、有効なら起動時から常駐する（Windows・macOS）
 
 （[issue #252](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/252)。
 被験体は [vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)
-の `cli`。実測の記録はあちらの [Windows の実機での実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)
-と [SDK の調査 0](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/sdk-research.md#0-拡張機能を-1-つも登録しないプラグインの読み込み)。）
+の `cli`。[実測](../Metrics/Plug-in%20Modules.md#拡張機能を-1-つも登録しないモジュールの常駐を確かめたwindowsmacos)）
 
-**メニューも PIO もプラグインライブラリ関数も登録しない（`REGISTER_Extension` を 1 度も
-呼ばない）モジュールでも、VW は起動時に読み込んで `plugin_module_main` を呼び、そのまま
-常駐させる。** そこで始めた OS タイマーは刻み続ける。常駐させるために目に触れない
-メニューを 1 つ登録する、といった細工は要らない。条件は 2 つだけ:
-
-- **「開発元不明のプラグイン」で有効にしてあること**（下の「開発元不明のプラグイン」）。
-  新しく置いた最初の起動では「無効」にされ、**読み込まれない**——プロセスのモジュール一覧に
-  居らず、`plugin_module_main` も呼ばれない。拡張の有無とは関係が無い。
-- **Windows では、OS にコールバックを預ける前に自分を留めること**（下の「【罠】Windows の VW は
-  起動時にモジュールを一度降ろして読み込み直す」）。
-
-`cli` の `plugin_module_main` は `GS_InitializeVCOM(cbp)` のあと、`kPluginModuleDeinit` 以外の
-action で 1 度だけ OS タイマーを始めて 0 を返す（`plugin_module_ver` と
-`DefaultPluginVWRIdentifier` は定義する。下の「SDK の静的ライブラリをリンクするモジュールは…」）。
-
-| | Windows（VW 2026 Update 6 x64・Windows 11 ARM64 の VM の x64 エミュレーション） | macOS（VW 2026 `31.6.0 (872399)`・macOS 27.0.1 arm64） |
-| --- | --- | --- |
-| ビルド | `0683df0` / `296a797`（`SetTimer(nullptr, 0, 250, proc)` の前に `GET_MODULE_HANDLE_EX_FLAG_PIN`） | `7b80014`（`CFRunLoopTimer` を `kCFRunLoopCommonModes` に。留めない） |
-| 登録 | 無し（ソースに `REGISTER_Extension` が無い） | 同じ |
-| 常駐 | 起動から 10〜50 秒前後で `cli.vlb` がモジュール一覧に載り、刻みが受け付ける `ping` が応えた（`running:true` から 0.2〜2.4 秒） | 有効化した後の起動で、ダイアログが開いている間から `ping` が応えた |
-| 有効化の前 | 「無効」と示され、モジュール一覧に `cli.vlb` が無く、最初の刻みで作るスプールも作られなかった | 「無効」と示され、130 秒待ってもスプールは作られなかった |
-
-- **プラグインマネージャの「開発元」タブで、拡張なしのモジュールは「不明な開発元」の下に
-  ファイル名だけが載る**（下に項目が並ばない）。読み込まれていない印ではない。
-- **初めに「Windows では拡張なしだと常駐しない」と見えたのは、有効化の前だったため**と読める
-  ——上の表の「有効化の前」は、当初の観測（留めない版）とそっくり同じである。
-- **留めない「拡張なし」のモジュールが Windows の読み込み直しの対象になるかは確かめていない**
-  （#253 で読み込み直しを見たのは、メニューとプラグインライブラリ関数を登録した殻）。留めれば
-  降ろされも読み込み直されもしないので、確かめなくても困らない。【推定】仮に対象になっても、
+- **`REGISTER_Extension` を 1 度も呼ばないモジュールでも、VW は起動時に読み込んで
+  `plugin_module_main` を呼び、常駐させる。** そこで始めた OS タイマーは刻み続ける。目に触れない
+  メニューを登録するといった細工は要らない。条件は 2 つだけ:
+  - **「開発元不明のプラグイン」で有効にしてあること**（新しく置いた最初の起動では無効にされ、
+    読み込まれない。下記）。
+  - **Windows では、OS にコールバックを預ける前に自分を留めること**（下記「【罠】」）。
+- プラグインマネージャの「開発元」タブでは、拡張なしのモジュールは「不明な開発元」の下に
+  ファイル名だけが載る（読み込まれていない印ではない）。
+- 当初の「Windows では拡張なしだと常駐しない」は、有効化の前に見ていたため。
+- 留めない拡張なしのモジュールが Windows の読み込み直しの対象になるかは確かめていない（留めれば
+  降ろされも読み込み直されもしないので、確かめなくても困らない）。【推定】仮に対象になっても、
   読み込み直した側で static が初期化し直され -4 以降でタイマーを作り直すので、「常駐しない」
   ではなく「古い番地のタイマーが残って落ちうる」形になる。
 
 ## 【罠】Windows の VW は起動時にモジュールを一度降ろして読み込み直す——OS に預けたコールバックは留めておく
 
-（[issue #253](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/253)。
-Windows 11 ARM64 の VM（UTM）・VW 2026 は x64 のエミュレーション。）
+（[issue #253](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/253)。Windows 11 ARM64 の
+VM・VW 2026 は x64 のエミュレーション。[実測](../Metrics/Plug-in%20Modules.md#実測)）
 
-**Windows の VW は起動時、利用者の `Plug-ins` のモジュールを読み込んで `plugin_module_main`
-に `kPluginModuleInit`（-1）と `kVCOMRegisterInterfaces`（-3）を送ったあと、`kPluginModuleDeinit`
-（-2）を送らずに一度降ろし、すぐ別の番地へ読み込み直して `kVCOMQueryInterface`（-4）以降を
-送る。** 読み込み直した側には -1 は来ない。static は読み込み直しで初期化し直される。
+- **Windows の VW は起動時、`plugin_module_main` に -1（`kPluginModuleInit`）・-3
+  （`kVCOMRegisterInterfaces`）を送ったあと、-2 を送らずに一度降ろし、別の番地へ読み込み直して
+  -4（`kVCOMQueryInterface`）以降を送る。** 読み込み直した側には -1 は来ず、static は初期化し直される。
+- **最初の呼び出しで OS に預けたコールバックの番地**（`SetTimer(nullptr, 0, ms, proc)`・ウィンドウ
+  手続き・フックなど）は降ろされた後も残り、**もう無い番地を呼び続ける**。その番地に何が入るかで
+  症状が変わる——何も無ければタイマーの例外は user32 が握り潰すので何も起きない。別の `.vlb` の
+  コードが入っていれば、レジスタやアクティベーションコンテキストが壊れて**起動の途中で落ちる**。
+  同じビルドが落ちたり落ちなかったりする。
+- Cineware のメッセージループで `rdi`（ループの前に 1 度だけ読み込まれる非揮発レジスタ）が `-1`
+  になって落ちたのは、その前の周で配られた何かが壊したことになる。【推定】それが前の読み込みの
+  タイマーが呼んだ番地のコードだった（その周はダンプに残らない。[実測](../Metrics/Plug-in%20Modules.md#実測)）。
+- **避け方: 預ける前に自分を留める。**
 
-だから、**最初の呼び出しで OS にコールバックの番地を預ける**——`SetTimer(nullptr, 0, ms, proc)`・
-ウィンドウクラスのウィンドウ手続き・フックなど——と、**降ろされた後もそれが OS に残り、もう
-無いモジュールの番地を呼び続ける**。その番地に何が入るか（何も無い／後から読まれた別の `.vlb`
-のコード）で症状が変わる。何も無ければタイマーの例外は user32 が握り潰すので何も起きない。
-別のコードが入っていれば、レジスタやアクティベーションコンテキストが壊れて**起動の途中で
-落ちる**。同じビルドが落ちたり落ちなかったりする。
+  ```cpp
+  GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
+                     自分の関数の番地, &h);
+  ```
 
-**避け方: 預ける前に自分を留める。** `GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-GET_MODULE_HANDLE_EX_FLAG_PIN, 自分の関数の番地, &h)`。留めれば VW の `FreeLibrary` では
-降りず、読み込み直しも同じモジュールが返る。実機確認プラグインの殻は時計（`SetTimer`）を
-作る前にこれをしている（`plugin/src/McpBridge.cpp` の `StartMcpBridgeClock`）。
+  留めれば VW の `FreeLibrary` では降りず、読み込み直しも同じモジュールが返る（殻は
+  `plugin/src/McpBridge.cpp` の `StartMcpBridgeClock` でこうしている）。留めた殻は 6 回とも起動し、
+  すべての action が同じ番地で届いた。
+- 落ちた回は **Windows の異常終了記録（Event 1000）に残らず、VW 同梱の Sentry がダンプを
+  `%APPDATA%\Nemetschek\Vectorworks\2026\Sentry\reports\*.dmp` に書く**（`VW User Log.txt` にも残らない）。
+  `0xe0000001` の形は Event 1000 に残り（`KERNELBASE.dll`）、Sentry のダンプは出ない。
+- 読み込み直していることの根拠（関数が 2 回走る・-1 が 1 回で -2 が無い・落ちた番地が「前の読み込みの
+  番地＋RVA」）と、留めない殻のダンプ 12 件の落ち方は [計測記録](../Metrics/Plug-in%20Modules.md#実測)。
 
 ### 実測
 
-| 殻 | 起動 | 結果 |
-| --- | --- | --- |
-| `a8af333`（留めない・ウィンドウなしタイマー） | 10/17 に 4 回・10/18 朝に 5 回 | **9 回とも落ちた**（10/18 朝の 1 回目は CPU に負荷を掛けた回） |
-| 同上 | 10/18 朝、上の前に 3 回 | 3 回とも起動した |
-| 診断ビルド（留めない。`f6dd983`）・刻みごとにファイルへ書く | 2 | 2 回とも起動 |
-| 同・元と同じ動き | 1 | **落ちた**（`0xc0150014`） |
-| 診断ビルド（留めない。`8061038`）・タイマーなし | 2 | 2 回とも起動 |
-| 同・ウィンドウなしタイマーで何もしない | 2 | 2 回とも起動 |
-| 同・元と同じ動き | 2 | 2 回とも起動 |
-| 同・メッセージ専用ウィンドウのタイマー | 2 | **2 回とも落ちた** |
-| `5e969b7`（**留める**） | 6 | **6 回とも起動**（下記） |
-
-落ちた回は **Windows の異常終了記録（Application の Event 1000）に残らない**。VW 同梱の
-Sentry（sentry-native / crashpad）が先に掴み、ダンプを
-`%APPDATA%\Nemetschek\Vectorworks\2026\Sentry\reports\*.dmp` に書く。`VW User Log.txt` にも
-その回は 1 行も残らない（ログを書き出す前に落ちる）。**例外は下の `0xe0000001` の形**で、
-こちらは Event 1000 に残り（`KERNELBASE.dll`）、Sentry のダンプは出ない（WER の
-`LocalDumps` を設定してあればそちらに出る）。
-
-**読み込み直していることの根拠（3 つ）:**
-
-- **殻の時計を作る関数が 1 プロセスで 2 回走った。** 関数は static の旗で 1 度しか動かない
-  作りなのに、診断の記録には 0.6〜1.0 秒あけて 2 行ずつ残った（記録を取った 6 回とも）。
-- **action の記録**（頼まれたときだけ書く。`plugin/src/ModuleMain.cpp`）は、留めない殻で
-  `-1`・`-3` → 0.8 秒後に `-4`・`-5` で、**`-1` は 1 回きり・`-2` は無し**だった。
-- **落ちた番地が「前の読み込みの番地 ＋ 自分の関数の RVA」になっている。** メッセージ専用
-  ウィンドウの回は、USER32 がこちらのウィンドウへ `WM_TIMER`（`0x113`）を配ろうとして
-  `AlignDistribute.vlb+0x30c50` を呼んで落ちた。ウィンドウ手続きの RVA は `0x40c50` で、
-  差し引くと `0x7ffe5c0f0000`（64 KB 境界）——そこに今は `AlignDistribute.vlb`
-  （`0x7ffe5c100000`〜）が入っており、今の殻は `0x7ffe42680000` と別の所にいた。
-  2 件目も同じ形（`0x7ffe5cdd0c50` − `0x40c50` = `0x7ffe5cd90000`。今の殻は `0x7ffe43420000`）。
-
-**留めない殻の落ち方（ダンプ 12 件）:**
-
-- ウィンドウなしタイマー（9 件）: 主スレッドで Cineware（`cineware.dll`。
-  `MaxonRenderDevice.vlb` から呼ばれる）が自前の `PeekMessageW` → `TranslateMessage` →
-  `DispatchMessageW` のループを回している最中、こちらの `WM_TIMER`（`hwnd=0`・`lParam` は殻の
-  `OnClock`）を配ろうとして、**`DispatchMessageW` を持っていたはずの `rdi` が `-1` になって
-  いた**（`call rdi` で `0xffffffffffffffff` を実行）。`rdi` はループの前に 1 度だけ読み込まれる
-  非揮発レジスタなので、その前の周で配られた何かが壊したことになる。【推定】それが前の
-  読み込みのタイマーが呼んだ番地のコードだった（その周はダンプに残らない）。起動から 22〜35 秒。
-- 同（1 件）: `0xc0150014`（`STATUS_SXS_CORRUPT_ACTIVATION_STACK`）。USER32 のコールバックの中。
-- メッセージ専用ウィンドウ（2 件）: 上記の `AlignDistribute.vlb` 行き。
-
-**留めた殻の実測（`5e969b7`。6 回起動して各 120 秒）:** 6 回とも起動し、閉じれば正常終了
-（終了コード 0）した。action の記録は**すべての action が同じ番地で届いた**（例:
-`-1 -3 -4 -4 -5 -4 -5 -4 -5 -2 -5` がすべて `0x7ffeba150000`。`-2` は閉じたとき）。
-**落ちなかった回数だけでは直った証拠にならない**——留めない殻でも続けて起動した回がある
-（上の表）。直ったと言える根拠は番地のほうで、留めれば読み込み直しが起きず、古い番地を
-指すコールバックがそもそも生まれない。
+[計測記録](../Metrics/Plug-in%20Modules.md#実測)——留めない殻（`a8af333`）は 12 回中 9 回落ち、
+**留めた殻（`5e969b7`）は 6 回とも起動した**。**落ちなかった回数だけでは直った証拠にならない**
+（留めない殻でも続けて起動した回がある）。直ったと言える根拠は番地のほうで、留めれば読み込み
+直しが起きず、古い番地を指すコールバックがそもそも生まれない。
 
 ### #233 の `0xe0000001` も同じもの
 
 （[issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233)。
-2026-10-24 に同じ Windows の VM で測った。殻はどれも Actions の成果物で、Plug-ins 直下に置いた。）
+[実測](../Metrics/Plug-in%20Modules.md#233-の-0xe0000001-との突き合わせ)）
 
-2026-10-15 に「殻を `4b2e59f` → `b125451` へ替えたら起動画面で毎回落ちる・Plug-ins 直下の
-`VWPluginLibraryRoutines.h` / `.p` / `WorksheetFunctionOptionsRegistry.txt` を退けると起動する」
-を踏み、プラグインライブラリ関数の定義のずれた書き出しが原因と見ていた。**誤りだった。**
-`KERNELBASE.dll`・`0xe0000001`・オフセット `0x1f79e8` で落ちるのは、**上と同じ「古い番地を
-指したまま残った殻の時計」**である。
-
-| # | 3 ファイル | 殻 | 結果 |
-| --- | --- | --- | --- |
-| T2 | `4b2e59f` が書いた、ずれたもの | `b125451`（留めない） | **`0xe0000001`**（147 秒） |
-| T2b | 同上 | 同上 | **`0xe0000001`**（53 秒） |
-| T5 | **無し** | 同上 | **`0xe0000001`**（56 秒） |
-| T3 | ずれたもの | `4b2e59f`（留めない。書いた本人） | `0xc0000005`（番地 `0xf90013e4f9400110`。93 秒） |
-| T3b | 同上 | 同上 | 起動した |
-| T4 | ずれたもの | `fd379cf`（**留める**・定義を直した） | 起動した（3 ファイルは今の定義で書き直された） |
-| T6 | T4 が書いたもの | `1aa43cc`（留める） | 起動した |
-
-- **3 ファイルが無くても落ちた**（T5）。ずれた 3 ファイルのまま留めた殻へ替えると起動した（T4）。
-  3 ファイルは原因ではない。
-- **T2 のダンプ**（WER の `LocalDumps`。Sentry のダンプは出なかった）で、`RaiseException` の
-  手前のスタックは上の「ウィンドウなしタイマー」と同じ形だった: `MaxonRenderDevice.vlb` →
-  `cineware.dll` のメッセージループ → `user32` → **`3DS Library.vlb+0x53390`** → `ucrtbase` →
-  `Vectorworks2026.exe+0x20058a3` → `KERNELBASE!RaiseException`。
-- **番地の勘定が合う。** `b125451` の殻で `SetTimer` に渡しているタイマー手続きの RVA は
-  `0x43390`（`.vlb` の `SetTimer` の呼び出しの手前の `lea r9, [rip+…]` から読んだ）。呼ばれた
-  番地 `0x7ffe894e3390`（＝ `3DS Library.vlb` の `0x7ffe89490000` ＋ `0x53390`）から引くと
-  `0x7ffe894a0000`——**64 KB 境界**で、1 回目の読み込みの殻の番地と読める。今の殻は
-  `0x7ffe6fdc0000` にいた。
-- 【推定】**手続きの RVA が着地する先の命令で落ち方が決まる。** `b125451`（`0x43390`）は
-  3 回とも `0xe0000001`、`4b2e59f`（`0x42fb0`）は 1 回落ち 1 回起動した。ダンプを読んだのは
-  T2 の 1 回だけで、ほかの回の番地は見ていない。2026-10-15 の「3 ファイルを退けたら起動した」も、
-  この巡り合わせと読める（そのときの番地は残っていない）。
+- 「Plug-ins 直下の `VWPluginLibraryRoutines.h` / `.p` / `WorksheetFunctionOptionsRegistry.txt` の
+  ずれた書き出しで起動時に落ちる」と見ていたのは**誤り**。`KERNELBASE.dll`・`0xe0000001` も、
+  **古い番地を指したまま残った殻の時計**である（3 ファイルが無くても落ち、留めた殻なら起動した）。
+- 【推定】手続きの RVA が着地する先の命令で落ち方が決まる。2026-10-15 の「3 ファイルを退けたら
+  起動した」も、この巡り合わせと読める（そのときの番地は残っていない）。
 
 ### 読み違えやすいところ
 
-- **「Plug-ins の中身で決まる」ように見える。** 置いた・退けたで結果が変わって見えたのは、
-  起動ごとに番地の巡り合わせが変わるからで、同じ中身でも落ちたり落ちなかったりする
+- **「Plug-ins の中身で決まる」ように見える**のは、起動ごとに番地の巡り合わせが変わるため
   （issue の 5 と 6 の食い違いもこれで説明が付く）。
-- **#233 の `0xe0000001` も同じもの**（上の「#233 の `0xe0000001` も同じもの」）。以前は
-  「プラグインライブラリ関数の定義のずれた書き出しで落ちる、別物」と書いていたが誤り。
-- **起動中に VM ごと落ちたこともある**（10/16 18:45・10/18 11:52。バグチェック `0xD1` が 2 回とも
-  `viogpudo.sys+0x180b8`——UTM の virtio GPU ドライバ）。どちらも VW が落ちた・終わった前後
-  だったが、ドライバ側の不具合で、上の直しとの関係は確かめていない。
-- **macOS の VW は読み込み直さない——mac の殻は留めなくてよい。** mac の殻は `CFRunLoopTimer`
-  を留めずに作っているが、古い番地を指すタイマーは生まれない。action の記録（殻の番地つき。
-  殻 `3889ee91a052`＝`fd379cf`・macOS 27.0.1 arm64・VW 2026 `31.6.0 (872399)`）で、**5 回起動して
-  5 回とも、起動から終了までのすべての action が同じ番地で届いた**:
-  `-1 -3 -4 -4 -5 -4 -5 -4 -5`、閉じたとき `-2 -5`。`-3` から `-4` までは 0.07〜0.1 秒
-  （Windows で読み込み直したときは 0.8 秒あき、番地が変わった）。番地は起動ごとに違った
-  （`0x715dec0000` / `0x7160b18000` / `0x7155338000` / `0x715eac0000` / `0x715ec8c000`）ので、
-  読み込み直していれば番地の違いで分かったはずである。起動後の `vmmap` でも殻は 1 つだけ
-  読み込まれていた。仮に同じ番地へ読み込み直す版が出ても、タイマーが指す先は自分のコードの
-  ままなので、Windows のように別のモジュールのコードを踏む形にはならない。
-- **閉じたときは `-2` の後にもう 1 度 `-5` が来る**（mac で 4 回。Windows の留めた殻の記録も
-  同じ `… -2 -5`）。`-2` を「もう呼ばれない」合図として後片付けすると、続く `-5` で
-  片付けたものを踏む。
-- 【推定】同じ `Plug-ins` に入れていた別のプラグイン（`cli`。`SetTimer` を使う）も同じ形で
-  落ちうる。cli だけで落ちた回（issue の 5）はダンプが残っておらず、確かめていない。
+- 起動中に VM ごと落ちたこと（バグチェック `0xD1`・`viogpudo.sys`）は UTM の仮想 GPU ドライバの
+  不具合で、上の直しとの関係は確かめていない。
+- **macOS の VW は読み込み直さない——mac の殻は留めなくてよい**（5 回起動して、すべての action が
+  同じ番地で届いた。番地は起動ごとに違ったので、読み込み直していれば番地の違いで分かったはず。
+  [実測](../Metrics/Plug-in%20Modules.md#結果が食い違って見えたところの切り分け)）。仮に同じ番地へ読み込み直す版が
+  出ても、タイマーが指す先は自分のコードのままなので、Windows のように別のモジュールのコードを
+  踏む形にはならない。
+- **閉じたときは `-2` の後にもう 1 度 `-5` が来る**（mac・Windows）。**`-2` を「もう呼ばれない」合図に
+  して後片付けすると、続く `-5` で片付けたものを踏む。**
+- 【推定】同じ `Plug-ins` の別のプラグイン（`cli`。`SetTimer` を使う）も同じ形で落ちうる。
 
 ## OS タイマーを持つ常駐プラグイン（留めたモジュール）は、終了時の落ち方を変えない（Windows）
 
 （[issue #257](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/257)。
-VW 2026 Update 6（Build 872399）x64・Windows 11 Pro ARM64 の VM（UTM）の x64 エミュレーション・
-描画は WARP。2026-10-26 に測った。）
+[実測](../Metrics/Plug-in%20Modules.md#os-タイマーを持つ常駐プラグイン留めたモジュールの有無と終了時の落ち方windows)）
 
-**`SetTimer` を持ち `GET_MODULE_HANDLE_EX_FLAG_PIN` で留めた常駐プラグインを入れても、
-利用者が閉じたときの終わり方は入れないときと変わらなかった。** ホーム画面まで進んでから
-閉じた 82 回（プラグインあり 63・なし 19）がすべて終了コード 0 で終わり、閉じる指示から
-プロセスが終わるまでの時間にも差は無かった。**タイマーを止める・留め方を変えるといった
-作法は要らない。**
-
-以前 `cli`（`296a797`）で 11 回中 3 回出た終了時の `0xC0000005`（すでに外された
-`libcef.dll` の中を実行していたスレッドで落ちた）は、**同じ版を 40 回閉じても再現しなかった**。
-当時の比率（27%）が `cli` の性質なら 40 回で 1 度も出ない見込みは 10 万分の 1 未満なので、
-`cli` の有無ではなく当時の状況の側にあったと読める。当時と違うのは、起動からホーム画面までが
-36〜308 秒とばらついていたこと（今回は 45〜91 秒）と、閉じる時機をホーム画面ではなく
-起動からの決め打ち（240 / 360 秒）で決めていたこと。**何が効いていたかは分かっていない**
-（当時の記録は cli の側の [Windows の実機での実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)）。
+- **`SetTimer` を持ち `GET_MODULE_HANDLE_EX_FLAG_PIN` で留めた常駐プラグインを入れても、利用者が
+  閉じたときの終わり方は変わらない**（82 回すべて終了コード 0、所要にも差が無い）。**タイマーを
+  止める・留め方を変えるといった作法は要らない。**
+- 以前 `cli` で 11 回中 3 回出た終了時の `0xC0000005`（外された `libcef.dll` の中）は 40 回で再現
+  しなかった。当時の比率（27%）が `cli` の性質なら 40 回で 1 度も出ない見込みは 10 万分の 1 未満
+  なので、`cli` の性質ではなく当時の状況の側と読めるが、**何が効いていたかは分かっていない**
+  （当時の記録は cli の側の [Windows の実機での実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/98bfbb1e5745405cb208981271a2d8b8240ad224/docs/plugin/windows-measurements.md)）。
 
 ### 実測
 
-起動し、`VW User Log.txt` にホーム画面の表示（`Dialog opened, Section = HomeScreen`）が出るのを
-待って、メインウィンドウへ `CloseMainWindow`（メニューの「終了」と同じ）を送った。終了コードは
-起動直後に開いておいたハンドルで読んだ。構成は 1 回ずつ交互に回した（時間帯の偏りを避けるため）。
-プラグインは `Plug-ins` の外へ退けて出し入れした。
+[計測記録](../Metrics/Plug-in%20Modules.md#実測-1)。要点:
 
-| 構成 | 閉じる時機 | 回数 | 終了コード 0 | 閉じる → 終わる |
-| --- | --- | --- | --- | --- |
-| なし | ホーム画面の 90 秒後 | 10 | 9（残る 1 回は VM ごと止まった。下記） | 26.5〜30.6 秒 |
-| VwSdkProbes の殻だけ | 同 | 10 | 10 | 26.8〜32.6 秒 |
-| `cli`（`296a797`） | 同 | 10 | 10 | 25.6〜33.3 秒 |
-| `cli`（`0683df0`） | 同 | 10 | 10 | 25.2〜35.1 秒 |
-| なし | ホーム画面が出た直後 | 10 | 10 | 28.4〜49.5 秒 |
-| `cli`（`296a797`） | 同 | 10 | 10 | 27.8〜47.1 秒 |
-| `cli`（`296a797`）・3 秒ごとに `vw2026 call ping` | 起動から 360 秒 | 10 | 10 | 27.8〜28.6 秒 |
-| `cli`（`296a797`）・要求なし | 同 | 10 | 10 | 27.1〜28.6 秒 |
-| VwSdkProbes の殻だけ（下の action の記録） | ホーム画面の 90 秒後 | 3 | 3 | 26.1〜33.6 秒 |
-
-- 常駐プラグインはどの回も読み込まれていた（ホーム画面の前、起動から 6〜14 秒でモジュール
-  一覧に載った）。ping の回は 1 回あたり 74〜79 回応え、刻みの中でスプールを読み書きしていた。
-- **Sentry のダンプも WER のダンプも 1 件も出なかった。**
-- **ホーム画面が出た直後に閉じると、タイトルの無いダイアログ（`#32770`）が開いていることがあり、
-  そのときは終わるまでに 38〜50 秒かかった**（20 回中 5 回。プラグインあり 2・なし 3）。
-  無いときは 28〜37 秒。
-- **そのうち 1 回（`cli` あり・47 秒）は、本体が終了コード 0 で終わった後に CEF の renderer
-  （`Vectorworks2026.exe --type=renderer`）が残り、殺せなくなった**——スレッドが 1 本だけ
-  `WaitReason=Executive` で止まり、`Stop-Process` も `taskkill /F` も効かない（終了の途中で
-  カーネルの中から戻ってこない）。VM を再起動するまで残る。次の起動の邪魔にはならなかった
-  （以後の 27 回は、下記の打ち切った 2 回を除いて変わらず終わった）。【推定】仮想 GPU の
-  ドライバの側で止まっている（上の「【罠】」の「読み違えやすいところ」）。
-- **起動の途中（ホーム画面の前。起動から 40 秒）に送った `CloseMainWindow` は捨てられる。**
-  ホーム画面まで進んだ後も終わらず、240 秒待って打ち切った（2 回）。終了の途中を作るのに
-  この手は使えない。
-- **VM ごと止まった 1 回**は、プラグインなしでホーム画面に置いていた最中だった（ログは起動から
-  240 秒で途切れ、Windows は「予期しないシャットダウン」を記録。バグチェックの記録は無い）。
-  【推定】上の「【罠】」の「読み違えやすいところ」と同じ、仮想 GPU のドライバによるもの。
-
-**利用者が閉じる道でも、`kPluginModuleDeinit`（-2）は終わる前に 1 回届く。** 殻に action を
-書かせた（頼み札のある間だけ。`plugin/src/ModuleMain.cpp`）3 回で、`CloseMainWindow` の
-7〜14 秒後に -2、その 0.5 秒後に -5、-2 の 19〜21 秒後にプロセスが終わった。刻みから
-`CloseAllFilesAndQuitVectorworks` を呼んだ道（[Timers and Notifications](Timers%20and%20Notifications.md)
-4 の 9。戻ってから 8〜10 秒で -2、その約 20 秒後に `atexit`）と同じ並び。番地は -1 から -2 まで
-同じだった（留めてあるので読み込み直しは起きない。上の「【罠】」）。この道で刻みが
-いつまで来るかは [Timers and Notifications](Timers%20and%20Notifications.md) 4 の 9「利用者が
-閉じる道の刻み」——**`kNotifyBeforeApplicationQuit` の後には来ない**（11 回。#269）。
-
-**その #269 の 11 回のうち 1 回は、終了の途中に `libcef.dll_unloaded` の `0xC0000005` で
-落ちた**（-2・-5 の後、`atexit` の前。閉じる指示の 44.5 秒後。WER のフルダンプが残った）。
-上の 82 回で再現しなかった `cli` の落ち方と同じモジュールである。この回は、ブリッジが図面を
-閉じて**ホーム画面へ戻った後**に閉じていた（上の 82 回は、起動してホーム画面から閉じた
-だけ）。同じ形の回は 5 回中 1 回で、入っていたのは `VwSdkProbes` だけ。【推定】図面を開いて
-閉じ、ホーム画面（CEF）へ戻ったことが効いている——確かめていない。
+- **利用者が閉じる道でも `kPluginModuleDeinit`（-2）は終わる前に 1 回届く**（閉じて 7〜14 秒後、
+  その 0.5 秒後に -5、-2 の 19〜21 秒後に終了）。刻みから `CloseAllFilesAndQuitVectorworks` を呼んだ道
+  （[Timers and Notifications](Timers%20and%20Notifications.md) 4 の 9）と同じ並び。刻みは
+  **`kNotifyBeforeApplicationQuit` の後には来ない**（同 4 の 9「利用者が閉じる道の刻み」。#269）。
+- ホーム画面が出た直後に閉じるとタイトルの無いダイアログが開いていることがあり、終わるまで
+  38〜50 秒かかる。**起動の途中（ホーム画面の前）に送った `CloseMainWindow` は捨てられる**——
+  終了の途中を作るのにこの手は使えない。
+- 計測中に VM ごと止まった 1 回（プラグインなしでホーム画面に置いていた最中）は、【推定】仮想 GPU
+  のドライバによるもの（上の「【罠】」の「読み違えやすいところ」と同じ）。
+- 1 回、本体が終わった後に CEF の renderer が殺せずに残った【推定】（仮想 GPU のドライバ）。
+- #269 の 11 回中 1 回、図面を閉じてホーム画面へ戻った後に閉じた回で `libcef.dll_unloaded` の
+  `0xC0000005` で落ちた。【推定】図面を開いて閉じ、ホーム画面（CEF）へ戻ったことが効いている
+  ——確かめていない。
 
 ### 読み違えやすいところ
 
-- **「開発元不明のプラグイン」のダイアログが出たまま閉じると、`CloseMainWindow` は効かない。**
-  最初に組んだ計測ではプラグインありの 5 回がすべてこれで止まった（全部有効でも前回から
-  約 24 時間たつと出る。下の「開発元不明のプラグイン」）。計測では、VW を止めた状態で
-  `SavedSettingsUser.xml` の `<UnknownPluginsDialog><Date>` を今にし、有効化の記録
-  （`ExceptionsMissingCredentials.bin`）を全部入りの写しから戻してから起動した。**プラグインを
-  出し入れしながらダイアログを閉じると、居ないものの有効化が消える**（同じ節）ので、写しを
-  戻すのは必須。
-- **`Get-Process Vectorworks2026` は CEF の子プロセスも拾う。** 子（`--type=renderer` /
-  `gpu-process` など）も同じ `Vectorworks2026.exe` なので、先頭の 1 つを取ると主窓の無い子に
-  当たることがある——`CloseMainWindow` は黙って何もせず（主窓のハンドルが 0）、「VW が閉じる
-  指示を無視した」ように見える（#269 で 4 回踏んだ）。主のプロセスはコマンドラインに
-  `--type=` が無いもの（`Win32_Process` で引く）か、`Start-Process -PassThru` の戻り値を使う。
-- **`VW User Log.txt` の `After SetUpCOM` はホーム画面ではない**（その後にライブラリの準備が
-  20 秒ほど続く）。「起動し終えた」の目印には `Section = HomeScreen` を使う。
-- **`VW User Log.txt` は前の起動の行を持ち越し、途中で短く書き直されることがある**（ログの
-  送信の後）。「起動より後に書き換わった」「起動前の長さより後ろ」のどちらで絞っても、
-  前の起動の `HomeScreen` を拾うか、今回の行を読み落とす（#270 で両方踏んだ）。**各行の
-  `ts`（UTC）が起動より後のものだけを見る。** また VW は書き込みのために開いたままなので、
-  `File.ReadAllLines` は共有違反で失敗する——`FileShare.ReadWrite | Delete` で開く。
+外から VW を起動・終了させる道具を書くときの落とし穴（[詳細](../Metrics/Plug-in%20Modules.md#計測でつまずいたところの記録)）:
+
+- **「開発元不明のプラグイン」のダイアログが出たままだと `CloseMainWindow` は効かない。**
+- **`Get-Process Vectorworks2026` は CEF の子プロセスも拾う**——主は `--type=` の無いもの
+  （`Win32_Process`）か `Start-Process -PassThru` の戻り値を使う。
+- **`After SetUpCOM` はホーム画面ではない。** 起動し終えた目印は `Section = HomeScreen`。
+- **`VW User Log.txt` は前の起動の行を持ち越し、途中で縮む**ことがある——**各行の `ts`（UTC）が
+  起動より後のものだけを見る**。`FileShare.ReadWrite | Delete` で開く。
 
 ### 新しい図面の最初の描画——30 回で 1 度も落ちなかった（Windows）
 
 （[issue #270](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/270)。
-上と同じ VM・VW。2026-10-27 に測った。）
+[実測](../Metrics/Plug-in%20Modules.md#新しい図面の最初の描画を-30-回測ったwindows)）
 
-**ホーム画面の「新規用紙」から新しい図面を開き、最初の描画を待ってから閉じる、を 30 回
-（プラグインなし・`cli`（`296a797`）・`VwSdkProbes` の殻だけ、を 1 回ずつ交互に 10 巡）
-回して、描画中の落ち（`MaxonDocumentBuilder.vlb` の番地 0 の読み出し）は 1 度も出なかった。**
-閉じたときもすべて終了コード 0、Sentry・WER のダンプは 0 件。**常駐プラグインの有無で差は
-見えない**——cli の側で出た 1 回（2 回中 1 回）は、どの構成でも再現しなかった。
-
-| 構成 | 回数 | 落ち | ホーム画面まで | クリック → `PaintArea begin` | 閉じる → 終わる |
-| --- | --- | --- | --- | --- | --- |
-| なし | 10 | 0 | 73〜98 秒 | 8〜22 秒 | 27.3〜36.4 秒 |
-| `cli`（`296a797`） | 10 | 0 | 74〜130 秒 | 13〜21 秒 | 28.4〜34.2 秒 |
-| `VwSdkProbes` の殻だけ | 10 | 0 | 78〜134 秒 | 9〜16 秒 | 28.1〜35.7 秒 |
-
-- 手順: 起動 → ログの `Section = HomeScreen` の 10 秒後に、主窓を前へ出して「新規用紙」の
-  位置をクリック（`SetCursorPos` ＋ `mouse_event`）→ 60 秒見張る（プロセスが消えるか・ダンプが
-  増えるか）→ `CloseMainWindow`。無題の図面は何もしていなければ保存の確認を出さない。
-- **頻度の上限**: 30 回で 0 回なので、この VM でも 1 回あたり**約 10%**を超えるとは考えにくい
-  （95% の上側。構成ごとの 10 回では約 26%）。cli の側の 2 回中 1 回は、偶然の偏りと
-  読むほうが自然。**何が効いていたかは分かっていない**——当時は描画が WARP（VM の
-  ソフトウェア描画）で、この VM はほかでも描画のスレッドで落ちている（[Viewports](Viewports.md)
-  の #248。`d3d10warp.dll` の番地 0）。【推定】プラグインではなく VM の描画の側。
-- **「新規用紙」の最初のクリックは、30 回中 21 回で効かなかった**（ホーム画面の表示から
-  10 秒後でも、図面が開かない）。20 秒待って 2 度目を押すと開いた。ホーム画面（CEF）は
-  `HomeScreen` のログの後もしばらく入力を受け付けていない。外から押す道具は、開いたかを
+- **「新規用紙」から開いて最初の描画を待って閉じる、を 30 回回して、描画中の落ちは 0 回。常駐
+  プラグインの有無で差は見えない**（95% の上側で、1 回あたり約 10% を超えるとは考えにくい。
+  構成ごとの 10 回では約 26%）。cli 側の 2 回中 1 回は
+  偶然の偏りと読むのが自然で、【推定】プラグインではなく VM の描画（WARP）の側
+  （[Viewports](Viewports.md) の #248）。
+- **ホーム画面の「新規用紙」の最初のクリックは効かないことが多い**（30 回中 21 回）——開いたかを
   窓の題（`[名称未設定 1]` など）で確かめて押し直す。
-- この計測の外で 1 回、**「新規用紙」で開いてから閉じたときに `libcef.dll_unloaded` の
-  `0xC0000005` で落ちた**（`VwSdkProbes` の殻だけ。手で同じ操作をした回。WER のフルダンプ）。
-  上の #269 の 1 回とオフセットまで同じ（`+0x3699c7e`）。計測の 30 回では出ていない。
 
 ## 「開発元不明のプラグイン」のダイアログ——有効化は**フルパス**で覚え、出るのは無効があるときと約 24 時間おき（Windows・macOS）
 
-（[issue #258](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/258)。
-VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エミュレーション。
-被験体は `%APPDATA%\Nemetschek\Vectorworks\2026\Plug-ins\cli\cli.vlb`（署名なし。
-[vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)）。
-2026-10-21 に 12 回起動して確かめた。macOS も 2026-10-24 に同じ規則を確かめた——下の「macOS」。）
+（[issue #258](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/258)。Windows・macOS の
+VW 2026。被験体は `cli`（署名なし／アドホック署名）。[起動ごとの実測](../Metrics/Plug-in%20Modules.md#実測起動ごと)）
 
 **まとめ（`install` のように外からプラグインを置く側が知っておくこと）:**
 
@@ -348,7 +174,7 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
   いない）。**別の機械で作った記録の複製が通るかは未確認**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
 - **ダイアログは「無効のものがあれば毎回」「全部有効なら前回から約 24 時間おき」に出る。**
   同梱ヘルプは「各セッションの開始時に開く」と書くが、実測では間引かれる。全部有効なら
-  開いている間もプラグインは読み込み済み（[cli の実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/main/docs/plugin/windows-measurements.md)と同じ）。
+  開いている間もプラグインは読み込み済み（[cli の実測](https://github.com/min-nano/vectorworks-plugin-command-line-interface/blob/98bfbb1e5745405cb208981271a2d8b8240ad224/docs/plugin/windows-measurements.md)と同じ）。
 - **全部有効で出たダイアログの最中も、プラグインは OS タイマーの刻みから図面を作る・足す
   （undo の記録の中で）・保存する・閉じる・開くができ、閉じた後も残る**（Windows。下の
   「ダイアログの最中も…」。#264）。ボタンは UI Automation では押せず、Win32 の `BM_CLICK`
@@ -367,194 +193,70 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
 
 ### 実測（起動ごと）
 
-「出た」は `VW User Log.txt` の `Dialog[OPEN]: ID-10002 (UnknownDeveloperPlugIns)` と画面で、
-「読み込み」はホーム画面が出た後に VW のプロセスのモジュール一覧に `cli.vlb` があるかで見た。
-`<Date>` は下記の `SavedSettingsUser.xml` の値（VW を止めて書き換えたものを含む）。
-
-| # | 前提 | ダイアログ | cli の表示 | 読み込み |
-| --- | --- | --- | --- | --- |
-| 1 | 何も変えない（記録あり。`<Date>` は 3 日前の 10/18 21:19） | **出た** | 有効 | された |
-| 2 | 1 の直後にそのまま | 出ない | — | された |
-| 3 | `<Date>` を 24 時間 20 分前に | **出た** | 有効 | された |
-| 4 | `<Date>` を 6 時間前（同じ日）に | 出ない | — | された |
-| 5 | `<Date>` を前日の 23:59（約 18 時間前）に | 出ない | — | された |
-| 6 | `<Date>` を 23 時間前に | 出ない | — | された |
-| 7 | 記録を退ける（`<Date>` は今） | **出た** | **無効** | **されない** |
-| 7' | 7 で「有効化」→「再起動」した後の起動 | 出ない | — | された |
-| 8 | フォルダを `cli` → `cli2`（記録は `cli` のもの） | **出た** | **無効** | **されない** |
-| 9 | 8 で有効化せず「続ける」→ `cli` に戻す | **出た** | **無効** | **されない** |
-| 10 | 9 の後、VW を止めて 7 で退けた記録を戻す | 出ない | — | された |
-| 11 | `cli.vlb` の末尾に 16 バイト足す（SHA-256・サイズ・日時が変わる） | 出ない | — | された |
-| 12 | `cli2` にして有効化 →「再起動」した後の起動 | 出ない | — | された（`cli2\cli.vlb`） |
-
-- **閾値は 23 時間〜24 時間 20 分の間**（4〜6 と 3）。暦の日付ではない（5 は前日だが出ない）。
-- **無効のものがあると `<Date>` が新しくても出る**（7〜9。どれも前回から 24 時間以内）。
-- ボタンごとの記録の書き方:
-
-  | 操作 | `ExceptionsMissingCredentials.bin` | `<Date>` | その後 |
-  | --- | --- | --- | --- |
-  | 「続ける」（全部有効のとき。1・3） | 書き直す（同じバイト列） | 押した時刻になる | そのまま起動を続ける |
-  | 「有効化」 | まだ書かない | — | 「続ける」が「再起動」に変わる |
-  | 「再起動」（7・12） | 書き直す | 変わらなかった | ホーム画面まで進んでから終了し、自動で起動し直す |
-  | 「続ける」（無効が残るとき。8） | 書き直す（**8 バイト＝空**） | 変わらなかった | そのまま起動を続ける（無効のものは読まれない） |
-  | 「終了」（9） | 書き直す（8 バイト） | 変わらなかった | ホーム画面まで進んでから VW を終了する（ログは `Return=2`） |
+- **閾値は暦の日付ではなく経過時間**（Windows で 23 時間〜24 時間 20 分の間、mac で 23 時間 55 分〜
+  24 時間 5 分の間）。**無効のものがあると `<Date>` が新しくても出る。**
+- ボタンごとの書き方: **「続ける」（全部有効）は記録を同じバイト列で書き直し `<Date>` を押した時刻に**、
+  **「有効化」は押した時点では書かず「続ける」が「再起動」に変わる**、「再起動」は記録を書き直し
+  自動で起動し直す、**無効が残るときの「続ける」「終了」は記録を空に書き直す**
+  （[表](../Metrics/Plug-in%20Modules.md#実測起動ごと)）。
 
 ### ダイアログの最中も、プラグインは刻みから図面を扱える（Windows）
 
 （[issue #264](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/264)。
-VW 2026 Update 6・Windows 11 ARM64 の VM。2026-10-26。`Plug-ins` には有効化済みの
-`VwSdkProbes` だけを置き、`<Date>` を 2 日前にして起動した——全部有効でも出る回。
-`probes/runtime/startup-dialog-docs/`、ビルド `b0a3ea33ef37`。macOS は下の「mac も…」。）
+[実測](../Metrics/Plug-in%20Modules.md#ダイアログの最中に刻みから図面を扱った実測windows)）
 
-**全部有効で出たダイアログの最中、OS タイマー（`SetTimer(nullptr, …)`）の刻みは届き、
-そこから図面を作る・足す・保存する・閉じる・開くがすべて通った。** ダイアログを閉じた後も、
-作った図面と保存したファイルは残っていた。**＝誰も見ていないときに起動してダイアログで
-止まっても、プラグイン経由の操作は待たずに進められる。**
-
-- 刻みは届く。殻の MCP ブリッジ（250 ms の `SetTimer`）の生存の印は 2 秒ごとに更新され続け、
-  `vw_ping` は 1 秒で応えた（その時点の図面は 0 枚）。
-- `vw_run_probe` が刻みの中で `OpenDocumentPath(nullptr, false)` で新規の図面を開き、
-  プローブが続けて次を行った——どれも成功し、落ちなかった。
-  | 手順 | 結果 |
-  | --- | --- |
-  | 始め | 図面 1 枚（ブリッジが開いた無題）・`IsCurrentlyBuildingAnUndoEvent()` は `no` |
-  | `SetUndoMethod(kUndoSwapObjects)` ＋ `NameUndoEvent` → 矩形 → `AddAfterSwapObject` → `EndUndoEvent` | 開いた後 `yes`、閉じた後 `no`。どれも成功 |
-  | `SaveActiveDocumentPath`（一時ディレクトリの `.vwx`） | 0（成功）・33255 バイト。前面の図面がそのパスになり `saved=yes` |
-  | `CloseDocument` → `OpenDocumentPath(そのファイル)` | 0 枚 → 1 枚。名前で矩形を引き直せた |
-
-  ダイアログの無い起動で同じ手順を走らせた結果と、ファイルの大きさ（32607 / 33255 バイト）
-  以外は同じだった。所要はダイアログの最中が 38 秒、無いときが 7 秒（起動の途中で新規の
-  図面を開くのが重い）。
-- そのときのプロセスの窓（可視のトップレベル）は、ダイアログ「開発元不明のプラグイン」
-  （`#32770`・有効）、題の無い `#32770`（無効。起動画面）、主窓（**無効**）の 3 つ。主窓の
-  リボンと開いた図面のタブは、起動画面とダイアログの後ろに既に描かれていた。
-- **ダイアログを閉じた後**: 開き直した図面は開いたまま、保存したファイルもそのまま。VW は
-  その上にホーム画面を出して起動を終えた（図面を開いた状態でも出る）。ブリッジはそのまま
-  応え続けた。
-
-**ボタンは UI Automation では押せない。Win32 の `BM_CLICK` なら押せる。**
-
-- UI Automation では、ダイアログのボタンが **`Button` ではなく `Pane`** として見え、
-  **パターンを 1 つも持たない**（`InvokePattern` も無い）。
-- Win32 では普通の子窓: 「続ける」＝`Button`・ID 1、「終了」＝ID 2、「有効化」＝ID 7、
-  「ファイルの場所を開く...」＝ID 8。**「続ける」へ `BM_CLICK` を送ると、3 秒以内に
-  ダイアログが閉じ**、記録はそのとき一覧にあったものだけで書き直された（上の表の「続ける」と
-  同じ。`<Date>` は VW を終えるまでファイルへ書かれない）。ダイアログは、VW のプロセスの
-  可視の `#32770` で題が「開発元不明のプラグイン」のものとして見つけた（表示言語を変えると
-  題も変わるはず——ID で押すほうが確か）。
-- 見つける目印に `VW User Log.txt` を使うときは注意。この回は、起動を待つハーネス
-  （「書き換え時刻が起動より新しく、`Section = HomeScreen` を含む」で判定）が**ダイアログの
-  最中に「ホーム画面」と誤判定した**。直後のファイルは、ダイアログの最中にログが送信されて
-  （`Log uploading complete`）**10 行に縮んでおり**、`HomeScreen` の行は無かった——
-  【推定】縮む前のファイルに残っていた前の起動の行を拾った。ダイアログが開いているかは、
-  窓（上記）で見るほうが確か。
+- **全部有効で出たダイアログの最中、`SetTimer(nullptr, …)` の刻みは届き、図面を作る・undo の記録の
+  中で足す・保存する・閉じる・開くがすべて通った。閉じた後も残った。** ＝誰も見ていない起動で
+  ダイアログに止まっても、プラグイン経由の操作は待たずに進められる。
+- **ボタンは UI Automation では押せない**（`Pane` に見え、パターンを持たない）。**Win32 の `BM_CLICK`
+  なら押せる**（「続ける」＝ID 1、「終了」＝ID 2、「有効化」＝ID 7、「ファイルの場所を開く...」＝ID 8。
+  題は表示言語で変わるはずなので ID で押す）。
+- ダイアログが開いているかは `VW User Log.txt` より**窓**で見るほうが確か（ログがダイアログの
+  最中に縮み、前の起動の `HomeScreen` を拾った【推定】）。
 
 ### mac も、共通モードの刻みからなら扱える（既定のモードだけでは刻まない）
 
 （[issue #264](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/264)。
-VW 2026 Update 6（Build 872399）・macOS 27.0.1。2026-10-27。`Plug-ins` には有効化済みの
-`cli`（`0b206b8`）と `VwSdkProbes` を置き、VW を止めて `<Date>` を 2 日前にして起動した。
-ローカルの Claude Code から MCP ブリッジで走らせた。ビルド `442411571f73`。）
+[実測](../Metrics/Plug-in%20Modules.md#mac-で共通モード既定のモードの刻みから図面を扱った実測)）
 
-**ダイアログは `applicationDidFinishLaunching` の中の `-[NSApplication runModalForWindow:]`
-で回る**（`sample` で採ったメインスレッドのスタック。開く道は AppleEvent の open →
-`_postDidFinishNotification` → VW → `runModalForWindow:` → `_doModalLoop:peek:`）。ランループの
-モードは **`NSModalPanelRunLoopMode`**（下のプローブの `CFRunLoopCopyCurrentMode`）。
-したがって**刻むのは `kCFRunLoopCommonModes` に登録したタイマーだけ**である
-（[Timers and Notifications](Timers%20and%20Notifications.md) の 4 の 6 と同じ）。
-
-- **既定のモードにだけ登録したタイマーは、ダイアログの間 1 度も刻まない。** 殻の MCP
-  ブリッジ（`kCFRunLoopDefaultMode`）の生存の印は、ダイアログが出る 5 秒前の値のまま
-  **639 秒**更新されなかった。「続ける」で閉じた直後から刻み直した。
-- **共通モードのタイマーは刻む。** 同じプロセス（同じ pid）の `cli`（`CFRunLoopAddTimer(…,
-  kCFRunLoopCommonModes)`）は、同じダイアログの最中に `ping` へ 0.07〜0.17 秒で応えた。
-- 殻のブリッジを共通モードに登録し直して（スプールの旗 `common-modes`。
-  [#276](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/276)）、
-  ダイアログの最中に `vw_run_probe` で `startup-dialog-docs` を走らせた——**Windows と同じ
-  手順がすべて通り、落ちなかった**（所要 3.1 秒）。
-  | 手順 | 結果 |
-  | --- | --- |
-  | 始め | 図面 1 枚（ブリッジが `OpenDocumentPath(nullptr, false)` で開いた無題）・`undo=no`・モード `NSModalPanelRunLoopMode` |
-  | `SetUndoMethod` ＋ `NameUndoEvent` → 矩形 → `AddAfterSwapObject` → `EndUndoEvent` | 開いた後 `yes`、閉じた後 `no`。どれも成功 |
-  | `SaveActiveDocumentPath`（一時ディレクトリの `.vwx`） | 0（成功）・34722 バイト・`saved=yes` |
-  | `CloseDocument` → `OpenDocumentPath(そのファイル)` | 0 枚 → 1 枚。名前で矩形を引き直せた |
-
-  どの時点も `IsCurrentlyBuildingAnUndoEvent()` は（自分で開いた間を除き）`no`——利用者が
-  開いた環境設定などの最中（`yes`。Timers and Notifications の 9）とは違い、Windows と同じ。
-  ダイアログの最中は、開いた図面の窓は窓の一覧（AX）に出ていなかった（ダイアログだけ）。
-- **ダイアログを閉じた後**（約 2 分後に `AXPress` で「続ける」）: 開き直した図面は開いたまま
-  （`GetOpenFilesList` 1 枚・`GetCurrentLayer()` が「レイヤ-1」）、保存したファイルも同じ
-  大きさで残った。VW はその上にホーム画面を出して起動を終え、ブリッジはそのまま応え続けた。
-  Windows と同じ。
-- **ボタンは AX の `AXPress` で押せる**（#258 と同じ）。押した後の記録はバイト単位で
-  押す前と同じに書き直され、`<Date>` は押した時刻（分まで）が VW の終了時に書かれた——
-  手で押したときと同じ（上記の表）。
-- **ダイアログが出たことは `VW User Log.txt` の `Dialog[OPEN]: ID-10002 (UnknownDeveloperPlugIns)`
-  の行で分かる**（ID と内部名なので表示言語に依らない【推定】。日本語でしか見ていない）。
-  窓の題（「開発元不明のプラグイン」）は表示言語で変わるはず。ただし Windows と同じく、
-  ダイアログの最中にログが送信されてファイルが縮む（この回は 10 行）ので、縮む前の行を
-  拾わないように「起動の後に書かれた行か」を時刻で確かめる。
-- **呼ぶ側の作りへの含み**: 共通モードに登録したプラグイン（`cli` はそう）なら、ダイアログが
-  開いたままでも待たずに図面を扱える。**既定のモードだけのプラグインは、ダイアログが閉じる
-  まで何もできない。**
+- **ダイアログは `applicationDidFinishLaunching` の中の `runModalForWindow:` で回り、モードは
+  `NSModalPanelRunLoopMode`**——**刻むのは `kCFRunLoopCommonModes` に登録したタイマーだけ**
+  （[Timers and Notifications](Timers%20and%20Notifications.md) の 4 の 6 と同じ）。
+- **既定のモードだけのタイマーはダイアログの間 1 度も刻まない**（639 秒止まった）。共通モードなら
+  Windows と同じ手順がすべて通った（[#276](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/276)
+  で殻のブリッジを共通モードに登録し直して確かめた）。**既定のモードだけのプラグインは、
+  ダイアログが閉じるまで何もできない。**
+- ダイアログの最中の `IsCurrentlyBuildingAnUndoEvent()` は `no`（利用者が開いた環境設定などの
+  最中の `yes` とは違う）。
+- **ボタンは AX の `AXPress` で押せる。** ダイアログが出たことは `VW User Log.txt` の
+  `Dialog[OPEN]: ID-10002 (UnknownDeveloperPlugIns)` で分かる（表示言語に依らない【推定】）が、
+  縮む前の行を拾わないよう時刻で確かめる。
 
 ### 置き場所と形
 
 - **有効化の記録**: `%APPDATA%\Nemetschek\Vectorworks\2026\Settings\ExceptionsMissingCredentials.bin`。
-  先頭 8 バイトが平文の長さ（リトルエンディアン）、続いて 16 バイト単位の暗号文。
-  - `cli` 1 本のとき長さ 82（0x52）＝ `C:\Users\…\Plug-ins\cli\cli.vlb` の 81 文字＋終端。
-    `cli2` にすると 83（0x53）になった——**フルパスそのものを暗号化している**。
-  - `cli` と `cli2` の記録は**暗号文の先頭 64 バイトが一致**し、パスが食い違う文字（73 文字目）を
-    含むブロックから先が違った。鍵も IV も固定のブロック暗号で、同じ平文は同じ暗号文になる
-    （7 で作り直した記録は退けたものとバイト単位で同一だった）。
-  - 何も有効でなければ 8 バイト（長さ 0）。
-  - **2 本のときは、1 本の暗号文に「パス＋終端」を続けて並べる**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)。
-    2026-10-26）。`cli`（81 文字）と `VwSdkProbes`（`…\Plug-ins\VwSdkProbes\VwSdkProbes.vlb`、
-    97 文字）の両方が有効な記録は長さ 180（0xB4）＝ 82 ＋ 98。`VwSdkProbes` 1 本の記録は 98
-    （0x62）。暗号文はそれぞれ 96（`cli`）・128（`VwSdkProbes`）・192（2 本）バイトで、
-    「16 バイトの区切りへ埋める」では 98 → 128 が説明できない（32 バイト単位なら 3 つとも合う）。
-  - **並びは `cli` が先で、有効にした順には依らない。** 2 本の記録の先頭 64 バイトは 1 本の記録と
-    同じで、65〜96 バイト目は `VwSdkProbes` 1 本の記録と違う——同じ平文が同じ暗号文になる
-    ので、先頭は `VwSdkProbes` ではない。`VwSdkProbes` だけを有効にした記録から「有効化」で
-    `cli` を足し直した記録は、元の 2 本の記録と**バイト単位で同一**だった。ダイアログの一覧も
-    `cli`・`VwSdkProbes` の順（大文字小文字を区別しない名前順・パス順と同じ。どちらかは
-    分けていない）。
-  - **1 本だけ消しても、残りは有効のまま。** 2 本の記録で `cli` を `Plug-ins` から退けて起動し
-    （`<Date>` を 2 日前にしてダイアログを出し）「続ける」を押すと、記録は `VwSdkProbes` だけ
-    （136 バイト）に書き直され、`VwSdkProbes` は読み込まれた。上の「一覧にあったものだけで
-    書き直す」の 2 本版。
-- **間引きの基準**: `Settings\SavedSettingsUser.xml` の
-  `<Vectorworks><UnknownPluginsDialog><Date>21;10;2026;17;14</Date>`（日;月;年;時;分。
-  ローカル時刻。同じ要素にダイアログの位置と列幅も入る）。
+  先頭 8 バイトが平文の長さ、続いて 16 バイト単位の暗号文——**フルパスそのものを鍵も IV も固定の
+  ブロック暗号で暗号化している**（同じ平文は同じ暗号文になる。[詳細](../Metrics/Plug-in%20Modules.md#置き場所と形)）。何も有効で
+  なければ 8 バイト。**2 本以上のときは 1 本の暗号文に「パス＋終端」を続けて並べ、並びは
+  決まっている**（`cli` が `VwSdkProbes` より先。有効にした順に依らない）。1 本を消しても残りは
+  有効のまま（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+- **間引きの基準**: `Settings\SavedSettingsUser.xml` の `<Vectorworks><UnknownPluginsDialog><Date>`
+  （日;月;年;時;分。ローカル時刻）。
 - **レジストリ**（`HKCU\Software\Nemetschek\Vectorworks 31` 以下）には何も無い。
 
 ### 「開発元」とは何か【バイナリ根拠】
 
-- VW 同梱の `Plug-Ins\` に**クレデンシャル**が置いてある: `CredentialsVectorworks.vlb`・
-  `CredentialsComputerWorks.vlb`・`CredentialsExtragroup.vlb`・`CredentialsMaxon.vlb`・
-  `CredentialsVectorworksJapanJW.vst`。中身は DLL ではなく、魔法の数 `de 4c 34 97`・
-  長さ・**ECDSA P-384 の署名**（DER）・長さ・JSON の順で、JSON は
-  `{"developer":{"contact":…,"issueDate":…,"name":"Vectorworks Inc.","web":…},"files":["3DS Library",…,"Vectorworks Remote/Vectorworks Remote",…]}`。
-  `files` は **`Plug-Ins` からの相対パス（拡張子なし）**の一覧。
-- `Vectorworks2026.exe` には P-384 の公開鍵（PEM）、`developer` / `contact` / `issueDate`、
-  `IExtendedPropsSupport::AddCredentials`、`_AddCredentialsLog.txt` と
-  `ADDED CREDENTIALS TO` / `FILE CONTAINS SIGNATURE` などの文字列がある——VectorScript の
-  暗号化プラグインにクレデンシャルを書き込む道具も本体に入っている。
-- ダイアログの文言は「開発者は Vectorworks パートナーシッププログラムの一員ではありません」、
-  同梱ヘルプ（`VWHelp\…\Start\Third-party_plug-in_security.htm`「サードパーティプラグインの
-  セキュリティ」）は「パートナーシップを申請しプラグインの審査を受けて…認証を得る」。
-  有効にした開発者のプラグインは「プラグインマネージャ」の「開発元」タブで管理するとある。
-- **Authenticode は使っていない見込み。** `Vectorworks2026.exe` と同梱の `.vlb` / `.dll` の
-  どれも `WinVerifyTrust` を含まない（含むのは Cineware・CEF・PhysX・Redshift・
-  インストーラだけ）。`CryptQueryObject` / `CertGetNameStringA` は exe にあるが、同じ所に
-  curl の schannel の文字列が並んでおり、そちらの持ち物と読める。
-- **自己署名の Authenticode を付けても変わらない（実測）。** `cli.vlb` の写しにコード署名用の
-  自己署名証明書（メモリの中だけで作り、証明書ストアにも信頼にも入れていない）で
-  `Set-AuthenticodeSignature`（SHA-256）を付け、同じパスに置いて起動すると、ダイアログは
-  `cli` を**「開発元不明」・「無効」**と出した（2026-10-26。[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
-  そのまま「有効化」すると、記録は署名の無いときとバイト単位で同じになった（パスで覚えて
-  中身は見ない、のとおり）。**信頼された認証局の証明書では試していない**——ただし上の
-  とおり `WinVerifyTrust` を呼ぶ箇所が無いので、変わる見込みは無い【バイナリ根拠】。
+- 「開発元」は**VW 同梱の `Plug-Ins\Credentials*.vlb` のクレデンシャル**（ECDSA P-384 で署名した JSON。
+  `files` は `Plug-Ins` からの相対パスの一覧）で、Vectorworks パートナーシッププログラムが審査して
+  発行する（[中身](../Metrics/Plug-in%20Modules.md#開発元とは何か)）。
+- `Vectorworks2026.exe` の文字列から、VectorScript の暗号化プラグインにクレデンシャルを書き込む
+  道具（`IExtendedPropsSupport::AddCredentials`）も本体に入っている。
+- **Authenticode は使っていない見込み**（本体と同梱の `.vlb` / `.dll` に `WinVerifyTrust` が無い。
+  exe の `CryptQueryObject` / `CertGetNameStringA` は curl の schannel の文字列と並んでおり、
+  そちらの持ち物と読める）。
+- **自己署名の Authenticode を付けても「開発元不明」・「無効」のまま（実測）**。有効化した記録も
+  署名の無いときとバイト単位で同じだった（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+  信頼された認証局の証明書では試していない（`WinVerifyTrust` が無いので変わる見込みは無い【バイナリ根拠】）。
 
 ### SDK【ヘッダ根拠】
 
@@ -564,86 +266,58 @@ VW 2026 Update 6（Build 872399）・macOS 27.0.1。2026-10-27。`Plug-ins` に�
 
 ### macOS
 
-（VW 2026 31.6.0（Build 872399）・macOS 27.0.1・arm64。被験体は
-`~/Library/Application Support/Vectorworks/2026/Plug-ins/cli/cli.vwlibrary`（アドホック署名）。
-2026-10-24 に 11 回起動して確かめた。見方は Windows と同じで、「読み込み」は `lsof -p` に
-`cli.vwlibrary/Contents/MacOS/cli` が出るか。）
+（[実測](../Metrics/Plug-in%20Modules.md#macos)）
 
-**規則は Windows と同じだった。** 違うのは置き場所と、空の記録の先頭 8 バイトだけ。
+- **規則は Windows と同じ。** 記録は `~/Library/Application Support/Vectorworks/2026/Settings/ExceptionsMissingCredentials.bin`
+  で、**鍵はバンドル（`cli.vwlibrary`）のパス**（中の実行ファイルのパスではない）。
+- **cli の `install` の手順（VW を止めてフォルダごと付け替え・中身も別ビルド）でも、パスが同じなら
+  有効のまま、ダイアログも出ない。**
+- 空の記録の先頭 8 バイトは 0 ではなく書くたびに違う値（Windows は長さ 0）【推定】初期化していない値。
+  中身が無いことに変わりはない（「無効」になる）。
+- **「有効化」ボタンは実際のクリックで行を選んだときだけ押せる**（`AXSelected` では灰色のまま）。
+  「続ける」「終了」は `AXPress` で押せる。
+- 入れたばかりの VW で「有効化」→「再起動」の 2 回目にもダイアログが出たのは、【推定】`<Date>` が
+  まだ無かったため（「再起動」は `<Date>` を書かない）。
 
-| # | 前提 | ダイアログ | cli の表示 | 読み込み |
-| --- | --- | --- | --- | --- |
-| m1 | `<Date>` を 1 時間前に（記録あり） | 出ない | — | された |
-| m2 | **`install` の手順で入れ替え**（下記）。`<Date>` は 1 時間前 | **出ない** | — | **された** |
-| m3 | `<Date>` を 23 時間前に | 出ない | — | された |
-| m4 | `<Date>` を 24 時間 20 分前に | **出た** | 有効 | された（開いている間も） |
-| m5 | `<Date>` を 23 時間 55 分前に | 出ない | — | された |
-| m6 | `<Date>` を 24 時間 5 分前に | **出た** | 有効 | された |
-| m7 | フォルダを `cli` → `cli2` | **出た** | **無効** | **されない** |
-| m8 | m7 で有効化せず「続ける」→ `cli` に戻す | **出た** | **無効** | **されない** |
-| m9 | m8 で「終了」→ VW を止めて m6 の後の記録を戻す | 出ない | — | された |
-| m10 | `cli2` にして有効化 →「再起動」した後の起動 | 出ない | — | された（`cli2/cli.vwlibrary`） |
+## プラグインのフォルダの「モジュール以外のもの」は無視され、モジュールは置いた場所から読まれる（Windows・macOS）
 
-- **m2 の入れ替え**は cli の `install` と同じ手順で、VW を止めてから
-  `<Plug-ins>/cli` を `~/Library/Application Support/vectorworks2026-cli/old/cli` へ退け、
-  `…/staging/cli`（CI の別ビルド。`5fcf0f3` → `0b206b8`）を `<Plug-ins>/cli` へ置き、
-  `old/cli` を消した。フォルダの inode・実行ファイルの inode・作成日時・SHA-256 が
-  すべて変わり、パスだけが同じ。**有効のまま、ダイアログも出なかった。**
-- **閾値は 23 時間 55 分〜24 時間 5 分の間**（m5・m6）——ほぼ 24 時間ちょうど。
-  Windows で絞った「23h〜24h20m」とも食い違わない。
-- **記録**: `~/Library/Application Support/Vectorworks/2026/Settings/ExceptionsMissingCredentials.bin`。
-  cli 1 本のとき 104 バイトで、先頭 8 バイトが 91＝`/Users/…/Plug-ins/cli/cli.vwlibrary`
-  の 90 文字＋終端、続いて 96 バイト（16 の倍数）。**鍵はバンドルのパス**で、中の
-  実行ファイル（`Contents/MacOS/cli`）のパスではない。
-- ボタンごとの書き方も Windows と同じ:
-  - 「続ける」（全部有効。m4・m6）は記録を**同じバイト列で**書き直し、`<Date>` を押した
-    時刻にする（ファイルに出るのは終了時の保存で、押した直後の XML はまだ古い値）。
-  - 「続ける」（無効が残る。m7）と「終了」（m8）は記録を **8 バイト**に書き直し、`<Date>` は
-    変えない。**ただし先頭 8 バイトは 0 ではなく**、`0x7b84ce7960`・`0x76d47c15a0` と
-    書くたびに違う値だった（Windows は長さ 0）。【推定】初期化していない値をそのまま
-    書いている。中身が無いことに変わりはない（m8 は「無効」）。
-  - 「有効化」（m10）は押した時点では記録を書かず（mtime もバイト列もそのまま）、
-    「続ける」が「再起動」に変わる。「再起動」は記録を書き直し（長さ 92＝`cli2` のパス
-    ＋終端）、`<Date>` は変えず、ホーム画面まで進んでから自動で起動し直す。
-- **「有効化」ボタンは実際のクリックで行を選んだときだけ押せるようになる。**
-  アクセシビリティ API で行を選んでも（`AXSelected`）灰色のまま（[cli の実測](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/258#issuecomment-6263987581)
-  と同じ）。「続ける」「終了」は `AXPress` で押せた。
-- [cli の実測](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/258#issuecomment-6263987581)
-  で、入れたばかりの VW で「有効化」→「再起動」の 2 回目も**ダイアログが出た**（cli は
-  「有効」で読み込まれた）のは、【推定】`<Date>` がまだ無かったため（「再起動」は
-  `<Date>` を書かない。m10 は `<Date>` が 9 分前だったので出なかった）。
-- 同じ VW の 10/19〜10/23 のログも同じ規則で読める: 10/19 16:04 に「続ける」で閉じた
-  時刻がそのまま `<Date>` に残り、約 3 日後の 10/22 の起動で出たダイアログを「終了」
-  （`Return=2`）で閉じたときは、記録だけ書き直されて `<Date>` は変わらなかった。
+（[issue #277](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/277)。プローブ
+`plugin-folder-extras`。[実測](../Metrics/Plug-in%20Modules.md#プラグインのフォルダにモジュール以外のものを置いた実測とモジュールを読む場所windowsmacos)）
+
+`<Plug-ins>/cli/` にモジュールと並べて CLI の実行ファイル・フック・JSON・スプールを置く形を
+確かめた。**Windows でも mac でも、VW はそれらに何もしない。**
+
+### macOS
+
+- **警告は出ない・書き換えも移しも消しもしない・開いたままにしない**（起動を 2 回またいで 17 件が
+  inode・大きさ・更新時刻・ハッシュまで同じ。[実測](../Metrics/Plug-in%20Modules.md#macos-1)）。
+- **モジュールは置いた場所のファイルそのものから読まれる**——モジュールの中で `dladdr` で自分の場所を
+  求めれば `<Plug-ins>/cli/` が得られる（mac は読み込み直さないので起動の途中でも同じ値）。
+- **mac はフォルダの名前をいつでも変えられる**（読み込み中でも）ので、ハンドルの問いは Windows でだけ
+  意味がある。
+- 起動時の走査で中身を読んだかは見ていない（読んでいたとしても害は無い）。
+
+### Windows
+
+- **警告は出ない**（「開発元不明のプラグイン」にも付属物は載らない）。**書き換えも移しも消しもせず、
+  ハンドルも残さない**（付属物は共有なしで開け、名前も変えられる。[実測](../Metrics/Plug-in%20Modules.md#windows)）。
+- **ただし `cli/`（モジュールを入れたフォルダ）自体の名前は VW が動いている間は変えられない**
+  （`MoveFileExW` が `ERROR_ACCESS_DENIED`＝5。中の `cli.vlb` が写像されているため）。**`<Plug-ins>/cli/`
+  をフォルダごと付け替える `install`（`vw2026 install`）は VW を止めてから行う。**
+- **モジュールは置いた場所から読まれる**——モジュールの中で `GetModuleHandleExW(FROM_ADDRESS)` →
+  `GetModuleFileNameW` で自分の場所を求めれば `<Plug-ins>\cli\` が得られる（起動時の降ろし直しより後の
+  値。降ろす前も【推定】同じパス）。
+- 実機確認プラグインの本体（`.vwpayload`）が `%TEMP%` の写しから読まれるのは殻の作りで、VW が
+  そうしているのではない（VW が読むのは `Plug-ins` の下のモジュールだけ）。
 
 ## VCOM の初期化はモジュールごとに閉じている【ソース根拠】
 
-`gSDK` / `gCBP` / `gVWMM` / `gVCOMCallback` は、SDK の静的ライブラリ（`libVWSDK.a` /
-`VWSDK.lib`）が持つ**そのモジュール内のグローバル変数**である。
-
-```
-Include/Kernel/API/MiniCadHookIntf.h:2032  extern CallBackPtr        gCBP;
-Include/Kernel/API/MiniCadHookIntf.h:2041  extern VectorWorks::ISDK* gSDK;
-Source/VWSDK/Kernel/API/MiniCadCallBacks.cpp:150  CallBackPtr gCBP = nil;
-Source/VWSDK/Kernel/API/MiniCadCallBacks.cpp:54   VectorWorks::ISDK* gSDK = NULL;
-```
-
-それらを埋めるのが `GS_InitializeVCOM(void* cbpParam)`
-（`Source/VWSDK/Kernel/API/MiniCadCallBacks.cpp:219`）で、**やっていることは
-`cbpParam` を材料にした自モジュール内の代入だけ**である:
-
-| すること | 何を埋めるか |
-| --- | --- |
-| `GS_Kludge(cbp, 499, &ver, &gVCOMCallback)` | VCOM のコールバック |
-| `VWMM::Partition::GetPartitionByIdentifier("VWMainPartition", true)` | `gVWMM` |
-| `gCBP = (CallBackPtr)cbpParam` | 旧 `GS_` 系の呼び出し口 |
-| `VCOMPtr<ISDK>(IID_SDK)` | `gSDK` |
-
-**cbp 以外の外部状態を見ていない**。したがって——
-
-- **同じプロセスに SDK の複製を持つモジュールが 2 つあってよい**（はず）。片方が
-  受け取った `CallBackPtr` をもう片方へ渡して `GS_InitializeVCOM` を呼べば、
-  そちらの `gSDK` も埋まる。【推定】実機での確認は下記。
+- **`gSDK` / `gCBP` / `gVWMM` / `gVCOMCallback` は、SDK の静的ライブラリ（`libVWSDK.a` / `VWSDK.lib`）が
+  持つそのモジュール内のグローバル変数。** 埋めるのは `GS_InitializeVCOM(void* cbpParam)` で、
+  **`cbpParam` を材料にした自モジュール内の代入だけ**をする（[宣言と代入の一覧](../Metrics/Plug-in%20Modules.md#vcom-の初期化の範囲を-sdk-の宣言と定義で読んだ)）。
+- **同じプロセスに SDK の複製を持つモジュールが 2 つあってよい**（はず）。受け取った `CallBackPtr` を
+  渡して `GS_InitializeVCOM` を呼べば、そちらの `gSDK` も埋まる【推定】（実機での確認は下記
+  「本体を外部モジュールへ出せば…」）。
 
 ### SDK の静的ライブラリをリンクするモジュールは、この 2 つを定義しなければならない
 
@@ -658,22 +332,13 @@ extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_ver() { return SDK_VERSION; }
 const char* DefaultPluginVWRIdentifier() { return "<vwr の基底名>"; }
 ```
 
-② を落とすと出るのはこの形の未解決で、**呼んでいる覚えのない場所から参照される**ので
-理由が分かりにくい（`TXString` を使えば `TXResStr` 経由で入ってくる）。
-
-```
-mac : Undefined symbols: "DefaultPluginVWRIdentifier()", referenced from:
-        _GS_GetLayoutFromRsrc in libVWSDK.a(APIBase.Legacy.Defs.o)
-        TXResStr::TXResStr(char const*, char const*, EEmptyHandling) in libVWSDK.a(TypesString.o)
-win : VWSDK.lib(TypesString.obj) : error LNK2019: unresolved external symbol
-        "char const * __cdecl DefaultPluginVWRIdentifier(void)"
-```
-
-`DefaultPluginVWRIdentifier` は **C++ リンケージ**（`extern "C"` を付けない）。
+- ② を落とすと、**呼んでいる覚えのない場所（`TXResStr` など）から参照される未解決**になる
+  （[リンカの出力](../Metrics/Plug-in%20Modules.md#sdk-の静的ライブラリをリンクするモジュールで足りなかった定義リンクエラー)）。
+- `DefaultPluginVWRIdentifier` は **C++ リンケージ**（`extern "C"` を付けない）。
 
 ## 本体を外部モジュールへ出せば、再起動なしで入れ替えられる
 
-**できる。macOS で実測した**（VW 2026 / Apple Silicon）。上の 2 つを合わせた道:
+**できる。macOS で実測した**（VW 2026 / Apple Silicon）。
 
 ```
 Vectorworks ──読み込む──▶ 殻（メニュー・ダイアログ・更新）      … 起動時に 1 度きり
@@ -682,9 +347,8 @@ Vectorworks ──読み込む──▶ 殻（メニュー・ダイアログ・�
                           本体（調査コード）                     … 好きなときに降ろして読み直せる
 ```
 
-Vectorworks は本体モジュールの存在を知らないので、**その入れ替えに Vectorworks の
-再起動は要らない**。実機確認プラグイン（`plugin/`）は**この形で作られている**
-（[`plugin/README.md`](../plugin/README.md)「殻と本体」）。境界は次の 3 つ:
+VW は本体の存在を知らないので、**その入れ替えに VW の再起動は要らない**。実機確認プラグイン
+（`plugin/`）はこの形で作られている（[`plugin/README.md`](../plugin/README.md)「殻と本体」）。境界:
 
 | 置き場所 | 役割 |
 | --- | --- |
@@ -693,44 +357,25 @@ Vectorworks は本体モジュールの存在を知らないので、**その入
 | [`plugin/src/PayloadHostHolder.h`](../plugin/src/PayloadHostHolder.h) | 本体の側。**殻から渡されたものを写して持つ**（下記「落とし穴」） |
 | [`plugin/src/payload/PayloadMain.cpp`](../plugin/src/payload/PayloadMain.cpp) | 本体の側（`GS_InitializeVCOM` を自分で呼ぶ） |
 
-境界を C にしてあるのは**降ろすため**である。降ろした瞬間にそのモジュールのコードと
-静的データは消えるので、殻の側に残ってよいのは「値を写したもの」だけになる
-（返した `const char*` はその場で `std::string` へ写す。例外は境界の手前で受ける）。
+境界を C にしてあるのは**降ろすため**——降ろした瞬間にそのモジュールのコードと静的データは
+消えるので、殻の側に残してよいのは「値を写したもの」だけ（返した `const char*` はその場で
+`std::string` へ写す。例外は境界の手前で受ける）。
 
 ### 実測（macOS。中身の違う 2 つのモジュールを順に読んだ）
 
-`.vwlibrary` の `Contents/Resources` に置いた**アドホック署名済み**の `MH_BUNDLE`
-（拡張子 `.vwpayload`）を、一時ディレクトリへ複製してから読み込んだ。
-
-| 確かめたこと | 結果 |
-| --- | --- |
-| Vectorworks のプロセス内で `dlopen` できるか | **できた。** アドホック署名で足りる（ホストの library validation に弾かれない） |
-| そのモジュールから SDK が使えるか | **使えた。** 殻の `gCBP` を渡して `GS_InitializeVCOM` → `gSDK` が埋まり、レイヤを読めた |
-| `dlclose` で本当に消えるか | **消えた**（`dlopen(RTLD_NOLOAD)` が nullptr を返す） |
-| 読み込み中のファイルを消せるか | **消せた**（macOS の作法どおり。Windows は消せないはず＝未確認） |
-| 降ろした後に置き換えて読み直せるか | **できた。変種 A → B で、走ったコードが実際に入れ替わった** |
-
-かかった時間（プローブ全体で 0.76 秒）:
-
-| | 世代 1（変種 A） | 世代 2（変種 B） |
-| --- | --- | --- |
-| 読み込み（`dlopen` ＋ シンボル解決） | 373 ms | 342 ms |
-| アンロード（`dlclose`） | 19 ms | 14 ms |
-
-**読み込みが 0.3〜0.4 秒かかる**のは、モジュールが SDK の静的ライブラリを丸ごと
-抱えているため。Vectorworks の再起動（数十秒）とは比べるまでもない。
-
-**降ろした後、次のモジュールが同じ番地へ載った**（両世代とも、モジュール内の関数の
-番地が `0xb1f798760`）。dyld が解放された空間を再利用しただけで、アンロードが本当に
-起きている傍証になる。
+- **アドホック署名の `MH_BUNDLE` を VW のプロセス内で `dlopen` でき、殻の `gCBP` を渡して
+  `GS_InitializeVCOM` すれば SDK が使え、`dlclose` で本当に消え、置き換えて読み直すと走るコードが
+  入れ替わった**（[表](../Metrics/Plug-in%20Modules.md#実測macos中身の違う-2-つのモジュールを順に読んだ)）。
+- **読み込みは 0.3〜0.4 秒**（SDK の静的ライブラリを丸ごと抱えているため。VW の再起動（数十秒）とは
+  比べるまでもない）、アンロードは十数 ms。
+- 降ろした後、次のモジュールが同じ番地へ載った——dyld が解放された空間を再利用しただけで、
+  アンロードが本当に起きている傍証になる。
+- 読み込み中のファイルは mac では消せる（Windows は消せないはず＝未確認）。
 
 ### 読み違えやすいところ: `gSDK` の**値**は殻と同じになる
 
-実測では殻とペイロードの `gSDK` が同じ値（`0x1069a2818`）だった。これは
-**共有している証拠ではない**——`gSDK` は VW 側の同じ `ISDK` 実装を指すポインタなので、
-どのモジュールから初期化しても同じ値が入る。**複製かどうかを見るなら `&gSDK`**
-（変数そのものの番地）を比べること。ペイロードは静的ライブラリを自分でリンクし、
-`RTLD_LOCAL`（二階層名前空間）で読み込んでいるので、変数はモジュールごとに別である。
+- 殻と本体の `gSDK` が同じ値なのは**共有の証拠ではない**（VW 側の同じ `ISDK` を指すため）。**複製か
+  どうかは `&gSDK`（変数の番地）で比べる。** 本体は `RTLD_LOCAL` で読むので変数はモジュールごとに別。
 
 ### 実運用でこうした（この形にするときの決めごと）
 
@@ -745,70 +390,27 @@ Vectorworks は本体モジュールの存在を知らないので、**その入
 
 ### 本体は複数置ける（PR ごとに分けて、選ばれた 1 本だけ読む）
 
-**できる。実機で確かめた**（VW 2026）。本体を 1 本に限る理由は無く、**別々のモジュールに
-分けて、必要になったものだけを読み込める**。実機確認プラグインはこの形にしてある——
-main のプローブが 1 本、PR のプローブが PR ごとに 1 本
-（`VwSdkProbesPayload-<群>.vwpayload`）。
-
-| 確かめたこと | 結果 |
-| --- | --- |
-| 一覧を出すのに本体を読み込まなくてよいか | **よい。** 殻の隣に置いたテキストの索引（`VwSdkProbes.probes.txt`）だけを読んでピッカーを組める。表示名と概要はビルドのときにソースから読み出して索引へ書いておく |
-| 選ばれてから読み込んで走らせられるか | **できた。** ダイアログで選んだ 1 本だけを `dlopen` → 実行 → 降ろす |
-| 1 本が欠けていても他は使えるか | **使えた。** 索引に載っているのにファイルが無い本体は「※本体なし」と出て、他の本体のプローブはそのまま選んで走らせられる |
-
-**分ける値打ちは「壊れ方が 1 本の中に閉じる」こと。** 1 本にまとめていたときは、
-**同居させた誰か 1 つの調査コードがコンパイルできないだけで、全部が配れなくなった**。
-分けてあれば、落ちた本体だけがビルドから外れ、残りはそのまま配れる。読み込みの失敗
-（版の食い違い・署名の不備）も、選んだその 1 本の話で終わる。
-
-索引と本体は**同じビルドから出し、置くのは本体 → 索引の順**にする（索引だけ新しいと
-「選んだものが本体に無い」が起こる）。殻は走らせる前に、選んだ id がその本体にあるかを
-確かめてから呼ぶ。
+- **できる（実機）。** 一覧は殻の隣のテキストの索引（`VwSdkProbes.probes.txt`）だけで組め、選ばれた
+  1 本だけを読んで走らせ、欠けた本体は「※本体なし」と出て他は使える
+  （[表](../Metrics/Plug-in%20Modules.md#本体を複数置いた形pr-ごとに分けて選ばれた-1-本だけ読む)）。
+- **分ける値打ちは「壊れ方が 1 本の中に閉じる」こと**——1 つの調査コードがコンパイルできなくても、
+  残りは配れる。読み込みの失敗（版の食い違い・署名の不備）も、選んだその 1 本の話で終わる。
+- 索引と本体は**同じビルドから出し、置くのは本体 → 索引の順**（索引だけ新しいと「選んだものが
+  本体に無い」が起こる）。殻は選んだ id が本体にあるかを
+  確かめてから呼ぶ。
 
 ### 落とし穴: 殻の記憶域を本体に持たせると落ちる（実機で落とした）
 
-**境界を越えて渡した構造体のポインタを、受け取った側が持ち続けてはいけない。**
-最初の実装は、殻が渡す `VwPayloadHost`（コールバック・ログの受け口）を本体が
-**ポインタのまま**保持していた。殻の側はそれを `load()` の**ローカル変数**に置いていた
-ので、`load()` から戻った瞬間にその番地は他所へ使い回される。プローブがログの 1 行目を
-書いたところで、本体は腐った構造体から**関数ポインタを読んで呼び**、Vectorworks ごと
-落ちた。
-
-**コンパイルもリンクも CI の実ビルドも通る**（型はすべて合っている）。実機でしか出ない。
+- **境界を越えて渡した構造体のポインタを、受け取った側が持ち続けてはいけない。** 殻の `load()` の
+  ローカルに置いた `VwPayloadHost` を本体がポインタのまま持ち、腐った構造体から関数ポインタを
+  読んで呼んで VW ごと落ちた。**コンパイルもリンクも CI の実ビルドも通る**——実機でしか出ない。
 
 #### クラッシュレポートから犯人を特定する読み方
 
-macOS の crash report は、**この壊れ方をほぼそのまま書いてくれる**。実際に読んだもの:
-
-```
-Exception Type:    EXC_BAD_ACCESS (SIGSEGV)
-Exception Subtype: KERN_PROTECTION_FAILURE at 0x000000016b699ad0
-  far: 0x16b699ad0  esr: 0x8200000f (Instruction Abort) Permission fault
-VM Region Info: 0x16b699ad0 is in 0x16aea0000-0x16b69c000 ---> Stack (thread 0)
-
-  x0: 0x000000016b699600   x1: 0x00000008db0797a0   x2: 0x000000016b699ad0
-   lr: 0x00000005234007ec   pc: 0x000000016b699ad0
-
-0  ???                          0x16b699ad0 ???
-1  …VwSdkProbesPayload.vwpayload 0x5233fcbf8 vw_payload_run + 1812
-2  VwSdkProbes                   0x4385e58dc vwprobe::Payload::run(...) + 232
-```
-
-| 読めること | どこから |
-| --- | --- |
-| **命令フェッチで落ちている**（データ参照ではない） | `esr` の `Instruction Abort` |
-| **飛び先がスタック**（＝関数ポインタがゴミ） | `far`＝`pc` が `VM Region Info` でスタックに入る |
-| **その値は `x2` から来た**（`blr x2`） | `x2` が `pc` と同じ値 |
-| **引数はゴミと実データが混じる** | `x0` はスタックの番地（＝腐った `logCtx`）、`x1` はヒープ（＝生きている `line`） |
-| **呼んだのは本体のログ経路** | `lr` が本体の中、frame 1 が `vw_payload_run` |
-
-「x0 だけがゴミで x1 は正しい」が決め手だった——**引数の一部だけが腐る**のは、
-構造体から `ctx` と関数ポインタを読み、実データは別経路で来ているとき、つまり
-`host->log(host->logCtx, line)` の形をしている。腐っていたのは `host` の指す先である。
-
-なお `lr`（本体 +0x87ec）と frame 1（`vw_payload_run + 1812`）が食い違っていたのは、
-受け口を呼ぶ小さな関数が**末尾呼び出し**にされてフレームを作らなかったため。
-**crash report のフレームは省略されうる**ので、`lr` と突き合わせて読むこと。
+- macOS の crash report で、**`esr` の `Instruction Abort`（命令フェッチ）・`pc` がスタック・引数の
+  一部だけがゴミ**なら、構造体から読んだ関数ポインタが腐っている
+  （[実物と読み方](../Metrics/Plug-in%20Modules.md#クラッシュレポートから犯人を特定する読み方)）。
+- **crash report のフレームは末尾呼び出しで省略されうる**ので、`lr` と突き合わせて読む。
 
 #### 決めごと（両側に置く）
 
@@ -817,112 +419,41 @@ VM Region Info: 0x16b699ad0 is in 0x16aea0000-0x16b69c000 ---> Stack (thread 0)
 | **本体** | 受け取った `VwPayloadHost` を**その場で写す**（`plugin/src/PayloadHostHolder.h`）。以後、殻の記憶域には触らない |
 | **殻** | 渡した実体を**降ろすまで生かす**（`Payload` のメンバに置く。`load()` のローカルにしない） |
 
-**両方やる。** 殻と本体は別々に配られるので、片方だけ古い組み合わせが実際に起きうる
-（＝ホットリロードの目的そのもの）。写す側だけ直しても、古い本体を新しい殻が読んだときに
-落ちる。逆向き（本体 → 殻）の `VwPayloadInfo` / `VwPayloadProbe` / `VwPayloadResult` は
-**殻が写す**約束で、これは最初からそうしてある。
-
-**この壊れ方は単体テストで押さえられる**（SDK も実機も要らない）。渡した記憶域を後から
-塗り潰し、受け口がまだ生きているかを見ればよい——`plugin/tests/PayloadHostHolderTests.cpp`。
-
-直したうえで**実機で確かめた**（VW 2026 / mac。build `95bb8334fd18`）。落ちていた
-ログの受け口がそのまま生きていて、プローブの各行が殻の結果ダイアログへ流れ、
-最後まで走り切る:
-
-```
-=== 煙試験: 図面のレイヤを数える [example] ===
-本体: … id=95bb8334fd18
-undo: before building=no
---- ここからプローブ本体 ---
-本体から見た undo: building=no
-  デザイン: 共通
-デザインレイヤ 1 枚 / シートレイヤ 0 枚
---- プローブ本体ここまで ---
-結果: 成功
-```
-
-これで**本番の形**（メニュー → 本体を読む → プローブが SDK と VWFC を使う →
-ログが境界を越えて殻へ流れる → 結果ダイアログ → 降ろす）が一周した。検証プローブで
-確かめたのは仕組みだけだったが、ここまでで実運用の経路も実機で通っている。
+- **両方やる**（殻と本体は別々に配られるので、片方だけ古い組み合わせが起きうる）。逆向きの
+  `VwPayloadInfo` / `VwPayloadProbe` / `VwPayloadResult` は**殻が写す**約束。
+- **この壊れ方は単体テストで押さえられる**（`plugin/tests/PayloadHostHolderTests.cpp`）。直した後、
+  本番の形（メニュー → 本体 → SDK と VWFC → ログが殻へ → 結果ダイアログ → 降ろす）が実機で一周した。
 
 ### 本体側からダイアログを開ける（実プラグインで実測）
 
-**開ける。** これは長く「まだ確かめていないこと」に残っていた項目で、駄目なら殻と本体に
-割る設計そのものをやり直すところだった。実測は実プラグイン
-（[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)）
-を同じ形へ割ったとき（macOS / VW 2026 / Apple Silicon）に取れた。**本体側から開いて
-正常に動いたもの**:
+**開ける**（[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)
+を割ったとき。macOS。[開いたもの](../Metrics/Plug-in%20Modules.md#本体側からダイアログを開いた実測実プラグイン)）。
 
-| 開いたもの | 使ったもの |
-| --- | --- |
-| 取り込み設定ダイアログ（一覧・チェック・シンボルの絵） | `VWFC::VWUI::VWDialog`（`GS_CreateLayout` で組む。`.vwr` のレイアウトは使わない） |
-| 進捗ダイアログ | 同上 |
-| 完了ダイアログ（折り畳んだログ欄付き） | 同上 |
-| ファイル選択 | VCOM の `IFileChooserDialog` / `IFileIdentifier` |
-| フォルダ選択 | VCOM の `IFolderChooserDialog` / `IFolderIdentifier`（[File and Folder Dialogs](File%20and%20Folder%20Dialogs.md)。実機確認プラグインのプローブで実測） |
-
-**`.vwr` は殻の側にしか無くてよい。** 本体は `DefaultPluginVWRIdentifier` を定義するだけで
-リソースを引かない（上記「SDK の静的ライブラリをリンクするモジュールは、この 2 つを
-定義しなければならない」）——メニュー名・PIO 名・パラメータ名といった `.vwr` の文字列は、
-すべて**登録**のときに使うもので、登録は殻に残るからである。ダイアログを
-`GS_CreateLayout` で組んでいる限り、本体がリソースを引く場面は出てこない。
-
-**危ないのは「開けるか」ではなく「開いたまま降ろすか」。** ダイアログは開いて閉じるまでが
-1 回の呼び出しの中で完結するので、その間に降ろされることが無ければ何も持ち越さない。
-実プラグインは**入れ子の深さが 0（本体のコードがスタックに 1 つも無い）のときだけ降ろす**
-作りにしてあり、この条件がそのまま安全弁になっている。**降ろす契機を「呼び出しの外」に
-置くこと**が要点で、これは下記「イベントを登録する」がまだ危ないままである理由でもある。
+- `VWFC::VWUI::VWDialog`（`GS_CreateLayout` で組む）・VCOM の `IFileChooserDialog` /
+  `IFolderChooserDialog`（[File and Folder Dialogs](File%20and%20Folder%20Dialogs.md)）が本体側から動いた。
+- **`.vwr` は殻の側にしか無くてよい**（`.vwr` の文字列は登録で使い、登録は殻に残る。ダイアログを
+  `GS_CreateLayout` で組んでいる限り、本体がリソースを引く場面は出てこない）。
+- **危ないのは「開いたまま降ろす」こと。** ダイアログは開いて閉じるまでが 1 回の呼び出しの中で
+  完結するので、その間に降ろされることが無ければ何も持ち越さない。 **降ろすのは入れ子の深さが 0（本体のコードがスタックに
+  無い）ときだけ**——降ろす契機を呼び出しの外に置く。
 
 ### PIO のイベントも殻から本体へ取り次げる（実プラグインで実測）
 
-**取り次げる。** PIO（パラメトリックオブジェクト）の**登録**——`SParametricDef`・
-パラメータ定義・UUID・`IMPLEMENT_VWParametricExtension`——は VW に番地を握られるので
-殻に残すほかないが、`Recalculate()` の**中身は本体へ出せる**。殻の event sink は
-「本体を確保して、自分のハンドル（`fhObject`）を C の ABI 越しに渡す」だけになる。
-
-実測（記号 PIO 12 個・耐力壁 PIO 53 枚を含む図面。取り込みの診断ログから、リセット
-1 回につき 1 行出る記録を数えた）:
-
-| 確かめたこと | 結果 |
-| --- | --- |
-| 取り込みが作った PIO のリセットが本体側で走るか | **走った**（耐力壁の作成中に 159 回 / 83 ms） |
-| **VW が自発的に起こすリセット**でも走るか | **走った**（伏図のビューポート作成中に 53 回 / 52 ms） |
-| 速さ | 合わせて **212 回 / 135 ms**＝**1 回あたり 0.6 ms 前後** |
-
-**この形では本体を載せっぱなしにする必要がある。** 境界を越える取り次ぎ自体は上のとおり
-ただ同然だが、**読み込みは 1 回 0.3〜0.4 秒**かかる（上記「実測（macOS。中身の違う 2 つの
-モジュールを順に読んだ）」）。「開くたびに読んで終わったら降ろす」作りのまま PIO を通すと、
-上の 212 回で**74 秒**を読み込みだけに使う計算になり、取り込み全体（1 分 15 秒）と同じ
-だけ余分にかかる。実プラグインは**一度読んだら載せたままにし、入れ替えの判定（同梱
-ファイルの大きさ・更新時刻）だけを入口ごとに行う**——降ろすのは、その判定が「変わった」と
-言い、かつ入れ子の深さが 0 のときだけ。
-
-**実機確認プラグインが「選ばれたら読み、終わったら降ろす」でよいのは、入口がメニュー
-1 つだけだから。** PIO のように VW 側から何度も呼ばれる入口を持つなら、載せっぱなしに
-切り替える必要がある。
+- **取り次げる。** PIO の登録（`SParametricDef`・`IMPLEMENT_VWParametricExtension` など）は殻に残し、
+  `Recalculate()` の中身を本体へ出せる。VW が自発的に起こすリセットでも走り、**1 回あたり 0.6 ms
+  前後**（[実測](../Metrics/Plug-in%20Modules.md#pio-のイベントを殻から本体へ取り次いだ実測実プラグイン)）。
+- **この形では本体を載せっぱなしにする**（読み込み 0.3〜0.4 秒をリセットごとに払えない——
+  「開くたびに読んで終わったら降ろす」作りのままだと、上の 212 回で**74 秒**を読み込みだけに使う
+  計算になり、取り込み全体（1 分 15 秒）と同じだけ余分にかかる）。入れ替えの
+  判定（同梱ファイルの大きさ・更新時刻）だけを入口ごとに行い、降ろすのは「変わった」かつ入れ子の
+  深さが 0 のときだけ。**入口がメニュー 1 つなら「選ばれたら読み、終わったら降ろす」でよい。**
 
 ### 実運用の入れ替えが実機で通った（再起動なし）
 
-本体だけを置き換えて、**Vectorworks を再起動せずに走るコードが入れ替わることを、
-実プラグインで確かめた**。検証プローブではなく、実運用のコード（IFC を読んで 1174 個の
-オブジェクトを描く取り込み）での確認である。
-
-1. ビルド A（`03a175c`）を入れて取り込みを実行。
-2. **`.vwpayload` だけ**をビルド B（`4363d43`）のものへ差し替え（`.vwlibrary` は触らない）。
-   **Vectorworks は起動したまま。**
-3. もう一度取り込みを実行。
-
-結果:
-
-- 取り込みログの見出しが名乗るコミットが `03a175c` → `4363d43` へ変わった
-  （この行は**本体が自分で名乗る値**なので、新しい本体が読まれた証拠になる）。
-- **ビルド B でしか直っていない挙動が実際に現れた**（ログのパス表示の修正）。
-- 描いたものは差し替えの前後で **1174 件が完全に一致**、所要も 1 分 14 秒 → 1 分 15 秒。
-
-**mac では本体にも個別のアドホック署名が要る。** 本体はバンドルの外（殻の隣）に置くので
-`codesign --deep` には含まれない。署名が無いと Apple Silicon の library validation に
-弾かれて `dlopen` が失敗する。配布 zip を作るときも展開してインストールするときも、
-殻とは別に署名し直すこと。
+- **`.vwpayload` だけを差し替えて、VW を再起動せずに走るコードが入れ替わった**（実プラグインの
+  取り込み。描いた 1174 件は前後で一致。[手順と結果](../Metrics/Plug-in%20Modules.md#実運用の入れ替えを実機で回した再起動なし)）。
+- **mac では本体にも個別のアドホック署名が要る**（殻の隣に置くので `codesign --deep` に含まれず、
+  無いと library validation で `dlopen` が失敗する）。配布 zip を作るときも展開するときも署名し直す。
 
 ### まだ確かめていないこと
 
