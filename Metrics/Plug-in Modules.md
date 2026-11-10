@@ -570,8 +570,8 @@ cli の実物 2 件の、計 16 件を載せた。
   `GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS)`（同じ `HMODULE` が返った）→
   `GetModuleFileNameW`、`GetMappedFileNameW`（`\Device\HarddiskVolume3\Users\…\Plug-ins\cli\cli.vlb`）。
   そのパスを書き込みで開くと共有違反（32）になった。
-  - これは**起動時の降ろし直し（上の「【罠】Windows の VW は起動時にモジュールを一度
-    降ろして読み込み直す」）より後**の値である（プローブはメニューから走らせた）。
+  - これは**起動時の降ろし直し（上の「Windows の VW の起動時のモジュールの読み込み直しと、
+    OS に預けたコールバック」）より後**の値である（プローブはメニューから走らせた）。
     4 回の起動とも同じパスで、`cli.vlb` の `HMODULE` は 4 回とも `00007ffe8f7a0000`
     だった（殻の番地は起動ごとに違った）。降ろす前の最初の読み込みで求めた値は見ていない。
 - 実機確認プラグインの本体（`.vwpayload`）は、殻が `%TEMP%` へ写してから読み込む

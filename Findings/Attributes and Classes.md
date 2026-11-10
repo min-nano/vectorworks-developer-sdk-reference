@@ -621,7 +621,7 @@ std::function<void(MCObjectHandle h)>)`（`ISDK.h:2697`）ひとつ。VWFC の
 これを包んで、型が `kClassDefNode`（94）のものだけを `GetObjectInternalIndex(h)` で
 `VWClass` にして渡すだけ【ソース根拠】。以下は Windows・VW 2026 の実測
 （[#280](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/280)。
-[実測](../Metrics/Attributes%20and%20Classes.md#クラスの一覧は-foreachclass-で列挙する順序は作った順ゲストは-nna_-付きで後ろに足される)）。
+[実測](../Metrics/Attributes%20and%20Classes.md#クラスの一覧は-foreachclass-で列挙する順序は作った順ゲストは-nnan_-付きで後ろに足される)）。
 
 ### 渡ってくるもの
 

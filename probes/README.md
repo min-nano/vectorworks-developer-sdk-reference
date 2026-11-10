@@ -26,7 +26,8 @@ CI の `compile` モードが `-fsyntax-only` で構文チェックする（リ�
 - `gSDK->...` の呼び出しは、実行はしないので**関数の中に書くだけ**でよい。
   「コンパイルが通るか」だけが答え。
 - **役目を終えたスニペットは消す**（調査 PR をマージする前に。結論は Findings/ に、
-  試したコードの要点と結果は Metrics/ に文章で残る。[`CLAUDE.md`](../CLAUDE.md)）。`example.cpp` だけは雛形として残す。
+  試したコードの要点と結果は Metrics/ に文章で残る。[`CLAUDE.md`](../CLAUDE.md)）。
+  `example.cpp` だけは雛形として残す。
 
 なお `compile` モードのインクルードパスには `plugin/src` も入っているので、
 実機プローブ（`probes/runtime/<slug>/probe.cpp`。`#include "Probe.h"` する）も

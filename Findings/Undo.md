@@ -200,9 +200,9 @@ pyEngine->ScriptContext_Run();          // ロガーを使うなら ScriptContex
 
 - **VectorScript 経由の取り消しは効く**（`pre=有 / m1=無 / m2=有`——スクリプトは最後まで走り、
   直前の 1 段が消え、C++ が作ったものは消えない）。**連続で 3 回呼べば 3 段戻る**
-  （上限は見ていない。`varMaxUndos = 59` の program variable が深さらしい【推定】——必要に
-  なったら `GetProgramVariable(varMaxUndos)` で読める見込み。深さは利用者の環境設定で
-  SDK の性質ではないので測っていない）。
+  （上限は見ていない。深さは program variable `varMaxUndos`（セレクタの番号が 59。段数では
+  ない）で決まるらしい【推定】——必要になったら `GetProgramVariable(varMaxUndos)` で読める
+  見込み。深さは利用者の環境設定で SDK の性質ではないので測っていない）。
 - **`ExecuteScript` は同期的**（戻った直後にスクリプトの作ったものがある）。
 - **両エンジンともコマンド実行中に取得できる。`CompileScript` は両エンジンとも通る。**
 - **構文エラーは戻り値で分かる**（`CompileScript` は `ok=no`、`ExecuteScript` は `VCOMError=1`）

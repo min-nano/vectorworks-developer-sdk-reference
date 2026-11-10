@@ -162,7 +162,7 @@ struct SFunctionDef {
     Sint8             fScope;           // kVLIBScope…（上記の表）
     bool              fHasReturnValue;
     SFunctionParamDef fParams[11];      // { 名前, 型 }。こちらも nullptr 終端。
-                                        // fHasReturnValue なら最後の欄が戻り値（下記【罠】）
+                                        // fHasReturnValue なら最後の欄が戻り値（下記「戻り値の型の伝え方」）
 };
 ```
 

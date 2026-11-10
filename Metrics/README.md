@@ -18,8 +18,10 @@
 
 - **ファイル名はトピックごとに同じ**にする（`Findings/Layer Objects.md` ↔
   `Metrics/Layer Objects.md`）。どちらも冒頭で相手へリンクする。
-- **Findings の結論から、根拠の節へリンクする**（`（[実測](../Metrics/Layer%20Objects.md#3-入れ子と-foreachobjectn-の-traversewhat)）`）。
-  節の見出しは Findings と同じにしておくと、リンクを組み立てやすい。
+- **Findings の結論から、根拠の節へリンクする**
+  （`（[実測](../Metrics/Layer%20Objects.md#3-入れ子と-foreachobjectn-の-traversewhat)）`）。
+  Findings の見出しを Metrics へ写さない——Findings の見出しは結論なので、写すと結論が
+  二か所に残る（下の「見出しも記録の言い方にする」）。
 - **数値の答えそのものは Findings に残してよい**（「`LO-A` は 11」「3000 件で 10 ms に届かない」
   のように結論の一部になる値）。その値を出した表は Metrics に置く。
 - **結果は「何をして何が出たか」の形で書く**（「`X` を呼ぶと `false` が返った」「画面に
@@ -28,8 +30,8 @@
   結論の更新は Findings で行う。Metrics と Findings が食い違って見えたら、Findings が正。
 - **見出しも記録の言い方にする**（「〜の実測」「〜を探した（ヘッダを読んだ）」）。結論や印を
   見出しに書くと、Findings からその見出しへ張ったリンクのせいで消せなくなり、結論が二か所に残る。
-  見出しを変えるときは、**同じ変更の中で Findings からのリンクも直す**（Markdown のリンクは CI が
-  見ない）。
+  見出しを変えるときは、**同じ変更の中で Findings からのリンクも直す**。切れたリンクは lint の
+  `scripts/check-md-links.py`（GitHub と同じ規則でアンカーを計算する）が PR で落とす。
 - 確認水準の印（【推定】【ヘッダ根拠】など）は結論に付けるものなので、Findings 側に付ける。
   Metrics では、**どう確かめたか**（実機のログ・目視・ヘッダを読んだ・ソースを読んだ）を
   記録そのものとして書く。
