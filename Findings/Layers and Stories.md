@@ -56,7 +56,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 ### 参照で入ってきたレイヤ（種類 `3`）——同じ列に並び、名前に接頭辞が付く
 
 `ISDK::CreateReference` で別図面を参照した実測（Windows。
-[表](../Metrics/Layers%20and%20Stories.md#参照で入ってきたレイヤ種類-3同じ列に並び名前に接頭辞が付く)）。
+[表](../Metrics/Layers%20and%20Stories.md#参照で入ってきたレイヤ種類-3の並びと名前)）。
 
 - **参照元のデザインレイヤが全部、型 `31` のまま同じ列に入る**（自分のレイヤの後、末尾の型 0 の
   前）。`ForEachLayer` も配る。**型だけでは自分のレイヤと見分けられない**——
@@ -73,7 +73,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 
 - **列はデザインもシートも作った順**（両者が入り混じる。タブごとに分けるなら `ovLayerType` で
   振り分ける）。**オーガナイザの `#` は、デザインレイヤだけ列の逆順、シートは同じ順**
-  （[表](../Metrics/Layers%20and%20Stories.md#順序列は作った順オーガナイザはデザインだけ逆に見せる)）。
+  （[表](../Metrics/Layers%20and%20Stories.md#列の順序とオーガナイザの並びの比較)）。
   オーガナイザと同じ並びで見せたいなら、デザインだけ反転する。
 - 作った後に高さを変えても、オーガナイザを開閉しても列は変わらなかった（「高さの降順」は
   ストーリに結んだレイヤを作ったときの規則で、食い違わない）。
@@ -88,7 +88,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 
 - **`GetLayerScaleN` / `VWLayerObj::GetScale()` の値は縮尺の分母**（1/50 → `50`、1:1 → `1`）。
 - **シートレイヤの縮尺は常に `1`**——`SetLayerScaleN(sheet, 50)` は黙って無視される。結果に
-  出すなら `null` 扱いが正直（[表](../Metrics/Layers%20and%20Stories.md#縮尺150-は-50シートレイヤは常に-1-で書いても効かない)）。
+  出すなら `null` 扱いが正直（[表](../Metrics/Layers%20and%20Stories.md#縮尺の読みと書き込みの実測)）。
 - この図面（1:1 生まれの新規）ではデザインレイヤへの `SetLayerScaleN` が効いた——下記
   「`SetLayerScaleN` は黙って効かないことがある」の実例とは別の結果で、何が分けるかは不明。
 
@@ -117,7 +117,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 - **`VWLayerObj::SetElevation` / `SetObjectVariable(h, 157, …)` / VS `SetLayerElevation` /
   `SetLayerElevationN` のどれで書いても、`VWLayerObj::GetElevation`・
   `ovLayerHeightInCurrUnits`(157)・バウンド経路が同じ値を返す**
-  （[表](../Metrics/Layers%20and%20Stories.md#書く口は-4-つありすべて同じ箱に届く)）。
+  （[表](../Metrics/Layers%20and%20Stories.md#4-つの書く口を試した)）。
   **読むだけなら `GetElevation` が一番短い。**
 - `SetElevation` は `GS_Kludge` 1002、`GetElevation` は 1000（SDK 同梱の `VWLayerObj.cpp` を読んだ）——
   書きと読みでセレクタが違うので、届いたことは絶対Z で確かめた。
@@ -130,7 +130,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 ### オブジェクトの絶対Z は「**生まれたレイヤ**の高さ ＋ ローカルZ」
 
 [Data Tags](Data%20Tags.md)「式から読める高さ」の前提
-（[段ごとの表](../Metrics/Layers%20and%20Stories.md#オブジェクトの絶対z-は生まれたレイヤの高さ--ローカルz)）。
+（[段ごとの表](../Metrics/Layers%20and%20Stories.md#オブジェクトの絶対z-の実測)）。
 
 - **レイヤの高さはその上のオブジェクトの絶対Z を持ち上げ、後から変えても追随する。**
   ストーリ由来でも素のレイヤでも同じ。
@@ -145,7 +145,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 
 - **レイヤ（と上の部材）だけ動き、`GetStoryElevation`・`GetStoryLevelElevation` は動かない**
   （VW へ戻った後も同じ。#245）。「階＋相対Z」と実際のレイヤ高さが食い違い、`#IPZS#` が
-  **どこにも対応しない数**を返す（[表](../Metrics/Layers%20and%20Stories.md#ストーリに属するレイヤへ-setelevation-を掛けてはいけない)）。
+  **どこにも対応しない数**を返す（[表](../Metrics/Layers%20and%20Stories.md#ストーリに属するレイヤへ-setelevation-を掛けた実測)）。
 - **階に属するレイヤの高さは、階（`SetStoryElevation`）かレベル（`SetStoryLevelElevation`）から
   動かす。**
 
@@ -156,7 +156,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 - **`SetLayerScaleN(layer, 50)` が何も起こさなかった実例がある**（[#145](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/145)）。
   1/100 で始まった文書では 3 回とも効き、1:1 の新規の空図面では効かなかった。**原因は特定
   できていない**【未確認】（文書ごとに決まっているようには見える。
-  [表](../Metrics/Layers%20and%20Stories.md#レイヤの縮尺setlayerscalen-は黙って効かないことがある)）。
+  [表](../Metrics/Layers%20and%20Stories.md#レイヤの縮尺setlayerscalen-の書き込みの実測)）。
   **変えた直後に `GetLayerScaleN` で確かめ、違っていたら止まる**——黙って効かないと以後の作図が
   全部旧縮尺で生まれ、症状はずっと後に出る（寸法の `ovDimFontSize` が 50 倍ずれる。[Dimensions](Dimensions.md)）。
 - **ビューポートの縮尺は別物**で `ovViewportScale`(1003) に書く（[Dimensions](Dimensions.md)）。
@@ -198,7 +198,7 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 ### レベルを持たないレイヤを階に結ぶ — **仮のレベル種別を与えて結び、外す**
 
 [#221](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/221) で実機確認済み
-（VW 2026 / mac。3 周の経緯と表は [計測記録](../Metrics/Layers%20and%20Stories.md#レベルを持たないレイヤを階に結ぶ--仮のレベル種別を与えて結び外す)）。
+（VW 2026 / mac。3 周の経緯と表は [計測記録](../Metrics/Layers%20and%20Stories.md#レベルを持たないレイヤを階に結ぶ試み仮のレベル種別を与えて結び外す)）。
 
 #### 結論: **未使用のレベル種別を先に与えれば結べ、結んだあとに種別だけ外せる**
 
@@ -230,7 +230,7 @@ SetLayerLevelType(layer, "");           // → true。階はそのまま、種�
 #### 実際の使い方で回す——仮の種別は 1 つで足り、何枚でも結べる
 
 - **外した種別はまた空く**——仮の種別 1 つで同じ階の 2 枚目も別の階も結べる。**レイヤの数だけ
-  種別を作る必要は無い**（[表](../Metrics/Layers%20and%20Stories.md#実際の使い方で回す仮の種別は-1-つで足り何枚でも結べる)）。
+  種別を作る必要は無い**（[表](../Metrics/Layers%20and%20Stories.md#実際の使い方で回した仮の種別-1-つで複数枚を結ぶ)）。
 - **種別 `''` のレイヤは同じ階に何枚あってもよい**が、`GetLayerForStory(階, '')` はそのうち 1 枚を
   返す——**種別 `''` でレイヤを引かない**（名前で引く）。
 - オーガナイザでは「ストーリ」欄に階、「ストーリレベル」欄は空（目視）。
@@ -247,13 +247,13 @@ SetLayerLevelType(layer, "");           // → true。階はそのまま、種�
 - 断面ビューポートにもレベル付きのレイヤの材と同じに映る（目視）。
 - **undo（⌘Z。VW の自動記録）では、レベル付きもレベル無しも同じ壊れ方**——階と構造材が消え、
   レイヤは階を失って残る。高さは階を動かす前の値に戻る
-  （[表](../Metrics/Layers%20and%20Stories.md#実際の使い方で回す仮の種別は-1-つで足り何枚でも結べる)）。
+  （[表](../Metrics/Layers%20and%20Stories.md#実際の使い方で回した仮の種別-1-つで複数枚を結ぶ)）。
 
 #### プラグイン自身の undo イベントの中で回すと、取り消しで**階・種別・テンプレートまで全部消える**
 
 [#223](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/223) で実機確認済み
 （VW 2026 / mac。`kUndoSwapObjects` ＋ `AddAfterSwapObject` で作ったレイヤを登録。
-[表と手順](../Metrics/Layers%20and%20Stories.md#プラグイン自身の-undo-イベントの中で回すと取り消しで階種別テンプレートまで全部消える)）。
+[表と手順](../Metrics/Layers%20and%20Stories.md#プラグイン自身の-undo-イベントの中で回して取り消した実測)）。
 
 - **階・レベル種別（仮の種別も）・レベルテンプレート・クラスも、同じイベントの中で作っていれば
   一緒に消える**——取り消し後の図面は作る前と件数まで同じ（[Undo](Undo.md)「戻らないもの」の
@@ -268,7 +268,7 @@ SetLayerLevelType(layer, "");           // → true。階はそのまま、種�
 
 - **階に属さないレイヤでは `fBoundStory` を 0 / 1 / −1 のどれにしても同じ値＝そのレイヤの高さ**
   になり、構造材の両端が同じ Z へ解けて **0 長に潰れる**
-  （[表](../Metrics/Layers%20and%20Stories.md#階に属さないレイヤの上ではestoryobjectbound_story-がそのレイヤの高さへ落ちる)）。
+  （[表](../Metrics/Layers%20and%20Stories.md#階に属さないレイヤの上での-estoryobjectbound_story-の実測)）。
 - これは [Parametric Objects](Parametric%20Objects.md)「階やレベルを指すバウンドは
   `eStoryObjectBound_Story` で書く」への条件追加——「`_Story` はレイヤに依らず一定」は**入れ物の
   レイヤが階に属している場合**の話で、属さなければ `LayerElevation` と同じに落ちる
@@ -286,7 +286,7 @@ SetLayerLevelType(layer, "");           // → true。階はそのまま、種�
 ### レベルの高さは「階の高さ＋階内の相対Z」——SDK で作ったレベルもちゃんと持っている
 
 [#141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141) で実機確認済み
-（VW 2026 / mac。[4 通りの表と実物件の表](../Metrics/Layers%20and%20Stories.md#レベルの高さは階の高さ階内の相対zsdk-で作ったレベルもちゃんと持っている)）。
+（VW 2026 / mac。[4 通りの表と実物件の表](../Metrics/Layers%20and%20Stories.md#レベルの高さの読みの実測sdk-で作ったレベルを含む)）。
 
 - **`GetStoryLevelElevation` / `SetStoryLevelElevation` が扱うのは階内の相対Z**（階の高さを
   含まない）。**絶対Z は「階の高さ＋相対Z」**（解き方は [Parametric Objects](Parametric%20Objects.md)
@@ -304,7 +304,7 @@ SetLayerLevelType(layer, "");           // → true。階はそのまま、種�
 - **レベル基準線が描く数値・レベルの絶対Z・レイヤの高さは、測った全行で一致した**（UI 製でも
   SDK 製のストーリでも。シートレイヤに置いた個体も同じ）——読むのは乗っているレイヤの Z ではなく、
   **名前で指したストーリレベルの絶対Z**
-  （[表](../Metrics/Layers%20and%20Stories.md#レベル基準線が描くのはこの絶対z-である)）。
+  （[表](../Metrics/Layers%20and%20Stories.md#レベル基準線が描く高さの実測)）。
 - **【訂正】`VWLayerObj::GetElevation` と `ovLayerHeightInCurrUnits`(157) がレイヤ高さを返す**
   （当初の「VS の `GetLayerElevation` に当たる ISDK の口は無い」は誤り）。
   `eStoryObjectBound_LayerElevation` を解かせる道も同じ値。レイヤ高さとレベルの絶対Z が
@@ -315,7 +315,7 @@ SetLayerLevelType(layer, "");           // → true。階はそのまま、種�
 ### 注釈に高さが出るかは、ビューポートで決まる
 
 レベル基準線を注釈へ置いたとき、**数値が出るかは「どのビューポートの注釈か」だけで決まる**
-（実物件の 29 件で実測。[表](../Metrics/Layers%20and%20Stories.md#注釈に高さが出るかはビューポートで決まる)）。
+（実物件の 29 件で実測。[表](../Metrics/Layers%20and%20Stories.md#注釈に高さが出るかをビューポートごとに見た)）。
 
 | 置き先 | 高さ | 名前 |
 | --- | --- | --- |
@@ -334,7 +334,7 @@ SetLayerLevelType(layer, "");           // → true。階はそのまま、種�
 - **名前はどこでも出る**（`耐力壁-1` の形）。**`Elev` 欄（または `Elevation`）を読み戻して `0` で
   ないことを確かめ、`0` ならストーリではなくビューポートを疑う。**
 - 潰した筋（ストーリの作り方・作り方の引数・断面線との結び付き）は
-  [計測記録](../Metrics/Layers%20and%20Stories.md#注釈に高さが出るかはビューポートで決まる)。
+  [計測記録](../Metrics/Layers%20and%20Stories.md#注釈に高さが出るかをビューポートごとに見た)。
 
 ## 打ち切った調査: ビューポート単位のレイヤ重ね順上書き
 

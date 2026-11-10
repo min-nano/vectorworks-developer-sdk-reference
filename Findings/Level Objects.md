@@ -128,7 +128,7 @@ gSDK->ResetObject(h);
   中身は動的テキスト 〈#Elev#〉 と 〈#STLT#-#STPS#〉。
 - **新しいテキストを `CreateTextBlock` で作ってグループへ入れ、渡し直す。中身を
   `DeleteText` ＋ `AddTextFromBuffer` で入れ替えるだけでは絵に出ない**
-  （[実測](../Metrics/Level%20Objects.md#マーカーレイアウトを差し替えて任意の名前を出す)）。
+  （[実測](../Metrics/Level%20Objects.md#マーカーレイアウトを差し替えて任意の名前を出した実測)）。
 
 ## 単位・丸め（レベル基準線）
 
@@ -143,7 +143,7 @@ gSDK->ResetObject(h);
   （[Investigation Techniques](Investigation%20Techniques.md)）。
 - 戻される例: レガシーの `Above Marker`（→ `Outside Marker`）・`Half Filled`（→ `Filled`）、
   レベル基準線の `Datum` ＝ `StoryLevel` 単独（→ `GroundPlane`）など
-  （[一覧](../Metrics/Level%20Objects.md#書いても入らない値がある必ず読み戻す)）。
+  （[一覧](../Metrics/Level%20Objects.md#書いて読み戻した値の実測)）。
 
 ## ストーリ／ストーリレベルとの関連付け
 
@@ -174,7 +174,7 @@ UI が置いた個体と SDK 製を同じ注釈で全欄突き合わせた（iss
 - 全 33 欄を写しても結果は変わらない。複製しても同じ高さと名前を出す（状態はすべて個体の
   中——レコードの欄——にある）。注釈の中の個体の
   3D 位置は `z=0`——**高さは Z ではなくストーリレベルから来る**
-  （[実測](../Metrics/Level%20Objects.md#断面ビューポートの注釈でも名前と高さは両立する3-つ組だけでよい)）。
+  （[実測](../Metrics/Level%20Objects.md#断面ビューポートの注釈で名前と高さを出した実測3-つ組)）。
 
 #### 同じ 3 つ組でも `0` になるビューポートがある（#141）
 
@@ -184,7 +184,7 @@ UI が置いた個体と SDK 製を同じ注釈で全欄突き合わせた（iss
 - 置き先ごと: デザインレイヤ / シートレイヤへ直に・UI が作った断面ビューポートの注釈は
   **絶対Z**、伏図ビューポートの注釈は **`0`**、SDK の `CreateSectionViewport` の注釈は
   **素のままなら `0`**（下記で直せる）。名前はどこでも出る——`0` になるのは数値だけ
-  （[実測](../Metrics/Level%20Objects.md#同じ-3-つ組でも-0-になるビューポートがある141)）。
+  （[実測](../Metrics/Level%20Objects.md#同じ-3-つ組で-0-になったビューポート141)）。
 - **使うときは `Elev`（または `Elevation`）を読み戻して `0` でないことを確かめる。**
   `0` なら疑うのは**ストーリではなくビューポート**——同じ 3 つ組をデザインレイヤか
   シートレイヤへ置けば数値は出る。
@@ -259,4 +259,4 @@ UI が置いた個体と SDK 製を同じ注釈で全欄突き合わせた（iss
 - **PIO が吐いた図形を `FirstMemberObj` → `NextObject` で辿り、`kTextNode` を
   `GetTextChars` で読めば**、絵に何を出したかが分かる——目視を頼まなくてよい。レベル基準線
   ではトークン（定義）と解決後の値（見えている文字）の両方が拾える
-  （[コード](../Metrics/Level%20Objects.md#描いた文字を機械で読む)）。
+  （[コード](../Metrics/Level%20Objects.md#描いた文字を機械で読んだ手順)）。

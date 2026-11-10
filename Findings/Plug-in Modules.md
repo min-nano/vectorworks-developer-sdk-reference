@@ -17,7 +17,7 @@
 
 （[issue #252](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/252)。
 被験体は [vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)
-の `cli`。[実測](../Metrics/Plug-in%20Modules.md#拡張機能を-1-つも登録しないモジュールも有効なら起動時から常駐するwindowsmacos)）
+の `cli`。[実測](../Metrics/Plug-in%20Modules.md#拡張機能を-1-つも登録しないモジュールの常駐を確かめたwindowsmacos)）
 
 - **`REGISTER_Extension` を 1 度も呼ばないモジュールでも、VW は起動時に読み込んで
   `plugin_module_main` を呼び、常駐させる。** そこで始めた OS タイマーは刻み続ける。目に触れない
@@ -75,7 +75,7 @@ VM・VW 2026 は x64 のエミュレーション。[実測](../Metrics/Plug-in%2
 ### #233 の `0xe0000001` も同じもの
 
 （[issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233)。
-[実測](../Metrics/Plug-in%20Modules.md#233-の-0xe0000001-も同じもの)）
+[実測](../Metrics/Plug-in%20Modules.md#233-の-0xe0000001-との突き合わせ)）
 
 - 「Plug-ins 直下の `VWPluginLibraryRoutines.h` / `.p` / `WorksheetFunctionOptionsRegistry.txt` の
   ずれた書き出しで起動時に落ちる」と見ていたのは**誤り**。`KERNELBASE.dll`・`0xe0000001` も、
@@ -91,7 +91,7 @@ VM・VW 2026 は x64 のエミュレーション。[実測](../Metrics/Plug-in%2
   不具合で、上の直しとの関係は確かめていない。
 - **macOS の VW は読み込み直さない——mac の殻は留めなくてよい**（5 回起動して、すべての action が
   同じ番地で届いた。番地は起動ごとに違ったので、読み込み直していれば番地の違いで分かったはず。
-  [実測](../Metrics/Plug-in%20Modules.md#読み違えやすいところ)）。仮に同じ番地へ読み込み直す版が
+  [実測](../Metrics/Plug-in%20Modules.md#結果が食い違って見えたところの切り分け)）。仮に同じ番地へ読み込み直す版が
   出ても、タイマーが指す先は自分のコードのままなので、Windows のように別のモジュールのコードを
   踏む形にはならない。
 - **閉じたときは `-2` の後にもう 1 度 `-5` が来る**（mac・Windows）。**`-2` を「もう呼ばれない」合図に
@@ -101,7 +101,7 @@ VM・VW 2026 は x64 のエミュレーション。[実測](../Metrics/Plug-in%2
 ## OS タイマーを持つ常駐プラグイン（留めたモジュール）は、終了時の落ち方を変えない（Windows）
 
 （[issue #257](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/257)。
-[実測](../Metrics/Plug-in%20Modules.md#os-タイマーを持つ常駐プラグイン留めたモジュールは終了時の落ち方を変えないwindows)）
+[実測](../Metrics/Plug-in%20Modules.md#os-タイマーを持つ常駐プラグイン留めたモジュールの有無と終了時の落ち方windows)）
 
 - **`SetTimer` を持ち `GET_MODULE_HANDLE_EX_FLAG_PIN` で留めた常駐プラグインを入れても、利用者が
   閉じたときの終わり方は変わらない**（82 回すべて終了コード 0、所要にも差が無い）。**タイマーを
@@ -131,7 +131,7 @@ VM・VW 2026 は x64 のエミュレーション。[実測](../Metrics/Plug-in%2
 
 ### 読み違えやすいところ
 
-外から VW を起動・終了させる道具を書くときの落とし穴（[詳細](../Metrics/Plug-in%20Modules.md#読み違えやすいところ-1)）:
+外から VW を起動・終了させる道具を書くときの落とし穴（[詳細](../Metrics/Plug-in%20Modules.md#計測でつまずいたところの記録)）:
 
 - **「開発元不明のプラグイン」のダイアログが出たままだと `CloseMainWindow` は効かない。**
 - **`Get-Process Vectorworks2026` は CEF の子プロセスも拾う**——主は `--type=` の無いもの
@@ -143,7 +143,7 @@ VM・VW 2026 は x64 のエミュレーション。[実測](../Metrics/Plug-in%2
 ### 新しい図面の最初の描画——30 回で 1 度も落ちなかった（Windows）
 
 （[issue #270](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/270)。
-[実測](../Metrics/Plug-in%20Modules.md#新しい図面の最初の描画30-回で-1-度も落ちなかったwindows)）
+[実測](../Metrics/Plug-in%20Modules.md#新しい図面の最初の描画を-30-回測ったwindows)）
 
 - **「新規用紙」から開いて最初の描画を待って閉じる、を 30 回回して、描画中の落ちは 0 回。常駐
   プラグインの有無で差は見えない**（95% の上側で、1 回あたり約 10% を超えるとは考えにくい。
@@ -200,7 +200,7 @@ VW 2026。被験体は `cli`（署名なし／アドホック署名）。[起動
 ### ダイアログの最中も、プラグインは刻みから図面を扱える（Windows）
 
 （[issue #264](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/264)。
-[実測](../Metrics/Plug-in%20Modules.md#ダイアログの最中もプラグインは刻みから図面を扱えるwindows)）
+[実測](../Metrics/Plug-in%20Modules.md#ダイアログの最中に刻みから図面を扱った実測windows)）
 
 - **全部有効で出たダイアログの最中、`SetTimer(nullptr, …)` の刻みは届き、図面を作る・undo の記録の
   中で足す・保存する・閉じる・開くがすべて通った。閉じた後も残った。** ＝誰も見ていない起動で
@@ -214,7 +214,7 @@ VW 2026。被験体は `cli`（署名なし／アドホック署名）。[起動
 ### mac も、共通モードの刻みからなら扱える（既定のモードだけでは刻まない）
 
 （[issue #264](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/264)。
-[実測](../Metrics/Plug-in%20Modules.md#mac-も共通モードの刻みからなら扱える既定のモードだけでは刻まない)）
+[実測](../Metrics/Plug-in%20Modules.md#mac-で共通モード既定のモードの刻みから図面を扱った実測)）
 
 - **ダイアログは `applicationDidFinishLaunching` の中の `runModalForWindow:` で回り、モードは
   `NSModalPanelRunLoopMode`**——**刻むのは `kCFRunLoopCommonModes` に登録したタイマーだけ**
@@ -276,7 +276,7 @@ VW 2026。被験体は `cli`（署名なし／アドホック署名）。[起動
 ## プラグインのフォルダの「モジュール以外のもの」は無視され、モジュールは置いた場所から読まれる（Windows・macOS）
 
 （[issue #277](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/277)。プローブ
-`plugin-folder-extras`。[実測](../Metrics/Plug-in%20Modules.md#プラグインのフォルダのモジュール以外のものは無視されモジュールは置いた場所から読まれるwindowsmacos)）
+`plugin-folder-extras`。[実測](../Metrics/Plug-in%20Modules.md#プラグインのフォルダにモジュール以外のものを置いた実測とモジュールを読む場所windowsmacos)）
 
 `<Plug-ins>/cli/` にモジュールと並べて CLI の実行ファイル・フック・JSON・スプールを置く形を
 確かめた。**Windows でも mac でも、VW はそれらに何もしない。**
@@ -308,7 +308,7 @@ VW 2026。被験体は `cli`（署名なし／アドホック署名）。[起動
 
 - **`gSDK` / `gCBP` / `gVWMM` / `gVCOMCallback` は、SDK の静的ライブラリ（`libVWSDK.a` / `VWSDK.lib`）が
   持つそのモジュール内のグローバル変数。** 埋めるのは `GS_InitializeVCOM(void* cbpParam)` で、
-  **`cbpParam` を材料にした自モジュール内の代入だけ**をする（[宣言と代入の一覧](../Metrics/Plug-in%20Modules.md#vcom-の初期化はモジュールごとに閉じている)）。
+  **`cbpParam` を材料にした自モジュール内の代入だけ**をする（[宣言と代入の一覧](../Metrics/Plug-in%20Modules.md#vcom-の初期化の範囲を-sdk-の宣言と定義で読んだ)）。
 - **同じプロセスに SDK の複製を持つモジュールが 2 つあってよい**（はず）。受け取った `CallBackPtr` を
   渡して `GS_InitializeVCOM` を呼べば、そちらの `gSDK` も埋まる【推定】（実機での確認は下記
   「本体を外部モジュールへ出せば…」）。
@@ -386,7 +386,7 @@ VW は本体の存在を知らないので、**その入れ替えに VW の再�
 
 - **できる（実機）。** 一覧は殻の隣のテキストの索引（`VwSdkProbes.probes.txt`）だけで組め、選ばれた
   1 本だけを読んで走らせ、欠けた本体は「※本体なし」と出て他は使える
-  （[表](../Metrics/Plug-in%20Modules.md#本体は複数置けるpr-ごとに分けて選ばれた-1-本だけ読む)）。
+  （[表](../Metrics/Plug-in%20Modules.md#本体を複数置いた形pr-ごとに分けて選ばれた-1-本だけ読む)）。
 - **分ける値打ちは「壊れ方が 1 本の中に閉じる」こと**——1 つの調査コードがコンパイルできなくても、
   残りは配れる。読み込みの失敗（版の食い違い・署名の不備）も、選んだその 1 本の話で終わる。
 - 索引と本体は**同じビルドから出し、置くのは本体 → 索引の順**（索引だけ新しいと「選んだものが
@@ -421,7 +421,7 @@ VW は本体の存在を知らないので、**その入れ替えに VW の再�
 ### 本体側からダイアログを開ける（実プラグインで実測）
 
 **開ける**（[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)
-を割ったとき。macOS。[開いたもの](../Metrics/Plug-in%20Modules.md#本体側からダイアログを開ける実プラグインで実測)）。
+を割ったとき。macOS。[開いたもの](../Metrics/Plug-in%20Modules.md#本体側からダイアログを開いた実測実プラグイン)）。
 
 - `VWFC::VWUI::VWDialog`（`GS_CreateLayout` で組む）・VCOM の `IFileChooserDialog` /
   `IFolderChooserDialog`（[File and Folder Dialogs](File%20and%20Folder%20Dialogs.md)）が本体側から動いた。
@@ -435,7 +435,7 @@ VW は本体の存在を知らないので、**その入れ替えに VW の再�
 
 - **取り次げる。** PIO の登録（`SParametricDef`・`IMPLEMENT_VWParametricExtension` など）は殻に残し、
   `Recalculate()` の中身を本体へ出せる。VW が自発的に起こすリセットでも走り、**1 回あたり 0.6 ms
-  前後**（[実測](../Metrics/Plug-in%20Modules.md#pio-のイベントも殻から本体へ取り次げる実プラグインで実測)）。
+  前後**（[実測](../Metrics/Plug-in%20Modules.md#pio-のイベントを殻から本体へ取り次いだ実測実プラグイン)）。
 - **この形では本体を載せっぱなしにする**（読み込み 0.3〜0.4 秒をリセットごとに払えない——
   「開くたびに読んで終わったら降ろす」作りのままだと、上の 212 回で**74 秒**を読み込みだけに使う
   計算になり、取り込み全体（1 分 15 秒）と同じだけ余分にかかる）。入れ替えの
@@ -445,7 +445,7 @@ VW は本体の存在を知らないので、**その入れ替えに VW の再�
 ### 実運用の入れ替えが実機で通った（再起動なし）
 
 - **`.vwpayload` だけを差し替えて、VW を再起動せずに走るコードが入れ替わった**（実プラグインの
-  取り込み。描いた 1174 件は前後で一致。[手順と結果](../Metrics/Plug-in%20Modules.md#実運用の入れ替えが実機で通った再起動なし)）。
+  取り込み。描いた 1174 件は前後で一致。[手順と結果](../Metrics/Plug-in%20Modules.md#実運用の入れ替えを実機で回した再起動なし)）。
 - **mac では本体にも個別のアドホック署名が要る**（殻の隣に置くので `codesign --deep` に含まれず、
   無いと library validation で `dlopen` が失敗する）。配布 zip を作るときも展開するときも署名し直す。
 

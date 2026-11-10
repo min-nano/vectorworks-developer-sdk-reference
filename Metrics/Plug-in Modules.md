@@ -9,7 +9,7 @@
 コンパイル済みプラグイン（`.vwlibrary` / `.vlb`）が**いつ読み込まれ、いつなら入れ替えられるか**。
 そして「Vectorworks を起動したまま中身を差し替えられないか」という問い（issue #15）の調査。
 
-## 拡張機能を 1 つも登録しないモジュールも、有効なら起動時から常駐する（Windows・macOS）
+## 拡張機能を 1 つも登録しないモジュールの常駐を確かめた（Windows・macOS）
 
 （[issue #252](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/252)。
 被験体は [vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)
@@ -19,7 +19,7 @@
 被験体の `cli` はメニューも PIO もプラグインライブラリ関数も登録しない（`REGISTER_Extension` を
 1 度も呼ばない）。`plugin_module_main` は `GS_InitializeVCOM(cbp)` のあと、`kPluginModuleDeinit` 以外の
 action で 1 度だけ OS タイマーを始めて 0 を返す（`plugin_module_ver` と
-`DefaultPluginVWRIdentifier` は定義する。下の「SDK の静的ライブラリをリンクするモジュールは…」）。
+`DefaultPluginVWRIdentifier` は定義する。下の「SDK の静的ライブラリをリンクするモジュールで足りなかった定義」）。
 
 | | Windows（VW 2026 Update 6 x64・Windows 11 ARM64 の VM の x64 エミュレーション） | macOS（VW 2026 `31.6.0 (872399)`・macOS 27.0.1 arm64） |
 | --- | --- | --- |
@@ -91,7 +91,7 @@ Sentry（sentry-native / crashpad）が先に掴み、ダンプを
 （終了コード 0）した。action の記録は**すべての action が同じ番地で届いた**（例:
 `-1 -3 -4 -4 -5 -4 -5 -4 -5 -2 -5` がすべて `0x7ffeba150000`。`-2` は閉じたとき）。
 
-### #233 の `0xe0000001` も同じもの
+### #233 の `0xe0000001` との突き合わせ
 
 （[issue #233](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/233)。
 2026-10-24 に同じ Windows の VM で測った。殻はどれも Actions の成果物で、Plug-ins 直下に置いた。）
@@ -124,7 +124,7 @@ Sentry（sentry-native / crashpad）が先に掴み、ダンプを
   1 回起動した。ダンプを読んだのは T2 の 1 回だけで、ほかの回の番地は見ていない。2026-10-15 の
   「3 ファイルを退けたら起動した」回の番地は残っていない。
 
-### 読み違えやすいところ
+### 結果が食い違って見えたところの切り分け
 
 - 置いた・退けたで結果が変わって見えたが、同じ中身でも落ちたり落ちなかったりした
   （issue の 5 と 6 の食い違い）。
@@ -143,7 +143,7 @@ Sentry（sentry-native / crashpad）が先に掴み、ダンプを
 - 同じ `Plug-ins` に入れていた別のプラグイン（`cli`。`SetTimer` を使う）だけで落ちた回
   （issue の 5）はダンプが残っておらず、確かめていない。
 
-## OS タイマーを持つ常駐プラグイン（留めたモジュール）は、終了時の落ち方を変えない（Windows）
+## OS タイマーを持つ常駐プラグイン（留めたモジュール）の有無と終了時の落ち方（Windows）
 
 （[issue #257](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/257)。
 VW 2026 Update 6（Build 872399）x64・Windows 11 Pro ARM64 の VM（UTM）の x64 エミュレーション・
@@ -210,7 +210,7 @@ VW 2026 Update 6（Build 872399）x64・Windows 11 Pro ARM64 の VM（UTM）の 
 閉じて**ホーム画面へ戻った後**に閉じていた（上の 82 回は、起動してホーム画面から閉じた
 だけ）。同じ形の回は 5 回中 1 回で、入っていたのは `VwSdkProbes` だけ。
 
-### 読み違えやすいところ
+### 計測でつまずいたところの記録
 
 - **「開発元不明のプラグイン」のダイアログが出たまま閉じると、`CloseMainWindow` は効かなかった。**
   最初に組んだ計測ではプラグインありの 5 回がすべてこれで止まった（全部有効でも前回から
@@ -228,7 +228,7 @@ VW 2026 Update 6（Build 872399）x64・Windows 11 Pro ARM64 の VM（UTM）の 
   前の起動の `HomeScreen` を拾うか、今回の行を読み落とした（#270 で両方踏んだ）。また VW は
   書き込みのために開いたままで、`File.ReadAllLines` は共有違反で失敗した。
 
-### 新しい図面の最初の描画——30 回で 1 度も落ちなかった（Windows）
+### 新しい図面の最初の描画を 30 回測った（Windows）
 
 （[issue #270](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/270)。
 上と同じ VM・VW。2026-10-27 に測った。）
@@ -257,7 +257,7 @@ VW 2026 Update 6（Build 872399）x64・Windows 11 Pro ARM64 の VM（UTM）の 
   `0xC0000005` で落ちた**（`VwSdkProbes` の殻だけ。手で同じ操作をした回。WER のフルダンプ）。
   上の #269 の 1 回とオフセットまで同じ（`+0x3699c7e`）。計測の 30 回では出ていない。
 
-## 「開発元不明のプラグイン」のダイアログ——有効化は**フルパス**で覚え、出るのは無効があるときと約 24 時間おき（Windows・macOS）
+## 「開発元不明のプラグイン」のダイアログが出る条件と有効化の記録の実測（Windows・macOS）
 
 （[issue #258](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/258)。
 VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エミュレーション。
@@ -300,12 +300,12 @@ VW 2026 Update 6（Build 872399）・Windows 11 ARM64 の VM（UTM）・x64 エ�
   | 「続ける」（無効が残るとき。8） | 書き直す（**8 バイト＝空**） | 変わらなかった | そのまま起動を続ける（無効のものは読まれない） |
   | 「終了」（9） | 書き直す（8 バイト） | 変わらなかった | ホーム画面まで進んでから VW を終了する（ログは `Return=2`） |
 
-### ダイアログの最中も、プラグインは刻みから図面を扱える（Windows）
+### ダイアログの最中に刻みから図面を扱った実測（Windows）
 
 （[issue #264](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/264)。
 VW 2026 Update 6・Windows 11 ARM64 の VM。2026-10-26。`Plug-ins` には有効化済みの
 `VwSdkProbes` だけを置き、`<Date>` を 2 日前にして起動した——全部有効でも出る回。
-`probes/runtime/startup-dialog-docs/`、ビルド `b0a3ea33ef37`。macOS は下の「mac も…」。）
+`probes/runtime/startup-dialog-docs/`、ビルド `b0a3ea33ef37`。macOS は下の「mac で共通モード…」。）
 
 **全部有効で出たダイアログの最中、OS タイマー（`SetTimer(nullptr, …)`）の刻みは届き、
 そこから図面を作る・足す・保存する・閉じる・開くがすべて通った。** ダイアログを閉じた後も、
@@ -346,7 +346,7 @@ VW 2026 Update 6・Windows 11 ARM64 の VM。2026-10-26。`Plug-ins` には有�
   最中に「ホーム画面」と誤判定した**。直後のファイルは、ダイアログの最中にログが送信されて
   （`Log uploading complete`）**10 行に縮んでおり**、`HomeScreen` の行は無かった。
 
-### mac も、共通モードの刻みからなら扱える（既定のモードだけでは刻まない）
+### mac で共通モード・既定のモードの刻みから図面を扱った実測
 
 （[issue #264](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/264)。
 VW 2026 Update 6（Build 872399）・macOS 27.0.1。2026-10-27。`Plug-ins` には有効化済みの
@@ -480,7 +480,7 @@ VW 2026 Update 6（Build 872399）・macOS 27.0.1。2026-10-27。`Plug-ins` に�
   時刻がそのまま `<Date>` に残り、約 3 日後の 10/22 の起動で出たダイアログを「終了」
   （`Return=2`）で閉じたときは、記録だけ書き直されて `<Date>` は変わらなかった。
 
-## プラグインのフォルダの「モジュール以外のもの」は無視され、モジュールは置いた場所から読まれる（Windows・macOS）
+## プラグインのフォルダに「モジュール以外のもの」を置いた実測と、モジュールを読む場所（Windows・macOS）
 
 （[issue #277](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/277)。
 プローブ `plugin-folder-extras`。macOS は VW 2026 `31.6.0 (872399)`・macOS 27.0.1 arm64・
@@ -587,7 +587,7 @@ cli の実物 2 件の、計 16 件を載せた。
 - **見ていないこと: 起動時の走査で中身を読んだか**（開いて閉じたか）。mac と同じく、
   起動後を写したもので、走査の最中は見ていない（Process Monitor は使わなかった）。
 
-## VCOM の初期化はモジュールごとに閉じている
+## VCOM の初期化の範囲を SDK の宣言と定義で読んだ
 
 SDK の宣言と定義（`sdk-grep` で読んだ）:
 
@@ -623,7 +623,7 @@ win : VWSDK.lib(TypesString.obj) : error LNK2019: unresolved external symbol
         "char const * __cdecl DefaultPluginVWRIdentifier(void)"
 ```
 
-## 本体を外部モジュールへ出せば、再起動なしで入れ替えられる
+## 本体を外部モジュールへ出して再起動なしで入れ替えた実測
 
 （macOS・VW 2026 / Apple Silicon。殻と本体の境界の置き場所は Findings の同じ節。）
 
@@ -650,12 +650,12 @@ win : VWSDK.lib(TypesString.obj) : error LNK2019: unresolved external symbol
 **降ろした後、次のモジュールが同じ番地へ載った**（両世代とも、モジュール内の関数の
 番地が `0xb1f798760`）。
 
-### 読み違えやすいところ: `gSDK` の**値**は殻と同じになる
+### 殻と本体の `gSDK` の値の実測
 
 実測では殻とペイロードの `gSDK` が同じ値（`0x1069a2818`）だった。ペイロードは静的ライブラリを
 自分でリンクし、`RTLD_LOCAL`（二階層名前空間）で読み込んでいる。
 
-### 本体は複数置ける（PR ごとに分けて、選ばれた 1 本だけ読む）
+### 本体を複数置いた形（PR ごとに分けて、選ばれた 1 本だけ読む）
 
 （VW 2026。実機確認プラグインの形——main のプローブが 1 本、PR のプローブが PR ごとに 1 本
 （`VwSdkProbesPayload-<群>.vwpayload`）。）
@@ -669,7 +669,7 @@ win : VWSDK.lib(TypesString.obj) : error LNK2019: unresolved external symbol
 1 本にまとめていたときは、**同居させた誰か 1 つの調査コードがコンパイルできないだけで、
 全部が配れなくなった**。
 
-### 落とし穴: 殻の記憶域を本体に持たせると落ちる（実機で落とした）
+### 殻の記憶域を本体に持たせて落ちた実測
 
 最初の実装は、殻が渡す `VwPayloadHost`（コールバック・ログの受け口）を本体が
 **ポインタのまま**保持していた。殻の側はそれを `load()` の**ローカル変数**に置いていた。
@@ -731,7 +731,7 @@ undo: before building=no
 これで**本番の形**（メニュー → 本体を読む → プローブが SDK と VWFC を使う →
 ログが境界を越えて殻へ流れる → 結果ダイアログ → 降ろす）が一周した。
 
-### 本体側からダイアログを開ける（実プラグインで実測）
+### 本体側からダイアログを開いた実測（実プラグイン）
 
 実プラグイン
 （[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)）
@@ -751,7 +751,7 @@ undo: before building=no
 - 実プラグインは**入れ子の深さが 0（本体のコードがスタックに 1 つも無い）のときだけ降ろす**
   作りにしてある。
 
-### PIO のイベントも殻から本体へ取り次げる（実プラグインで実測）
+### PIO のイベントを殻から本体へ取り次いだ実測（実プラグイン）
 
 PIO の**登録**——`SParametricDef`・パラメータ定義・UUID・`IMPLEMENT_VWParametricExtension`——は
 殻に残し、`Recalculate()` の**中身を本体へ出した**。殻の event sink は「本体を確保して、自分の
@@ -768,7 +768,7 @@ PIO の**登録**——`SParametricDef`・パラメータ定義・UUID・`IMPLEM
 
 取り込み全体の所要は 1 分 15 秒。
 
-### 実運用の入れ替えが実機で通った（再起動なし）
+### 実運用の入れ替えを実機で回した（再起動なし）
 
 実プラグイン（IFC を読んで 1174 個のオブジェクトを描く取り込み）で:
 

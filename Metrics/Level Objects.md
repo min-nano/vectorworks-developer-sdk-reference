@@ -101,7 +101,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
   | `Custom` ＋ `Elevation`＝`GL` ＋ `Title`＝空 | 〈 〉〈GL〉 |
   | `Custom` ＋ `Elevation`＝`+2800` ＋ `Title`＝`2FL` | 〈2FL〉〈+2800〉 |
 
-### レベル基準線（`Elevation Benchmark2`）——**パラメータではなくレイアウトが出す**
+### レベル基準線（`Elevation Benchmark2`）の名前の出どころを探した
 
 `Note`（備考）・`EPfx` / `ESfx`（高さの前後記号）・`CustElev`（高さ（カスタム））を
 書いても絵は変わらなかった（欄には入った）。名前が出たのは次の 2 つの場合だった。
@@ -110,7 +110,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
    出た（下記「ストーリ…」）。
 2. マーカーレイアウトのテキストを差し替えたとき——差し替えた固定文字が出た（下記）。
 
-### マーカーレイアウトを差し替えて任意の名前を出す
+### マーカーレイアウトを差し替えて任意の名前を出した実測
 
 レイアウトは PIO 自身のプロファイルグループとして読めた（`ISDK::GetCustomObjectProfileGroup` /
 `SetCustomObjectProfileGroup`。[Data Tags](Data%20Tags.md) のタグレイアウトと同じ作り）。
@@ -142,7 +142,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
   `None` / `Plus` / `Plus-Minus` の 3 択で、**負の値に `Plus-Minus` を当てると
   `±-2800` になった**。
 
-## 書いても入らない値がある（必ず読み戻す）
+## 書いて読み戻した値の実測
 
 書いた値が入らなくても `SetParamValue` からはそれが分からなかった。書いた後に読み戻して、
 戻されていた例:
@@ -165,8 +165,8 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
    倒され、名前欄だけだと `Datum` は `UserReference` のまま名前も出なかった。
 
 実測（**SDK だけで組み立てた文書**。ストーリ 1 階＝0 / 2 階＝2800、レベル種別 `FL`。
-注釈の高さ `0` はこの文書でのもの。実物件の図面での測り直しは下の「注釈でも名前と高さは
-両立する」）:
+注釈の高さ `0` はこの文書でのもの。実物件の図面での測り直しは下の「断面ビューポートの注釈で名前と高さを出した
+実測」）:
 
 | 置いた場所 | 書いたもの | `Datum` の読み戻し | 描かれた高さ | 描かれた名前 |
 | --- | --- | --- | --- | --- |
@@ -183,7 +183,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
 - 実機の OIP は「測定基準」に `FL`（レベル種別名）を見せたが、
   `VWParametricObj::PopupGetChoices`（欄名版・欄索引版とも）は **0 件**を返した。
   `Datum` へ `FL` や `GL` と書くと `GroundPlane` に倒された。
-### 断面ビューポートの注釈でも、名前と高さは両立する——**3 つ組だけでよい**
+### 断面ビューポートの注釈で名前と高さを出した実測（3 つ組）
 
 **実機の図面で、UI がツールで置いた個体と SDK 製の個体を同じ注釈の中で全欄突き合わせ、
 1 段ずつ足して確かめた**（[issue #135](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/135)。
@@ -218,7 +218,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
 - UI 製を複製（`DuplicateObject`）すると、複製は同じ高さと名前を出した。
 - 注釈の中の個体の 3D 位置は `z=0`（変換行列の原点も `z=0`）だった。
 
-#### 同じ 3 つ組でも `0` になるビューポートがある（#141）
+#### 同じ 3 つ組で `0` になったビューポート（#141）
 
 [issue #141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141) で
 実機で測った（実測値と潰した筋は
@@ -245,7 +245,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
 
 同じ 3 つ組をデザインレイヤかシートレイヤへ置くと、数値は出た。
 
-#### SDK で作った断面ビューポートでも出せる——**表示レイヤとクラスを表示へ戻して更新する**（#151）
+#### SDK で作った断面ビューポートで出した実測（表示レイヤとクラスを表示へ戻して更新。#151）
 
 `CreateSectionViewport` が作ったビューポートは、作った直後はビュー行列
 （`ovViewportViewMatrix` ＝ 1050）が単位行列で、その注釈の個体は `0` を描いた。
@@ -263,7 +263,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
 手順・2 × 2 の実測値・潰した筋は
 [Viewports](../Findings/Viewports.md)「SDK で作った断面ビューポートの注釈でレベル基準線に高さを出す」。
 
-#### ストーリバウンド（`SetObjectStoryBound` の一群）は使っていない
+#### ストーリバウンド（`SetObjectStoryBound` の一群）を測った
 
 `ISDK` にはオブジェクトを階／レベルへ結ぶ**ストーリバウンド**
 （`HasObjectStoryBounds` / `GetObjectStoryBound` / `SetObjectStoryBound` /
@@ -272,7 +272,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
 `HasObjectStoryBounds=false` / 件数 0 で、名指しで引いた `id=-3 / 0 / 1` もすべて `false`
 だった。
 
-#### 高さを注釈の Y から読ませたいときだけ、`Axis` を倒す
+#### `Axis` を倒して高さを注釈の Y から読ませた実測
 
 3 つ組に `Axis`＝`YAxis2DMode` を足して比べた:
 
@@ -284,7 +284,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
 `Axis` を `YAxis2DMode` にすると、`__StoryName` / `__LevelTypeName` が**空に戻り**、
 `Datum` も `UserReference` に戻った（書く順を変えても同じ）。
 
-#### 描かれる名前は「レベル種別名-ストーリの接尾語」
+#### 描かれた名前の実測
 
 レイアウトのトークン `#STLT#-#STPS#` が解決された実測: ストーリ〈1階〉接尾語 `1` ＋
 レベル種別 `FL` → **`FL-1`**、〈屋根〉＋`軒高` → **`軒高-R`**、〈基礎〉＋`GL` → **`GL-F`**。
@@ -345,7 +345,7 @@ universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
 `UseY` / `Use Control Point` / `ControlPoint01X` …（`__NNA_DO_NOT_CHANGE`）は
 `Elevation Display` の内部表現と制御点（上記）。
 
-## 描いた文字を機械で読む
+## 描いた文字を機械で読んだ手順
 
 「絵に何を出したか」は、PIO が吐いた図形を辿ってテキスト（`kTextNode`）を読んで採った
 （計測に使ったコード）。
