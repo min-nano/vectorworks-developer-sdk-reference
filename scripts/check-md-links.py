@@ -32,12 +32,7 @@ DEFAULT_ROOTS = ['Findings', 'Metrics', 'CLAUDE.md', 'README.md', 'plugin/README
                  'probes/README.md', 'probes/runtime/README.md']
 
 # 承知のうえで切れているリンク（{ファイル: {リンク先: 理由}}）。足すときは理由を書く。
-KNOWN_BROKEN = {
-    'CLAUDE.md': {
-        '.github/workflows/issue-webhook.yml':
-            'a02379d でワークフローを消したが、CLAUDE.md の説明は残っている（扱いは未決）',
-    },
-}
+KNOWN_BROKEN = {}
 
 
 def link_targets(text):
