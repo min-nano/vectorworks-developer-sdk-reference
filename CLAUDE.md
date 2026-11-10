@@ -401,7 +401,9 @@ Bash(run_in_background: true):
 `conclusion=success` 以外は exit 1（`no-checks` は「チェックが 1 件も登録されなかった」、
 `timed-out-waiting` / `api-error` は「待機側が見届けられなかった」——CI の失敗ではない）。
 このリポジトリの PR CI は `lint.yml`（shellcheck / actionlint / clang-format / 無 SDK の
-単体テスト）と、
+単体テスト。**その中で Findings / Metrics のリンクとアンカーも点検する**——
+`scripts/check-md-links.py`。**文書だけの PR でも、見出しを変えてリンクが切れれば
+`unit-tests` が赤くなる**ので、そのときは見出しかリンクを直す）と、
 `plugin/src/**` など**プラグイン本体**を触ったときだけ走る
 `probe-build.yml`（mac / Windows の実ビルド）、そして `probes/runtime/**` を触ったときだけ
 走る `probe-auto-update.yml`（main のビルドを起動して**完了まで待つ**ので、mac /
