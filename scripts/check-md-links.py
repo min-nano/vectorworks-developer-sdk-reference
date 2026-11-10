@@ -159,23 +159,66 @@ def anchors(path):
     return result
 
 
-def check(path):
-    problems, fence = [], Fence()
-    section = SECTION_ONLY.get(os.path.normpath(path))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_CODE_SPAN = re.compile(r'(`+)(.+?)(?<!`)\1(?!`)', re.S)
+
+
+def _repo_relative(path):
+    return os.path.relpath(os.path.abspath(path), REPO_ROOT).replace(os.sep, '/')
+
+
+def _blocks(lines):
+    """囲みの外の行を、段落（空行・見出し・囲みで区切る）ごとにまとめて返す。
+
+    `code` が行をまたぐことがある（手で折り返した文書）ので、code span は段落の単位で
+    取り除く。返すのは [(行番号, 行), …] の並び。見出しは 1 行で 1 つの段落にする。
+    """
+    fence, block = Fence(), []
+    for lineno, line in enumerate(lines, 1):
+        if fence.step(line):
+            if block:
+                yield block
+                block = []
+            continue
+        if not line.strip() or HEADING.match(line):
+            if block:
+                yield block
+                block = []
+            if line.strip():
+                yield [(lineno, line)]
+            continue
+        block.append((lineno, line))
+    if block:
+        yield block
+
+
+def _strip_code(block):
+    """段落から code span を取り除く（行数は保つ）。[(行番号, 行), …] を返す。"""
+    joined = ''.join(line for _, line in block)
+    joined = _CODE_SPAN.sub(lambda m: '\n' * m.group(0).count('\n'), joined)
+    return list(zip((n for n, _ in block), joined.split('\n')))
+
+
+def check(path, section_only=None):
+    if section_only is None:
+        section_only = SECTION_ONLY
+    problems = []
+    section = section_only.get(_repo_relative(path))
     level = None if section else 0  # 0 = ファイル全体を見る
+    found = not section
     with open(path, encoding='utf-8') as f:
-        for lineno, line in enumerate(f, 1):
-            if fence.step(line):
+        lines = f.read().split('\n')
+    lines = [line + '\n' for line in lines]
+    for block in _blocks(lines):
+        if section:
+            h = HEADING.match(block[0][1]) if len(block) == 1 else None
+            if h and h.group(2).startswith(section):
+                level, found = len(h.group(1)), True
+            elif h and level and len(h.group(1)) <= level:
+                level = None
+            if level is None:
                 continue
-            if section:
-                h = HEADING.match(line)
-                if h and h.group(2).startswith(section):
-                    level = len(h.group(1))
-                elif h and level and len(h.group(1)) <= level:
-                    level = None
-                if level is None:
-                    continue
-            text = re.sub(r'`[^`]*`', '', line)
+        for lineno, text in _strip_code(block):
             for target in link_targets(text):
                 if re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', target):
                     continue  # http: / mailto: など
@@ -191,19 +234,26 @@ def check(path):
                     want = urllib.parse.unquote(frag)
                     if want not in anchors(dest):
                         problems.append(f'{path}:{lineno}: アンカーが無い: {target}')
+    if not found:
+        # 見出しを言い換えたら、黙って何も見なくなる——それを切れたリンクと同じに扱う
+        problems.append(f'{path}: 点検する節「{section}」の見出しが見つからない'
+                        '（SECTION_ONLY を直す）')
     return problems
 
 
 def main(argv):
+    if not argv:
+        os.chdir(REPO_ROOT)  # 既定の範囲はリポジトリの最上位からの道
     roots = argv or DEFAULT_ROOTS
-    files = []
+    files, problems = [], []
     for r in roots:
         if os.path.isdir(r):
             for d, _, names in os.walk(r):
                 files += [os.path.join(d, n) for n in sorted(names) if n.endswith('.md')]
-        else:
+        elif os.path.isfile(r):
             files.append(r)
-    problems = []
+        else:
+            problems.append(f'{r}: 点検する範囲が無い')
     for f in sorted(files):
         problems += check(f)
     for p in problems:

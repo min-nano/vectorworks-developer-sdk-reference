@@ -98,9 +98,21 @@ with tempfile.TemporaryDirectory() as d:
     with open(r, 'w', encoding='utf-8') as f:
         f.write('# 上流\n[up](nai1.md)\n## このフォークについて\n[mine](nai2.md)\n'
                 '### 小節\n[mine2](nai3.md)\n## 上流の続き\n[up2](nai4.md)\n')
-    cml.SECTION_ONLY[os.path.normpath(r)] = 'このフォークについて'
-    eq('section-only', sorted(p.split(': ', 1)[1] for p in cml.check(r)),
+    only = {cml._repo_relative(r): 'このフォークについて'}  # 全体の設定は書き換えない
+    eq('section-only', sorted(p.split(': ', 1)[1] for p in cml.check(r, only)),
        ['リンク先が無い: nai2.md', 'リンク先が無い: nai3.md'])
+    # 見出しを言い換えて節が見つからなくなったら、黙って通さずに失敗にする
+    only = {cml._repo_relative(r): '言い換えた節'}
+    eq('section-missing', [p.split(': ', 1)[1] for p in cml.check(r, only)],
+       ['点検する節「言い換えた節」の見出しが見つからない（SECTION_ONLY を直す）'])
+    # 行をまたぐ code span: 組み合わせを取り違えて、後ろのリンクを見落とさない
+    w = os.path.join(d, 'w.md')
+    with open(w, 'w', encoding='utf-8') as f:
+        f.write('前の行から `Get\nFoo` を読む。[ng](nai5.md) と `x` と `[code](nai6.md)`\n'
+                '\n`折り返した\nコード [code](nai7.md)` の後 [ng](nai8.md)\n')
+    eq('wrapped-code', sorted(p.split(': ', 1)[1] for p in cml.check(w)),
+       ['リンク先が無い: nai5.md', 'リンク先が無い: nai8.md'])
+    eq('wrapped-code-lineno', sorted(p.split(':')[1] for p in cml.check(w)), ['2', '5'])
 
 print('check-md-links tests:', 'FAILED' if failed else 'ok')
 sys.exit(1 if failed else 0)
