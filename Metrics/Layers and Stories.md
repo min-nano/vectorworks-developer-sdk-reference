@@ -2,7 +2,7 @@
 
 結論は [Findings「Layers and Stories」](../Findings/Layers%20and%20Stories.md)。ここには各節の測った
 環境（VW の版・OS・図面）・使ったプローブ・手順・実測の表とダンプ・切り分けの経緯を置く。
-節の見出しは Findings と同じ。
+節は Findings の節に対応する。
 
 > ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
