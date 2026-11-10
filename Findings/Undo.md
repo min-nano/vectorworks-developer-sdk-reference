@@ -8,7 +8,7 @@ VW 2026 / mac。実測の値・表・プローブ・潰した道は [計測記�
   呼び出しがある**ため。**この半端な記録を取り消すと図面が壊れる**（ビューポートだけ消え、
   レイヤは戻らず、オブジェクトが断面を失った）。`GS_EndUndoEvent` の説明の「外部の終了時に
   自動で**閉じる**」は「自動で開く」ではない
-  （[実測](../Metrics/Undo.md#vw-は処理の開始時に-undo-イベントを開かない)）。
+  （[実測](../Metrics/Undo.md#処理の開始時の-undo-イベントの実測)）。
   - **自前で開く呼び出しは断面ビューポートだけではない**——PIO の作成＋`ResetObject`
     （[#166](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/166)）、
     `CreateLocus`（mac。[#206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)）、
@@ -24,7 +24,7 @@ VW 2026 / mac。実測の値・表・プローブ・潰した道は [計測記�
   （`DeleteObject(h, useUndo=false)`・`ClearUndoTableDueToUnsupportedAction()`・イベントを閉じる・
   VW へ戻る、のどれでも減らない。[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)）。
   **数が増えること自体を異常と読まない**
-  （[実測](../Metrics/Undo.md#kundoplaceholdernode型-90は積もるが描画に影響しない)）。
+  （[実測](../Metrics/Undo.md#kundoplaceholdernode型-90の実測)）。
 - **`SetUndoMethod(kUndoSwapObjects)` ＋ `NameUndoEvent(...)` が開始も兼ねる**（ISDK に開始
   専用の呼び出しは無い）。RAII で包み、破棄で `EndUndoEvent()` するのが安全。
 - **`IsCurrentlyBuildingAnUndoEvent()` を「いま触ってよいか」の判定に使うなら、
@@ -63,7 +63,7 @@ VW 2026 / mac。実測の値・表・プローブ・潰した道は [計測記�
     [Layers and Stories](Layers%20and%20Stories.md)「プラグイン自身の undo イベントの中で回すと…」）。
     **後始末は要らないが、取り消しの後で残っていると当てにしない。**
   - **登録しなかったレイヤは残る**（階に結んでいたレイヤは階を失って残る）。その上の構造材は
-    消えた（[実測](../Metrics/Undo.md#戻らないものクラスストーリレベルテンプレートの測り直し)）。
+    消えた（[実測](../Metrics/Undo.md#クラスストーリレベルテンプレートの取り消しの測り直し)）。
 - **【訂正】保存はいつも段を積むわけではない。積むのは次の 2 つの場面の 1 回だけ**
   （[issue #288](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/288)。
   [手順ごとの表](../Metrics/Undo.md#保存が積む取り消しの段288)）。**どの場合も履歴は消えず、
@@ -194,7 +194,7 @@ pyEngine->ScriptContext_Run();          // ロガーを使うなら ScriptContex
 **この節の結論は二度書き換えている**（「スクリプトエラーが出ていた」という指摘と、足跡で
 誤りが割れた経緯）。プローブを 7 度作り直し、実機で 10 回走らせ、うち 4 回は VectorWorks
 ごと落ちた。足跡・実測値・落ちたときのスタック・所要時間の表は
-[計測記録](../Metrics/Undo.md#実機で走らせた結果とその読み方vw-2026--macos)。
+[計測記録](../Metrics/Undo.md#実機で走らせた結果vw-2026--macos)。
 
 #### 確定していること（無印＝実機確認済み）
 

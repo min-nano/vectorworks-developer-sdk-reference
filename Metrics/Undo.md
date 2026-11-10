@@ -5,7 +5,7 @@
 
 > ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
-## VW は処理の開始時に undo イベントを開かない
+## 処理の開始時の undo イベントの実測
 
 - `IsCurrentlyBuildingAnUndoEvent()` の実測は `undo: start=no` / `afterParse=no` /
   `afterDraw=yes` だった（その処理は描画で断面ビューポートを生成していた）。この記録を
@@ -25,7 +25,7 @@
     - 自分で開いていないイベントに `EndUndoEvent()` を呼ぶと、戻り値 `true`、閉じた後の
       `IsCurrentlyBuildingAnUndoEvent()` は `no` だった。
 
-## `kUndoPlaceholderNode`（型 90）は積もるが描画に影響しない
+## `kUndoPlaceholderNode`（型 90）の実測
 
 - `kUndoPlaceholderNode`（型 90）は `ResetObject` 1 回ごとに PIO の子へ 1 つ積もった。
   11 個積んだ構造材でも、描かれた子の数・型の内訳・外接・立方は既定のままだった
@@ -50,7 +50,7 @@
   `IsCurrentlyBuildingAnUndoEvent()` が `yes` になった（VectorScript / Python の
   `ScriptContext` 経由とも）。次に走らせたプローブの冒頭も `building=yes` から始まった。
 
-## 戻らないもの——クラス・ストーリ・レベルテンプレートの測り直し
+## クラス・ストーリ・レベルテンプレートの取り消しの測り直し
 
 - **経緯:** この節は長らく「クラス・ストーリ・レベルテンプレートはリソースなので残る」と
   書いていた（初回の移植から。実測の記録は見当たらない）。
@@ -243,7 +243,7 @@ issue #27 の問い 2〜6（取り消しの対象になるイベント・呼べ�
   別の口（`ScriptContext_Begin` / `ScriptContext_Run`。`IPythonScriptEngine` 固有で
   `IVectorScriptEngine` には無い）へ渡していた。
 
-### 実機で走らせた結果と、その読み方（VW 2026 / macOS）
+### 実機で走らせた結果（VW 2026 / macOS）
 
 **経緯:** この節の記述は二度書き換えた。
 

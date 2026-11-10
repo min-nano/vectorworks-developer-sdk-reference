@@ -32,7 +32,7 @@ virtual MCObjectHandle CreateLinearDimension(
 
 （引数ごとの意味の表は [Findings](../Findings/Dimensions.md#createlineardimension-の引数) にある。）
 
-### `dimType` は `ovDimClass` そのもの
+### `dimType` と `ovDimClass` の読み戻しの実測
 
 ヘッダは「水平と垂直だけを許すか、`p1`→`p2` の向きへ寸法線を回すか、ordinate を作るか
 を示す」としか書いておらず、**どの数値がどれなのかを書いていない**。実測すると、
@@ -62,7 +62,7 @@ virtual MCObjectHandle CreateLinearDimension(
 `(0.857, 0.514)` は `(1000, 600)` を正規化したもので、`dir` に `(0,0)` を渡すと
 `p2`-`p1` が入るというヘッダの説明どおりの値だった。
 
-### `0`（`fix_ang`）と `1`（`sloped`）に差は無い——角度は `ovDimDirection` が決める
+### `0`（`fix_ang`）と `1`（`sloped`）を並べて比べた実測（#134）
 
 [#134](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/134) の実測。
 作った後に SDK から触ったときと、画面で触ったときを、`dimType` `0` と `1` で並べて比べた。
@@ -80,7 +80,7 @@ virtual MCObjectHandle CreateLinearDimension(
   つまんで動かしたところ、**どちらも寸法線は水平のまま**で、値は**水平距離**に
   なった（`3,720` と `3,790`——差はドラッグ量）。
 
-#### 表示される寸法値は「射影」であって実長ではない
+#### `ovDimDirection` と測点がずれた寸法に描かれた値の実測
 
 `ovDimDirection` と測点がずれている寸法を作り、実機に描かれた寸法値を読んだ実測:
 
@@ -104,7 +104,7 @@ virtual MCObjectHandle CreateLinearDimension(
   目視に頼らず測れる（再帰して型 10 を拾い、`GetTextChars` で文字列も読める）。
 - 射影を自分で計算した値も、実測 3 例すべてと一致した。
 
-#### `AssociateLinearDimension` が効かなかったのは、解く段を呼んでいなかったから
+#### `AssociateLinearDimension` を 8 通りで呼んだ記録（#134）
 
 この節は #134 で何を測ったかの記録（「効かない」は
 [#138](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/138)
@@ -118,9 +118,9 @@ virtual MCObjectHandle CreateLinearDimension(
 
 #138 で `HasConstraint` を見たところ、**この 8 通りでも関連付けそのものは成立していた**。
 この 8 通りでは**制約を解く段（`UpdateConstraintModel`）を一度も呼んでいなかった**。
-呼んだときの記録は[下記](#こう呼べば効く関連付けは成立していて足りなかったのは解く段だった)。
+呼んだときの記録は[下記](#解く段updateconstraintmodelまで呼んだ実測138)。
 
-### `startOffset` の符号は図面の座標軸で決まる（測る向きには依らない）
+### `startOffset` の符号を 4 方向で測った実測
 
 長さ 1000mm の寸法を 4 方向へ `startOffset = +300` で作り、
 外接矩形の中心が線分の中点からどれだけずれるかを測った実測:
@@ -140,7 +140,7 @@ virtual MCObjectHandle CreateLinearDimension(
 - 作った寸法のオブジェクト型は **`dimHeaderNode = 63`**（`Objs.TDType.h:129`）。
   `GetObjectTypeN` はこれを返した（実測）。
 
-### 作った寸法はアクティブレイヤに入る
+### 作った寸法が入ったレイヤの実測
 
 `CreateLinearDimension` を呼んだ直後に、**アクティブレイヤ（`GetActiveLayer()`）の中に入っていた**
 ——実測でレイヤ直下の要素数が 1 本あたり 1 つ増え、`FirstMemberObj`／`NextObject` で歩くと
@@ -149,7 +149,7 @@ virtual MCObjectHandle CreateLinearDimension(
 - シートレイヤを作ると、アクティブレイヤがそちらへ移った（作る前に取った `GetActiveLayer()`
   の中を探すと、寸法は「どこにも入っていない」ように見えた）。
 
-### 読み戻すときの型（`ovDimClass` は符号付き）
+### 読み戻すときの型の実測（`ovDimClass`）
 
 `ovDimClass` はヘッダに `unsigned char` と書いてあるが、`TVariableBlock` で受け取ると
 実体は **`t_Sint8`（型番号 11）**で、`GetUint8` では読めなかった（`GetSint8` で読めた）。
@@ -179,7 +179,7 @@ t_XCoordPt=16 / t_Uint32=17 / t_MCObjectHandle=18 / t_TXString=19`。
   `DEFINE_TYPE(Boolean)` の並びに入っており、`v = static_cast<Boolean>(1);` で通った。
   読みは `GetBoolean(bool&)` が別に定義されている。
 
-### 文字の大きさは作るときのアクティブレイヤの縮尺で焼き付く
+### 作るときのアクティブレイヤを替えた `ovDimFontSize` の実測
 
 実測（VW 2026 / macOS。同じ規格・同じ 6pt の設定で、アクティブレイヤを替えて作り分けた
 寸法の `ovDimFontSize`(17)（図面上の mm））:
@@ -196,7 +196,7 @@ t_XCoordPt=16 / t_Uint32=17 / t_MCObjectHandle=18 / t_TXString=19`。
 > **その寸法に当たっている文字スタイルの `ovTextStyleSize`（インチ）**を式ごと押さえ、
 > [#163](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/163)
 > が**規格と文字スタイルを別々にして**規格を差し替えても動かないことを測った
-> ——下記「[規格に「文字の大きさ」は無い](#規格に文字の大きさは無い持っているのは文字スタイルへの参照-1-本でそれは寸法に届かない)」。
+> ——下記「[規格と文字の大きさの関係を測った記録（#163）](#規格と文字の大きさの関係を測った記録163)」。
 > この図面では規格 `min-nano` が `寸法(6pt)` を指しているので**数値は一致する。**
 
 - **後からレイヤの縮尺を変えた。** 1/100 で作った寸法（`211.666`）を
@@ -206,11 +206,11 @@ t_XCoordPt=16 / t_Uint32=17 / t_MCObjectHandle=18 / t_TXString=19`。
 - **`ovDimFontSize` へ書いた。** 書いた値は `ResetObject`・規格の当て直し
   （`ovDimStandardName` の書き戻し）・`ovDimShowValue` の立て直しのいずれでも
   巻き戻らなかった（実測）。連続寸法の中の直線寸法での記録は下記
-  「[〈クラスの文字スタイル〉のままなら文字の大きさは「繋ぐときのアクティブレイヤ」で決まる](#クラスの文字スタイルのままなら文字の大きさは繋ぐときのアクティブレイヤで決まる)」。
+  「[〈クラスの文字スタイル〉のまま繋いだ連続寸法の文字の大きさの実測（#155）](#クラスの文字スタイルのまま繋いだ連続寸法の文字の大きさの実測155)」。
 - 線の幾何の側は [#145](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/145)
-  で測り直した——下記「[規格の用紙インチは描くたびに解かれる](#焼き付くのは文字の大きさだけ規格の用紙インチは描くたびに解かれる)」。
+  で測り直した——下記「[縮尺・規格を変えて線の幾何を測った実測（#145）](#縮尺規格を変えて線の幾何を測った実測145)」。
 
-#### `ovDimTextSizeInPoints` は「読む時点のアクティブレイヤ」で割った値——当てにしない
+#### `ovDimTextSizeInPoints` を 2 つの時点で読んだ実測
 
 デザインレイヤ（1/50）に置いたままの 1 本を、2 つの時点で `ovDimTextSizeInPoints`(40) を
 読んだ（`ovDimFontSize` は両方とも `105.8333` で動いていない）:
@@ -226,7 +226,7 @@ t_XCoordPt=16 / t_Uint32=17 / t_MCObjectHandle=18 / t_TXString=19`。
 - **書いたとき。** アクティブが 1:1 のときに `ovDimTextSizeInPoints` へ `6` を書くと、
   入ったのは `ovDimFontSize` = `2.1167` だった（実測。書き込み自体は `true` を返した）。
 
-### 焼き付くのは文字の大きさだけ——規格の用紙インチは描くたびに解かれる
+### 縮尺・規格を変えて線の幾何を測った実測（#145）
 
 VW 2026 / macOS。[#145](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/145) の実測。
 補助線の長さと隙間・寸法線の出（overhang）・端記号の大きさ・文字と寸法線の間隔を、
@@ -260,7 +260,7 @@ VW 2026 / macOS。[#145](https://github.com/min-nano/vectorworks-developer-sdk-r
   違って見える」が、実際には 2 本とも同じ縮尺生まれだった。
   下の ① と ② は、**読み戻しで 1/100 → 1/50 → 1:1 と実際に変わったことを確かめた走行**の値である。
 
-#### ① レイヤの縮尺を変えると、既にある寸法の線の幾何は追随する
+#### ① レイヤの縮尺を変えて、既にある寸法の線の幾何を測った
 
 規格 `min-nano` の `witExtend`（補助線が寸法線より出る長さ）は **0.0472 page inch =
 紙の 1.2mm**。1/100 のレイヤで作った 1 本を、レイヤの縮尺だけ変えて読み直した:
@@ -272,7 +272,7 @@ VW 2026 / macOS。[#145](https://github.com/min-nano/vectorworks-developer-sdk-r
 
 補助線の出は「紙の 1.2mm × 縮尺」と一致し、`ovDimFontSize` は動かなかった。
 
-#### ② 生まれの縮尺が違う 2 本は、同じ縮尺の下では完全に一致する
+#### ② 生まれの縮尺が違う 2 本を同じ縮尺の下で測った
 
 1/100 で作った寸法と 1/50 で作った寸法を同じレイヤに置き、レイヤを 1:1 にして測った:
 
@@ -283,7 +283,7 @@ VW 2026 / macOS。[#145](https://github.com/min-nano/vectorworks-developer-sdk-r
 
 1 つの桁も違わなかった。
 
-#### ③ 規格を差し替えると、既にある寸法の線の幾何がその場で変わる
+#### ③ 規格を差し替えて、既にある寸法の線の幾何を測った
 
 1/50 のレイヤに置いた 1 本に規格を当て直して測った（実測値は**すべて「紙の値 × 50」
 そのもの**だった）:
@@ -296,7 +296,7 @@ VW 2026 / macOS。[#145](https://github.com/min-nano/vectorworks-developer-sdk-r
 | `ISO` | 2.0mm | `100.000` | 0mm | `0.000` |
 | `JIS` | 2.0mm | `100.000` | 0mm | `0.000` |
 
-#### ④ 注釈の中でも同じ——ビューポートの縮尺で解かれる
+#### ④ 注釈の中でビューポートの縮尺を変えて測った
 
 1/50 のビューポートの注釈へ 2 本（`JIS` の 1/50 生まれと、`min-nano` の 1:1 生まれ）を
 入れ、ビューポートの縮尺だけを変えて測った:
@@ -317,7 +317,7 @@ VW 2026 / macOS。[#145](https://github.com/min-nano/vectorworks-developer-sdk-r
 2 本は見分けが付かなかった**。端記号は外接矩形にも `GetMarkerPolys` にも出ないので、
 端記号についてはこの目視だけが記録である。
 
-#### 読み戻せる `ov*` は「作ったとき／規格を当てたときの縮尺」で固まる——当てにしない
+#### 読み戻せる `ov*` を生まれの縮尺ごとに読んだ実測
 
 `ovDimTextAboveLineInCurrUnits`(43) と `ovDimCust*Wit*`(1236-1239) を、生まれの縮尺ごとに
 読んだ。入っていたのは**規格の用紙値をそのとき有効だった縮尺で図面上の長さに直した値**だった:
@@ -334,7 +334,7 @@ VW 2026 / macOS。[#145](https://github.com/min-nano/vectorworks-developer-sdk-r
 - **規格を当て直すと、そのときの縮尺で計算し直された**（`Arch` を当てると
   `ovDimTextAboveLineInCurrUnits` が `79.375` ＝ 1.5875mm × 50 になった）。
 
-#### per-object の上書きは効く——単位は「図面上の長さ」
+#### per-object の上書き（`ovDimWitnessOverride`）を書いた実測
 
 `ovDimWitnessOverride`(1235) を立てて補助線の長さを書いた。**実測**:
 
@@ -346,7 +346,7 @@ VW 2026 / macOS。[#145](https://github.com/min-nano/vectorworks-developer-sdk-r
 - 書いた `2000` は用紙インチではなく図面上の長さとして描かれた（`in current units` の名前どおり）。
 - **`ovDimWitnessOverride` は `Sint16` で書けた**（ヘッダは `short` と書いている）。
 
-#### 端記号の大きさは規格が `Sint16` で持つ（1/16384 インチ）
+#### 端記号の大きさ（`dimStdLinearASize`）の読みと換算
 
 `dimStdLinearASize`(22) はヘッダに単位の記載が無い `Sint16`。**マーカーの大きさと
 同じ 1/16384 インチの 16 ビット整数**として換算した値（[Attributes and Classes](../Findings/Attributes%20and%20Classes.md)）:
@@ -457,7 +457,7 @@ for (short index = 9; index >= -8; --index)
 - どちらを書いても、他方が書いた直後に追随して読み戻せた。`ResetObject` を
   呼んだ後も値は同じだった。
 
-### 規格に「文字の大きさ」は無い——持っているのは文字スタイルへの参照 1 本で、それは寸法に届かない
+### 規格と文字の大きさの関係を測った記録（#163）
 
 VW 2026 / macOS。[#163](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/163)
 で実機のプローブを走らせた。**2 回走らせた**——別のビルドで走らせた 2 回のログは
@@ -474,7 +474,7 @@ VW 2026 / macOS。[#163](https://github.com/min-nano/vectorworks-developer-sdk-r
 | `dimStdTextPos` | 52 | `UInt8` | 文字の位置（0: above/left, 1: above/right, 2: outside） |
 | `dimStdTolSizeFac` | 26 | `UInt8` | **公差**文字の大きさ（寸法文字に対する％） |
 
-#### ② 規格の文字スタイルは書ける——カスタムだけ、組み込みは弾かれる
+#### ② 規格の文字スタイルを書いた実測（カスタムと組み込み）
 
 **実測。文字スタイルを 2 つ（`6pt` ＝ `0.0833333` インチ／`300pt` ＝ `4.16667` インチ）
 作ってから、`SetCustomDimensionStandardVariable(index, dimStdTextStyle, ref)` を叩いた:**
@@ -488,9 +488,9 @@ VW 2026 / macOS。[#163](https://github.com/min-nano/vectorworks-developer-sdk-r
 - 組み込み（1〜9）は戻り値 `false` で、値も動かなかった（ヘッダの
   "cannot be changed with this function" どおり）。
 - 文字スタイルは `CreateTextStyleResource` で作り、`ovTextStyleSize`（インチ）を書いた
-  （下記「[`ovTextStyleSize` の単位はインチ](#ovtextstylesize-の単位はインチpt-ではない)」）。
+  （下記「[`ovTextStyleSize` の単位の実測](#ovtextstylesize-の単位の実測)」）。
 
-#### ③ ところが、その規格を当てた寸法は 1 mm も動かない（これが答え）
+#### ③ その規格を当てた寸法の大きさの実測
 
 （**VW へ戻った後に読み直しても同じ**——[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。規格が指す文字スタイル資源の大きさを
 6pt → 24pt に書き換えた後も、その規格・その文字スタイルを持つ寸法 5 本（`ResetObject`
@@ -514,8 +514,8 @@ VW 2026 / macOS。[#163](https://github.com/min-nano/vectorworks-developer-sdk-r
 - **`GetTextStyleRef` は `30` のまま動かなかった。** `30` はこの図面の
   **元からの**カスタム規格 `min-nano` が指す `寸法(6pt)`で、新しく当てた規格が指す
   `113` / `114` ではなかった。
-- #157 の「[作った直後は〈クラスの文字スタイル〉——`GetTextStyleRef` は寸法が
-  入ったクラスを見る](#作った直後はクラスの文字スタイルgettextstyleref-は寸法が入ったクラスを見る249-で訂正)」で
+- #157 の「[作った直後の文字スタイルと `GetTextStyleRef` の読みの実測
+  （#157・#249）](#作った直後の文字スタイルと-gettextstyleref-の読みの実測157249)」で
   測った 4 点目（規格を替えても寸法の文字スタイルは外れない）と同じ値の動きで、
   今回は「規格を文書の既定にしてから作る」道（5b）でも同じだった。
   この図面の「寸法」クラスは `寸法(6pt)`（`30`）を持っている（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。下記「[寸法はどのクラスへ入り…](#寸法はどのクラスへ入りgettextstyleref-はどのクラスを追うか249)」）。
@@ -523,7 +523,7 @@ VW 2026 / macOS。[#163](https://github.com/min-nano/vectorworks-developer-sdk-r
   絵は食い違っていなかった（#155 のような「値は動いたが絵は古い」は起きていない——値
   そのものが動かなかった）。
 
-#### ④ 既にある連続寸法も追随しない——3 つの道すべて
+#### ④ 既にある連続寸法で規格側を動かした実測（3 つの道）
 
 **`6pt` の規格で作って繋いだ連続寸法（中の `ovDimFontSize` ＝ `2.11667`）**に対して、
 規格側を動かしてから `ResetObject` した。**どれも `2.11667` のまま**だった:
@@ -541,21 +541,21 @@ VW 2026 / macOS。[#163](https://github.com/min-nano/vectorworks-developer-sdk-r
   同じ動き）。
 - **絵（中に描かれている文字図形）も終始 `2.11667mm`。**
 
-#### ⑤ では「繋ぐときに焼き付く値」の左の因子は何か——規格ではなく文字スタイル
+#### ⑤ 「繋ぐときに焼き付く値」の左の因子を突き合わせた記録
 
-③④ の値と、#157 の「[文字スタイルを当てる 2 つの口は、
-`ovDimFontSize` の扱いが違う](#文字スタイルを当てる-2-つの口はovdimfontsize-の扱いが違う)」の
+③④ の値と、#157 の「[文字スタイルを当てる 2 つの口で
+`ovDimFontSize` を往復した実測](#文字スタイルを当てる-2-つの口で-ovdimfontsize-を往復した実測)」の
 `SetTextStyleRef` の実測を突き合わせた。式は Findings にある。
 
-#### ⑥ 逃げ道は 2 つある——どちらも規格ではない
+#### ⑥ 規格以外の道を 2 通り試した
 
 1:1 がアクティブなまま `CreateChainDimension` を呼んで連続寸法の紙の大きさが決まった
 実測の出どころ:
 
 | 道 | やること | 実測の出どころ |
 | --- | --- | --- |
-| **(a)** | **繋ぐ直前**に、繋ぐ 2 本へ `ovDimFontSize` ＝ 紙の pt × 25.4/72 × ビューポートの縮尺 を書く | #161（「[#143 の手順は正しかった](#143-のovdimfontsize-を書く手順は正しかった抜けていたのは-resetobject)」。繋いだ後の中の直線寸法も**絵も**書いた値どおりだった） |
-| **(b)** | **繋ぐ前**に、`SetTextStyleRef(dim, ref)` で文字スタイルを明示する（`ovTextStyleSize` ＝ 狙いの紙 pt ÷ 72 × ビューポートの縮尺） | #157（「[連続寸法へ繋いでも残る](#連続寸法へ繋いでも残る)」と「[連続寸法は中の `ovDimFontSize` で描かれる](#連続寸法は中の-ovdimfontsize-で描かれる-食い違いは恒久的ではない)」の 3 巡目） |
+| **(a)** | **繋ぐ直前**に、繋ぐ 2 本へ `ovDimFontSize` ＝ 紙の pt × 25.4/72 × ビューポートの縮尺 を書く | #161（「[#143 の手順を `ResetObject` 付きで測り直した記録](#143-のovdimfontsize-を書く手順を-resetobject-付きで測り直した記録161)」。繋いだ後の中の直線寸法も**絵も**書いた値どおりだった） |
+| **(b)** | **繋ぐ前**に、`SetTextStyleRef(dim, ref)` で文字スタイルを明示する（`ovTextStyleSize` ＝ 狙いの紙 pt ÷ 72 × ビューポートの縮尺） | #157（「[連続寸法へ繋いだ後の読み戻し](#連続寸法へ繋いだ後の読み戻し)」と「[連続寸法の中の `ovDimFontSize` と描かれた大きさの実測](#連続寸法の中の-ovdimfontsize-と描かれた大きさの実測)」の 3 巡目） |
 
 - **(b) は #157 がその条件そのままで測っている**——1:1 のシートレイヤが
   アクティブなまま `ovTextStyleSize` ＝ `10.4167` インチ（＝ 6/72 × **125**）の文字
@@ -563,7 +563,7 @@ VW 2026 / macOS。[#163](https://github.com/min-nano/vectorworks-developer-sdk-r
   同じ文字スタイルだけを当てた 2 本を繋いだ連続寸法も、**直線寸法と同じ
   `264.5833mm`（＝ `10.4167 × 25.4 × 1`）の絵**で出ている（3 巡目）。
 
-#### 付け足し: `CreateCustomDimensionStandard` の実測（この調査で分かったこと）
+#### 付け足し: `CreateCustomDimensionStandard` の実測
 
 | 測ったこと | 結果 |
 | --- | --- |
@@ -609,13 +609,13 @@ if (gSDK->GetDimensionStandardVariable(standardIndex, dimStdTextStyle, block))
 - この図面ではカスタムは index `0` の 1 件しかなく、−1 以下は「無い」と返った
   （上記「[index の体系](#index-の体系)」の総当たりと同じ結果）。
 
-### `ovTextStyleSize` の単位はインチ（pt ではない）
+### `ovTextStyleSize` の単位の実測
 
 `CreateTextStyleResource` で作った直後の `ovTextStyleSize` は **`0.1667`**
 （= 1/6 インチ = **12pt**）。ここへ `6` を書くと **6 インチ = 432pt** になり、
 その文字スタイルを当てた寸法の `ovDimTextSizeInPoints` は実際に **`432`** を返した。
 
-### 作った直後は〈クラスの文字スタイル〉——`GetTextStyleRef` は寸法が入ったクラスを見る（#249 で訂正）
+### 作った直後の文字スタイルと `GetTextStyleRef` の読みの実測（#157・#249）
 
 > **【訂正の記録】** この節は最初（#157）「`GetTextStyleRef` はクラスを見ていない」と読んでいた。
 > [#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)
@@ -686,7 +686,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - 空の図面では、「寸法」クラスへ文字スタイルを持たせた後に作った寸法は by-class で生まれた。
 - #163 の図面ではクラスを読み直していない。
 
-### 文字スタイルを当てる 2 つの口は、`ovDimFontSize` の扱いが違う
+### 文字スタイルを当てる 2 つの口で `ovDimFontSize` を往復した実測
 
 **同じ 1 本（1:1 のシートレイヤがアクティブなときに作った寸法）で往復した実測:**
 
@@ -700,7 +700,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - `SetTextStyleRef` の行の `152.4` は、当てた文字スタイル（6 インチ）× 25.4 × 1
   （シートレイヤがアクティブなので縮尺 1）に一致した。作った直後の値も、`寸法(6pt)`
   （6/72 インチ）で 1:1 なら `6/72 × 25.4 × 1 = 2.1167`、1/50 のデザインレイヤなら
-  `× 50` して `105.8333` に一致した（上記「[文字の大きさは作るときのアクティブレイヤの縮尺で焼き付く](#文字の大きさは作るときのアクティブレイヤの縮尺で焼き付く)」の表）。
+  `× 50` して `105.8333` に一致した（上記「[作るときのアクティブレイヤを替えた `ovDimFontSize` の実測](#作るときのアクティブレイヤを替えた-ovdimfontsize-の実測)」の表）。
 - **容れ物の縮尺とアクティブレイヤの縮尺が分かれた 1 例**（[#164](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/164)）:
   1:1 のシートレイヤがアクティブなまま、1/125 の注釈の中の連続寸法へ `SetTextStyleRef` を
   掛け直したら `0.0833 × 25.4 × 125` ＝ `264.5833` が入った。ほかの検算はどれも、
@@ -708,7 +708,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - どちらの道でも、後から `ovDimFontSize` を書くとその値が残った（`264.5833` を書いて
   そのまま読み戻せた）。
 
-### ★ 絵の文字の大きさは、書いた瞬間には変わらない——引き直しで反映される（確定）
+### 書いた直後と引き直した後の絵の文字の大きさの実測（#161）
 
 [#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161) の実測
 （VW 2026 / macOS。1/50 の平面ビューポートの注釈へ 7 行。**測る長さを行ごとに
@@ -753,13 +753,13 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - 外しても絵は変わらなかった（H3 / H6）。
 - クラスから文字スタイルを取り去っても `GetTextStyleRef` の実効は `30` のままだった。
 
-### 注釈で値が出るのは `SetTextStyleRef` で明示したときだけ（← 誤り。原因は上記の引き直し）
+### `ResetObject` を呼ばずに注釈で値が出たかの実測（#157 の D1〜D6）
 
 > **【訂正の記録】** この節の表（D1〜D6）は #157 の実測で、どの行も `ResetObject` を
 > 呼んでいなかった。当時は表から「`SetTextStyleRef` で明示しないと値が出ない」と読んだが、
 > [#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
 > で `ovDimFontSize` を書いて `ResetObject` した by-class の寸法が出ることを測った
-> （上記「★ 絵の文字の大きさは…」の H2）。表は測ったときのまま残す。
+> （上記「書いた直後と引き直した後の絵の文字の大きさの実測」の H2）。表は測ったときのまま残す。
 
 1/125 の平面ビューポートの注釈へ、作り方だけを変えた寸法を 6 行ならべて絵を見た
 （VW 2026 / macOS）。**測る長さを行ごとに変えてあるので、出た数字がそのままどの行かを表す。**
@@ -789,12 +789,12 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 そちらは**値が出ていた**（`ovDimFontSize = 105.8333` → 1/125 の紙で 0.85mm ≒ 2.4pt の
 小さな数字として読めた）。
 
-### 文字スタイルを当てた後に `ovDimFontSize` を書いても、その場では絵が変わらない
+### 文字スタイルを当てた後に `ovDimFontSize` を書いた実測（E1〜E3）
 
 > **【訂正の記録】** 見出しはもと「大きさを決めるのは文字スタイルであって `ovDimFontSize` ではない」
 > だった（[#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161) で改めた）。
 > 下の E1〜E3 は **3 本とも `ResetObject` を呼んでいない**。#161 で `ResetObject` を通した
-> H4 は H1 のちょうど 2 倍で描かれた（上記「★ 絵の文字の大きさは…」）。
+> H4 は H1 のちょうど 2 倍で描かれた（上記「書いた直後と引き直した後の絵の文字の大きさの実測」）。
 
 同じ文字スタイル（6 インチ）を当てた直線寸法を 3 本、`ovDimFontSize` だけ変えて
 1/125 の注釈へならべた（`ResetObject` 無し）:
@@ -810,7 +810,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - `ovDimFontSize` は書けて、書いた値が読み戻せた。
 - **注釈へ移しても値は 1 つも動かなかった**（移す前後で `ovDimFontSize` が同じ）。
 
-### 紙で狙った大きさを出す——文字スタイルの大きさの決め方（確定）
+### 文字スタイルの大きさを 0・1・2 倍にして注釈で測った実測
 
 **0 倍・1 倍・2 倍の 3 本を 1/125 の注釈へならべて確かめた**（`ovDimFontSize` は
 いっさい触らず、文字スタイルの大きさ `ovTextStyleSize` だけを変えてある）:
@@ -825,7 +825,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
   の `ovDimFontSize` の式 `紙pt × 25.4/72 × 縮尺`（mm）をインチに直した（÷ 25.4）
   `紙pt / 72 × 縮尺` である。
 
-### 図面にある「紙の pt で名付けられた文字スタイル」をそのまま当てると縮尺で焼かれる（確定）
+### 「紙の pt で名付けられた文字スタイル」をそのまま当てた実測（#164）
 
 [#164](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/164) で 10 行を測った。
 寸法規格 `min-nano` が持つ `寸法(6pt)`（`ovTextStyleSize` = 6/72 = `0.0833` インチ）を
@@ -848,7 +848,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - A も D も文字図形そのものは在って、大きさが `2.1167`mm だった。
 - OIP の「文字 → スタイル」には `寸法(6pt)` と出ていた。
 
-#### 注釈の連続寸法で紙の pt を出す道は 3 つ（どれも実測で ★）
+#### 注釈の連続寸法で紙の pt を出す 3 つの道の実測
 
 **同じ 1 回の実行で、1/125 の注釈に並べて測り分けた。**
 
@@ -859,14 +859,14 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 | **(c)** | **ビューポートと同じ縮尺のレイヤをアクティブにして**から当てて繋ぐ | **★**（G） | ★（I / J は 1/50 で同じ） |
 
 - (c) のレイヤの切り替えは `ISDK::SetCurrentLayer` で行った（下記
-  「[注釈へ寸法を置くときの作り方](#注釈へ寸法を置くときの作り方ここだけ読めばよい)」の【訂正】）。
+  「[注釈へ寸法を置く手順の根拠の実測](#注釈へ寸法を置く手順の根拠の実測)」の【訂正】）。
 - B: 繋いだ後の型 86 の `ovDimFontSize` は `2.1167` のままだったが、絵は `264.5833` で描かれていた。
 - B / C / C2 は `GetTextStyleByClass` / `GetTextStyleRef` / `ovDimTextStyle` / `ovDimFontSize` の
   **4 つとも完全に同じ**（`false` / `113` / `113` / `264.5833`）だったが、絵は C だけが
   出なかった。描かれた大きさは
   [調査の作法「絵の文字の大きさを目視に頼らず測る」](../Findings/Investigation%20Techniques.md) の道で測った。
 
-#### 既に注釈へ置いてしまった連続寸法を後から直す——通る道は 1 つだけ（確定）
+#### 既に注釈へ置いた連続寸法を後から直す 6 通りの実測
 
 [#164](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/164)。
 `寸法(6pt)` を 1:1 で当てて繋いだ連続寸法を 6 本、1/125 の注釈へ置いてから、
@@ -901,14 +901,14 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
   の「繋いだ後に中へ書いても捨てられる」は by-class の連続寸法で測っていた）。単独の直線寸法では
   書いた値で描かれた（上記 C2）。
 
-### 連続寸法は中の `ovDimFontSize` で描かれる（← 食い違いは恒久的ではない）
+### 連続寸法の中の `ovDimFontSize` と描かれた大きさの実測
 
 > **【訂正の記録】** 見出しはもと「（直線寸法と食い違う）」だった。#157 の当時は下の表から
 > 「直線寸法は文字スタイルの大きさで描かれるので `ovDimFontSize` は効かない」と読んでいたが、
 > [#164](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/164)
 > で、文字スタイルを当てたまま `ovDimFontSize` を書いて `ResetObject` を通した単独の
 > 直線寸法が書いた値のとおりの大きさで描かれることを測った（上記
-> 「[注釈の連続寸法で紙の pt を出す道は 3 つ](#注釈の連続寸法で紙の-pt-を出す道は-3-つどれも実測で-)」の C2）。
+> 「[注釈の連続寸法で紙の pt を出す 3 つの道の実測](#注釈の連続寸法で紙の-pt-を出す-3-つの道の実測)」の C2）。
 > 2 巡目は直線寸法を引き直していなかった。
 
 2 つの実行（#157 の 2 巡目・3 巡目）の絵を突き合わせた:
@@ -920,7 +920,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 
 - 2 巡目の 2 本は、読み戻しでは 4 つとも同じ値だった。
 
-### 連続寸法へ繋いでも残る
+### 連続寸法へ繋いだ後の読み戻し
 
 繋ぐ前に直線寸法 2 本へ `SetTextStyleRef(113)` と `ovDimFontSize = 264.5833` を当ててから
 `CreateChainDimension` した結果:
@@ -932,25 +932,25 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 
 - 対照: `SetTextStyleRef` を呼んでいない（〈クラスの文字スタイル〉のままの）寸法を繋いだ
   [#155](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/155) の 4 回では、
-  中の `ovDimFontSize` は繋いだ時点で捨てられた（下記「[〈クラスの文字スタイル〉のままなら文字の大きさは「繋ぐときのアクティブレイヤ」で決まる](#クラスの文字スタイルのままなら文字の大きさは繋ぐときのアクティブレイヤで決まる)」）。
+  中の `ovDimFontSize` は繋いだ時点で捨てられた（下記「[〈クラスの文字スタイル〉のまま繋いだ連続寸法の文字の大きさの実測（#155）](#クラスの文字スタイルのまま繋いだ連続寸法の文字の大きさの実測155)」）。
 - 連続寸法そのもの（型 86 の PIO）でも `GetTextStyleByClass` / `GetTextStyleRef`（`ISDK` の口）は
   読めた。`ovDimTextStyle` は `GetObjectVariable` が `false` を返した。
 - **`ISDK::SetPIOTextStyle(chain, 113, true)` を当てても何も変わらなかった**が、当てる前から
   `113` が入っていた。
 
-### 注釈へ移しても変わらない
+### 注釈へ移した後の読み戻し
 
 6 本すべて `AddViewportAnnotationObject` が `true` を返し、**移した後の読み戻しは移す前と
 完全に同じ**だった（`GetTextStyleByClass` / `GetTextStyleRef` / `ovDimTextStyle` /
 `ovDimFontSize` の 4 つとも）。
 
-### #143 の「`ovDimFontSize` を書く」手順は正しかった——抜けていたのは `ResetObject`
+### #143 の「`ovDimFontSize` を書く」手順を `ResetObject` 付きで測り直した記録（#161）
 
 [#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161) の記録。
 #157 の 3 回の実行（D1 / E5 / F5）で
 [#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143)
 の手順が再現しなかった。#161 では、**by-class のまま `ovDimFontSize` ＝紙 6pt 相当を書き、
-`ResetObject` を呼んだ寸法は、注釈で紙 6pt に出た**（上記「[★ 絵の文字の大きさは、書いた瞬間には変わらない](#-絵の文字の大きさは書いた瞬間には変わらない引き直しで反映される確定)」の H2）。
+`ResetObject` を呼んだ寸法は、注釈で紙 6pt に出た**（上記「[書いた直後と引き直した後の絵の文字の大きさの実測（#161）](#書いた直後と引き直した後の絵の文字の大きさの実測161)」の H2）。
 
 当初の見立て（「**文字スタイルが当たっているときだけ効かない**」）を確かめた:
 
@@ -974,15 +974,15 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - 連続寸法そのものに対して `ovDimStandard` / `ovDimStandardName` は、どちらも
   `GetObjectVariable` が `false` を返した（中身のグループも同じ）。
   `ovDimFontSize` は `true` が返り、読み戻しも書いた値になったが、中の直線寸法には効かなかった
-  （下記「〈クラスの文字スタイル〉のままなら、文字の大きさは『繋ぐときのアクティブレイヤ』で決まる」）。
+  （下記「〈クラスの文字スタイル〉のまま繋いだ連続寸法の文字の大きさの実測（#155）」）。
 - 繋ぐ前後でレイヤ直下が 19 → 21 と**増えて**見えた。内訳を型で見ると `63` が 2 つ消えて
   **`90`（`kUndoPlaceholderNode`）が 3 つ**と `86` が 1 つ増えていた。
 
-### 〈クラスの文字スタイル〉のままなら、文字の大きさは「繋ぐときのアクティブレイヤ」で決まる
+### 〈クラスの文字スタイル〉のまま繋いだ連続寸法の文字の大きさの実測（#155）
 
 VW 2026 / macOS。[#155](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/155)
 で実機のプローブを 4 回走らせた。4 回はすべて by-class（`ovDimTextStyle` = `-2`）の寸法で
-走らせている（#157 の「明示してから繋ぐ」は上記「連続寸法へ繋いでも残る」）。
+走らせている（#157 の「明示してから繋ぐ」は上記「連続寸法へ繋いだ後の読み戻し」）。
 
 > **【訂正の記録】** #155 当時は、下の表の左の因子を「規格が紙で決めた大きさ」と書いていた。
 > #155 の図面ではカスタム規格が 1 件（`min-nano`）だけで、当たっている
@@ -990,7 +990,7 @@ VW 2026 / macOS。[#155](https://github.com/min-nano/vectorworks-developer-sdk-r
 > [#163](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/163)
 > が**両者を別々にして測った**ところ、**大きさは by-class で解決される文字スタイルに
 > 従い、当てた規格が指す文字スタイルには従わなかった**——上記
-> 「[規格に「文字の大きさ」は無い](#規格に文字の大きさは無い持っているのは文字スタイルへの参照-1-本でそれは寸法に届かない)」。
+> 「[規格と文字の大きさの関係を測った記録（#163）](#規格と文字の大きさの関係を測った記録163)」。
 > 下の表の数値は測ったときのまま（同じ図面では一致する）。
 
 **`CreateChainDimension` の前後を比べた。** 繋ぐ前の 2 本の手（ハンドル）は
@@ -1013,7 +1013,7 @@ VW 2026 / macOS。[#155](https://github.com/min-nano/vectorworks-developer-sdk-r
 **後から直そうとして潰した道**（すべて実測。by-class の寸法で、いずれも紙の上で
 0.12pt のまま。文字スタイルを明示した連続寸法で中の型 63 へ書いた場合は、
 [#164](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/164) の K1 / K2——上記
-「[既に注釈へ置いてしまった連続寸法を後から直す](#既に注釈へ置いてしまった連続寸法を後から直す通る道は-1-つだけ確定)」）:
+「[既に注釈へ置いた連続寸法を後から直す 6 通りの実測](#既に注釈へ置いた連続寸法を後から直す-6-通りの実測)」）:
 
 | 試したこと | 結果 |
 | --- | --- |
@@ -1028,15 +1028,15 @@ VW 2026 / macOS。[#155](https://github.com/min-nano/vectorworks-developer-sdk-r
 - **ビューポートの縮尺を変えたとき**は中の値が動いた。中へ `105.833` を書いた状態
   （値と絵が食い違っていた）で 1/50 → 1/100 にすると中の値が `211.667` になり、
   **絵もその大きさになった**。1/50 へ戻すと `105.833` で絵も `105.833` だった
-  （下記「[注釈はビューポートの縮尺で描かれる](#注釈はビューポートの縮尺で描かれる用紙-11-ではない)」と同じ比例の書き換え）。
+  （下記「[注釈の縮尺の実測（#143）](#注釈の縮尺の実測143)」と同じ比例の書き換え）。
 - **対照（同じ 1 回の実行で測った）: 単独の直線寸法。** 1:1 生まれに
   `105.833` を書いて注釈へ入れ `ResetObject` すると、**描かれている文字も `105.833`**
   （紙で 6pt）になった。何も書かない 1 本は `2.11667` のままだった。
 
-#### by-class の連続寸法で狙った大きさを出す手順
+#### by-class の連続寸法で #155 が使った手順
 
 #155 で使った手順（アクティブレイヤの切り替えは `CreateLayer` の副作用で行った。
-`ISDK::SetCurrentLayer` での切り替えは下記「注釈へ寸法を置くときの作り方」の【訂正】）:
+`ISDK::SetCurrentLayer` での切り替えは下記「注釈へ寸法を置く手順の根拠の実測」の【訂正】）:
 
 ```cpp
 // 1. **出したい縮尺のレイヤをアクティブにする。** ISDK にアクティブレイヤを切り替える
@@ -1056,9 +1056,9 @@ MCObjectHandle chain = gSDK->CreateChainDimension(dim1, dim2);
   1 文字目も `105.833mm` だった。#155 では注釈の絵は見ていない。
 - 規格の紙の pt を変える道を #155 の時点では【推定】で残していたが、
   [#163](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/163) で
-  測った（上記「[規格に「文字の大きさ」は無い](#規格に文字の大きさは無い持っているのは文字スタイルへの参照-1-本でそれは寸法に届かない)」）。
+  測った（上記「[規格と文字の大きさの関係を測った記録（#163）](#規格と文字の大きさの関係を測った記録163)」）。
 
-#### 中身を読むときの注意（測り方）
+#### 中身の読み方（測り方）
 
 - 中の 63 に `ovDimFontSize` を書いた直後は、値だけが変わり、絵は古い大きさのままだった。
   絵の大きさは、寸法の中に描かれている文字図形（型 `10` ＝ `kTextNode`）を `GetTextSize` で
@@ -1069,7 +1069,7 @@ MCObjectHandle chain = gSDK->CreateChainDimension(dim1, dim2);
   `63` に追従した。
 - **作り直しのたびに中の `63` の手（ハンドル）は変わった。**
 
-### `FirstMemberObj` / `NextObject` の walk は終端も数える
+### `FirstMemberObj` / `NextObject` の walk で数えた件数の内訳
 
 **リストの末尾に `kTermNode`（型 `0`）が 1 つ入っていた。** `FirstMemberObj` → `NextObject` で
 歩いて数えると、実際の図形より 1 多く出た（上の連続寸法の件数の食い違いは、型の並びを
@@ -1080,9 +1080,9 @@ MCObjectHandle chain = gSDK->CreateChainDimension(dim1, dim2);
 [#138](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/138) の調査。
 `ISDK::AssociateLinearDimension(h, selectedObjectsMode)` を呼んだ寸法が、図形を動かしたときに
 追従するかを、呼び方を変えて測った（[#134](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/134)
-の 8 通りの記録は上記「`AssociateLinearDimension` が効かなかったのは…」）。
+の 8 通りの記録は上記「`AssociateLinearDimension` を 8 通りで呼んだ記録（#134）」）。
 
-### 関連付けは「パラメトリック制約」の仕組みの一部である
+### 関連付けと「パラメトリック制約」の口（ヘッダを読んだ）
 
 制約の口の一覧（宣言と説明はヘッダの写し）。制約は図形にぶら下がる
 **制約ノード**（`kConstraintNode = 110`。`Objs.TDType.h:176`）。
@@ -1113,7 +1113,7 @@ if (!gSDK->UpdateConstraintModel())       // ③ 解く
 
 #134 が呼んだのは `MoveObject` と `ResetObject` だけで、③ は一度も呼んでいない。
 
-### こう呼べば効く——関連付けは成立していて、足りなかったのは「解く段」だった
+### 解く段（`UpdateConstraintModel`）まで呼んだ実測（#138）
 
 測ったコード:
 
@@ -1142,16 +1142,16 @@ gSDK->UpdateConstraintModel();   // ← これを呼ばないと測点は 1mm �
 - **`selectedObjectsMode` は `true` でも `false` でも同じ**だった（どちらでも関連付き、
   どちらでも追った）。選択せずに `false` で呼んでも関連付いた。
 - 表は 1 つの `dimType`（`0`）で取った（`dimType` `0` / `1` の比較は
-  [上記](#0fix_angと-1slopedに差は無い角度は-ovdimdirection-が決める)）。
+  [上記](#0fix_angと-1slopedを並べて比べた実測134)）。
 - **`UpdateConstraintModel` は 4 通りとも `true`（解けた）を返した。**
 - 1 行目は VW へ戻った後に読み直しても同じだった
   （[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。関連付けた寸法の線を `MoveObject` で +1200 動かし、`ResetObject` だけで
   `UpdateConstraintModel` を呼ばない——測点は undo イベントを閉じても、戻って数十秒置いても
   0 のまま）。
 - #245 では「`OpenDocumentPath(nullptr)` の空の図面では成立しない」と見えた。そのときは
-  1/1 の空の図面で y=60000 に寸法を置いていた（下記「[関連付くのは表示範囲の中だけ](#関連付くのは表示範囲の中だけ249-で確定)」で測り直した）。
+  1/1 の空の図面で y=60000 に寸法を置いていた（下記「[表示範囲と関連付けの実測（#249）](#表示範囲と関連付けの実測249)」で測り直した）。
 
-#### 関連付くのは表示範囲の中だけ（#249 で確定）
+#### 表示範囲と関連付けの実測（#249）
 
 VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。
 `probes/runtime/t0-mismatch`。測点 `(x, y)`→`(x+3000, y)` の寸法と、両端に端点を重ねた
@@ -1173,7 +1173,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
   `SetViewCenter(控え)` とすると成立した。寄せて関連付けた後に表示を戻した対照（y=66000）は
   成立しなかった。
 
-#### 関連付いたかは `HasConstraint` で読める
+#### `HasConstraint` と `FindAuxObject` の読みの実測
 
 実測で `HasConstraint(寸法)` と `FindAuxObject(寸法, 110)` は**常に一致**した。
 
@@ -1186,7 +1186,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - `[76]` は関連付ける前から付いていた。
 - `GetDimensionsAssociatedToPlugin` は引数が PIO（ヘッダ）。
 
-#### 関連付けの正体は「同一点上（coincident）」の拘束——VW 自身がそう名乗る
+#### 関連付けた後に VW が出したダイアログ（coincident の拘束）
 
 上の表の 4 行目（`CreateConstraintModel(線分, false)` + `AddToConstraintModel`）で、VW は
 確認ダイアログを出した（目視）:
@@ -1201,7 +1201,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 ダイアログは出なかった。このダイアログを抑止する環境設定を `ProgramVariables.h` で探したが
 見つからなかった。
 
-#### 門は `varAssociateDims`(28) ただ 1 つ——`varAutoAssociateDims`(134) は関与しない
+#### `varAssociateDims`(28) と `varAutoAssociateDims`(134) を総当たりした実測
 
 | selector | 名前 | 置き場所 |
 | --- | --- | --- |
@@ -1224,7 +1224,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - **画面（目視）。** 上の 4 通りを 1 つの図面に上から順に並べて描かせたところ、
   **拘束マークが出たのは上の 2 段（`28=1` の 2 通り）だけ**だった。
 
-#### 通らなかった道
+#### 他に試した道
 
 - **`SetBinaryConstraint` で自分で coincident を張る。** 頂点番号を引く
   `GetClosestPt` が、**寸法に対して `-1`（＝型が非対応）**を返した（線分側は `1` を返した）。
@@ -1233,7 +1233,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
   戻り値は `true` で、渡した線分に拘束ノード（`[110]`）は付いたが、**レイヤの図形数は
   増えなかった**（32 → 32）。
 
-#### 画面でドラッグしたときは、VW が自分で解く——何もしなくても追う
+#### 画面でドラッグしたときの寸法の実測
 
 実測（関連付け済みの 1 組を残しておき、利用者が線A を画面でドラッグしたあとに読み直した）:
 
@@ -1267,7 +1267,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
     移ったので、判定は寸法を作る直前に `GetActiveLayer()` を取り直して行った。
 - 平面ビューポートの `GetObjectTypeN` は **122**。
 
-### 注釈へ寸法を置くだけでは見えない——ビューポートの作法を先に踏む
+### 注釈へ寸法を置いただけのビューポートの実測
 
 **実機で踏んだ。** 断面ビューポートを作って注釈へ寸法を 2 本足し、`UpdateViewport`
 まで呼んだのに、シートレイヤ上のビューポートは **53.3mm 角の「×」印の空枠**
@@ -1295,7 +1295,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 ビューポートが「×」印の空枠で寸法も何も出ず、踏んだ後は**寸法が縦横 1 本ずつ
 はっきり見え、値も渡した 2 点間の距離どおり**（4000mm と 2400mm）に出た。
 
-### ビューポートの外接矩形——53.3mm 角の空枠より小さいものは隠れる
+### ビューポートの外接矩形の実測（#200）
 
 > **【訂正の記録】ここには「ビューポートの外接矩形は中身を勘定に入れない。注釈へ図形を
 > 足しても増えないし、断面に写る図形が増えても増えない」と書いていた。**
@@ -1320,7 +1320,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
   どれかに件数が入っていた（群 4 は断面群で、空でも必ず在った。[Viewports](../Findings/Viewports.md)
   「断面に中身が入る条件」）。
 
-### 断面ビューポートの注釈空間の座標——横の原点は断面線の「終点」
+### 断面ビューポートの注釈空間の座標の実測
 
 **実測（VW 2026 / macOS）。** 断面線を `(-500, -1500)` → `(4500, -1500)`（長さ 5000mm、
 `+x` 向き）に引き、`(2000, 1500)` 側から見る断面ビューポートを作って、
@@ -1341,7 +1341,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - **縦 = Z**（実測で一致）。
 - 向きは**視線の右手が模型の `+x`** になる並びだった（断面線 `+x` 向き・`+y` を見る配置）。
 
-### 注釈はビューポートの縮尺で描かれる（用紙 1:1 ではない）
+### 注釈の縮尺の実測（#143）
 
 > **【訂正の記録】** ここには以前「注釈空間は用紙 1:1 なので、文字は紙のポイントのまま出る」と
 > 書いていた（#132）。[#143](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/143)
@@ -1374,7 +1374,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - **`CreateViewport` / `CreateSectionViewport` が作ったビューポートは、どちらも直後の
   `ovViewportScale` が `1.0` だった。**
 
-### 注釈へ寸法を置くときの作り方（ここだけ読めばよい）
+### 注釈へ寸法を置く手順の根拠の実測
 
 手順のコードは [Findings](../Findings/Dimensions.md#注釈へ寸法を置くときの作り方ここだけ読めばよい) にある。
 ここにはその根拠の実測だけを置く。
@@ -1382,7 +1382,7 @@ VW 2026 / mac。[#249](https://github.com/min-nano/vectorworks-developer-sdk-ref
 - **手順 4（`ResetObject`）は [#161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)
   で足した。** #143 当時の記述にこれが無く、#157 の再現実験は 3 回とも
   「値が出ない」になった（上記
-  「[★ 絵の文字の大きさは、書いた瞬間には変わらない](#-絵の文字の大きさは書いた瞬間には変わらない引き直しで反映される確定)」）。
+  「[書いた直後と引き直した後の絵の文字の大きさの実測（#161）](#書いた直後と引き直した後の絵の文字の大きさの実測161)」）。
   #157 では一時「当たっている文字スタイルがあると効かないので使うな」と書いていたが、#161 が取り消した。
 - 1:1 で作った寸法に `ovDimFontSize` ＝ `6 × 25.4 / 72 × 50` を書いたら、1/50 のビューポートと
   同じ縮尺で作った寸法と**見分けが付かない大きさで値が出た**。
