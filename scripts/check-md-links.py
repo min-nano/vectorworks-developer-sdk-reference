@@ -32,7 +32,10 @@ import unicodedata
 import urllib.parse
 
 FENCE = re.compile(r'^\s*(`{3,}|~{3,})(.*)$')
-HEADING = re.compile(r'^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$')
+HEADING = re.compile(r'^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$')  # 行頭の空白は 3 つまで
+LIST_ITEM = re.compile(r'^\s*(?:[-*+]|\d{1,9}[.)])\s')
+TABLE_ROW = re.compile(r'^\s*\|')
+_CODE_SPAN = re.compile(r'(`+)(.+?)(?<!`)\1(?!`)', re.S)
 
 DEFAULT_ROOTS = ['Findings', 'Metrics', 'CLAUDE.md', 'README.md', 'plugin/README.md',
                  'probes/README.md', 'probes/runtime/README.md']
@@ -103,7 +106,7 @@ def link_targets(text):
 def rendered_text(md):
     """見出しの Markdown から、描画したときの文字列を作る。"""
     out, i = [], 0
-    for m in re.finditer(r'(`+)(.+?)\1', md):
+    for m in _CODE_SPAN.finditer(md):
         out.append(_plain(md[i:m.start()]))
         out.append(m.group(2).strip())  # code span: 中身はそのまま
         i = m.end()
@@ -139,19 +142,17 @@ _anchor_cache = {}
 def anchors(path):
     if path in _anchor_cache:
         return _anchor_cache[path]
-    occurrences, fence = {}, Fence()
-    with open(path, encoding='utf-8') as f:
-        for line in f:
-            if fence.step(line):
-                continue
-            m = HEADING.match(line)
-            if m:
-                base = slug(rendered_text(m.group(2)))
-                s = base
-                while s in occurrences:  # github-slugger と同じ番号の進め方
-                    occurrences[base] += 1
-                    s = f'{base}-{occurrences[base]}'
-                occurrences[s] = 0
+    occurrences = {}
+    for block in _blocks(_read_lines(path)):  # 見出し・囲みの判定は check と同じ道
+        m = HEADING.match(block[0][1]) if len(block) == 1 else None
+        if m:
+            base = slug(rendered_text(m.group(2)))
+            s = base
+            while s in occurrences:  # github-slugger と同じ番号の進め方
+                occurrences[base] += 1
+                s = f'{base}-{occurrences[base]}'
+            occurrences[s] = 0
+        for _, line in block:
             for a in re.findall(r'<a\s+(?:name|id)="([^"]+)"', line):
                 occurrences.setdefault(a, 0)
     result = set(occurrences)
@@ -160,7 +161,11 @@ def anchors(path):
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_CODE_SPAN = re.compile(r'(`+)(.+?)(?<!`)\1(?!`)', re.S)
+
+
+def _read_lines(path):
+    with open(path, encoding='utf-8') as f:
+        return [line + '\n' for line in f.read().split('\n')]
 
 
 def _repo_relative(path):
@@ -168,10 +173,13 @@ def _repo_relative(path):
 
 
 def _blocks(lines):
-    """囲みの外の行を、段落（空行・見出し・囲みで区切る）ごとにまとめて返す。
+    """囲みの外の行を、段落ごとにまとめて返す。
 
     `code` が行をまたぐことがある（手で折り返した文書）ので、code span は段落の単位で
-    取り除く。返すのは [(行番号, 行), …] の並び。見出しは 1 行で 1 つの段落にする。
+    取り除く。段落は空行・見出し・囲みで区切り、**箇条書きの項目ごと・表の行ごとにも
+    区切る**（code span は項目や行をまたがない。またぐと閉じていない ` が次の項目の ` と
+    組になり、間のリンクを見落とす）。返すのは [(行番号, 行), …] の並び。見出しと表の
+    行は 1 行で 1 つの段落にする。
     """
     fence, block = Fence(), []
     for lineno, line in enumerate(lines, 1):
@@ -180,13 +188,16 @@ def _blocks(lines):
                 yield block
                 block = []
             continue
-        if not line.strip() or HEADING.match(line):
+        if not line.strip() or HEADING.match(line) or TABLE_ROW.match(line):
             if block:
                 yield block
                 block = []
             if line.strip():
                 yield [(lineno, line)]
             continue
+        if LIST_ITEM.match(line) and block:
+            yield block
+            block = []
         block.append((lineno, line))
     if block:
         yield block
@@ -206,10 +217,7 @@ def check(path, section_only=None):
     section = section_only.get(_repo_relative(path))
     level = None if section else 0  # 0 = ファイル全体を見る
     found = not section
-    with open(path, encoding='utf-8') as f:
-        lines = f.read().split('\n')
-    lines = [line + '\n' for line in lines]
-    for block in _blocks(lines):
+    for block in _blocks(_read_lines(path)):
         if section:
             h = HEADING.match(block[0][1]) if len(block) == 1 else None
             if h and h.group(2).startswith(section):

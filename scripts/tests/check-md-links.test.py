@@ -114,5 +114,21 @@ with tempfile.TemporaryDirectory() as d:
        ['リンク先が無い: nai5.md', 'リンク先が無い: nai8.md'])
     eq('wrapped-code-lineno', sorted(p.split(':')[1] for p in cml.check(w)), ['2', '5'])
 
+with tempfile.TemporaryDirectory() as d:
+    # 閉じていない ` は次の項目・次の表の行の ` と組にならない（間のリンクを見落とさない）
+    x = os.path.join(d, 'x.md')
+    with open(x, 'w', encoding='utf-8') as f:
+        f.write('- 項目 1 の ` は閉じていない\n- 項目 2 [ng](nai1.md)\n- 項目 3 `x`\n'
+                '  続きの行 [ng](nai2.md)\n\n'
+                '| a | `b |\n| c | [ng](nai3.md) `d` |\n')
+    eq('list-and-table-blocks', sorted(p.split(': ', 1)[1] for p in cml.check(x)),
+       ['リンク先が無い: nai1.md', 'リンク先が無い: nai2.md', 'リンク先が無い: nai3.md'])
+    # 行頭の空白 3 つまでは見出し（4 つはコード扱いなので見出しではない）。
+    # 見出しの code span は `` で括れば ` を含められる
+    a = os.path.join(d, 'a.md')
+    with open(a, 'w', encoding='utf-8') as f:
+        f.write('   ## 字下げ 3\n    ## 字下げ 4\n## ``a`b`` の実測\n')
+    eq('indented-and-double-backtick', sorted(cml.anchors(a)), sorted(['字下げ-3', 'ab-の実測']))
+
 print('check-md-links tests:', 'FAILED' if failed else 'ok')
 sys.exit(1 if failed else 0)
