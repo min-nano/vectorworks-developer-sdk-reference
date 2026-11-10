@@ -115,6 +115,167 @@
 - `DeleteObject(layer, false)` で消した直後の列に、名前の無い型 `90` のものが 1 つ挟まった
   （`CreateReference` の後の列では消えていた）。
 
+### 参照で入ってきたレイヤの姿（参照の方法ごと）
+
+**実測**（[#310](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/310)。
+VW 2026 / mac・2026-11-10。プローブは PR #311 の `probes/runtime/orgref-prep`（見本を作る）と
+`orgref-inspect`（前面の図面を読むだけ）。ビルド `6dc6cff53525`。MCP ブリッジから
+`new_document=false` で回した。参照はオーガナイザの画面の操作で作った）。
+
+**見本**（`orgref-prep`）: 新規の空図面にクラス `OR-cls`、デザインレイヤ `1F`（1/50。矩形・線を
+`OR-cls`、点を「一般」）と `2F`（1/100。円 2 つ）を作り、`VwSdkProbes-orgref-src.vwx` と、同じ中身の
+`…-src2.vwx` へ別名保存した。参照先は同じ図面から `1F`・`2F` を消し、`レイヤ-1` に矩形を 1 つ置いた
+もの。参照元のファイルは `~/Documents/vw100/orgref/` へ写したものを指した（ファイル選択のダイアログで
+一時フォルダを辿れなかったため）。
+
+**`orgref-inspect` が読むもの**: `GetReferencedFilesInfo` の全項目、レイヤの列の各行の型・名前・
+`IsObjectFromReferencedFile`・`ovLayerType`・`GetLayerScaleN`・オブジェクト変数 149〜168・補助リスト、
+各レイヤの直下の図形（型・クラス・外接・`IsObjectFromReferencedFile`・`ParentObject` がそのレイヤか）、
+`GetNamedLayer` の引き当て。
+
+#### A. 既定の設定のまま「ファイル参照 › 新規」（リソースの参照）
+
+- 「新規」→ ファイルを選ぶと、まず案内が出た（目視）:「Vectorworks ファイルの参照を作成すると
+  リソースマネージャに参照元のリソースが表示されます。」「他の Vectorworks ファイルからレイヤを
+  参照する場合、『ビューポートを作成』コマンドを使用してデザインレイヤビューポートを作成して
+  ください。…」「旧来のファイル参照を行う場合、オーガナイザダイアログボックスのファイル参照タブの
+  詳細設定ボタンで設定が可能です。」
+- 続く「新規ファイル参照」には参照元のパス・絶対 / 相対パス・キャッシュ・自動更新・クラス属性の
+  更新だけがあり、レイヤを選ぶ欄は無かった。既定のまま OK した。
+
+```
+■ GetReferencedFilesInfo
+  [0] id=1 type=0 mac="/Users/vectorworks/Documents/vw100/orgref/VwSdkProbes-orgref-src.vwx" win=""
+      updateOnOpen=1 ignoreUserOrigin=0 updateClasses=0 createLayerLinks=0 saveCache=0 useLayerColors=0
+■ レイヤの列
+  [0] type=31 name="レイヤ-1"       fromRef=no  ovLayerType=s16:1 scale=1   current=yes  直下=2（自分の矩形＋型 0）
+  [1] type=31 name="NNA#1_レイヤ-1" fromRef=yes ovLayerType=s16:3 scale=1   直下=1[0]
+  [2] type=31 name="NNA#1_1F"       fromRef=yes ovLayerType=s16:3 scale=50  直下=1[0]
+  [3] type=31 name="NNA#1_2F"       fromRef=yes ovLayerType=s16:3 scale=100 直下=1[0]
+  [4] type=0  （レイヤではない）
+ForEachLayer 件数=4
+GetNamedLayer("1F") → 0x0 / ("NNA#1_1F") → [2] / ("NNA#1_レイヤ-1") → [1]
+```
+
+- 参照で入った 3 枚は、オブジェクト変数 155・156・165〜168 を `GetObjectVariable` で読めなかった
+  （自分のレイヤでは 156=`true`、165〜168 は用紙の値）。補助リストは 0 件（自分のレイヤは 8 件）。
+- オーガナイザのデザインレイヤのタブには `レイヤ-1` の 1 行だけが出た（目視）。
+
+#### B. 「詳細設定」で「レイヤを参照」に切り替えてから「新規」（レイヤの参照）
+
+- 「ファイル参照 › 詳細設定…」（参照設定）の「Vectorworks ファイルの参照方法」は
+  「デザインレイヤにビューポート図形として参照(P)」（既定）と「レイヤを参照(L)」の 2 択。
+  最初の参照先の図面で「レイヤを参照」にした後、`orgref-prep` が開いた別の図面で開くと、
+  既定の側に戻っていた。
+- 「レイヤを参照」にすると、「新規ファイル参照」に「参照レイヤ」の一覧（`2F`・`1F`・`レイヤ-1`）と
+  「参照ファイルのユーザー原点を無視」「レイヤリンクを作成」が増えた。一覧は行を選ぶだけでは何も
+  入らず（行を選んで OK した回は、参照の登録だけができてレイヤは 0 枚だった）、**行の左の欄を
+  クリックしてチェックを付けた**レイヤが入った。`2F`・`1F` にチェックを付け、他は既定のまま OK した。
+
+```
+■ GetReferencedFilesInfo
+  [0] id=1 type=0 mac=".../VwSdkProbes-orgref-src.vwx" win=""
+      updateOnOpen=1 ignoreUserOrigin=0 updateClasses=0 createLayerLinks=0 saveCache=0 useLayerColors=0
+■ レイヤの列
+  [0] type=31 name="1F" fromRef=yes ovLayerType=s16:1 scale=50 current=no
+      - type=3  class="OR-cls" bounds=(0,0)-(2000,1000)   fromRef=yes parent==layer:yes
+      - type=2  class="OR-cls" bounds=(0,0)-(3000,1500)   fromRef=yes parent==layer:yes
+      - type=17 class="一般"   bounds=(500,500)-(500,500) fromRef=yes parent==layer:yes
+      - type=0                                            fromRef=yes parent==layer:yes
+      直下の件数=4 うち fromRef=4
+  [1] type=31 name="2F" fromRef=yes ovLayerType=s16:1 scale=100 current=no
+      - type=4  class="一般"   bounds=(0,0)-(400,400)       fromRef=yes
+      - type=4  class="一般"   bounds=(1000,1000)-(1400,1400) fromRef=yes
+      - type=0                                              fromRef=yes
+      直下の件数=3 うち fromRef=3
+  [2] type=31 name="レイヤ-1" fromRef=no ovLayerType=s16:1 scale=1 current=yes
+      - type=3  class="一般" bounds=(-500,-900)-(-100,-500) fromRef=no
+      - type=0                                             fromRef=no
+  [3] type=0 （レイヤではない）
+ForEachLayer 件数=3
+GetNamedLayer("1F") → [0] / ("2F") → [1] / ("NNA#1_1F") → 0x0
+```
+
+- 参照で入った `1F`・`2F` のオブジェクト変数 149〜168 は、自分の `レイヤ-1` と同じ値だった
+  （156=`true`、165〜168 も同じ）。補助リストは `1F` 6 件・`2F` 7 件（`レイヤ-1` は 8 件）。
+- オーガナイザのデザインレイヤのタブには `レイヤ-1`（# 1、1:1）・*`2F`*（# 2、1:100）・
+  *`1F`*（# 3、1:50）が出て、`2F`・`1F` は斜体だった（目視）。ナビゲーションパレットにも 3 行出た。
+
+#### C. 同じ名前のレイヤを持つ図面を、レイヤの参照で足す
+
+B の図面のまま、`…-src2.vwx`（`1F`・`2F`・`レイヤ-1` を持つ）を「レイヤを参照」で新規に参照し、
+`1F` だけにチェックを付けて OK した。
+
+- 警告が 2 つ続けて出た（目視）:「参照ファイル『VwSdkProbes-orgref-src2.vwx』のレイヤ『1F』は同じ
+  名前があるため参照できません。参照する前に開いているファイルのレイヤ名を変更してください。」→
+  「参照ファイル『VwSdkProbes-orgref-src2.vwx』からの更新中にエラーが発生しました。」
+- オーガナイザのファイル参照の一覧には src2 の行が赤字・ステータス「未更新」で残った。
+- `GetReferencedFilesInfo` は 2 件になり、src2 は `id=2`・`lastUpdate=0`・`lastModified=0` だった。
+  レイヤの列は B と同じ（`1F`・`2F`・`レイヤ-1`）で、何も増えなかった。
+
+続けて、src の参照を「削除…」（ファイル参照を解除）で外した。ダイアログの「参照レイヤ」は
+「ファイルに残す(K)」（既定）/「削除(D)」、「参照リソース」は「ファイルに残す(E)」（既定）/
+「未使用の場合削除(M)」で、既定のまま OK した。
+
+- `GetReferencedFilesInfo` は src2（`id=2`）の 1 件になった。
+- `1F`・`2F` は同じハンドル・同じ名前・同じ直下のまま列に残り、レイヤも直下の図形もすべて
+  `fromRef=no` に変わった。
+
+その状態で src2 の行を選んで「更新」を押すと、上と同じ 2 つの警告が出た（相手が自分のレイヤの
+`1F` でも同じ文面）。
+
+#### D. 名前がぶつからなくなってから更新し、「すべてを選択」の数を見る
+
+C の図面で、自分のものになった `1F` をオーガナイザで削除し（「『1F』レイヤを削除しますか?」→ はい）、
+src2 の行を選んで「更新」を押した。警告は出なかった。
+
+- ナビゲーションパレットで `1F` をアクティブにすると、確認が出た（目視）:「参照中のレイヤを
+  アクティブレイヤにしますか?」「参照元のレイヤが変更されていると参照を更新する時に参照レイヤに
+  入力したすべての情報が失われます。」（「このアラートを再表示せずに…」のチェックあり）。「はい」で
+  アクティブになった。
+- 「編集 › すべてを選択」の後、オブジェクト情報パレットの見出しは「**3 図形 - ロック状態**」で、
+  各欄は灰色（編集できない表示）だった（目視）。
+
+```
+■ GetReferencedFilesInfo
+  [0] id=2 type=0 mac=".../VwSdkProbes-orgref-src2.vwx" … lastUpdate=3877186611 lastModified=3877185054
+■ レイヤの列
+  [0] type=31 name="1F" fromRef=yes ovLayerType=s16:1 scale=50 current=yes
+      - type=3  class="OR-cls" fromRef=yes / type=2 class="OR-cls" fromRef=yes
+      - type=17 class="一般"   fromRef=yes / type=0 fromRef=yes
+      直下の件数=4 うち fromRef=4
+  [1] type=90 （レイヤではない）
+  [2] type=31 name="2F"      fromRef=no ovLayerType=s16:1 scale=100 直下=3 うち fromRef=0
+  [3] type=31 name="レイヤ-1" fromRef=no ovLayerType=s16:1 scale=1   直下=2 うち fromRef=0
+  [4] type=0 （レイヤではない）
+ForEachLayer 件数=3
+```
+
+- 削除で空いた後の列に型 `90` が 1 つ挟まっていた。参照で入り直した `1F` は列の先頭だった。
+
+#### E. mac で `ISDK::CreateReference` を呼んだ
+
+`probes/runtime/orgref-sdk` を新規の空図面で走らせ（`CreateReference(<一時フォルダの …-src.vwx>)` →
+`true`。ダイアログは出なかった。走らせた後に開いていた undo イベントを `EndUndoEvent` で閉じた）、
+続けて `orgref-inspect` を同じ図面で走らせた。
+
+```
+■ GetReferencedFilesInfo
+  [0] id=1 type=0 mac="/var/folders/…/T/VwSdkProbes-orgref-src.vwx" win=""
+      updateOnOpen=1 ignoreUserOrigin=0 updateClasses=0 createLayerLinks=0 saveCache=1 useLayerColors=0 lastUpdate=0 lastModified=0
+■ レイヤの列
+  [0] type=31 name="レイヤ-1"       fromRef=no  ovLayerType=s16:1 scale=1   current=yes 直下=1[0]
+  [1] type=31 name="NNA#1_レイヤ-1" fromRef=yes ovLayerType=s16:3 scale=1   直下=1[0]
+  [2] type=31 name="NNA#1_1F"       fromRef=yes ovLayerType=s16:3 scale=50  直下=1[0]
+  [3] type=31 name="NNA#1_2F"       fromRef=yes ovLayerType=s16:3 scale=100 直下=1[0]
+  [4] type=0 （レイヤではない）
+ForEachLayer 件数=4
+```
+
+- A（オーガナイザの既定の設定）と比べて、レイヤの列・名前・種類・縮尺・オブジェクト変数・補助リストは
+  同じで、`GetReferencedFilesInfo` の `saveCache` が `1`（A は `0`）、`lastUpdate` / `lastModified` が
+  `0` だった。
+
 ### 列の順序とオーガナイザの並びの比較
 
 | | 列（`NextObject` / `ForEachLayer`） | オーガナイザの `#` 列 |

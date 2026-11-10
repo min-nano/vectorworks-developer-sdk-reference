@@ -49,24 +49,66 @@ VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-dev
 - **デザインとシートの見分けは `ovLayerType`(154) か `VWLayerObj::GetLayerType()`**（同じ値）。
   デザイン `1`（`kLayerDesign`）・シート `2`（`kLayerSheet`）。`Sint16` で受け取れる。
   `kLayerPresentation = 2`（旧名）・`kGuestLayerDesign = 3`【ヘッダ根拠】（`MiniCadCallBacks.h:4560`）。
-  **`3` は参照で入ってきたデザインレイヤ**（下記）。
+  **`3` はリソースの参照で入ってきたデザインレイヤ**（下記。レイヤの参照で入ったものは `1`）。
 - **シートの名前（番号）は `GetObjectName`。`ovLayerExpandedSheetName`(162) はシートでだけ読め**、
   タイトルが空なら番号と同じ文字列を返す（タイトル入りは未測定）。デザインレイヤでは `false`。
 
-### 参照で入ってきたレイヤ（種類 `3`）——同じ列に並び、名前に接頭辞が付く
+### 参照で入ってきたレイヤ——参照の方法で 2 通りの姿になる。見分けは `IsObjectFromReferencedFile(layer)`
 
-`ISDK::CreateReference` で別図面を参照した実測（Windows。
-[表](../Metrics/Layers%20and%20Stories.md#参照で入ってきたレイヤ種類-3の並びと名前)）。
+別図面を参照すると、参照元のデザインレイヤが**型 `31` のまま同じ列に入る**（`ForEachLayer` も配る。
+**型だけでは自分のレイヤと見分けられない**）。入り方は**参照の方法**で 2 通りに分かれ、
+**mac と Windows の違いではない**——mac でも `CreateReference` とオーガナイザの既定は
+リソースの参照の姿になり、Windows の `CreateReference`（#281）と同じだった。
+レイヤの参照は mac でだけ測った
+（[#310](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/310)。
+[実測](../Metrics/Layers%20and%20Stories.md#参照で入ってきたレイヤの姿参照の方法ごと)）。
 
-- **参照元のデザインレイヤが全部、型 `31` のまま同じ列に入る**（自分のレイヤの後、末尾の型 0 の
-  前）。`ForEachLayer` も配る。**型だけでは自分のレイヤと見分けられない**——
-  `ovLayerType == 3` か `IsObjectFromReferencedFile(layer)` で見分ける（同じ結果）。
-- **名前は `NNA#1_<元の名前>` に変わる。** `GetNamedLayer` は元の名前では `nullptr`、接頭辞付きで
-  引ける。元の名前で引きたいなら接頭辞を剥がす必要がある。`#1` / `NNA` の由来は【未確認】。
-- 現在のレイヤにでき（`SetCurrentLayer` → `GetCurrentLayer` と `==`）、縮尺も `GetLayerScaleN` で
-  読める（参照元の縮尺を写すかは未確認）。`ovGuestLayerHasRelativePath`(163) は `false` だった。
-- **参照で入ったレイヤの直下には図形が見えない**（型 0 だけ）。参照の中身は `FirstMemberObj` →
-  `NextObject` では辿れない。
+| | **リソースの参照**（既定） | **レイヤの参照**（旧来の方法） |
+| --- | --- | --- |
+| 作り方 | `ISDK::CreateReference(<file>)`、またはオーガナイザ「ファイル参照 › 新規」（既定の設定のとき） | オーガナイザ「ファイル参照 › 詳細設定」の「Vectorworks ファイルの参照方法」を**「レイヤを参照」**にしてから「新規」。参照レイヤに**チェックを付けた**ものだけが入る |
+| 入るレイヤ | 参照元のデザインレイヤ**全部** | チェックしたレイヤだけ |
+| 名前 | **`NNA#<n>_<元の名前>`**（元の名前では `GetNamedLayer` が `nullptr`） | **元の名前のまま** |
+| `ovLayerType`(154) | **`3`**（`kGuestLayerDesign`） | **`1`**（自分のデザインレイヤと同じ） |
+| `IsObjectFromReferencedFile(layer)` | `true` | **`true`** |
+| 直下（`FirstMemberObj` → `NextObject`） | **型 0 だけ**（中身は辿れない） | **参照元の図形が全部見える**（型・クラス・外接も参照元どおり）。**どの図形も `IsObjectFromReferencedFile` が `true`**（終端の型 0 まで） |
+| 列の位置 | 自分のレイヤの後（末尾の型 0 の前） | **列の先頭**（自分のレイヤより前） |
+| オーガナイザのデザインレイヤのタブ | **出ない** | **斜体で出る** |
+| `GetLayerScaleN` | 参照元の縮尺を写す（1/50 → `50`、1/100 → `100`） | 同じ |
+
+- **参照由来かは `IsObjectFromReferencedFile(layer)` で見分ける。** どちらの方法でも `true` に
+  なる。**`ovLayerType == 3` はリソースの参照でしか立たない**——レイヤの参照で入ったレイヤは
+  `1` で、`ovLayerType` で見分けると自分のレイヤと区別できない（#310 の発端がこれ）。
+- **レイヤの参照で入った図形は、図形ごとに `IsObjectFromReferencedFile(obj)` が `true`。**
+  「自分の図形だけ数える」ならレイヤ単位で除外するか、図形ごとに判定して除く。
+- **画面でも参照の中身は「図形」として数えられる。** レイヤの参照で入ったレイヤをアクティブにして
+  「すべてを選択」すると、情報パレットは「**3 図形 - ロック状態**」と出た（直下 4 件から終端の
+  型 0 を除いた数と一致。[Layer Objects](Layer%20Objects.md) の数え方と同じ）。参照の図形は
+  ロックされた扱いで、編集できない。
+- 参照で入ったレイヤを画面でアクティブにしようとすると「参照中のレイヤをアクティブレイヤに
+  しますか?」の確認が出る（`SetCurrentLayer` では出ない——#281 で、Windows のリソースの参照のレイヤで確かめた）。
+- **オーガナイザの「Vectorworks ファイルの参照方法」は図面ごとの設定**（新しく開いた図面では
+  既定の「デザインレイヤにビューポート図形として参照」に戻っていた）。既定の方法で
+  「新規」を押すと、レイヤを選ぶ欄が無く、「他の図面のレイヤはデザインレイヤビューポートで
+  参照せよ」という案内が出る。
+- **SDK からレイヤの参照（レイヤを選ぶ参照）を作る口は無い**【ヘッダ根拠】——`CreateReference` は
+  ファイルしか受け取らず、`SReferencedFileInfo` にもレイヤの一覧は無い。参照の一覧は
+  `GetReferencedFilesInfo` で読める（どちらの方法でも 1 件ずつ出る。`bCreateLayerLinks` は
+  どちらも `false`）。VectorScript には `IsLayerReferenced(layer, VAR pathname)` がある【ヘッダ根拠】。
+- **同じ名前のレイヤがあると、レイヤの参照は断られる**（「参照ファイル「…」のレイヤ「1F」は
+  同じ名前があるため参照できません。参照する前に開いているファイルのレイヤ名を変更して
+  ください。」→ 続けて「…からの更新中にエラーが発生しました。」）。
+  - 相手が**自分のレイヤ**でも、**別の参照で入ったレイヤ**でも同じように断られる。
+  - 断られるのは**チェックを付けたレイヤ**の名前がぶつかるときだけ（両方の図面にある
+    「レイヤ-1」は、チェックしなければ何も言われない）。
+  - 断られても**参照の登録は残る**（オーガナイザで赤字の「未更新」、`GetReferencedFilesInfo` では
+    `lastUpdate=0`）。レイヤも図形も入らない。
+  - リソースの参照は名前に接頭辞が付くので、この断りは起きない。
+- **参照を解除するとき「参照レイヤ: ファイルに残す」（既定）を選ぶと、入っていたレイヤと図形は
+  そのまま自分のものになる**（ハンドルも同じで、`IsObjectFromReferencedFile` が `false` に変わる）。
+- 現在のレイヤにでき（`SetCurrentLayer` → `GetCurrentLayer` と `==`。リソースの参照で確認）、
+  `ovGuestLayerHasRelativePath`(163) はどちらの方法でも `GetObjectVariable` が `false` を返して読めなかった。
+- `NNA#<n>` の `<n>` は `GetReferencedFilesInfo` の `id` と同じ値だった（参照 1 つでしか見ていない。
+  【推定】参照の番号）。
 - 副次: `DeleteObject(layer, false)` の直後の列に型 `90` が 1 つ挟まった。型で絞れば害は無い。
 
 ### 順序——列は作った順。オーガナイザはデザインだけ逆に見せる

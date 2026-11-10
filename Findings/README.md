@@ -48,7 +48,7 @@
 | [Walls](Walls.md) | 壁の生成・高さ・結合（`JoinWalls`）・キャップ・2D 表現の更新 | — |
 | [Slabs and Extrudes](Slabs%20and%20Extrudes.md) | スラブの構成層・`VWExtrudeObj` の平行移動・`ModifySlab` の不具合（打ち切り） | — |
 | [Roof Faces](Roof%20Faces.md) | 屋根面オブジェクトの正しい作り方（コンストラクタは使えない・オブジェクト変数で与える） | — |
-| [Layers and Stories](Layers%20and%20Stories.md) | レイヤの列挙と重ね順（高さの降順）・レイヤ高さの読み書きと絶対 Z・縮尺・階とレベルを SDK で作る / レベル無しのレイヤを階に結ぶ | [Metrics](../Metrics/Layers%20and%20Stories.md) |
+| [Layers and Stories](Layers%20and%20Stories.md) | レイヤの列挙と重ね順（高さの降順）・**参照で入ったレイヤの 2 つの姿と見分け方（`IsObjectFromReferencedFile`）**・レイヤ高さの読み書きと絶対 Z・縮尺・階とレベルを SDK で作る / レベル無しのレイヤを階に結ぶ | [Metrics](../Metrics/Layers%20and%20Stories.md) |
 | [Layer Objects](Layer%20Objects.md) | レイヤの中の図形の辿り方と数え方。**情報パレットの「N 図形」はレイヤ直下の数**・型 `0`（終端）と `90`（undo の置き石）を除く・`traverseWhat` の違い・外形は縮尺を掛けない mm | [Metrics](../Metrics/Layer%20Objects.md) |
 | [Viewports](Viewports.md) | クラス表示・2D 作り直し・**`UpdateViewport` は描き終わりを知らせない**・断面の 1064/1065 の倒し方・注釈の座標と通り芯の符号・`parentHandle`・**【罠】作ったばかりの押し出しは外接を読むか `ResetObject` するまで断面に映らない** | [Metrics](../Metrics/Viewports.md) |
 | [Sheet Layers and Page Layout](Sheet%20Layers%20and%20Page%20Layout.md) | 用紙と印刷可能領域の読み取り（単位の癖）・用紙の位置は読めない・置いた後に測って動かす作法 | — |
