@@ -2,331 +2,113 @@
 
 **CI が全て緑でも、実描画（高さ・傾き・スタイル・PIO の挙動）は検証できない。**
 実機（ローカルの VectorWorks）で確かめるしかない領域を、最少の往復で切り分けるための作法。
-どれも実際の調査で確立し、外したときに往復を無駄にしたものばかり。
+どれも実際の調査で確立し、外したときに往復を無駄にしたもの。各作法を確立した実例
+（どの issue で何を踏み、何が出たか）は [計測記録](../Metrics/Investigation%20Techniques.md)。
 
 ## 書く・読む
 
 - **書いたパラメータは読み戻す。** 名前が違えば setter は黙って無視する
   （[Parametric Objects](Parametric%20Objects.md)）。
-- **組み込み PIO の universal 名は、当てる前に `GetPluginType` で確かめる。**
-  `gSDK->GetPluginType(名前, 種別)` は図形を 1 つも作らずに「その綴りのプラグインが在るか」と
-  「オブジェクト（`kVSPluginObject` ＝ 2）か」を返すので、**綴りの候補を並べて総当たりする
-  のが安い**（[#181](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/181)
-  では 18 候補のうち 10 件が当たり、8 件が `false`）。綴りは英語の UI 名そのままで、
-  **空白を詰めると当たらない**（`Break Line` は在るが `BreakLine` は無い）。候補の起こし方は
-  `SDKLib/Include/Kernel/API/MiniCadHookIntf.h` の `kInternalID_*`（定数名がほぼ綴りになって
-  いる）。
-  - **プラグインフォルダを舐めても組み込みは出てこない。**
-    `ForEachFilePathInPluginFolderN` は 2450 ファイルを返したが、`.vso` / `.vst` の該当は
-    **0 件**だった（組み込み PIO はフォルダ内の単体ファイルとして置かれていない）。
-    **名前探しにこの口を当てにしない。**
-- **setter の戻り値を信用しない。** 書けなくても true を返す族がある
-  （`SetViewportLayerStackingOverride`・`SetUseDocumentClassVis`）。**読み戻しで確かめる**
-  しかない。同じ形の setter に当たったら、まず GUI で作った実物を読んで「読める形式」と
+- **組み込み PIO の universal 名は、当てる前に `GetPluginType` で確かめる。** 図形を作らずに
+  在るか・オブジェクト（`kVSPluginObject` ＝ 2）かを返すので、**綴りの候補を総当たりするのが
+  安い**。綴りは英語の UI 名そのままで、**空白を詰めると当たらない**。候補は
+  `MiniCadHookIntf.h` の `kInternalID_*` から起こす。**`ForEachFilePathInPluginFolderN` で
+  プラグインフォルダを舐めても組み込みは出てこない**（[実測](../Metrics/Investigation%20Techniques.md#組み込み-pio-の-universal-名の総当たり181)）。
+- **setter の戻り値を信用しない。** 書けなくても true を返す族がある（`SetViewportLayerStackingOverride`・
+  `SetUseDocumentClassVis`）。読み戻しで確かめ、GUI で作った実物を読んで「読める形式」と
   「書けるか」を切り分ける（[Layers and Stories](Layers%20and%20Stories.md)）。
-- **`SetObjectName` は `0`（成功）を返しながら 63 文字で黙って切る。** 図形の名前を
-  「小さな記憶」に使う（走行をまたいで値を残す）ときは、**書いた後に読み戻して長さまで
-  確かめる**。実測では 64 文字目以降が落ち、`GetObjectName` はちょうど 63 文字を返した
-  （[#181](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/181) で
-  実際に踏み、プローブが 1 巡まるごと無駄になった）。**載せるのは短い指紋
-  （ハッシュ）にして、値そのものはログへ出す**のが確実である。
-- **「書けたのに絵が変わらない」＝「その欄は効かない」ではない。** PIO の欄は作り直しの
-  ときに読まれるので、まず `ResetObject` を挟んだかを疑う。
-- **`ResetObject` を挟んでも変わらないなら、次は「どこから値を採るか」を切り替える欄を
-  探す。** 同じ種別の中に**モード欄**があって、いま選ばれていないモードの欄は
-  **黙って読まれない**ことがある。**その欄は死んでいるのではなく、眠っている。**
-  探すときは**ポップアップの選択肢を全部採って読む**のが速い（`GetParamChoices` /
-  `GetParamLocalizedChoices`。[Parametric Objects](Parametric%20Objects.md)
-  「選択肢を採る経路」）——項目名がそのままモードの名前になっている。
-  **実例**: 構造材の `MajorDepth` は書けて読み戻せるのに断面が 1mm も動かなかったが、
-  効かない理由は `MemberType`（材質）が「スチール」で、そこでは断面がカタログ
-  （`ProfileShape` ＋ `ProfileSize` の綴り）から来ていたためだった。
-  「コンクリート」「木」へ倒すと**同じ欄がそのまま断面になる**（#169）。
-  **4 択を採るまで 16 個体を無駄に振った**——モード欄を先に疑えば 1 往復で済んだ。
-- **読み戻しの一致は「効いた」の証拠にならない。** さらに悪いことに、**書いた値を
-  写すだけの読み取り専用の表示欄**が隣に居ることがあり、そこが追随するのを見て
-  「効いた」と誤読しうる（実例: 構造材の `B` / `B1` / `D` / `D1` は寸法 4 欄の鏡で、
-  絵が 1mm も動いていなくても書いた値を返す。#169）。
-  **効いたかどうかは、描かれた図形か生成物を測って決める**（PIO なら
-  `GetCustomObjectProfileGroup` の外接のように、**パスの長さが混ざらない出力**を選ぶ）。
-- **順序を疑う。** 半分だけ直らないときは、置き場所を探し回る前に**書く順番を並べ替えて
-  みる**（実例: 凡例の枠が合わなかった原因は「中身を変えるのが作り直しより後だった」という
-  ただそれだけだった）。
+- **`SetObjectName` は `0`（成功）を返しながら 63 文字で黙って切る。** 名前を走行をまたぐ記憶に
+  使うなら長さまで読み戻し、**載せるのは短い指紋にして値はログへ出す**（[実測](../Metrics/Investigation%20Techniques.md#setter-の戻り値と名前の切り詰め181)）。
+- **「書けたのに絵が変わらない」＝「その欄は効かない」ではない。** まず `ResetObject` を
+  挟んだかを疑い、次に**モード欄**を探す——選ばれていないモードの欄は黙って読まれない
+  （**死んでいるのではなく眠っている**）。探すときは**ポップアップの選択肢を全部採る**
+  （項目名がそのままモードの名前になっている）
+  （`GetParamChoices` / `GetParamLocalizedChoices`。[Parametric Objects](Parametric%20Objects.md)
+  「選択肢を採る経路」）（[実例](../Metrics/Investigation%20Techniques.md#モード欄と読み取り専用の鏡169)）。
+- **読み戻しの一致は「効いた」の証拠にならない。** 書いた値を写すだけの読み取り専用の欄が
+  隣に居ることがある。**効いたかは描かれた図形か生成物を測って決める**（PIO なら
+  `GetCustomObjectProfileGroup` の外接のように、パスの長さが混ざらない出力）。
+- **順序を疑う。** 半分だけ直らないときは、置き場所を探す前に**書く順番を並べ替える**。
 
 ## 測る・比べる
 
-- **数えるより測る。** 「指定した値」と「図面の実測値」を突き合わせれば、ずれが平行移動
-  なのかスケールなのか回転なのかが 1 本のサンプルで分かる。
-- **何も描いていない PIO の `GetObjectBounds` は `true` を返して「反転した空矩形」を返す。**
-  `left` = `bottom` = `+DBL_MAX`（1.7976931348623157e308）、`right` = `top` = `-DBL_MAX` が
-  入るので、**幅・高さを計算すると `-inf` になる**。**戻り値では空を判別できない**ので、
-  外接を測る前に `right > left` を確かめる。実測はパスを与えずに作った
-  `StructuralMember` と `Linear Material`（[#181](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/181)）。
-  「大きさ 0」と「外接が無い」を取り違えると、**存在しない巨大な図形を追いかけることに
-  なる**。
-- **症状が同じまま対処を重ねない。** 同じ症状に対処を 3 回続けて外したら、対処の方向では
-  なく**前提**（＝入力と図面のどちらがずれているか）を実測で確かめる。1 本の両端の座標と
-  長さを測るだけで、長さが一致して位置だけ違えば描画側、長さも違えば入力側、と確定する。
-- **外接は「形」を教えてくれない——輪郭は頂点で読む。** 外接（`GetObjectBounds`）が
-  指定どおりでも、中身がその形だとは限らない。構造材の断面は外接が
-  「主幅 × 主高さ」に一致するので**矩形だと読んでしまったが、実際は I 形**で、
-  断面群の子の**12 頂点を 1 点ずつ出して初めて**「効かないと思っていた 2 欄は板厚だった」
-  と分かった（[Findings「副幅・副高さは板厚」](Parametric%20Objects.md)。#169 → #173）。
-  **「この欄は効かない」と書く前に、外接ではなく頂点を見る。**
-  ポリゴン・ポリラインなら `VWPolygon2DObj(handle)` の `GetVertexCount` /
-  `GetVertexPoint` で引ける。
-- **3D があることを 2D の測り値で判定しない。** 同じ構造材で、断面群の輪郭も外接も
-  正しいのに**型 84（`kCSGTree`）だけが作られていない**——つまり平面図には出るのに
-  3D が無い——状態が起きた。`ResetObject` は `true`、読み戻しも一致、群の外接も正しい。
-  **立体が要るものを調べるなら `GetObjectCube` の高さか、子の型を数える。**
-- **「壊れた」と「意図と違う」を分けて記録する。** 同じ入力の範囲外でも、3D が
-  作られない個体と、作られるが寸法が違う個体があった。**前者だけを見て「壊れる条件」を
-  書くと、後者（黙って別物ができる）を見落とす。** 表には必ず「実体の有無」と
-  「実測寸法」の両方を並べる。
-- **同じ文書に「正解」を並べて差分を取る。** UI で手作業したものと SDK が作ったものを
-  並べて全欄を比較すると、「欄が足りない」のか「書き込み経路が違う」のかが分かる。
-  **推測を重ねるより、正解を 1 つ用意して比べるほうが速い。**
-- **API の無い設定は「UI で手作業したもの」と見比べて突き止める。** 読み取り専用の
-  ダンプ（パラメトリックレコード・付いているレコード・オブジェクト変数・補助オブジェクト）
-  を設定の前と後で 2 回取り、diff を見る。`ModifySlab` の噛み合わせも断面ビューポートの
-  範囲も凡例のフィルタも、この見比べで決着した（実装例: ホームズ君プラグインの
-  `scripts/vw-dump-pio-fields.py`）。
-- **「絵で読める大きさか」は目視に頼らず測れる——中に描かれている文字図形を引く。**
-  寸法や PIO は、描いた結果を**子の図形として持っている**。深さ数段まで潜って最初の
-  型 `10`（`kTextNode`）を拾い、`GetTextSize(text, 1, charSize)` で 1 文字目の大きさを
-  読めば、**紙の上で何 pt で出るかが数値で分かる**（容れ物の縮尺で割る）。
-
-  ```cpp
-  // container の中から最初の文字図形を探し、その大きさ（図面上の mm）を返す。
-  bool FindDrawnTextSize(MCObjectHandle container, int depth, double& outMM)
-  {
-      if (container == nil || depth > 4) return false;
-      for (MCObjectHandle m = gSDK->FirstMemberObj(container); m != nil;
-           m = gSDK->NextObject(m))
-      {
-          const short type = gSDK->GetObjectTypeN(m);
-          if (type == 0) break;                      // kTermNode（walk の終端）
-          if (type == kTextNode)
-          {
-              WorldCoord size = 0;
-              gSDK->GetTextSize(m, 1, size);
-              outMM = static_cast<double>(size);
-              return true;
-          }
-          if (FindDrawnTextSize(m, depth + 1, outMM)) return true;
-      }
-      return false;
-  }
-  ```
-
-  **実機の絵と突き合わせて確かめてある**（[issue #161](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/161)）。
-  1/50 のビューポートの注釈へ作り方を変えた寸法を 7 行ならべ、この物差しが「紙 6pt」と
-  言った行だけが絵で読め、「紙 0.12pt」と言った行は寸法線だけだった——**7 行とも一致**。
-  2 巡目では「紙 12pt」と言った 1 行だけが絵でも 2 倍に見えた。
-  - **これが効くのは、`ISDK` の読み戻しが当てにならない場面**である。#157 は
-    「`GetTextStyleByClass` / `GetTextStyleRef` / `ovDimTextStyle` / `ovDimFontSize` の
-    4 つとも同じなのに絵が違う」で行き止まりになったが、**描かれている文字を測れば
-    その場で割れた**（[Dimensions](Dimensions.md)）。
-  - **落とし穴: レイアウト（プロファイルグループ）が混ざる。** データタグ・レベル
-    オブジェクト・図面ラベルのように**レイアウトをプロファイルグループで持つ PIO** では、
-    `FirstMemberObj` の再帰が**描いた図形だけでなくレイアウトそのものも拾う**。
-    そこに入っているのは「**レイアウトへ与えた値**」（縮尺を掛ける前の、紙の上の値）
-    なので、**文字を 1 つも描いていない個体を測ると、レイアウト側の値が「描かれた文字」
-    として返ってくる**。[#177](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/177)
-    では、これで「縮尺が掛からない」という**存在しない現象**を 7 回の走行にわたって
-    追いかけた（実際には `Title` が空で文字が描かれていなかっただけ。
-    [Drawing Labels](Drawing%20Labels.md)）。
-    - **外接（`GetObjectBounds`）を必ず併せて読む。** 大きさ `s` の文字が本当に描かれて
-      いれば**外接の高さは `s × 1.5` になる**（実測。フォント依存だが、この比は安定して
-      いる）。**高さ `0` は「文字が無い」**であって「小さい文字がある」ではない。
-    - **レイアウトのハンドル（`GetCustomObjectProfileGroup`）と突き合わせて、拾った
-      テキストがどちら側のものかを印で出す。** 走査の結果を「最初の 1 件」で代表させず、
-      **件数と出どころごと**ログへ出せば、取り違えはその場で目に入る。
-  - **落とし穴: 古い写しを拾うことがある。** 連続寸法（型 86）は中に 2D 表現のグループ
-    （型 11）を持ち、**そこだけ引き直される前の文字が残っていることがある**
-    （[issue #156](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/156)
-    で実際に踏んだ）。**直線寸法では信用してよいが、PIO では外接矩形（`GetObjectBounds`）
-    と併せて読む**——両方が同じ向きに動いていれば確か。
-- **オブジェクトの中身を型で数えるのがいちばん早い。** コンテナの中の節点型
-  （`GetObjectTypeN`）を数える 1 行を診断へ出すだけで、正体が割れることがある（実例:
-  凡例イメージがビューポートだと分かった）。**中を見ずにヘッダだけで推測していた間は
-  ずっと外していた。**
-- **ただし、数える型を決め打ちしない。** 「描かれた子」を型 5 / 21 / 84 だけと決めて
-  数えたせいで、網から漏れた型 11（`kGroupNode`）の子が**「消えた」と読めてしまった**
-  ことがある（[#166](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/166)。
-  実際には何も消えていなかった）。**置き石以外を全部数え、型の内訳ごと出す。**
-  決め打ちの網は、漏れたときに**いちばん間違えやすい形**で嘘をつく。
-- **1 個体に複数の欄を順に書いて測ると、原因が 1 段前へずれる。** 「A を書く → 測る →
-  B を書く → 測る」で B のときに変化が出ても、それは A の遅れて出た結果かもしれない。
-  **欄ごとに個体を分ける**か、少なくとも**1 段ごとに内訳を出して差分で読む**
-  （同じ [#166](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/166)
-  で、表示欄が消した子を、直前に振っていた `AttributesMode` のせいだと読んだ）。
-- **「ヘッダに書いていないから分からない」で止めない——SDK は実装ソースを同梱している。**
-  `SDKLib/Source/VWSDK/` に VWFC（`VWFC::VWUI` / `VWFC::Tools` …）の `.cpp` が丸ごと入って
-  いるので、`sdk-grep` / `sdk-ls` はそこも見る。「この関数が false を返す条件は？」は
-  たいていその場で確定する（実例: `VWImagePopupCtrl::CreateControl` が **`return false`
-  のスタブ**だと分かり、実機での条件出しが丸ごと不要になった。
-  [Layout Dialogs](Layout%20Dialogs.md)）。**宣言だけを読んで推測を重ねる前に、実装を
-  探す。**
-- **`SDK Index/` で見つからなくても「無い」と決めない——マクロの中の宣言は索引に載らない。**
-  旧 API の一部は `Include/Kernel/API/APIBase.Legacy.h` の中で `APP_API_FUNCTION(...)` /
-  `APP_API_PROCEDURE(...)` の**引数として**書かれており、索引を作るパーサはそれを宣言として
-  読み取れない。**実例**: 断面ビューポートの作り方を調べていて、索引には 1 行も無い
-  `GS_CreateSectionLineInstance(CallBackPtr, MCObjectHandle inSectionView)` と
-  `GS_IsSectionLineLinkedToViewport(CallBackPtr, MCObjectHandle inSectionLine)` が
-  `sdk-grep` で出た（[issue #151](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/151)）。
-  **索引で当たりが無かったら、諦める前に `sdk-grep` で同じ語を引き直す**——
-  索引は「速い入口」であって「SDK の全部」ではない。
+- **数えるより測る。** 指定した値と図面の実測値を突き合わせれば、平行移動・スケール・回転の
+  どれかが 1 本で分かる。
+- **何も描いていない PIO の `GetObjectBounds` は `true` を返して「反転した空矩形」を返す**
+  （`left` = `bottom` = `+DBL_MAX`、`right` = `top` = `-DBL_MAX`）。**戻り値で空を判別できない**
+  ので、測る前に `right > left` を確かめる。「大きさ 0」と「外接が無い」を取り違えると、
+  存在しない巨大な図形を追いかけることになる（[実測](../Metrics/Investigation%20Techniques.md#何も描いていない-pio-の外接181)）。
+- **症状が同じまま対処を重ねない。** 3 回外したら**前提**（入力と図面のどちらがずれているか）を
+  実測する——1 本の両端と長さを測れば決まる（長さが一致して位置だけ違えば描画側、長さも
+  違えば入力側）。
+- **外接は「形」を教えてくれない——輪郭は頂点で読む**（`VWPolygon2DObj` の `GetVertexCount` /
+  `GetVertexPoint`）。**3D があることを 2D の測り値で判定しない**（`GetObjectCube` の高さか子の型）。
+  **「壊れた」と「意図と違う」を分けて**、実体の有無と実測寸法を両方並べる
+  （[実例](../Metrics/Investigation%20Techniques.md#断面の輪郭と-3d-の有無を測った例169173)）。
+- **同じ文書に「正解」を並べて差分を取る。** 全欄を比べれば「欄が足りない」のか「書き込み
+  経路が違う」のかが分かる。API の無い設定は、UI で手作業したものの
+  ダンプを設定の前後で取り diff を見る（[実例](../Metrics/Investigation%20Techniques.md#設定の前後のダンプを並べて-diff-を取った例)）。
+- **描かれている文字を測る**——「絵で読める大きさか」は目視に頼らず、PIO・寸法の中を再帰で
+  潜って最初の型 `10` の `GetTextSize` を読む（容れ物の縮尺で割れば紙の pt）。**実機の絵と
+  一致を確かめてある**（#161。コードは [計測記録](../Metrics/Investigation%20Techniques.md#描かれている文字を測ったコード161177156)）。
+  - **`ISDK` の読み戻しが当てにならない場面で効く**（#157 の行き止まりがその場で割れた）。
+  - **落とし穴: レイアウト（プロファイルグループ）が混ざる。** レイアウトを持つ PIO では再帰が
+    レイアウトの値（紙の上の値）も拾い、**文字を描いていない個体ではそれが「描かれた文字」に
+    見える**（#177 で存在しない現象を追った）。**外接を必ず併せて読む**（文字が在れば高さは
+    大きさの約 1.5 倍、**高さ `0` は文字が無い**）。拾ったテキストの出どころと件数をログへ出す。
+  - **落とし穴: 古い写しを拾う。** 連続寸法（型 86）の中の 2D 表現の群には引き直し前の文字が
+    残ることがある。**直線寸法では信用してよいが、PIO では外接と併せて読む**——両方が同じ
+    向きに動いていれば確か。
+- **中身を型で数えるのがいちばん早い。ただし数える型を決め打ちしない**——置き石以外を全部
+  数え、型の内訳ごと出す（決め打ちの網は、漏れたときにいちばん間違えやすい形で嘘をつく）。
+  **1 個体に複数の欄を順に書いて測ると原因が 1 段前へずれる**ので、
+  欄ごとに個体を分けるか 1 段ごとに差分で読む（[実例](../Metrics/Investigation%20Techniques.md#節点型を数えた例欄ごとに個体を分けた例166)）。
+- **「ヘッダに書いていないから分からない」で止めない——SDK は VWFC の実装ソースを同梱している**
+  （`SDKLib/Source/VWSDK/`。`sdk-grep` / `sdk-ls` で見る）。**`SDK Index/` に無くても「無い」と
+  決めない**——`APIBase.Legacy.h` の `APP_API_*` マクロの中の宣言は索引に載らないので
+  `sdk-grep` で引き直す（[実例](../Metrics/Investigation%20Techniques.md#実装ソースと索引の外151)）。
 - **ただし `APP_API_FUNCTION` / `APP_API_PROCEDURE` の 12 本は、宣言があっても呼べない**
-  （「未公開の API」＝ヘッダのコメントいわく *SDK APIs waiting to be published for
-  external use*）。マクロが作るのは `CB_<名前>` を呼ぶ**インライン**の `GS_<名前>` だけで、
-  **その `CB_` シンボルは `SDKLib/LibMac/Release/libVWSDK.a` に入っていない**——
-  `libVWSDK.a` にある `CB_` は**メモリ確保系の 8 本だけ**（`CB_NewHandle` 等）で、
-  残りは実体が無い。だから呼ぶと**リンクで落ちる**:
-
-  ```
-  Undefined symbols for architecture arm64:
-    "_CB_CreateSectionLineInstance", referenced from: …
-  ld: symbol(s) not found for architecture arm64
-  ```
-
-  **`compile`（`-fsyntax-only`）では通ってしまう**ので、構文チェックだけでは気付けない
-  （実際に、プローブの構文チェックが緑のままプラグインのビルドで落ちた。
-  [run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/36519158213)）。
-  該当するのは次の 12 本で、**この名前を見かけたら実装の当てにしない**:
-  `GS_CreateSectionLineInstance` / `GS_IsSectionLineLinkedToViewport` /
-  `GS_IsDetailCalloutLinkedToViewport` / `GS_DisplayImagePopup` /
-  `GS_{Begin,Cancel,Draw,End,Update}FreehandInteractive` /
-  `GS_GetFreehandInteractivePoly` / `GS_SetFreehandInteractivePen{,Style}`。
-  （`GS_DisplayImagePopup` が呼べないことは、`VWImagePopupCtrl::CreateControl` が
-  `return false` のスタブだったこと——[Layout Dialogs](Layout%20Dialogs.md)——と
-  同じ話の裏表である。）
-  **見分け方**: 宣言が `APIBase.Legacy.h` の `APP_API_*` の中にあるなら呼べない。
-  `APIBase.Legacy.Defs.h` に `extern "C" … GS_…(CallBackPtr, …);` として並んでいる
-  ふつうの旧 API は、`libVWSDK.a` に実体があるので呼べる。
-- **「絵に出ているか」は目視に頼らず、描かれている図形を測る。** オブジェクト変数を
-  読み戻して「書けた」と確かめても、**絵が古いまま**のことがある（実例: 連続寸法の中の
-  直線寸法は `ovDimFontSize` が書き換わっても文字の大きさが変わらなかった。
-  [Dimensions](Dimensions.md)）。**中を歩いて文字図形（型 `10`）を見つけ
-  `GetTextSize` で 1 文字目を測る**・**外接矩形の高さを見る**——このどちらかを
-  プローブに 1 行足せば、「値は入ったが絵は変わっていない」をログで判別できる。
-  ユーザーへ目視を頼む前に、これを試す。
-- **2 つの要因がいつも一致しているなら、入れ替えて双方向で測る。** 「作ったときの
-  アクティブレイヤ」と「操作したときのアクティブレイヤ」のように、毎回同じ値になる要因は
-  **どちらが効いているかを分けられない**。A（片方だけ変える）と B（もう片方だけ変える）を
-  同じ 1 回の実行に並べると、1 往復で決着する（実例: 連続寸法の文字の大きさは
-  **繋ぐときの**アクティブレイヤだけで決まると確定した。[Dimensions](Dimensions.md)）。
-- **信用できるのはハンドルの生バイト。** タグ付きデータの読み出し API は当てにならない
-  ので、探索は 16 進ダンプでやる（[Tagged Data](Tagged%20Data.md)）。
-- **1 ULP を追う調査では、プローブの中で予測式を計算しない。** 浮動小数の式は
-  **コンパイラが FMA へ縮約して別の値になる**（clang の既定は `-ffp-contract=on`）。
-  `v / 25.4 * 25.4 - v` は `fma(v / 25.4, 25.4, -v)` になり、丸めが 1 回減るぶん
-  **答えが変わる**——実例: 3531 で `-2.885e-13` と出たが、本当の往復誤差は `-4.547e-13`
-  だった（[issue #67](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/67)。
-  1 往復を無駄にした）。予測はプローブの外（手元の Python など）で計算して**値を
-  書き込む**か、どうしても中で計算するなら中間値を `volatile` の `double` へ落として
-  縮約を止める。**プローブが出すべきは実測値だけ**である。
-- **仮説に寄せた値ばかりで試さない。** 「予測が当たった値」を並べても仮説は強くならない。
-  **予測が割れる値**（2 つの説で答えが違う値）と、**予測が外れるなら外れるはずの値**を
-  必ず混ぜる。同じ #67 で、8 点では当たって見えた仮説が、値を散らした 18 点の走査で
-  落ちた。
-- **数えるだけの走査は「1 ケース 1 文字」にする。** 結果が数通り（残差の ULP 数・
-  成否・分類）に収まる調査なら、1 ケースを 1 行ではなく**1 文字**にして 50 文字ずつ
-  並べると、**数百ケースが数行に収まる**。全文の明細は「0 でなかったケース」だけに
-  絞れば、**規則を目で探せる地図**になる（実例:
-  [issue #71](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/71) の
-  491 ケース・11.3 秒を 10 行ほどの地図にした。`0000000001111000000000000` のような
-  並びを見て初めて「隣り合う値がまとまって出る」が分かった——1 ケース 1 行では
-  埋もれていた）。**ログが長いと読まれない**ので、走査の規模は文字数ではなく
-  「1 ケースあたりの文字数」で稼ぐ。
-- **「何で決まるか」は、その量を厳密に揃えた組で 1 発で割る。** 「A で決まるのか B で
-  決まるのか」を数百点の走査から読み取ろうとすると、たいてい読み取れない。**A だけを
-  厳密に同じにして B を変えた組**を数家族通せば、**残差が食い違った時点で「A では
-  決まらない」が確定する**。実例:
-  [issue #73](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/73) で
-  「残差は 3 次元長で決まるのか、成分の組で決まるのか」を、**ピタゴラス数**
-  （`(1600, 0, 3000)` / `(3000, 0, 1600)` / `(0, 0, 3400)` は 3 次元長が厳密に 3400）で
-  割った——**5 家族 15 ケースで済み**、うち 4 家族で食い違って決着した。
-  **浮動小数の調査では「厳密に揃う」組を作れるかどうかが要**（整数の三つ組・2 の冪倍など）。
-- **1 次元の走査で決まらないものは、格子（2 次元の地図）にする。** 行と列のどちらで
-  文字が変わるかが**面として見える**ので、「片方だけが効いている」「両方が効いている」が
-  一目で分かる。#73 では `dz` × `dx` の 21 × 21 を 21 行で出し、**`dx = 0` の列（＝鉛直）に
-  だけ負符号が無い**ことが目で見えた。
-- **26 点で式が当たらないなら、点を増やすより先に「何が決まっているか」を絞る。**
-  #71 では、走らせる前に手元で 26 点を整理して (1) 残差は必ず `k × ULP` (2) `k` は仮数で
-  決まる (3) 指数には依らないらしい——の 3 つに畳み、**その 3 つを正面から試す群**を
-  プローブに置いた。結果、(3) が確定して「危ない値の話は仮数だけの話」に縮み、
-  走査の意味がはっきりした。**闇雲に点を増やす走査は、点が増えるだけで終わる。**
-
-- **Windows 版 SDK を引き直しても同じものしか出ない。** `ci-debug` の
-  `--platform windows` と `--platform mac` が用意する SDK は、**`SDKLib/` の 961
-  ファイルすべてが改行コードを除いて同一**である（CR を落とした集約ハッシュが
-  `a859b31735d9572d2b7c967aa3512a19` で一致。ディレクトリ単位でも全 19 群が一致。
-  [windows](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35883156877) /
-  [mac](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/35883177907)）。
-  **`Include/OnlyWin` も `Include/OnlyMac` も、どちらの SDK にも両方入っている**
-  （13 ファイル / 27 ファイル）。したがって「Windows ではどうなっているか」を
-  `sdk-grep` / `sdk-ls` で引き直しても、**mac で引いたのと 1 文字も違わない答えが返る**
-  ——`--platform windows` は**中身を変えない**。プラットフォーム差を知りたいなら
-  実機で測るしかない（実例: [ファイル・フォルダの識別子](File%20and%20Folder%20Identifiers.md)
-  の `SAttributes`）。
-  - **比べるときは `tr -d '\r'` を使わない。** macOS の BSD `tr` は UTF-8 でない
-    バイトを含むファイルで `Illegal byte sequence` を出して**そのファイルだけ空に
-    してしまう**ので、GNU `tr` の Windows 側と比べると**差が無いのに差が出る**
-    （実際に 961 ファイル中 6 ファイルで踏み、4 つのディレクトリが「違う」と出た）。
-    `perl -0777` で読んで `s/\r//g` すれば両方で同じ挙動になる。
-
-- **PIO が描いた図形は入れ子になっている。** 図面ラベルでは `FirstMemberObj(pio)` の
-  直下は群（型 11）で、テキストはその中にある。**1 階層だけ舐めて「テキストが無い」と
-  読むと、そこから先の推論が全部ずれる**（[#175](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/175)
-  で 1 往復無駄にした）。走査は再帰で書き、深さも記録する。
-- **`GetTextSize` だけでは「紙の上で何 pt か」は決まらない。** 大きさの値は容れ物の
-  縮尺が掛かる前のものかもしれず、掛かった後のものかもしれない。**同じ容れ物に
-  「紙で何 pt か分かっているもの」を 1 つ置いて、比で測る**——図面ラベルの調査では
-  ビューポートの注釈へ「紙で 6pt の寸法」（`ovDimFontSize` ＝ 紙の pt × 25.4/72 × 縮尺。
-  [Dimensions](Dimensions.md) で確定済み）を置いて物差しにした。
-  - **物差しは「大きさ用」と「外接用」を別に取る。** テキストの外接の高さは大きさの
-    1.4〜1.5 倍あり、**書体によってその比が違う**（寸法の文字で 1.44、ラベルの文字で
-    1.5）。大きさ同士・外接同士で比べないと、10pt を `10.4167pt` と読む（実際に読んだ）。
-- **2 つの要因がいつも一致していると、切り分けたつもりになる。** 図面ラベルの文字の
-  大きさでは「容れ物の縮尺」と「アクティブレイヤの縮尺」が 5 走行にわたって常に一致して
-  いたため、**どちらが効いているのか決まっていないのに「容れ物だ」と書いてしまった**
-  （[#175](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/175)。
-  翌走行で否定され、取り消した）。**交差させた対を 1 回の走行で取る**——1/50 の容れ物 ×
-  アクティブ 1:1 と、1:1 の容れ物 × アクティブ 1/50。これで 1 回で決まった。
-  （同じ教訓は [Dimensions](Dimensions.md) の「双方向で測る」にもある。）
-- **同じプローブを作り替えて何度も走らせるときは、先頭コメントに「ここまでに確定した
-  こと」と「今回測ること」を書く。** 走行が 5 回を越えると、何が確定して何が仮説なのかが
-  自分でも混ざる。確定した項目は測り直さず、コメントへ結論だけ残して落とす。
-- **「作った直後」だけを読むと、既に在るものが書き換わったことに気づけない。**
-  図面ラベルの図番の採番は、作った直後の値を並べると `1 2 1 3 4 5` と乱数のように見えた
-  （[#179](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/179)）。
-  **1 本足すたびに「いま在るもの全部」を読み直したら、先頭のラベルが毎回書き換わって
-  いることが 1 回の走行で出た**——乱れて見えたのは、**測っていない場所が動いていた**
-  からである。**1 つ足すたびに全員を読む**のは行数が増えるだけで、往復は増えない。
-- **規則の候補が立ったら、独立した過去の走行に当てて検算する。** #179 で立てた規則
-  （「使われていない最小の正整数」＋「注釈の先頭は最後に入れた本を映す」）を、
-  [#177](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/177) の
-  11 本（`1 2 1 3 4 5 4 6 4 7 4`）へ当てたら**1 本の例外も無く一致した**。
-  **別の条件で取った古いログは、ただで手に入る検算用のデータである**——消す前に当てる。
-- **「乱れている」で終わらせない。** 同じ手順を繰り返して違う値が出るなら、**繰り返し
-  回数を増やして並べる**（#179 では 6〜8 本を 1 フェーズにした）。3 本では乱数に見える
-  ものが、6 本並べると規則になる。
-- **ワークシート式は、ワークシートを作らずにハンドルへ直接評価できる**
-  ——`ISDK::CompileCriteriaExpression(式, 誤りのコールバック, 文脈)` で
-  コンパイルし、`ISDK::ExecWSExpression(h, compiled, outResult)` で実行する
-  （ラッパーは `VWFC::Tools::WSCriteriaExpression`。`Compile` / `ExecWSExpression` /
-  `GetLastError` / `GetLastErrorOffset` が生えている）。**`=` は付けない**
-  ——SDK のコメントの例が `"Area()/2"` である。文脈は `eLocal`（ローカライズされた綴り）と
-  `eUniversal` を選ぶ。【ヘッダ根拠】
-  - **これが「識別子の総当たり」を当て推量から実測へ変える。** ただし
-    **判定材料はコンパイル誤りではない**——下記のとおり、**知らない識別子でも
-    コンパイルは通る**。見るのは**戻り値**である。
-  - **知らない識別子は「自分自身の文字列」に評価される。**【実測】対照として入れた
-    `T187NOSUCHFUNCTION` が、コンパイル `ok` のまま `s:'T187NOSUCHFUNCTION'` を返した
-    （[#187](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/187)）。
-    つまり**裸の語は、関数として知られていなければ文字列リテラルとして扱われる**。
-    したがって唯一の判定条件は:
+  （未公開の API。`CB_` の実体が `libVWSDK.a` に無く**リンクで落ちる**。`compile` は通る）。
+  **宣言が `APIBase.Legacy.h` の `APP_API_*` の中なら呼べない**、`APIBase.Legacy.Defs.h` の
+  ふつうの旧 API は呼べる。`GS_DisplayImagePopup` が呼べないことは、`VWImagePopupCtrl::CreateControl`
+  が `return false` のスタブだったこと（[Layout Dialogs](Layout%20Dialogs.md)）と同じ話の裏表
+  （[12 本の一覧とリンクエラー](../Metrics/Investigation%20Techniques.md#app_api_-の-12-本の一覧とリンクエラー)）。
+- **「絵に出ているか」も描かれている図形を測って判別する**（文字の `GetTextSize`・外接の高さ）。
+  目視を頼む前に試す。**2 つの要因がいつも一致しているなら、入れ替えて双方向で測る**——
+  片方だけ変えた A と、もう片方だけ変えた B を同じ 1 回の実行に並べると 1 往復で決着する
+  （[実例](../Metrics/Investigation%20Techniques.md#絵と読み戻しが食い違った例片方ずつ変えた例)）。
+- **信用できるのはハンドルの生バイト**（タグ付きデータは 16 進ダンプで。[Tagged Data](Tagged%20Data.md)）。
+- **浮動小数の走査**（[実例](../Metrics/Investigation%20Techniques.md#生バイトと浮動小数の走査677173)）:
+  - **1 ULP を追うならプローブの中で予測式を計算しない**——clang は FMA へ縮約する
+    （`-ffp-contract=on`）。予測は外で計算して値を書き込むか、中間値を `volatile` の
+    `double` へ落として縮約を止める。
+    **プローブが出すのは実測値だけ。**
+  - **予測が割れる値・外れるはずの値を必ず混ぜる。** **数えるだけの走査は 1 ケース 1 文字**で
+    地図にする（ログが長いと読まれないので、走査の規模は「1 ケースあたりの文字数」で稼ぐ）。
+    **「何で決まるか」は厳密に揃えた組（ピタゴラス数など。整数の三つ組・2 の冪倍）で 1 発で割る。**
+    1 次元で決まらなければ**格子**にする。点を増やす前に**何が決まっているかを絞る**。
+- **Windows 版 SDK を引き直しても同じものしか出ない。** `ci-debug` の `--platform windows` と
+  `mac` の SDK は、**`SDKLib/` の 961 ファイルすべてが改行コードを除いて同一**で、
+  **`Include/OnlyWin` も `Include/OnlyMac` も両方に入っている**。プラットフォーム差は実機で
+  測るしかない（[File and Folder Identifiers](File%20and%20Folder%20Identifiers.md) の
+  `SAttributes`）。比べるときは BSD の `tr -d '\r'` を使わず `perl` で
+  （[実測](../Metrics/Investigation%20Techniques.md#windows-版-sdk-と-mac-版-sdk-の比較)）。
+- **図面ラベルの調査で踏んだもの**（[実例](../Metrics/Investigation%20Techniques.md#図面ラベルの調査で踏んだもの175177179)）:
+  - **PIO が描いた図形は入れ子になっている**——走査は再帰で書き、深さも記録する。
+  - **`GetTextSize` だけでは紙の pt は決まらない**——同じ容れ物に紙の pt が分かっている物差しを
+    置いて比で測る。**物差しは大きさ用と外接用を別に取る**（外接/大きさの比は書体で違う）。
+  - **2 つの要因が常に一致していると切り分けたつもりになる**——交差させた対を 1 走行で取る。
+  - **作り替えて何度も走らせるプローブは、先頭コメントに確定したことと今回測ることを書く。**
+    確定した項目は測り直さず、コメントへ結論だけ残して落とす。
+  - **「作った直後」だけを読まず、1 つ足すたびに全員を読む**（動いていたのは測っていない場所）。
+    行数が増えるだけで、往復は増えない。
+  - **規則の候補は独立した過去の走行で検算する**（古いログはただの検算データ）。
+  - **「乱れている」で終わらせず、繰り返し回数を増やして並べる。**
+- **ワークシート式は、ワークシートを作らずにハンドルへ直接評価できる**——
+  `ISDK::CompileCriteriaExpression` ＋ `ISDK::ExecWSExpression`（ラッパーは
+  `VWFC::Tools::WSCriteriaExpression`）。**`=` は付けない**。文脈は `eLocal` / `eUniversal`。【ヘッダ根拠】
+  - **知らない識別子もコンパイルは通り、「自分自身の文字列」に評価される**【実測】（#187）。
+    裸の語は、関数として知られていなければ文字列リテラルとして扱われる。**判定は戻り値**:
 
     | 戻り値 | 意味 |
     | --- | --- |
@@ -334,102 +116,40 @@
     | 数値・真偽・別の文字列 | 関数が在って値を返した |
     | コンパイル誤り（`InvalExpr` 等） | 構文として通らない（`Z()` のように**関数でないものに `()` を付けた**とき） |
 
-    > **訂正。** この節は当初「コンパイルの失敗（`InvalIdent`）で『そんな名前は無い』と
-    > 判定できる」と書いていた。**誤りである**——実測では `InvalIdent` は 1 度も返らず、
-    > 知らない名前はすべて `ok` ＋ 自分自身の文字列だった。**戻り値を見なければ
-    > 総当たりは成立しない。**
-  - **対照を 1 本入れる。** 存在しないはずの識別子（`T187NOSUCHFUNCTION` のような）を
-    必ず混ぜて、「無いときに何が返るか」を同じ走行の中に持っておく。**上の訂正は、
-    その対照が入っていたからその場で分かった**——対照が無ければ、自分自身の文字列を
-    返した 20 以上の候補を「値が空の関数」と読み違えていた。
-  - 戻り値は `VWVariant` なので、**型（`GetType`）も一緒にログへ出す**
-    ——`eVWVariantType_Empty` と「空文字列」は別物であり、**上の判定は型を見ないと
-    付かない**。
-  - 量（長さ・面積・体積など）だけなら `ISDK::ExecQTOFunction` ＋ `EQTOFunction`
-    （`Angle` / `Count` / `Length` / `Perimeter` / `Width` / `Height` / `Depth` / `Weight` /
-    `Area` / `SurfaceArea` / `ProjectedArea` / `FootPrintArea` / `CrossSectionArea` /
-    `SpecialArea` / `Volume` / `ObjectData` / `Thickness` の 17 個）という**列挙できる口**も
-    ある。【ヘッダ根拠】
+  - **【訂正】当初の「`InvalIdent` で無いと判定できる」は誤り**（1 度も返らなかった）。
+  - **存在しない識別子の対照を必ず 1 本入れる。** 戻り値は `VWVariant` なので**型も出す**
+    （`eVWVariantType_Empty` と空文字列は別物）。
+  - 量だけなら `ISDK::ExecQTOFunction` ＋ `EQTOFunction`（17 個）という列挙できる口もある。【ヘッダ根拠】
+  （[実測](../Metrics/Investigation%20Techniques.md#ワークシート式の評価187)）
 
 ## いつ読むか——同じ呼び出しの中・undo イベントの後・VW へ戻った後
 
-**プローブが書いた直後に同じ呼び出しの中で読んだ値は、利用者の図面に残る値と同じとは
-限らない。** VW は仕事の一部を後へ回す。[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)
-で、過去に「効かない／変わらない」と結論した項目を、同じ図形について次の 4 時点で
-読み比べた:
+**同じ呼び出しの中で読んだ値は、利用者の図面に残る値と同じとは限らない**
+（[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。4 時点
+T0・T1・Te・T2 の読み比べは [計測記録](../Metrics/Investigation%20Techniques.md#読む時機を-4-つ比べた実測同じ呼び出しの中undo-イベントの後vw-へ戻った後)）。
 
-| 時点 | いつ |
-| --- | --- |
-| T0 | 書いた直後（同じ呼び出しの中）——これまでの調査はすべてここ |
-| T1 | 同じ呼び出しの中でランループを 1.5 秒回した後（`CFRunLoopRunInMode` を短く刻む） |
-| Te | 自動で開いた undo イベントを `EndUndoEvent()` で閉じた直後（まだ同じ呼び出し） |
-| T2 | 別の走行（VW へ制御を返し、数十秒置いた後） |
-
-**後から変わったものは 2 種類あり、引き金が違った:**
-
-| 引き金 | 変わったもの | T0 | 変わった時点 |
-| --- | --- | --- | --- |
-| **ランループ**（VW へ戻れば回る） | 連続寸法へ `SetTextStyleRef` だけ掛けたときの中の寸法の大きさ（[Dimensions](Dimensions.md)） | 古い | T1 |
-| | 連続寸法の中の寸法へ直接書いた `ovDimFontSize`（捨てられる） | 書いた値 | T1 |
-| **undo イベントの終わり** | `ResetObject` の後に `SetEntityMatrix` で動かした PIO の外接（[Parametric Objects](Parametric%20Objects.md)） | 古い位置 | Te |
-| | `UpdateViewport` 直後のビューポートの `IsDirty()`（`no` → `yes`。[Viewports](Viewports.md)） | `no` | Te |
-
-**それ以外は変わらなかった**——PIO・スタイル 97 欄中 96、データタグ・レイヤ高さ 50 欄、
-寸法 107 欄中 100、ビューポート・図面ラベル 97 欄中 80（変わったのは上表の 2 種類だけ）、
-断面ビューポートの (1064,1065) × 向き × pt3 の 16 枚は 16 枚とも同じ。2 巡目
-（[PR #250](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/250)）の
-ビューポートの `SetDirty(true)` 12 欄・データタグとグラフィック凡例 44 欄・構造材の
-`AttributesMode` / 3 面の目印 / 既定 by-class の旗 74 欄も、変わった欄は 0。
-`UpdateStyledObjects` のずれと累積・`SetPluginObjectStyle` だけでは記録が変わらない・
-`RedrawRect` / `ResetObject(レイヤ)` は作り直さない・3D パスの構造材の `#ZTBB*#` が
-±1.79e308・`#IPZ#` が追随しない・クラスや規格の文字スタイルが寸法へ届かない・
-`AttributesMode` が描画に効かない・平面で使われるのは `_Below`・既定のマーカー旗は
-再生成で下りる・ソースの無い凡例は空、などの結論は**戻った後に読み直しても同じ**だった
-（各ファイルに注記した）。**`doRegen=false` で作ったまま `ResetObject` しない PIO は、
-戻った後も子 2 つ・外接は空のまま**——VW が後から勝手に作り直すことは無い。
-**逆に、旧結論のほうが誤りだったものが 1 つある**: 「ビューポートによっては
-`SetDirty(true)` が立たない」は再現せず、掛けた 4 枚すべて（断面・更新済みの平面・
-一度も更新していない平面・直後に更新し直す平面）で、掛けた直後に立った
-（[Layers and Stories](Layers%20and%20Stories.md)）。
-
-- **「効かない」と書く前に、undo イベントを閉じた後と、VW へ戻った後にも読む。**
-  とくに**外接・dirty の印・PIO の中身**は後から追い付くことがある。仕立ては
-  [PR #246](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/246) の
-  `probes/runtime/deferred-*/Deferred.h`（`RunDeferred`。役目を終えたので消したが、履歴から
-  取り出せる）——1 本のプローブを 2 回走らせ、状態を一時ファイルで受け渡し、図形は名前で
-  引き直す。1 回目の最後に自動で開いた undo イベントを閉じ、閉じた直後にも読む（Te）。
-- **自動で開いた undo イベントを閉じずに戻らない。** 図形を作るだけでイベントは開く
-  （[Undo](Undo.md)）。閉じずに戻ると、**利用者がクリックしても閉じず**、外接も
-  `IsDirty` も古いままで、MCP ブリッジは受け付けを見送って止まった（7 分。
-  [#247](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/247)）。
-  **閉じずに置いた 7 分のあいだ、外接は 1mm も追い付かなかった**——引き金は時間でも
-  アイドルでもない。
-- **戻った後に呼ばれるもの（タイマー・`dispatch_after`・通知）をプローブに仕掛けない。**
-  殻は走らせた直後に本体を降ろすので、VW ごと落ちる（#245 で落とした。
-  [probes/runtime/README.md](../probes/runtime/README.md)）。
-- **`OpenDocumentPath(nullptr)` で開いた図面はテンプレートの資源を持たない。** 利用者が
-  ⌘N で作る図面と違い、図面ラベルのツールにスタイルが無く（既定レイアウトに文字が無い）、
-  「寸法」クラスも文字スタイルを持たない。**縮尺は 1/1 で用紙も小さい**ので、画面に見えて
-  いる範囲が狭い——`AssociateLinearDimension` が成立しなかったのは資源のせいではなく、
-  寸法を表示範囲の外に置いたからだった（[#249](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/249)。
+- **後から変わるものは 2 種類**: **ランループで作り直されるもの**（連続寸法の中の寸法の大きさ。
+  [Dimensions](Dimensions.md)）と、**undo イベントの終わりで更新されるもの**（`ResetObject` 後に
+  `SetEntityMatrix` で動かした PIO の外接・`UpdateViewport` 直後の `IsDirty()`）。
+- **それ以外の「効かない」は、戻った後も同じだった**（各ファイルに注記）。`doRegen=false` の
+  まま `ResetObject` しない PIO を VW が後から作り直すことも無い。**逆に「`SetDirty(true)` が
+  立たない」は再現せず、旧結論の誤り**だった（[Layers and Stories](Layers%20and%20Stories.md)）。
+- **「効かない」と書く前に、undo イベントを閉じた後と、VW へ戻った後にも読む**（外接・dirty の
+  印・PIO の中身）。仕立ては [PR #246](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/246)
+  の `RunDeferred`（消したが履歴にある）。
+- **自動で開いた undo イベントを閉じずに戻らない**（[Undo](Undo.md)。外接も `IsDirty` も
+  古いまま、ブリッジが止まる。時間でもアイドルでも追い付かない）。
+- **戻った後に呼ばれるもの（タイマー・`dispatch_after`・通知）をプローブに仕掛けない**——
+  VW ごと落ちる（[probes/runtime/README.md](../probes/runtime/README.md)）。
+- **`OpenDocumentPath(nullptr)` の図面はテンプレートの資源を持たない**（図面ラベルのスタイル・
+  「寸法」クラスの文字スタイルが無い。縮尺 1/1・用紙が小さい）。`vw_run_probe` の新規図面も
+  これ。旧調査の再現は**同じ出どころの図面**で（[Documents](Documents.md)・
   [Dimensions](Dimensions.md)「関連付くのは表示範囲の中だけ」）。
-  旧調査を再現するときは、**同じ出どころの図面**（`.sta` を `OpenDocumentPath` へ渡す。
-  [Documents](Documents.md)）で走らせる。MCP ブリッジの `vw_run_probe` が開く新規図面も
-  `OpenDocumentPath(nullptr)` である。
-- **SDK の呼び出しが、表示・選択・アクティブレイヤといった「画面の状態」を黙って読む
-  ことがある。** #249 で 2 つ踏んだ——図面ラベルは**選択中のビューポート**の図面タイトルを
-  持って生まれ（[Drawing Labels](Drawing%20Labels.md)）、`AssociateLinearDimension` は
-  **表示範囲の外**の寸法を関連付けない（[Dimensions](Dimensions.md)）。しかも
-  **`CreateViewport` は作ったビューポートを選択したまま残す**ので、前の手順が後の手順の
-  結果を変える。旧調査と結果が食い違ったら、図面の出どころより先に**選択と表示**を疑い、
-  プローブでは `DeselectAll()` と表示の中心・縮尺をログに出しておく。
-- **旧調査を測り直すときは、まず T0 が旧調査と同じ値になることを確かめる。** 場面の作り方が
-  少し違うだけで、断面ビューポートに中身が入らない（[#248](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/248)）・
-  図面ラベルが文字を描かない、といった食い違いが T0 の時点で出た。**T0 が合わないまま
-  T2 を比べても、何も確かめたことにならない**——#245 では旧プローブそのものを 2 回走らせる
-  形にして測り直した。
-- **所要時間（ms）の表は「呼び出しの中の時間」だけを測っている。** 戻った後の仕事
-  （上表のランループ側）は含まれていない。
+- **SDK の呼び出しが「画面の状態」（選択・表示・アクティブレイヤ）を黙って読むことがある**
+  （#249。[Drawing Labels](Drawing%20Labels.md)・[Dimensions](Dimensions.md)）。食い違ったら
+  **選択と表示**を疑い、`DeselectAll()` と表示の中心・縮尺をログに出す。
+- **旧調査を測り直すときは、まず T0 が旧調査と同じ値になることを確かめる**（#248）。
+- **所要時間（ms）の表は「呼び出しの中の時間」だけ**を測っている。
 
 ## 運用
 

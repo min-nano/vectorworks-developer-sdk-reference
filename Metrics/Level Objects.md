@@ -1,0 +1,360 @@
+# レベル（標高）オブジェクト — 断面ビューポートの注釈へ置く — 計測記録
+
+結論は [Findings「Level Objects」](../Findings/Level%20Objects.md)。ここには実測の表・
+読み戻しの記録・訂正に至った切り分けの経緯を置く。
+
+> ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
+
+軸組図（断面ビューポート）へ **GL・1FL・2FL・軒高**のような高さの印を置くための調査。
+[issue #130](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/130) の
+実機確認（VW 2026 / mac）による。続きは
+[issue #135](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/135)・
+[#141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141)・
+[#151](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/151)。
+断面ビューポートそのものの作り方は [Viewports](../Findings/Viewports.md)、注釈空間の座標は
+[Data Tags](../Findings/Data%20Tags.md) にある。
+
+> **測り直しの記録**: #131 の時点では「ストーリレベルへの関連付けは SDK からできない」
+> 「レベル基準線には名前を書く口が無い」と測っていた（`Datum` という**ポップアップ欄
+> 単体**で関連付けを選ぼうとし、名前を**パラメータ**で探していた）。issue #130 を開き直して
+> 取り直すと、内部の 2 欄と合わせた**3 つ組**で関連付き、名前は**マーカーレイアウト**から
+> 出た（下記の各節）。
+>
+> **測り直しの記録 2**: #133 の時点では「注釈では名前と高さは両立しない」と測っていた
+> （**SDK だけで組み立てた文書**で測った。あの文書では高さが `0` になった。その理由は
+> [issue #141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141)
+> へ切り出した）。issue #135 で、**UI が置いた個体と SDK 製の個体を同じ図面で全欄突き合わせて**
+> 取り直すと、**3 つ組だけで両方出た**（`Axis` は既定の `ZAxis3DMode` のまま。下記
+> 「注釈でも名前と高さは両立する」）。
+
+## どのオブジェクトか（VW 2026 には 3 つある）
+
+SDK ヘッダ（`MiniCadHookIntf.h`）には内部 ID しか無かったので、PIO を作るのに要る
+universal 名は実機に尋ねた（`ISDK::GetPluginType` が種別を返し、
+`ISDK::GetLocalizedPluginName` がその言語での名前を返す）。VW 2026 日本語版での実測:
+
+| universal 名 | ローカライズ名 | 内部 ID | 欄数 | 素性 |
+| --- | --- | --- | --- | --- |
+| `Elevation Benchmark2` | レベル基準線 | 663 | 33 | **現行のツール。** 絵はレイアウト（`__Edit Layout`）で作る |
+| `Elevation Benchmark` | レベル（横断面）（レガシー） | 102 | 47 | 旧ツール。**タイトルと高さの 2 つの文字**を描く |
+| `Stake Object` | レベル | 370 | 51 | 地形モデル（敷地情報）向け。ラベルは 17 択 |
+
+- `ElevationBenchmark`（空白なし）・`Level Marker`・`Datum Marker` などの綴りは
+  `GetPluginType` が false を返した。
+- `Reference Marker`（参照記号（レガシー））も PIO として実在した（レベルとは別物）。
+- 3 つとも `CreateCustomObject` だけで（スタイル無しで）作れた。
+  `FolderSpecifiers.h` には `kObjectStylesElevationBenchmarkFolder` がある。
+
+## 高さは何で決まるか
+
+どちらのレベルオブジェクトも、既定のまま注釈の Y=0 / 2800 / 5600 へ置くと、描かれた高さは
+**3 本とも `0`** で、動かしても変わらなかった。欄を 1 つ切り替えたときの実測:
+
+| | レガシー `Elevation Benchmark` | レベル基準線 `Elevation Benchmark2` |
+| --- | --- | --- |
+| 注釈の Y を読ませる欄 | `Elevation Display` ＝ `Y value relative to reference elevation` | `Axis` ＝ `YAxis2DMode`（既定は `ZAxis3DMode`） |
+| 実測（注釈 Y=0 / 2800 / 5600） | `0` / `2800` / `5600` | `0` / `2800` / `5600` |
+| 動かしたら | **追う**（`MoveObject` で Y=7000 → `7000`） | **追う**（Y=5600 へ動かして `5600`） |
+| 基準を引く欄 | `DatumY`（1000 を入れると 2800 → `1800`） | `RefElev`（1000 を入れると 2800 → `1800`） |
+
+- `Offset`（レベル基準線）に 500 を入れても、描かれた高さは `2800` のままだった。
+- レガシーの `Elevation Display` は 5 択で、内部では**真偽欄 `UseY` /
+  `Use Control Point`**（どちらも `__NNA_DO_NOT_CHANGE`）として持たれていた。
+  内部欄を先に倒してからポップアップへ書くと、ポップアップへの書き込みが負けた
+  （`ResetObject` のたびに内部欄から作り直された）。素の個体へポップアップだけを書くと、
+  5 択とも読み戻しが一致した。
+- `Distance from control point`（＝`Use Control Point`）は **-Y** を返し、
+  **動かしても値が変わらなかった**（制御点が一緒に動いた）。
+
+### `Elevation Display`（レガシー）の 5 択
+
+| universal 値 | ローカライズ | 注釈 Y=2800 での実測 |
+| --- | --- | --- |
+| `Custom` | カスタム | `Elevation`（文字欄）の中身がそのまま出る |
+| `Z value relative to ground plane` | 基準平面に対するZ値 | `0`（注釈には Z が無い） |
+| `Z value relative to reference elevation` | 基準高さに対するZ値 | `0`（同上） |
+| `Y value relative to reference elevation` | 基準高さに対するY値 | **`2800`** |
+| `Distance from control point` | 制御点からの距離 | `-2800`（移動しても変わらない） |
+
+### `Datum`（レベル基準線）の 6 択
+
+`GroundPlane` / `DesignLayerZ` / `ControlPoint` / `UserReference` / `Custom` / `StoryLevel`
+（基準平面 / デザインレイヤのZ高さ / 制御点 / ユーザー基準 / カスタム / ストーリレベル）。
+
+- `Axis` ＝ `YAxis2DMode` にすると、入ったのは `UserReference` / `ControlPoint` /
+  `Custom` の 3 つだけだった。Z を見る 3 つ（`GroundPlane` / `DesignLayerZ` /
+  `StoryLevel`）は書いても **`UserReference` へ戻った**（読み戻し）。
+- `ControlPoint` は入ったが、値は制御点からの距離だった（実測 `-3000`）。
+
+## 名前（表示名）を書く口
+
+### レガシー（`Elevation Benchmark`）
+
+- `Title`（タイトル）に書いた文字が、そのまま絵に出た。
+  位置は `TitleOrient` の 4 択（`Above Marker` は入らなかった。下記）。
+- `Elevation Display` ＝ `Custom` にすると、`Elevation`（文字欄）がそのまま高さの位置に
+  出た。空にすると数値は出なかった。実測:
+
+  | 書いたもの | 描かれた文字 |
+  | --- | --- |
+  | `Custom` ＋ `Elevation`＝空 ＋ `Title`＝`1FL` | 〈1FL〉〈 〉（**数値なし**） |
+  | `Custom` ＋ `Elevation`＝`GL` ＋ `Title`＝空 | 〈 〉〈GL〉 |
+  | `Custom` ＋ `Elevation`＝`+2800` ＋ `Title`＝`2FL` | 〈2FL〉〈+2800〉 |
+
+### レベル基準線（`Elevation Benchmark2`）の名前の出どころを探した
+
+`Note`（備考）・`EPfx` / `ESfx`（高さの前後記号）・`CustElev`（高さ（カスタム））を
+書いても絵は変わらなかった（欄には入った）。名前が出たのは次の 2 つの場合だった。
+
+1. ストーリレベルへ結んだとき——レベル名（`FL-2 階` のような「レベル種別-ストーリ」）が
+   出た（下記「ストーリ…」）。
+2. マーカーレイアウトのテキストを差し替えたとき——差し替えた固定文字が出た（下記）。
+
+### マーカーレイアウトを差し替えて任意の名前を出した実測
+
+レイアウトは PIO 自身のプロファイルグループとして読めた（`ISDK::GetCustomObjectProfileGroup` /
+`SetCustomObjectProfileGroup`。[Data Tags](Data%20Tags.md) のタグレイアウトと同じ作り）。
+実測した中身（型は `Objs.TDType.h`）:
+
+```
+プロファイルグループ: 型=11（グループ）
+  中身の型: 10（テキスト）/ 10（テキスト）/ 21 / 0
+  テキスト: 〈#Elev#〉（高さ）と 〈#STLT#-#STPS#〉（ストーリレベル名）＝**動的テキスト**
+```
+
+テキストの差し替え方を 2 通り試した（データタグの「中身を入れてから渡す」と同じ筋。
+渡し直しは `SetObjectProfileGroup`）:
+
+| 手 | レイアウトの中身 | **描かれた文字** |
+| --- | --- | --- |
+| `DeleteText` ＋ `AddTextFromBuffer` で中身を入れ替えるだけ | 〈#Elev#〉〈GL〉 | 〈2800〉〈**-**〉（**変わらない**） |
+| 古いテキストを消し、`CreateTextBlock` ＋ `AddObjectToContainer` で入れて**渡し直す** | 〈#Elev#〉〈GL〉 | 〈2800〉〈**GL**〉 |
+
+この形と `Axis`＝`YAxis2DMode` を合わせ、断面ビューポートの注釈で「▼GL ＋ 高さ」が出た。
+
+## 単位・丸め（レベル基準線）
+
+- `PrimaryUnits` は 12 択で、選ぶと単位記号が数値に付いた（実測: `0mm` / `0m` /
+  `0cm` / `0'` / `0"` / `0yd` / `0mi` / `0µm` / `0km` / `0°`）。
+- `ShowUnitMark` ＝ `False` で単位記号だけ消えた（数値は残った）。
+- `RoundingPrecision` は 10 択（`EPrec1` 〜 `EPrec0000000001`）。既定は `EPrec1`。
+- レガシーには単位の欄が無く、数値は図面の単位のまま出た。`Prefix` は
+  `None` / `Plus` / `Plus-Minus` の 3 択で、**負の値に `Plus-Minus` を当てると
+  `±-2800` になった**。
+
+## 書いて読み戻した値の実測
+
+書いた値が入らなくても `SetParamValue` からはそれが分からなかった。書いた後に読み戻して、
+戻されていた例:
+
+| オブジェクト | 書いた値 | 読み戻し |
+| --- | --- | --- |
+| レガシー | `TitleOrient` ＝ `Above Marker` | `Outside Marker` |
+| レガシー | `ElevationOrient` ＝ `Above Marker` | `Outside Marker` |
+| レガシー | `Fill` ＝ `Half Filled` | `Filled` |
+| レベル基準線（`Axis`＝Y） | `Datum` ＝ `GroundPlane` / `DesignLayerZ` / `StoryLevel` | `UserReference` |
+| レベル基準線（`Axis`＝Z） | `Datum` ＝ `StoryLevel` | `GroundPlane`（**場所を問わず**。下記） |
+
+## ストーリ／ストーリレベルとの関連付け
+
+関連付いたのは次の 2 つの場合だった:
+
+1. **ストーリ従属のデザインレイヤに置いた**とき——何も書かずに関連付いた。
+2. **`__StoryName` ＋ `__LevelTypeName` ＋ `Datum`＝`StoryLevel` の 3 つを書いた**とき
+   ——注釈の中でも効いた（書く順番を変えても同じ）。`Datum` 単独だと `GroundPlane` へ
+   倒され、名前欄だけだと `Datum` は `UserReference` のまま名前も出なかった。
+
+実測（**SDK だけで組み立てた文書**。ストーリ 1 階＝0 / 2 階＝2800、レベル種別 `FL`。
+注釈の高さ `0` はこの文書でのもの。実物件の図面での測り直しは下の「断面ビューポートの注釈で名前と高さを出した
+実測」）:
+
+| 置いた場所 | 書いたもの | `Datum` の読み戻し | 描かれた高さ | 描かれた名前 |
+| --- | --- | --- | --- | --- |
+| ストーリ従属のデザインレイヤ（2 階） | **何も書かない** | `UserReference`（既定のまま） | `2800` | **`FL-2 階`** |
+| 断面ビューポートの注釈（Y=2800） | 何も書かない | `UserReference` | `0` | `-` |
+| 断面ビューポートの注釈（Y=2800） | `__StoryName` ＋ `__LevelTypeName` ＋ `Datum`＝`StoryLevel` | **`StoryLevel`** | `0`（**この文書では**。下記） | **`FL-2 階`** |
+| 断面ビューポートの注釈（Y=2800） | 名前欄 2 つだけ（`Datum` を書かない） | `UserReference` | `0` | `-`（**出ない**） |
+| シートレイヤへ直に置く | 名前欄 2 つだけ | `UserReference` | **`2800`**（レベルの高さ） | `-` |
+
+- ストーリの高さを 2800 → 3500 に変えたら、デザインレイヤの個体の描かれた高さも `3500` に
+  なった。
+- `Datum` へ `StoryLevel` と書くだけでは入らず `GroundPlane` になった。名前欄が埋まって
+  いるときだけ入った。
+- 実機の OIP は「測定基準」に `FL`（レベル種別名）を見せたが、
+  `VWParametricObj::PopupGetChoices`（欄名版・欄索引版とも）は **0 件**を返した。
+  `Datum` へ `FL` や `GL` と書くと `GroundPlane` に倒された。
+### 断面ビューポートの注釈で名前と高さを出した実測（3 つ組）
+
+**実機の図面で、UI がツールで置いた個体と SDK 製の個体を同じ注釈の中で全欄突き合わせ、
+1 段ずつ足して確かめた**（[issue #135](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/135)。
+ストーリ 基礎/1階/2階/屋根、レベル種別 GL/FL/軒高 の実物件の図面。2 回の実行）。
+
+- **UI が置いた個体が持っていたのは、3 つ組だけだった。** `Axis`＝`ZAxis3DMode`（既定）・
+  `Datum`＝`StoryLevel`・`__StoryName`・`__LevelTypeName`。ほかに特別なものは何も無かった
+  （ストーリバウンドも拘束オブジェクトも無し。下記）。
+- SDK から 3 つ組を書くと、同じ注釈の中で同じ数値と名前が出た（`Axis` は触っていない）。
+- `Elev` 欄の持ち越しかを確かめた: **既定値として `6776` を持って生まれた個体に、別の
+  レベル（2階/FL）の 3 つ組を書いたら、数値が `3176` に変わった**（描かれた文字も
+  `3176` / `FL-2`）。
+
+  | 何をしたか | `Elev` 欄 | 描かれた数値 | 描かれた名前 |
+  | --- | --- | --- | --- |
+  | 素のまま（`Datum`＝`UserReference`） | `6776`（文書の PIO 既定値） | `6776` | `-` |
+  | 屋根/軒高 の 3 つ組 | `6776` | `6776` | `軒高-R` |
+  | **2階/FL の 3 つ組**（同じ個体へ上書き） | **`3176`** | **`3176`** | **`FL-2`** |
+  | さらに `Elev` へ `1234.5` を書く | `3176`（**入らない**） | `3176` | `FL-2` |
+
+- `Elev`（`__NNA_DO_NOT_CHANGE` の座標欄）: レイアウトのトークン `#Elev#` が出すのは
+  この欄。ストーリレベルへ結んだ個体では書いても入らなかった（上表の最後の行）。
+  `RefElevSeaLevel` も同じ値になった。
+  - 素の個体（`Datum`＝`UserReference`）では、既定値がそのまま残って描かれた。
+    `CreateCustomObject` は文書の PIO 既定値を引き継いだので、直前に UI でツールを
+    使った図面では、何も書いていない個体がもっともらしい数値を描いた（一度これを
+    「効いた」と読み違えた）。
+- **全 33 欄を写しても結果は変わらなかった**（残った差 **0 件**）。UI 製と素の SDK 製の差は
+  5〜7 欄で、高さと名前を変えたのは 3 つ組の 3 欄だけ。残りは見た目と内部フラグ
+  （`__IsHidden` / `__IsFlipped` / `__IsCreatedFromDialog` / `__kTextInsertOffsetX`）で、
+  高さにも名前にも効かなかった。
+- UI 製を複製（`DuplicateObject`）すると、複製は同じ高さと名前を出した。
+- 注釈の中の個体の 3D 位置は `z=0`（変換行列の原点も `z=0`）だった。
+
+#### 同じ 3 つ組で `0` になったビューポート（#141）
+
+[issue #141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141) で
+実機で測った（実測値と潰した筋は
+[Layers and Stories](../Findings/Layers%20and%20Stories.md)「注釈に高さが出るかは、ビューポートで決まる」から辿れる）。
+
+> **測り直しの記録**: #133 の `0` を最初「SDK で作ったストーリのレベルに高さが入っていない」と
+> 見当を付けた。#141 で測ると、SDK で `CreateStory` ＋ `SetStoryElevation` ＋
+> `CreateStoryLevelTemplate`（offset 0）＋ `AddStoryLevelFromTemplate` で作ったストーリも、
+> **レベルの絶対Z を持っていた**（4 通りの作り方で確認）。`GetStoryLevelElevation` が返して
+> いた `0` は階内の相対Z の値（`elevationOffset` を 0 にしていた）。
+
+3 つの実物件の図面で、同じ 1 回の実行のうちに「描かれた数値」と「ストーリレベルの絶対Z
+（＝階の高さ ＋ 階内の相対Z）」を並べて測り、**全行一致**した。シートレイヤ（ストーリに
+属さない）へ置いた個体でも正しく出た。
+
+置き先ごとの高さ（名前はどこでも出た。`0` になったのは数値だけ）:
+
+| 置き先 | 高さ |
+| --- | --- |
+| そのレベルのデザインレイヤ / シートレイヤへ直に | **絶対Z** |
+| **UI が作った断面ビューポートの注釈** | **絶対Z** |
+| 伏図（平面）ビューポートの注釈 | **`0`**（`ovIsSectionViewport` が `false`） |
+| SDK の `CreateSectionViewport` で作った断面ビューポートの注釈 | **素のままなら `0`。1 行足せば絶対Z**（下記） |
+
+同じ 3 つ組をデザインレイヤかシートレイヤへ置くと、数値は出た。
+
+#### SDK で作った断面ビューポートで出した実測（表示レイヤとクラスを表示へ戻して更新。#151）
+
+`CreateSectionViewport` が作ったビューポートは、作った直後はビュー行列
+（`ovViewportViewMatrix` ＝ 1050）が単位行列で、その注釈の個体は `0` を描いた。
+表示レイヤとクラスを表示へ戻してから `UpdateViewport` すると、1050 に断面の向き
+（1055）と同じ値が入り、以後の更新でも保たれた。そのうえで注釈へ置いて 3 つ組を書き、
+`ResetObject` すると絶対Z が出た（実測。正解 `612` と一致）。1050 へは自分で書いていない。
+
+> **測り直しの記録**: #147 では「注釈を置き終えてから 1055 を 1050 へ写し、`ResetObject`
+> する」形で出していた。[#151](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/151)
+> で取り直すと、写さずに出た。#147 で「`UpdateViewport` が 1050 を単位行列へ戻す」と
+> 見えたのは、**表示レイヤとクラスが揃っていなかったとき**だった。1050 が入っている
+> ビューポートでは、ラベルを動かしても・欄を書き換えても・クラスを変えても・
+> `ResetObject` しても高さは落ちなかった（#147 で推定していた「落ちる」は外れた）。
+
+手順・2 × 2 の実測値・潰した筋は
+[Viewports](../Findings/Viewports.md)「SDK で作った断面ビューポートの注釈でレベル基準線に高さを出す」。
+
+#### ストーリバウンド（`SetObjectStoryBound` の一群）を測った
+
+`ISDK` にはオブジェクトを階／レベルへ結ぶ**ストーリバウンド**
+（`HasObjectStoryBounds` / `GetObjectStoryBound` / `SetObjectStoryBound` /
+`GetObjectBoundElevation`。構造材 PIO で使うもの。[Parametric Objects](../Findings/Parametric%20Objects.md)）
+があり、注釈で高さが出る仕組みの第一候補として測った。UI が置いた個体も
+`HasObjectStoryBounds=false` / 件数 0 で、名指しで引いた `id=-3 / 0 / 1` もすべて `false`
+だった。
+
+#### `Axis` を倒して高さを注釈の Y から読ませた実測
+
+3 つ組に `Axis`＝`YAxis2DMode` を足して比べた:
+
+| 書いたもの | `Datum` | 描かれた高さ | 描かれた名前 |
+| --- | --- | --- | --- |
+| 3 つ組 | `StoryLevel` | レベルの高さ | **レベル名** |
+| 3 つ組 ＋ `Axis`＝`YAxis2DMode` | `UserReference` | 注釈の Y | **`-`** |
+
+`Axis` を `YAxis2DMode` にすると、`__StoryName` / `__LevelTypeName` が**空に戻り**、
+`Datum` も `UserReference` に戻った（書く順を変えても同じ）。
+
+#### 描かれた名前の実測
+
+レイアウトのトークン `#STLT#-#STPS#` が解決された実測: ストーリ〈1階〉接尾語 `1` ＋
+レベル種別 `FL` → **`FL-1`**、〈屋根〉＋`軒高` → **`軒高-R`**、〈基礎〉＋`GL` → **`GL-F`**。
+**接尾語を空で作った文書では階の名前が出た**（#133 の `FL-2 階`）。
+
+## 拘束（`IsElevationBenchmarkConstrained`）
+
+`Interfaces/VectorWorks/Extension/IMarkersPluginSupport.h` に
+`IsElevationBenchmarkConstrained(hObject)` と `RemoveElevationBenchmarkConstraining(hObject)`
+がある（このヘッダは `VectorworksSDK.h` から引き込まれず、名指しで include した）。
+実測: 素の個体・`Axis`＝`YAxis2DMode` の個体はいずれも `false`、UI が置いた個体は
+`true`、SDK から 3 つ組を書いた個体も `true` だった。
+
+> **測り直しの記録**: 最初の測定では、SDK から作った個体はどの設定でも `false` だった
+> （このときは 3 つ組を書いていなかった）。
+
+## パラメータ（主なもの）
+
+### `Elevation Benchmark2`（レベル基準線・33 欄）
+
+| universal 名 | ローカライズ名 | 欄型 | 既定 |
+| --- | --- | --- | --- |
+| `Axis` | 測定に使用する座標軸 | ポップアップ | `ZAxis3DMode` |
+| `Datum` | 測定基準 | ポップアップ | `UserReference` |
+| `RefElev` | 基準高さ | 座標 | 0 |
+| `CustElev` | 高さ（カスタム） | 文字 | 空 |
+| `Offset` | オフセット | 座標 | 0 |
+| `Elevation` | 高さ | 静的文字（**読み取り用**） | 0 |
+| `Elev` | `__NNA_DO_NOT_CHANGE` | 座標 | 0（**描かれる数値はこれ。ただし出力**——ストーリレベルへ結んだ個体では書いても入らない。上記） |
+| `RefElevSeaLevel` | 海抜参照高さ | 座標 | 0（ストーリレベルへ結ぶと `Elev` と同値になる） |
+| `Note` | 備考 | 文字 | 空 |
+| `PrimaryUnits` / `RoundingPrecision` / `ShowUnitMark` | 主単位 / 端数丸めの精度 / 単位記号を表示 | ポップアップ・真偽 | `DocumentUnits` / `EPrec1` / `True` |
+| `EPfx` / `ESfx` | 高さの前記号 / 後記号 | 文字 | 空 |
+| `MarkerScaleFactor` | マーカーの倍率 | 実数 | 1 |
+| `UseHorizontalLeader` / `UseLeaderOffset` | 水平引出線を使用 / 引出線オフセットを使用 | 真偽 | `True` / `False` |
+
+`__` で始まる欄（`__Edit Layout` / `__StoryName` / `__LevelTypeName` / `__IsHidden` …）は
+内部用。`__StoryName` / `__LevelTypeName` へ書いても絵は変わらない。
+
+### `Elevation Benchmark`（レガシー・47 欄）
+
+| universal 名 | ローカライズ名 | 欄型 | 既定 |
+| --- | --- | --- | --- |
+| `Title` | タイトル | 文字 | ベンチマーク　タイトル |
+| `Title Width` | タイトル文字幅の上限 | 座標 | 7500 |
+| `Elevation Display` | 高さ表示 | ポップアップ（5 択） | `Z value relative to ground plane` |
+| `Elevation` | 高さ（カスタム） | 文字 | レベル基準線 |
+| `DatumY` | 基準高さ | 座標 | 0 |
+| `Style` | 形式 | ポップアップ（`US` / `ISO`） | `US` |
+| `LineOrient` | 引出線の位置 | ポップアップ（2 択） | `Top of Marker` |
+| `TitleOrient` / `ElevationOrient` | タイトル / 高さ表示の位置 | ポップアップ（4 択） | `Above Line` / `Below Line` |
+| `Orientation` | マーカーの位置 | ポップアップ（`Left` / `Right`） | `Right` |
+| `Fill` | マーカーの属性 | ポップアップ（3 択） | `Filled` |
+| `Prefix` | 前記号 | ポップアップ（3 択） | `None` |
+| `Factor` / `CrossScale` / `MFact` | 記号の倍率 / 十字の倍率 / マーカーサイズ | 実数・座標 | 1 / 1 / 6.35 |
+| `ShoulderLength` / `LineLength` / `Offset` / `UseOffset` | 水平線の長さ / 引出線の長さ / オフセット | 座標・真偽 | 1250 / 152.4 / 620 / `False` |
+
+`UseY` / `Use Control Point` / `ControlPoint01X` …（`__NNA_DO_NOT_CHANGE`）は
+`Elevation Display` の内部表現と制御点（上記）。
+
+## 描いた文字を機械で読んだ手順
+
+「絵に何を出したか」は、PIO が吐いた図形を辿ってテキスト（`kTextNode`）を読んで採った
+（計測に使ったコード）。
+
+```cpp
+for (MCObjectHandle child = gSDK->FirstMemberObj(h); child != nil; child = gSDK->NextObject(child))
+	if (gSDK->GetObjectTypeN(child) == kTextNode)
+		TXString text = gSDK->GetTextChars(child);   // ここに描かれた文字が入っている
+```
+
+レベル基準線では、この経路で**レイアウトのトークンそのもの**（`#Elev#` /
+`#STLT#-#STPS#`）と**解決後の値**（`2800` / `-`）の両方が拾えた。
