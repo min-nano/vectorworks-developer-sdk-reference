@@ -12,6 +12,9 @@
 #include <string>
 #include <system_error>
 
+using namespace VectorWorks;
+using namespace VectorWorks::Filing;
+
 VW_PROBE("orgref-sdk", "CreateReference で参照", "前面の図面から orgref-src を CreateReference")
 {
 	std::error_code ec;

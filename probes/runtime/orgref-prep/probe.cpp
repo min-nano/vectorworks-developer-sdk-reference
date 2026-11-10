@@ -23,6 +23,9 @@
 #include <string>
 #include <system_error>
 
+using namespace VectorWorks;
+using namespace VectorWorks::Filing;
+
 namespace
 {
 	std::string OrpPath(const char* leaf)
