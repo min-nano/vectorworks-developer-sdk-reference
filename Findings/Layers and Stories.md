@@ -1,716 +1,321 @@
 # レイヤ・ストーリ・重ね順
 
+デザインレイヤ／シートレイヤの列挙・重ね順・高さ・縮尺と、階（ストーリ）・レベルを SDK から
+作って結ぶ手順（[#141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141)・
+[#145](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/145)・
+[#194](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/194)・
+[#221](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/221)・
+[#223](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/223)・
+[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)・
+[#281](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/281)）。
+測った環境・プローブ・実測の表とダンプは [計測記録](../Metrics/Layers%20and%20Stories.md)。
+
 ## デザインレイヤの並びと並べ替え
 
-- **デザインレイヤは図面のオブジェクト列に並んでいる。**
-  `VWDocument::GetDrawingHeaderFristMember`（綴りは SDK ママ）＋ `NextObject` で辿れ、
-  **`InsertObjectAfter` / `InsertObjectBefore`** が VS の `HMoveForward` に当たる。
-  これがレイヤ重ね順を変える**唯一の手段**。
+- **デザインレイヤは図面のオブジェクト列に並ぶ。** `VWDocument::GetDrawingHeaderFristMember`
+  （綴りは SDK ママ）＋ `NextObject` で辿れ、**`InsertObjectAfter` / `InsertObjectBefore`**
+  （VS の `HMoveForward` 相当）が**レイヤ重ね順を変える唯一の手段**。
 - **並べ替えはビューポート生成より前に行う**（ビューポートは生成時の重ね順で描かれる）。
-- **【実測】VW はデザインレイヤを「レイヤ高さの降順」で並べる。作った順でも、レベル種別の
-  登録順でもない。** 実機のダンプ（レイヤ名 ＋ ストーリ / レベル種別 / レベル高さ）:
-
-  ```
-  3to3.5-柱[屋根/3to3.5-柱/5961] | R-垂木[屋根/垂木/5961] | … | R-野地板[屋根/野地板/5961]
-  2-FL[2階/FL/3361] | 2to2.5-柱[2階/2to2.5-柱/3325] | … | 2-野地板[2階/野地板/3325]
-  1-FL[1階/FL/561]  | 1to2-柱[1階/1to2-柱/525] | … | 1-横架材天端[1階/横架材天端/525]
-  F-アンカーボルト[基礎/基礎天端/400] | F-床束[…/50] | F-底盤[…/50] | F-立上り[基礎/GL/0]
-  柱伏図記号・共通（ストーリ非従属。高さ 0 で最背面）
-  ```
-
-  高さが 5961 → 3361 → 3325 → 561 → 525 → 400 → 50 → 0 と**きれいな降順**になっている。
-  希望順に沿って**作って**も 27 枚中 26 枚が並べ替え対象になった（作った順は完全に無視）。
-  ストーリ非従属レイヤだけは**作った順**で決まり、ストーリ従属レイヤの背面へ回る。
-- **プラグインが入れた並べ替えは、その処理中の描画には届かない。** 図面の並びは並べ替え後で
-  正しく（読み戻しでも OIP でも）、描き直しも走っている（`IsDirty` が下りる）のに、処理中に
-  作ったビューポートの絵は高さ順のまま——ユーザーが「更新」を 1 回押すか、ファイルを
-  開き直すと、図面の並び（＝並べ替え後）で描き直されて正しくなる。
-- **処理中の絵へ届かせようとして全滅した 4 通り（もう一度やらない）:**
-  1. 並べ替えをビューポート生成の直前に置く。
-  2. 並べ替えを**要素を 1 つも描く前**へ前倒しし、`SetDirty(true)` を立てて描き直す。
-  3. 描き直しを **undo イベントを閉じた後**へ回し、口も `ISDK::UpdateViewport` へ替える。
-  4. 描き直しを**進捗ダイアログも閉じた処理の外**まで遅らせる。さらに「処理中は 1 枚も
-     描かず out-of-date の印だけ立てて VW に描かせる」も試したが、当時は「ビューポートによっては
-     `SetDirty(true)` を受け付けない（`IsDirty` が立たない）ので印すら立たない」と読んだ
-     （**測り直しでは再現しなかった**。下の注）。
-     - 【注】**「`SetDirty(true)` を受け付けない」は測り直しで再現しなかった**（#245）。
-       断面 1 枚（更新済み）と平面 5 枚に掛けて、書いた直後・ランループの後・undo
-       イベントを閉じた後・VW へ戻った後の 4 時点で `VWViewportObj::IsDirty()` と
-       `ovViewportDirty`（1004）を読んだ:
-
-       | ビューポート | 掛けたもの | `IsDirty` / 1004（4 時点とも） |
-       | --- | --- | --- |
-       | 断面・更新済み | `SetDirty(true)` | yes / T |
-       | 平面・更新済み | `SetDirty(true)` | yes / T |
-       | 平面・一度も更新していない | `SetDirty(true)` | yes / T |
-       | 平面・更新済み（対照） | 何もしない | no / F |
-       | 平面・更新済み | `SetDirty(true)` → `UpdateViewport` | no / F（`SetDirty` 直後は yes） |
-       | 平面・更新済み | 1004 へ `true` を書く | yes / T |
-
-       戻った後の読みで変わった欄は 0 / 12。**`SetDirty(true)` はどのビューポートでも
-       立った**——「立たない」と読んだのは、別の操作（直後の `UpdateViewport` か、同じ
-       呼び出しの中の読み）と取り違えたものと見られる【推定】。**ただし「印だけ立てて
-       VW に描かせる」が絵の順序を直すかは確かめていない**（立った印を VW がいつ描き直しに
-       使うかは別の問い）。
-
-  SDK に遅延実行の口は無い（`ISDK` にあるのは `RegisterDialogForTimerEvents`＝ダイアログの
-  タイマーだけ）。**「周期的に呼んでもらう口」を一通り数え上げた結果は
-  [周期実行と通知](Timers%20and%20Notifications.md)**（アイドルの口は無い・通知は出来事用・
-  ツール拡張の `kAction_OnIdle` は選ばれている間だけ）。
-- **「動かせた数」を並べ替えの成否と読まない。** 既に希望どおりでも 0 件、失敗しても 0 件。
-  並びそのものを読み戻して確かめること。
-- **【訂正】レイヤ高さを読む口も書く口も ISDK にある**（下記「レイヤの高さ」）。
-  ここには当初「取得する呼び出しが無い」と書いていたが、**誤り**だった
-  ——`VWFC::VWObjects::VWLayerObj::GetElevation` / `SetElevation` と、オブジェクト変数
-  `ovLayerHeightInCurrUnits`(157) が同じ箱を読み書きする
-  （[#194](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/194) で実測）。
+- **VW はストーリ従属のデザインレイヤを「レイヤ高さの降順」で並べる。** 作った順でも
+  レベル種別の登録順でもない（希望順に作っても 27 枚中 26 枚が並べ替え対象になった）。
+  **ストーリ非従属レイヤは作った順**で、ストーリ従属レイヤの背面へ回る
+  （[実測](../Metrics/Layers%20and%20Stories.md#デザインレイヤの並びと並べ替え)）。
+- **プラグインが入れた並べ替えは、その処理中に作ったビューポートの絵には届かない。** 図面の
+  並びは正しく、利用者が「更新」を 1 回押すか開き直すと正しく描き直される。処理中の絵へ
+  届かせる 4 通りは全滅した（もう一度やらない。[潰した道](../Metrics/Layers%20and%20Stories.md#デザインレイヤの並びと並べ替え)）。
+  - 【注】当時の「`SetDirty(true)` を受け付けないビューポートがある」は測り直し（#245）で
+    再現しなかった——**`SetDirty(true)` はどのビューポートでも立った**。取り違えと見られる
+    【推定】。**印だけ立てて VW に描かせると絵の順序が直るかは確かめていない。**
+  - SDK に遅延実行の口は無い（`RegisterDialogForTimerEvents`＝ダイアログのタイマーだけ）。
+    周期的に呼んでもらう口の一覧は [周期実行と通知](Timers%20and%20Notifications.md)（アイドルの口は無い・
+    通知は出来事用・ツール拡張の `kAction_OnIdle` は選ばれている間だけ）。
+- **「動かせた数」を並べ替えの成否と読まない。** 既に希望どおりでも失敗しても 0 件。
+  並びそのものを読み戻して確かめる。
+- **【訂正】レイヤ高さを読む口も書く口も ISDK にある**（下記「レイヤの高さ」。当初の
+  「取得する呼び出しが無い」は誤り）。
 
 ## レイヤを列挙する（デザインとシート・種類・順序・現在・縮尺）
 
-**実測**（VW 2026 / Windows。`probes/runtime/layer-enum/` を MCP ブリッジのスプールから回し、
-オーガナイザと目で突き合わせた。ビルド `6f0d1d834668`。
-[issue #281](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/281)）。
-新規の空図面（既定のデザインレイヤ「レイヤ-1」1 枚）に、デザインレイヤ `LE-D-low`（高さ
-`-1000`・縮尺 1/50）→ `LE-D-high`（高さ `3000`・縮尺 1/200）、シートレイヤ `LE-30` → `LE-10` →
-`LE-20` の順に `CreateLayer` で足し、`LE-10` にビューポートを 1 つ作ってから読んだ。
+VW 2026 / Windows で実測（[#281](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/281)。
+[見本と手順](../Metrics/Layers%20and%20Stories.md#レイヤを列挙するデザインとシート種類順序現在縮尺)）。
 
 - **シートレイヤも同じ列に並ぶ。** `GetDrawingHeader()`（型 32）→ `FirstMemberObj` →
-  `NextObject` の列に、デザインレイヤとシートレイヤが**混ざって 1 本で**並ぶ。
-  `VWDocument::GetDrawingHeaderFristMember()` の返す先頭は `FirstMemberObj(GetDrawingHeader())`
-  と同じハンドルだった。`ISDK::ForEachLayer` もデザインとシートを**同じ順で**全部配る。
-- **【罠】列の末尾にレイヤではないものが 1 つ居る。** 型 `0`・名前が空のオブジェクトが、
-  どの図面でも列の最後に 1 つ並んだ（新規の空図面でも。アドレスは図面ごとに違う）。
-  `ForEachLayer` はこれを配らない（7 件の列に対して 6 件）。**列を辿るなら
-  `GetObjectTypeN(h) == kLayerNode`（31）で絞る**——絞らないと名前の無い「レイヤ」が 1 枚増える。
-  正体は分かっていない【未確認】。
-- **ビューポートの注釈などは列に混ざらない。** シートにビューポート（型 122）を作っても
-  列は 7 件のまま変わらず、増えたのはそのシートレイヤの直下の数（1 → 2）だけだった。
-- **デザインとシートの見分けは `ovLayerType`(154) か `VWLayerObj::GetLayerType()`。**
-  どちらも同じ値を返した: デザイン `1`（`kLayerDesign`）・シート `2`（`kLayerSheet`）。
-  `ovLayerType` は `Sint16` で受け取れる。`ELayerType` の値の一覧は `kLayerDesign = 1`・
-  `kLayerPresentation = 2`（＝`kLayerSheet`。旧名）・`kGuestLayerDesign = 3`
-  【ヘッダ根拠】（`MiniCadCallBacks.h:4560`）。**`3` は参照で入ってきたデザインレイヤ**で、
-  これも同じ列に並ぶ（下記「参照で入ってきたレイヤ」）。
-- **シートの名前（番号）は `GetObjectName`、`ovLayerExpandedSheetName`(162) はシートでだけ
-  読める。** タイトルを空のまま作ったシートでは 162 は**番号と同じ文字列**
-  （`"LE-30"`）を返した（タイトルを入れたときの形は測っていない）。デザインレイヤに対しては
-  `GetObjectVariable` が `false` を返す。
+  `NextObject` の 1 本の列にデザインとシートが混ざる。`GetDrawingHeaderFristMember()` も
+  同じ先頭を返し、`ISDK::ForEachLayer` も両方を同じ順で配る。
+- **【罠】列の末尾にレイヤでないもの（型 `0`・名前なし）が 1 つ居る**（空図面でも）。
+  `ForEachLayer` はこれを配らない。**列を辿るなら `GetObjectTypeN(h) == kLayerNode`（31）で
+  絞る。** 正体は【未確認】。
+- ビューポートの注釈などは列に混ざらない（増えるのはシートレイヤの直下の数だけ）。
+- **デザインとシートの見分けは `ovLayerType`(154) か `VWLayerObj::GetLayerType()`**（同じ値）。
+  デザイン `1`（`kLayerDesign`）・シート `2`（`kLayerSheet`）。`Sint16` で受け取れる。
+  `kLayerPresentation = 2`（旧名）・`kGuestLayerDesign = 3`【ヘッダ根拠】（`MiniCadCallBacks.h:4560`）。
+  **`3` は参照で入ってきたデザインレイヤ**（下記）。
+- **シートの名前（番号）は `GetObjectName`。`ovLayerExpandedSheetName`(162) はシートでだけ読め**、
+  タイトルが空なら番号と同じ文字列を返す（タイトル入りは未測定）。デザインレイヤでは `false`。
 
 ### 参照で入ってきたレイヤ（種類 `3`）——同じ列に並び、名前に接頭辞が付く
 
-**実測**（VW 2026 / Windows。`probes/runtime/layer-guest/` を MCP ブリッジのスプールから回した。
-ビルド `347e44924739` と `df9b22412610` の 2 回。どちらも同じ列）。新規の空図面にデザインレイヤ `LG-src` と点を 1 つ足して
-一時フォルダの `…-src.vwx` へ別名保存し、続けて `…-host.vwx` へ別名保存して図面を移し、
-`LG-src` を消してから `ISDK::CreateReference(<src の IFileIdentifier>)` を呼んだ
-（ダイアログは出ず `true`。参照元の図面にはレイヤ-1 と LG-src の 2 枚のデザインレイヤがある）。
+`ISDK::CreateReference` で別図面を参照した実測（Windows。
+[表](../Metrics/Layers%20and%20Stories.md#参照で入ってきたレイヤ種類-3の並びと名前)）。
 
-| # | 名前 | `ovLayerType` / `GetLayerType` | `IsObjectFromReferencedFile` | 現在 |
-| --- | --- | --- | --- | --- |
-| 0 | `レイヤ-1`（自分の） | `1` / `1` | `false` | ○ |
-| 1 | `NNA#1_レイヤ-1` | **`3` / `3`** | **`true`** | |
-| 2 | `NNA#1_LG-src` | **`3` / `3`** | **`true`** | |
-| 3 | （型 0・名前なし） | — | `false` | |
-
-- **参照で入ったレイヤも同じ列に、型 `31`（`kLayerNode`）のまま並ぶ。** 自分のレイヤの後、
-  末尾の型 0 の前に、**参照元のデザインレイヤが全部**入った。`ForEachLayer` も 3 件とも配る。
-  **型で絞るだけでは自分のレイヤと見分けられない**——見分けは `ovLayerType == 3`
-  （`kGuestLayerDesign`）か `IsObjectFromReferencedFile(layer)`。どちらも同じ結果だった。
-- **名前は `NNA#1_<元の名前>` に変わる。** `GetNamedLayer("LG-src")` は `nullptr` で、
-  `GetNamedLayer("NNA#1_LG-src")` は列のハンドルと同じものを返した。画面のレイヤの
-  ポップアップにも `NNA#1_LG-src` と出る。元の名前で引きたいなら接頭辞を剥がす必要がある
-  （`#1` が参照の通し番号か、`NNA` が何から来るかは 1 回の参照では分からない【未確認】）。
-- **現在のレイヤにできる。** `SetCurrentLayer(<参照で入ったレイヤ>)` の後、`GetCurrentLayer()` は
-  そのハンドルと `==` で一致し、列でも `current==yes` がそのレイヤに移った。
-- **縮尺は `GetLayerScaleN` で読める**（`1`。参照元のレイヤが 1:1 だったので、参照元の縮尺を
-  写すのかまでは分からない）。
-- `ovGuestLayerHasRelativePath`(163) は参照で入ったレイヤでも `GetObjectVariable` が `false` を
-  返した（読む口が違うのか、この形の参照では無いのかは分からない）。
-- **参照で入ったレイヤの直下には図形が見えない。** 参照元の `LG-src` の直下は保存の前に
-  `2[17,0]`（点＋型 0）だったが、参照で入った `NNA#1_LG-src` の直下は `1[0]`（型 0 だけ）。
-  `FirstMemberObj` → `NextObject` では参照の中身は辿れない（どこに置かれるかは調べていない。
-  図形の数え方は別 issue）。
-- 副次的に、**`DeleteObject(layer, false)` で消した直後の列に、名前の無い型 `90` のものが 1 つ
-  挟まった**（`CreateReference` の後の列では消えていた）。型で絞っていれば害は無い。
+- **参照元のデザインレイヤが全部、型 `31` のまま同じ列に入る**（自分のレイヤの後、末尾の型 0 の
+  前）。`ForEachLayer` も配る。**型だけでは自分のレイヤと見分けられない**——
+  `ovLayerType == 3` か `IsObjectFromReferencedFile(layer)` で見分ける（同じ結果）。
+- **名前は `NNA#1_<元の名前>` に変わる。** `GetNamedLayer` は元の名前では `nullptr`、接頭辞付きで
+  引ける。元の名前で引きたいなら接頭辞を剥がす必要がある。`#1` / `NNA` の由来は【未確認】。
+- 現在のレイヤにでき（`SetCurrentLayer` → `GetCurrentLayer` と `==`）、縮尺も `GetLayerScaleN` で
+  読める（参照元の縮尺を写すかは未確認）。`ovGuestLayerHasRelativePath`(163) は `false` だった。
+- **参照で入ったレイヤの直下には図形が見えない**（型 0 だけ）。参照の中身は `FirstMemberObj` →
+  `NextObject` では辿れない。
+- 副次: `DeleteObject(layer, false)` の直後の列に型 `90` が 1 つ挟まった。型で絞れば害は無い。
 
 ### 順序——列は作った順。オーガナイザはデザインだけ逆に見せる
 
-| | 列（`NextObject` / `ForEachLayer`） | オーガナイザの `#` 列 |
-| --- | --- | --- |
-| デザインレイヤ | レイヤ-1 → LE-D-low → LE-D-high（**作った順**） | 1 LE-D-high・2 LE-D-low・3 レイヤ-1（**列の逆**） |
-| シートレイヤ | LE-30 → LE-10 → LE-20（**作った順**） | 1 LE-30・2 LE-10・3 LE-20（**列と同じ**） |
-
-- **デザインレイヤはオーガナイザの `#` の逆順、シートレイヤは同じ順**で列に並ぶ。オーガナイザと
-  同じ並びで見せたいなら、デザインだけ反転する。
-- **列の中では、デザインとシートが作った順に入り混じる**（この図面ではたまたまデザインを
-  先に作ったので前半に固まった）。**タブごとに分けるなら `ovLayerType` で振り分ける。**
-- **作った後に高さを変えても並びは変わらなかった**（`LE-D-low` を `-1000`、`LE-D-high` を
-  `3000` にしても、列は作った順のまま）。上の「VW はデザインレイヤを高さの降順で並べる」は
-  ストーリに結んだレイヤを作ったときの観察で、同じ節の「ストーリ非従属レイヤは作った順」と
-  食い違わない。
-- **オーガナイザを開いて閉じても列は変わらなかった**（閉じた後の再走で同じ並び・同じアドレス）。
+- **列はデザインもシートも作った順**（両者が入り混じる。タブごとに分けるなら `ovLayerType` で
+  振り分ける）。**オーガナイザの `#` は、デザインレイヤだけ列の逆順、シートは同じ順**
+  （[表](../Metrics/Layers%20and%20Stories.md#列の順序とオーガナイザの並びの比較)）。
+  オーガナイザと同じ並びで見せたいなら、デザインだけ反転する。
+- 作った後に高さを変えても、オーガナイザを開閉しても列は変わらなかった（「高さの降順」は
+  ストーリに結んだレイヤを作ったときの規則で、食い違わない）。
 
 ### 現在のレイヤ——ハンドルの `==` で判定してよい
 
-- `GetCurrentLayer()` の返すハンドルは、列で辿ったハンドルと**そのまま `==` で一致した**。
-  **シートレイヤを現在にしても同じ**（`SetCurrentLayer(LE-20)` の後、`GetCurrentLayer()` は
-  `LE-20` の列のハンドルと同値。列の中で一致するのは 1 枚だけ）。
-- **ただしハンドルは図面をまたいで持ち越さない。** 図面を閉じて新規を開いたら、新しい図面の
-  「レイヤ-1」が**閉じた図面の `LE-D-low` と同じアドレス**で返り、ヘッダも閉じる前と同じ
-  アドレスだった（[周期実行と通知](Timers%20and%20Notifications.md) の 4 の 8 と同じ現象）。
-  列挙のたびに引き直す。
+- `GetCurrentLayer()` は列で辿ったハンドルと `==` で一致する（シートを現在にしても同じ）。
+- **ハンドルは図面をまたいで持ち越さない**——閉じて新規を開くと、別のレイヤが前と同じアドレスで
+  返った（[周期実行と通知](Timers%20and%20Notifications.md) の 4 の 8 と同じ現象）。列挙のたびに引き直す。
 
 ### 縮尺——1/50 は `50`。シートレイヤは常に `1` で、書いても効かない
 
-| レイヤ | `SetLayerScaleN` で書いた値 | `GetLayerScaleN` / `VWLayerObj::GetScale` | オーガナイザ |
-| --- | --- | --- | --- |
-| LE-D-low（デザイン） | `50` | `50` | 1:50 |
-| LE-D-high（デザイン） | `200` | `200` | 1:200 |
-| レイヤ-1（デザイン。既定） | — | `1` | 1:1 |
-| LE-30 / LE-10（シート） | — | `1` | （縮尺の欄は無い） |
-| LE-20（シート） | `50` | **`1`**（書いても変わらない） | （同） |
-
-- **値は縮尺の分母**（1/50 なら `50`、1:1 なら `1`）。`VWLayerObj::GetScale()` も同じ値。
-- **シートレイヤの縮尺は常に `1`**——`SetLayerScaleN(sheet, 50)` は黙って無視され、読み戻しは
-  `1` のまま。シートレイヤでは縮尺に意味が無いので、結果に出すなら `null` 扱いが正直。
-- この図面（新規の空図面・縮尺 1:1 生まれ）では、**デザインレイヤへの `SetLayerScaleN` は
-  効いた**——下の「`SetLayerScaleN` は黙って効かないことがある」の実例（1:1 の新規図面で
-  効かなかった）とは別の結果である。何が分けているかは依然分からない。
+- **`GetLayerScaleN` / `VWLayerObj::GetScale()` の値は縮尺の分母**（1/50 → `50`、1:1 → `1`）。
+- **シートレイヤの縮尺は常に `1`**——`SetLayerScaleN(sheet, 50)` は黙って無視される。結果に
+  出すなら `null` 扱いが正直（[表](../Metrics/Layers%20and%20Stories.md#縮尺の読みと書き込みの実測)）。
+- この図面（1:1 生まれの新規）ではデザインレイヤへの `SetLayerScaleN` が効いた——下記
+  「`SetLayerScaleN` は黙って効かないことがある」の実例とは別の結果で、何が分けるかは不明。
 
 ### OS タイマーの刻みの中・図面 0 枚
 
-プローブは本体をピン留めし、`SetTimer`（50 ms）を仕掛けてメニューから戻り、**主窓が
-操作できる状態になってから**刻みの中で同じ列挙をした。
-
-- **刻みの中でも同じ列が取れた**——メニューの中で最後に辿った列と、アドレスまで含めて一致。
-  `ForEachLayer` も同じ 6 件。刻みの中で undo イベントは開いていなかった。
-- **図面 0 枚でも落ちない。** 刻みの中で `CloseDocument()` で全部閉じた後（件数 0）、
-  `GetDrawingHeader()` は `nullptr`、`VWDocument::GetDrawingHeaderFristMember()` も `nullptr`、
-  `GetCurrentLayer()` も `nullptr`、`ForEachLayer` は 1 度もコールバックせずに戻った。
-  **呼ぶ前に図面の有無を確かめる必要は無い**（列が空になるだけ）。
-- 刻みの中で `OpenDocumentPath(nullptr, false)` を呼ぶと `true` で新規が開き（件数 1）、
-  次の刻みでその図面の列（レイヤ-1 ＋ 末尾の型 0）が取れた。**ただしこの間、次の刻みまで
-  30 秒空き、その間 VW は応答なし**（`Responding=False`）だった【推定: 新規を開いた後の
-  何かの処理。メニューやブリッジから開いたときにはこの待ちは見ていない】。
+- **刻みの中でも同じ列が取れる**（アドレスまで一致。undo イベントは開いていなかった）。
+- **図面 0 枚でも落ちない。** `GetDrawingHeader()` / `GetDrawingHeaderFristMember()` /
+  `GetCurrentLayer()` は `nullptr`、`ForEachLayer` は 1 度も呼ばずに戻る。**呼ぶ前に図面の有無を
+  確かめる必要は無い。**
+- 刻みの中の `OpenDocumentPath(nullptr, false)` は `true` で新規を開くが、次の刻みまで 30 秒
+  VW が応答なしになった【推定: 新規を開いた後の何かの処理】
+  （[実測](../Metrics/Layers%20and%20Stories.md#os-タイマーの刻みの中図面-0-枚)）。
 
 ### `objects`（直下の数）について
 
-列で辿った各レイヤの `FirstMemberObj` → `NextObject` の数は、**何も描いていない
-レイヤでも `1`** だった（ビューポートを 1 つ置いたシートで `2`）。レイヤの直下にも利用者には
-見えないものが 1 つ居る（型は `0`。`layer-guest` の再走で確かめた）【未確認: 正体】。**オブジェクトの数え方は別 issue で決める**
-（ここでは列挙の口だけを見る）。
+- 何も描いていないレイヤでも `FirstMemberObj` → `NextObject` の数は `1`（型 `0`）。数え方は
+  [Layer Objects](Layer%20Objects.md) で決めた（終端の型 0 を除く）。
 
 ## レイヤの高さ（読み書きの 4 経路と、絶対Z の決まり方）
 
-[issue #194](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/194) で
-**実機確認済み**（VW 2026 / mac。`probes/runtime/ipzl-layer-elevation/` と
-`probes/runtime/layer-elevation-absolute-z/` を新規の空図面で 1 回ずつ。以下の値は
-実行ログそのまま）。
+[#194](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/194) で実機確認済み
+（VW 2026 / mac）。
 
 ### 書く口は 4 つあり、**すべて同じ箱に届く**
 
-レイヤ高さを 4 通りで与え、**5 経路で読み戻して突き合わせた**（数値はすべて互いに違う）。
-
-| 与え方 | `VWLayerObj::GetElevation` | `ovLayerHeightInCurrUnits`(157) | バウンド経路 | `GetHeight` / `ov158`(厚さ) |
-| --- | --- | --- | --- | --- |
-| `VWLayerObj::SetElevation(872)` | 872 | 872 | 872 | 0 |
-| `SetObjectVariable(h, 157, 1234)` | 1234 | 1234 | 1234 | 0 |
-| VS `SetLayerElevation(h, 1500, 2400)` | 1500 | 1500 | 1500 | **2400** |
-| VS `SetLayerElevationN(h, 1600, 2400)` | 1600 | 1600 | 1600 | **2400** |
-| ストーリのレベル（階 2699・階内相対Z −40） | **2659** | 2659 | 2659 | 0 |
-
-- **`ovLayerHeightInCurrUnits`(157) は `VWLayerObj::GetElevation` / `SetElevation` と
-  同じ箱。** ヘッダのコメントも "current units, **the base elevation height of the
-  layer**"（`Kernel/API/ObjectVariables.h`）。**読むだけなら `GetElevation` が一番短い。**
-- **`VWLayerObj::SetElevation` の実体は `GS_Kludge(gCBP, 1002, …)`、`GetElevation` は
-  同 `1000`**（SDK 同梱の `VWLayerObj.cpp` を読んだ。**書きと読みでセレクタが違う**ので、
-  「書いた値が読み戻せた」だけでは図面に届いた証拠にならない——実際に届いていることは
-  下記の絶対Z で確かめた）。
-- **厚さ（ΔZ・階高）まで 1 回で書けるのは VectorScript の 2 つだけ**
-  （`IVectorScriptEngine::ExecuteScript` 経由。`ISDK` に相当する口は無い。
-  ただし `VWLayerObj::SetHeight` が `GS_Kludge` 1003 で厚さを書く【ヘッダ根拠】）。
-  `SetLayerElevation` と `SetLayerElevationN` は**この舞台では同じ振る舞い**だった。
-- **`eStoryObjectBound_LayerWallHeight` が返すのは「高さ ＋ 厚さ」。** 高さ 1500 ＋
-  厚さ 2400 で **3900**。厚さが 0 なら高さと同値になるので、**取り違えに気付きにくい。**
-- **ストーリ由来のレイヤの高さは「階の高さ ＋ 階内相対Z」**（2699 − 40 = **2659**）。
-  4 つの書き口と同じ箱に入る。
+- **`VWLayerObj::SetElevation` / `SetObjectVariable(h, 157, …)` / VS `SetLayerElevation` /
+  `SetLayerElevationN` のどれで書いても、`VWLayerObj::GetElevation`・
+  `ovLayerHeightInCurrUnits`(157)・バウンド経路が同じ値を返す**
+  （[表](../Metrics/Layers%20and%20Stories.md#4-つの書く口を試した)）。
+  **読むだけなら `GetElevation` が一番短い。**
+- `SetElevation` は `GS_Kludge` 1002、`GetElevation` は 1000（SDK 同梱の `VWLayerObj.cpp` を読んだ）——
+  書きと読みでセレクタが違うので、届いたことは絶対Z で確かめた。
+- **厚さ（ΔZ）まで書けるのは VS の `SetLayerElevation` / `SetLayerElevationN` だけ**
+  （`ExecuteScript` 経由。`VWLayerObj::SetHeight` が `GS_Kludge` 1003 で厚さを書く【ヘッダ根拠】）。
+- **`eStoryObjectBound_LayerWallHeight` は「高さ＋厚さ」**（1500＋2400 で 3900）。厚さ 0 だと
+  高さと同値なので取り違えに気付きにくい。
+- **ストーリ由来のレイヤの高さは「階の高さ＋階内相対Z」**（2699 − 40 = 2659）で、同じ箱に入る。
 
 ### オブジェクトの絶対Z は「**生まれたレイヤ**の高さ ＋ ローカルZ」
 
-データタグの `#IPZ#`（絶対Z）で測った。**この節は
-[Data Tags](Data%20Tags.md)「式から読める高さ」の前提になる。**
+[Data Tags](Data%20Tags.md)「式から読める高さ」の前提
+（[段ごとの表](../Metrics/Layers%20and%20Stories.md#オブジェクトの絶対z-の実測)）。
 
-| 段 | 何をしたか | `#IPZ#`（絶対Z） |
-| --- | --- | --- |
-| P | 高さ 0 のレイヤで部材を作る | `0` |
-| P | **そのレイヤへ後から** 800 を与える | **`800`**（追随した） |
-| Q | 最初から高さ 900 のレイヤで部材を作る | **`900`**（作成時も乗る） |
-| R | Q の部材を**高さ 1100 のレイヤへ `AddObjectToContainer`** | **`900` のまま** |
-| R | さらに移した先を 1300 にする | **`900` のまま**（追随しない） |
-| T | **ストーリ由来のレイヤ**（2659）で部材を作る | **`2659`**（素のレイヤと同じ） |
-| U | そのレイヤへ後から `SetElevation(5000)` | **`5000`**（追随した） |
-
-- 段 R の「`900` のまま」は、**VW へ戻った後に読み直しても同じ**だった
-  （[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。部材の挿入点 Z も 900 のまま、`#IPZL#` は −400＝900−1300）。
-  undo イベントを閉じても、戻って数十秒置いても追随しない。
-
-- **レイヤの高さは、その上のオブジェクトの絶対Z を持ち上げる。** 作った後に高さを
-  変えても追随する（段 P・段 U）。**ストーリ由来のレイヤでも素のデザインレイヤでも
-  同じ**（段 T）——ストーリかどうかは関係しない。
-- **ただし `AddObjectToContainer` で別のレイヤへ移したオブジェクトは別**。
-  **移した時点の絶対Z を保ち、以後は所属レイヤの高さが変わっても動かない**（段 R）。
-  - **「レイヤ面の上に置く」つもりなら、`gSDK->SetCurrentLayer(layer)` で
-    そのレイヤをアクティブにしてから作る。** 作ってから移すと、**そのレイヤの面から
-    見た高さが意図しない値になる**（上表なら −200）。
-  - これは `#IPZL#` / `#ZTBBL#`（レイヤ基準の綴り）に直接効く
-    （[Data Tags](Data%20Tags.md)）。`#IPZS#`（階基準）は掛からない。
-- **`#IPZS#` は「絶対Z − 階の高さ」なので、レイヤ面上の部材では階内相対Z がそのまま出る**
-  ——段 T で `#IPZS#` は **`-40`** だった（2659 − 2699）。
+- **レイヤの高さはその上のオブジェクトの絶対Z を持ち上げ、後から変えても追随する。**
+  ストーリ由来でも素のレイヤでも同じ。
+- **`AddObjectToContainer` で別のレイヤへ移したオブジェクトは、移した時点の絶対Z を保ち、
+  以後レイヤ高さに追随しない**（VW へ戻った後・undo イベントを閉じた後も同じ。#245）。
+  **レイヤ面に置くなら `gSDK->SetCurrentLayer(layer)` してから作る**（作ってから移すと、
+  そのレイヤの面から見た高さが意図しない値になる。実測では −200）。 `#IPZL#` / `#ZTBBL#`
+  （レイヤ基準）に直接効き、`#IPZS#`（階基準）は掛からない。
+- `#IPZS#` は「絶対Z − 階の高さ」なので、レイヤ面上の部材では階内相対Z（例 `-40`）が出る。
 
 ### ストーリに属するレイヤへ `SetElevation` を掛けてはいけない
 
-段 U の実測。ストーリ由来のレイヤ（階 2699 ＋ 相対Z −40 ＝ 2659）へ
-`SetElevation(5000)` を掛けると:
-
-| 読んだもの | 値 |
-| --- | --- |
-| レイヤの高さ（4 経路とも） | **5000** |
-| 部材の絶対Z（`#IPZ#`） | **5000**（図面ごと動いた） |
-| `GetStoryElevation`（階の高さ） | **2699**（変わらない） |
-| `GetStoryLevelElevation`（階内相対Z） | **−40 のまま**（更新されない） |
-
-（この表は **VW へ戻った後に読み直しても同じ**だった——[#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245)。階 6000・相対Z −40・
-レイヤ 5000・`#IPZS#` −1000 の組で測り直し、undo イベントを閉じた後も戻った後も動かない。）
-
-**レイヤは動くのに、階とレベルは動かない。** その結果「階 2699 ＋ 相対Z −40 ＝ 2659」と
-実際のレイヤ高さ 5000 が食い違い、`#IPZS#` は **2301**（＝5000 − 2699）という
-**どこにも対応しない数**を返すようになる。**階に属するレイヤの高さは、階
-（`SetStoryElevation`）かレベル（`SetStoryLevelElevation`）から動かすこと。**
+- **レイヤ（と上の部材）だけ動き、`GetStoryElevation`・`GetStoryLevelElevation` は動かない**
+  （VW へ戻った後も同じ。#245）。「階＋相対Z」と実際のレイヤ高さが食い違い、`#IPZS#` が
+  **どこにも対応しない数**を返す（[表](../Metrics/Layers%20and%20Stories.md#ストーリに属するレイヤへ-setelevation-を掛けた実測)）。
+- **階に属するレイヤの高さは、階（`SetStoryElevation`）かレベル（`SetStoryLevelElevation`）から
+  動かす。**
 
 ## レイヤの縮尺（`SetLayerScaleN` は黙って効かないことがある）
 
-- **読みは `GetLayerScaleN(h, double_gs&)`、書きは `SetLayerScaleN(h, double)`。**
-  どちらも**戻り値が `void`** なので、**書いたら読み戻して確かめる**。
-- **【実測】`SetLayerScaleN` が何も起こさなかった実例がある。**
-  [#145](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/145) の
-  プローブを 2 つの文書で走らせたところ:
-
-  | 走らせた文書のデザインレイヤ | 走らせた回数 | `SetLayerScaleN(layer, 50)` の後に読み戻した縮尺 |
-  | --- | --- | --- |
-  | 縮尺 **1/100** で始まった文書 | **3 回** | **1/50**（毎回効いた。**3 回のログは数値が 1 桁も違わない**） |
-  | 縮尺 **1:1** で始まった新規の空図面 | 1 回 | **1/1**（**効かなかった**。以後に作った寸法も 1:1 生まれのままだった） |
-
-  **原因は特定できていない**【未確認】——同じ 1 本のコードを同じビルドで走らせた
-  差である。**文書ごとに決まっているようには見える**（効いたほうは 3 回とも効いた）
-  が、何が分けているのかは分かっていない。**「縮尺を変えてから作る」という段取りを組むなら、変えた直後に
-  `GetLayerScaleN` で確かめ、違っていたら止まること。** 黙って効かないと、以後に
-  作ったものが全部「変える前の縮尺で生まれる」ので、**症状は作図のずっと後に出る**
-  （寸法なら `ovDimFontSize` が 50 倍ずれる。[Dimensions](Dimensions.md)）。
-- **ビューポートの縮尺は別物**で、こちらは `ovViewportScale`(1003) に書く
-  （`SetObjectVariable` が `true` を返し、読み戻しも追随した。[Dimensions](Dimensions.md)）。
+- **読みは `GetLayerScaleN(h, double_gs&)`、書きは `SetLayerScaleN(h, double)`。** どちらも
+  戻り値が `void` なので、**書いたら読み戻して確かめる。**
+- **`SetLayerScaleN(layer, 50)` が何も起こさなかった実例がある**（[#145](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/145)）。
+  1/100 で始まった文書では 3 回とも効き、1:1 の新規の空図面では効かなかった。**原因は特定
+  できていない**【未確認】（文書ごとに決まっているようには見える。
+  [表](../Metrics/Layers%20and%20Stories.md#レイヤの縮尺setlayerscalen-の書き込みの実測)）。
+  **変えた直後に `GetLayerScaleN` で確かめ、違っていたら止まる**——黙って効かないと以後の作図が
+  全部旧縮尺で生まれ、症状はずっと後に出る（寸法の `ovDimFontSize` が 50 倍ずれる。[Dimensions](Dimensions.md)）。
+- **ビューポートの縮尺は別物**で `ovViewportScale`(1003) に書く（[Dimensions](Dimensions.md)）。
 
 ## 階（ストーリ）を SDK から作る — レベルは**レベルテンプレート経由**で生やす
 
-**階は SDK だけで作れる。** ただし**レベル（＝レイヤ）を生やす道が 2 系統あり、効くのは
-片方だけ**で、効かないほうも `true` を返すため「作れない」と誤診しやすい。実装例は
-ホームズ君プラグインの `draw/Story`（`createStories` / `CreateStoryLevelViaTemplate`）で、
-**実際にこの手順で階を作っている**。
+**階は SDK だけで作れる。** ただしレベル（＝レイヤ）を生やす道は 2 系統あり、効かないほうも
+`true` を返す。実装例はホームズ君プラグインの `draw/Story`（`createStories` /
+`CreateStoryLevelViaTemplate`）。手順（この順番に意味がある）:
 
-手順（この順番に意味がある）:
-
-1. `CreateLayerLevelType(type)` で**レベル種別を先に登録する**（引数は非 const `TXString&`
-   なので名前付き lvalue を渡す。以下の `Create*` も同じ）。
-2. `CreateStory(name, suffix)` で階を作る。**戻り値は `bool` でハンドルは返らない。**
-3. **`GetNamedObject(name)` で階のハンドルを取る**（VS の `GetObject` 相当）。
-   **レベルの無い階はまだレイヤを持たない**ので `ForEachLayerN` ＋ `GetStoryOfLayer` では
-   見つからないが、**名前では引ける**。
-4. **`SetStoryElevation(story, elevation)` を、レベルを足す前に呼ぶ**。直後に設定しないと
-   「既定高さ 0 の階が複数」になり、**次の `CreateStory` が衝突して失敗し得る**。
-5. `CreateStoryLevelTemplate(name, scale, levelType, offset, wallHeight, index)` で
-   **レベルテンプレート**を作り、**`AddStoryLevelFromTemplate(story, index)`** で
-   レベルとレイヤを生やす。
-6. `GetLayerForStory(story, levelType)` でできたレイヤを取り、`SetObjectName` で名前を直す
-   ——**テンプレート経由だとレイヤ名に `CreateStory` の suffix が付く**（例 `1-FL` が
-   `1-FL-1` になる）。
+1. `CreateLayerLevelType(type)` で**レベル種別を先に登録**（引数は非 const `TXString&`。以下も同じ）。
+2. `CreateStory(name, suffix)`——**戻り値は `bool` でハンドルは返らない。**
+3. **`GetNamedObject(name)` で階のハンドルを取る**（レベルの無い階はレイヤを持たないので
+   `ForEachLayerN` ＋ `GetStoryOfLayer` では見つからない）。
+4. **`SetStoryElevation(story, elevation)` をレベルを足す前に呼ぶ**（高さ 0 の階が複数になると
+   次の `CreateStory` が衝突して失敗し得る。高さのためではない——下記）。
+5. `CreateStoryLevelTemplate(name, scale, levelType, offset, wallHeight, index)` ＋
+   **`AddStoryLevelFromTemplate(story, index)`** でレベルとレイヤを生やす。
+6. `GetLayerForStory(story, levelType)` でレイヤを取り、`SetObjectName` で名前を直す
+   （テンプレート経由だと suffix が付く。`1-FL` → `1-FL-1`）。
 
 落とし穴（すべて実測）:
 
-- **`AddStoryLevel` ＋ `AssociateLayerWithStory` では紐付かない**（VW 2026）。UI 上
-  レイヤ→レベルの紐付けが「なし」になる。**バインドが保証されるのは
-  `CreateStoryLevelTemplate` ＋ `AddStoryLevelFromTemplate` の側**。
-  （`AssociateLayerWithStory` は**種別 `''` のレイヤを弾く**ので、結ぶ前に未使用の種別を
-  与える必要がある——下記「レベルを持たないレイヤを階に結ぶ」。）
-- **`AddStoryLevel` の `true` を信用しない。** `GetNamedObject` で引いた階のハンドルへ
-  渡すと `true` が返るのに、`GetLayerForStory` は **nil** のまま（＝レイヤは生えていない）。
-  **戻り値ではなく `GetLayerForStory` の読み戻しで判定する**こと
+- **`AddStoryLevel` ＋ `AssociateLayerWithStory` では紐付かない**（VW 2026）。`AddStoryLevel` は
+  `true` を返すのに `GetLayerForStory` は nil——**戻り値ではなく `GetLayerForStory` で判定する**
   （[Investigation Techniques](Investigation%20Techniques.md)「setter の戻り値を信用しない」）。
-- **`Story Layer Template` と `Story Level Template` を取り違えない。**
-  `CreateStoryLayerTemplate` は `true` を返し件数も増えるが、**その後に `CreateStory`
-  してもレイヤは生えない**——階へレベルを生やすのは `Story Level` 系
-  （[Parametric Objects](Parametric%20Objects.md)「ストーリを触る API」の落とし穴 2）。
-- **`ResetDefaultStoryLevels(false)` は `true` を返すが、レベルの無い階にレイヤを
-  生やしてはくれない。**
-- `CreateStoryWithUI()` はハンドルを返すが**ダイアログが出る**ので、プローブや無人の
-  処理では使えない。【ヘッダ根拠】
+  `AssociateLayerWithStory` は種別 `''` のレイヤを弾く（下記）。
+- **`Story Layer Template` と `Story Level Template` を取り違えない。** `CreateStoryLayerTemplate`
+  は `true` で件数も増えるが、レイヤは生えない（[Parametric Objects](Parametric%20Objects.md)
+  「ストーリを触る API」の落とし穴 2）。
+- `ResetDefaultStoryLevels(false)` は `true` を返すが、レベルの無い階にレイヤを生やさない。
+- `CreateStoryWithUI()` はダイアログが出るので無人の処理では使えない【ヘッダ根拠】。
 
-> **この節は一度「できない」と書いて誤った。** `AddStoryLevel` と
-> `CreateStoryLayerTemplate`（Layer 系）だけを試し、どちらも `true` を返すのに
-> レイヤが生えないのを見て「SDK だけでは階を用意できない」と結論した
+> **この節は一度「できない」と書いて誤った**
 > （[PR #66](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/66)）。
-> **正しい道は `Story Level` 系のテンプレートで、実装が既に存在していた。**
-> 教訓: **「できない」と書く前に、動いている実装（ホームズ君プラグイン）を当たる。**
-> 同じ名前で始まる API が 2 系統あるときは、**両方試すまで「できない」と言わない。**
+> 教訓: **「できない」と書く前に動いている実装を当たる。** 同じ名前で始まる API が 2 系統あるときは
+> **両方試すまで「できない」と言わない。**
 
 ### レベルを持たないレイヤを階に結ぶ — **仮のレベル種別を与えて結び、外す**
 
-[issue #221](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/221) で
-**実機確認済み**（VW 2026 / mac。新規の空図面で 1 回ずつ。以下の値は実行ログそのまま）。
-1 周目（`story-only-layer`）は素のレイヤを結ぼうとして全部失敗し、2 周目
-（`story-layer-associate`）で**呼ぶ順を入れ替えたら通った**。どちらも、レベルテンプレート
-経由のレベル付きレイヤ（相対Z −40）を比較の基準に置いて測った。3 周目（`story-layer-recipe` /
-`story-layer-reopen`）で実際の使い方に回した。プローブは役目を終えたので消してある。
+[#221](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/221) で実機確認済み
+（VW 2026 / mac。3 周の経緯と表は [計測記録](../Metrics/Layers%20and%20Stories.md#レベルを持たないレイヤを階に結ぶ試み仮のレベル種別を与えて結び外す)）。
 
 #### 結論: **未使用のレベル種別を先に与えれば結べ、結んだあとに種別だけ外せる**
 
-手順（この順番に意味がある）:
+```
+CreateLayer(name, kLayerDesign);
+SetLayerLevelType(layer, 仮の種別);      // その階で未使用の種別（CreateLayerLevelType で登録済み）
+AssociateLayerWithStory(layer, story);  // → true。GetStoryOfLayer がその階を返す
+SetLayerLevelType(layer, "");           // → true。階はそのまま、種別だけ '' に
+```
 
-1. `CreateLayer(name, kLayerDesign)` で素のデザインレイヤを作る。
-2. **`SetLayerLevelType(layer, 仮の種別)`**——**その階でまだ使われていない**種別を与える
-   （`CreateLayerLevelType` で先に登録しておく）。
-3. **`AssociateLayerWithStory(layer, story)`** → **`true`**。`GetStoryOfLayer` がその階を返し、
-   `GetLayerForStory(階, 仮の種別)` もそのレイヤを返す。
-4. **`SetLayerLevelType(layer, "")`** → **`true`**。**階はそのまま**（`GetStoryOfLayer`＝その階）で、
-   レベル種別だけ `''` になる。`GetLayerForStory(階, 仮の種別)` は nil に戻る。
-
-実測（2 周目。`試験1階`=1000 / `試験2階`=4000、基準のレベル付きレイヤは `試験天端`）:
-
-| 試したこと | `Associate…` の戻り値 | 読み戻し（階・種別・レイヤ高さ） |
-| --- | --- | --- |
-| **素のレイヤ**を結ぶ（1 周目。レベル付きの階・レベルの無い階・別の階で計 5 回） | **`false`** | 階 nil・種別 `''`・高さ 0 |
-| **未使用の種別**（`試験柱`）を先に与えた P を `試験1階` へ | **`true`** | **`試験1階`**・`試験柱`・**1000** |
-| **その階で使用中の種別**（`試験天端`）を先に与えた Q を `試験1階` へ | **`false`** | 階 nil・`試験天端`・0 |
-| P と**同じ種別**（`試験柱`）を先に与えた R を `試験1階` へ | **`false`** | 階 nil・`試験柱`・0 |
-| **別の未使用の種別**（`試験柱2`）を先に与えた S を `試験1階` へ | **`true`** | **`試験1階`**・`試験柱2`・1800（階を動かした後） |
-| 結べた P へ `SetLayerLevelType(P, "")` | （setter は `true`） | **`試験1階`**・**`''`**・1800 |
-
-- **`AssociateLayerWithStory` の失敗条件は「その階に同じレベル種別のレイヤが既に在る」で、
-  種別が空（`''`）のレイヤも結べない**——`vs.py` の説明どおりで、**空の種別は「種別なし」
-  ではなく弾かれる側**に入る。1 周目に**レベルを 1 枚も持たない階でも `false`**
-  だったのはこのため。
-- **戻り値は実態と一致した**（`true` の 3 回は全部結ばれ、`false` の回は全部結ばれていない）。
-  ただし `SetLayerLevelType` は**階に結ばれていないレイヤにも、その階で使用中の種別にも
-  `true` を返す**（種別の欄に入るだけで、階の側からは見えない。1 周目の D）——
-  **典型的な「setter の `true` を信用しない」事例**
-  （[Investigation Techniques](Investigation%20Techniques.md)）。
-- **結んだ直後のレイヤ高さは「階の高さ」**（P は 1000。レベル付きのレイヤは「階の高さ＋
-  階内の相対Z」で 960）。仮の種別には階内の相対Z が無いので（`GetStoryLevelElevation` ＝ 0）、
-  階の高さそのものになる。**種別を外したあとも階の高さのまま**で（1800）、
-  **`SetStoryElevation` で階を動かすと追随する**（P は 1000 → 1800）。
-- **バウンドの解決は基準と同じ。** P の上の構造材に、下端 `{0, 試験天端}`・上端 `{1, 試験天端}`
-  を書くと、**下端 960・上端 3960（差 3000）で基準のレベル付きレイヤと同値**。階を 1800 へ
-  動かして `ResetObject` すると **1760 / 3960**（基準も同じ）。**種別を外してからも 1760 / 3960
-  のまま**——バウンドの宛先は**入れ物のレイヤの種別ではなく、バウンドに書いた種別**
-  （`fLayerLevelType`）で決まり、入れ物から要るのは**階だけ**である。
-- `GetStoryObjectDataBoundHeight`（入れ物＝P）も自階 960・上階 3960 で基準と一致した。
+- **`AssociateLayerWithStory` の失敗条件は「その階に同じ種別のレイヤが既に在る」で、種別 `''` の
+  レイヤも弾かれる**（レベルを持たない階でも `false`）。**戻り値は実態と一致した。**
+  一方 `SetLayerLevelType` は結ばれていないレイヤにも使用中の種別にも `true` を返す——
+  setter の `true` を信用しない事例（[Investigation Techniques](Investigation%20Techniques.md)）
+  （[表](../Metrics/Layers%20and%20Stories.md#2-周目未使用のレベル種別を先に与えて結び種別を外す)）。
+- **結んだレイヤの高さは「階の高さ」**（相対Z を持たない）で、種別を外した後も
+  `SetStoryElevation` に追随する。
+- **バウンドの解決は基準のレベル付きレイヤと同値**で、種別を外した後も変わらない——宛先は
+  入れ物の種別ではなく**バウンドに書いた種別**（`fLayerLevelType`）で決まり、入れ物から要るのは
+  **階だけ**。`GetStoryObjectDataBoundHeight` も一致。
 
 #### 同じ階に同じレベル種別のレイヤは 2 枚置けるか
 
-**`AddStoryLevelFromTemplate` を同じ階へ 2 回呼ぶと、2 回とも `true` で、同じ種別
-（`試験天端`）のレイヤが 2 枚その階に属した**（`試験天端雛形-t1` と `-t3`。どちらも
-高さ 1760）。**`AssociateLayerWithStory` では同じ種別の 2 枚目は `false`**（上の R）なので、
-**「1 つのレベル種別に複数のレイヤを結ぶ」はテンプレート経由なら起きるが、結ぶ口からは
-できない**。テンプレート経由の 2 枚目で `GetLayerForStory(階, 種別)` がどちらを返すかは
-決まらないので、**この状態を意図して作らない**（issue の代替案「レベル種別を共有する」は
-採らない）。
+- **`AddStoryLevelFromTemplate` を同じ階へ 2 回呼ぶと、同じ種別のレイヤが 2 枚属する**（どちらも
+  `true`）。`AssociateLayerWithStory` では 2 枚目は `false`。テンプレート経由の 2 枚目で
+  `GetLayerForStory` がどちらを返すかは決まらないので、**この状態を意図して作らない**
+  （「レベル種別を共有する」案は採らない）。
 
 #### 実際の使い方で回す——仮の種別は 1 つで足り、何枚でも結べる
 
-3 周目（`story-layer-recipe`）。階 3 つ（1000 / 4000 / 7000）に `試験天端` のレベルを生やし、
-仮の種別 `試験仮` **1 つだけ**で上の手順を 3 枚に回した。
-
-| レイヤ | 結ぶ先 | `Associate…` | 手順の後（階・種別・高さ） |
-| --- | --- | --- | --- |
-| X | 試験1階 | `true` | 試験1階・`''`・1000 |
-| Y（**同じ階の 2 枚目・同じ仮の種別**） | 試験1階 | **`true`** | 試験1階・`''`・1000 |
-| Z | 試験2階 | `true` | 試験2階・`''`・4000 |
-
-- **外した種別はまた空く**——`GetLayerForStory(階, 仮)` は外した直後に nil へ戻り、
-  同じ階の 2 枚目も同じ仮の種別で結べた。**レイヤの数だけ種別を作る必要は無い**
-  （issue の背景にあった「専用のレベル種別がレイヤの数だけ増える」は、これで解消できる）。
-- **種別 `''` のレイヤは同じ階に何枚あってもよい**（X と Y が同居）。ただし
-  `GetLayerForStory(試験1階, '')` は**そのうち 1 枚（X）を返す**ので、**種別 `''` で
-  レイヤを引かない**——レイヤは名前で引く。
-- **UI（オーガナイザ → デザインレイヤ）では「ストーリ」欄に階、「ストーリレベル」欄は空**
-  （ユーザーが目視。X＝試験1階、Y・Z＝試験2階〔Y は下の結び直しの後〕）。
-  issue の求めた「ストーリ＝その階・レベル＝なし」そのものである。
-
-**バウンドと高さ**（構造材の下端 `{0, 試験天端}`・上端 `{1, 試験天端}`）:
-
-| 入れ物 | 結んだ直後の解決Z（下端 / 上端） | 1階→1800・2階→4500 へ動かし `ResetObject` 後 | レイヤ高さ（動かした後） |
-| --- | --- | --- | --- |
-| 基準（レベル付き・1階） | 960 / 3960 | 1760 / 4460 | 1760 |
-| X（1階・種別なし） | **960 / 3960** | **1760 / 4460** | **1800**（＝階の高さ） |
-| Y（1階・種別なし） | **960 / 3960** | **1760 / 4460** | 1800 |
-| Z（2階・種別なし） | **3960 / 6960** | **4460 / 6960** | 4500 |
-
-- **基準と同値で、階を動かせば追随する。** X は `ResetObject` を**掛ける前から**
-  1760 / 4460 に追随していた。
-- **レイヤ高さは「階の高さ」**（相対Z を持たないので）。構造材の挿入点Z はバウンドの
-  解決値（1760）で、レイヤ高さ（1800）とは一致しない——**この上でレイヤ面基準の図形を
-  描くと、レベル付きのレイヤとはレイヤ高さの分（ここでは 40）ずれる**。
-
-**並び**:
-
-- **種別なしで階に結んだレイヤは、高さの降順に並ばない。** 作った順のまま、ストーリ従属
-  レイヤ（レベル付き）の**背面**へ付いた（前面から t1 1760・t2 4460・t3 6960・X 1800・
-  Y 1800・Z 4500）。階に属さないレイヤ（1 周目）と同じ振る舞いで、**高さ順の自動整列は
-  レベル付きのレイヤだけ**に掛かる。
-- **`InsertObjectAfter` は効く。** X を最背面へ、Z を `試験天端雛形-t2` の直後（t2 と t3 の間）へ
-  移せた（`true` で、読み戻しの並びもそのとおり）。**階の順に並べたいなら自分で並べる。**
-
-**ビューポートの表示レイヤ**: 断面ビューポートへ `SetViewportLayerVisibility(…, 0)` は
-全デザインレイヤで `true`、X / Y / Z の読み戻しも `表示=0`——**レベル付きのレイヤと差なし**。
-
-**別の階へ結び直す**: 種別 `''` のまま `AssociateLayerWithStory(Y, 試験2階)` は **`false`**
-（Y は試験1階に残る。種別 `''` は弾かれる側なので当然）。**同じ手順（仮の種別 → 結ぶ →
-外す）をもう一度回せば結び直せた**（試験2階・高さ 4500・構造材も 4460 / 6960 へ追随。
-試験1階の件数は 1 減った）。
-
-**保存して開き直しても保たれる**（`story-layer-reopen`。`story-layer-recipe` を走らせた図面を
-保存し、閉じて開き直してから読んだ）:
-
-| レイヤ | 階 | 種別 | 高さ | 構造材の解決Z（開いたまま → `ResetObject` 後） |
-| --- | --- | --- | --- | --- |
-| 試験天端雛形-t1（基準） | 試験1階 | `試験天端` | 1760 | 1760 / 4460 → 1760 / 4460 |
-| 試験-柱X | **試験1階** | **`''`** | 1800 | **1760 / 4460** → 同じ |
-| 試験-柱Y（2階へ結び直したもの） | **試験2階** | **`''`** | 4500 | **4460 / 6960** → 同じ |
-| 試験-柱Z | **試験2階** | **`''`** | 4500 | **4460 / 6960** → 同じ |
-
-- 階・種別・高さ・並び（`InsertObjectAfter` で動かした順）・バウンド
-  （`fBound`=2〔`_Story`〕・`fBoundStory`=1・`試験天端`）が、すべて保存前のまま残った。
-- **開き直した図面では、`GetNamedObject` でデザインレイヤが引けなかった**（X / Y / Z も、
-  レベル付きの t1 も **nil**。同じ図面で階 `試験1階` などは引けた。⌘Z の後の図面でも nil）。
-  開き直す前の図面で引けたかは測っていない。**レイヤは `ForEachLayerN` か、ドローイングヘッダから辿って
-  名前で突き合わせる**。
-
-**断面ビューポートにも映る**（ユーザーが目視。開き直した図面の断面ビューポートで、
-断面線を材が映る位置へ動かして更新した）: 柱 4 本が映り、**基準と X が下の段、Y と Z が
-その上の段**に並んだ——解決Z（1760〜4460 / 4460〜6960）どおりで、**レベル無しのレイヤの材も
-レベル付きのレイヤの材と同じに描かれる**。プローブが作ったままの位置（断面線 y=−500）では、
-`1064=false` / `1065=true`・隠線消去にしても**基準の材も含めて空**だった——これはレイヤの
-違いではなく断面線の置き方の問題である。
-
-**undo（⌘Z）——レベル無しのレイヤとレベル付きのレイヤで差は無い**（新規図面で
-`story-layer-recipe` を走らせた直後に ⌘Z を 1 回。オーガナイザの目視と、そのあと
-`story-layer-reopen` で読み戻した値）:
-
-| 見たもの | ⌘Z の後 |
-| --- | --- |
-| 階（`試験1階`〜`3階`） | **消えた**（`GetNamedObject` で見つからない。オーガナイザの「ストーリ」欄も全レイヤで空） |
-| デザインレイヤ（X / Y / Z も t1〜t3 も） | **全部残った** |
-| レイヤの階 | **全部 nil**（レベル付きの t1〜t3 も） |
-| レベル種別 | t1〜t3 は `試験天端` のまま・X / Y / Z は `''` のまま |
-| レイヤ高さ | X・Y 1000 / Z 4000 / t1 960 / t2 3960 / t3 6960——**階を動かす前（U3 の前）の値** |
-| 並び | `InsertObjectAfter` で動かした後の順のまま |
-| 構造材 | **全部消えた**（どのレイヤにもストーリバウンドを持つ図形が無い） |
-
-- **レベル付きのレイヤもレベル無しのレイヤも同じ壊れ方をする**——階と構造材が消え、
-  レイヤは階を失って残る。issue の問い（レベル付きと差が出るか）への答えは「出ない」。
-- ただしこれは**プローブ経由の取り消し**で、プローブは自分では undo イベントを開かない
-  （ここで戻ったのは VW が自動で記録した分）。**プラグインが自分の undo イベントの中で
-  回したとき**は次節。
+- **外した種別はまた空く**——仮の種別 1 つで同じ階の 2 枚目も別の階も結べる。**レイヤの数だけ
+  種別を作る必要は無い**（[表](../Metrics/Layers%20and%20Stories.md#実際の使い方で回した仮の種別-1-つで複数枚を結ぶ)）。
+- **種別 `''` のレイヤは同じ階に何枚あってもよい**が、`GetLayerForStory(階, '')` はそのうち 1 枚を
+  返す——**種別 `''` でレイヤを引かない**（名前で引く）。
+- オーガナイザでは「ストーリ」欄に階、「ストーリレベル」欄は空（目視）。
+- **バウンドは基準と同値で、階を動かせば追随する。** レイヤ高さは階の高さなので、**この上で
+  レイヤ面基準の図形を描くと、レベル付きのレイヤとは相対Z の分（例 40）ずれる。**
+- **種別なしで結んだレイヤは高さの降順に並ばない**（作った順で、レベル付きのレイヤの背面）。
+  **`InsertObjectAfter` は効く**ので、階の順に並べたいなら自分で並べる。
+- ビューポートの表示レイヤ（`SetViewportLayerVisibility`）は、レベル付きのレイヤと差なし。
+- **別の階へ結び直す**: 種別 `''` のままの `AssociateLayerWithStory` は `false`。**同じ手順
+  （仮の種別 → 結ぶ → 外す）をもう一度回せば結び直せる。**
+- **保存して開き直しても階・種別・高さ・並び・バウンドは保たれる。** ただし**開き直した図面では
+  `GetNamedObject` でデザインレイヤが引けなかった**（nil。階は引けた）——**レイヤは
+  `ForEachLayerN` かドローイングヘッダから辿って名前で突き合わせる。**
+- 断面ビューポートにもレベル付きのレイヤの材と同じに映る（目視）。
+- **undo（⌘Z。VW の自動記録）では、レベル付きもレベル無しも同じ壊れ方**——階と構造材が消え、
+  レイヤは階を失って残る。高さは階を動かす前の値に戻る
+  （[表](../Metrics/Layers%20and%20Stories.md#実際の使い方で回した仮の種別-1-つで複数枚を結ぶ)）。
 
 #### プラグイン自身の undo イベントの中で回すと、取り消しで**階・種別・テンプレートまで全部消える**
 
-[issue #223](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/223) で
-**実機確認済み**（VW 2026 / mac。新規の空図面。以下の値は実行ログそのまま）。イベントの開き方は
-import-ifc の `draw::ImportUndoScope` と同じ——`SetUndoMethod(kUndoSwapObjects)` ＋
-`NameUndoEvent` で開き、**作ったレイヤを `AddAfterSwapObject` で登録**し（構造材へ渡すパスも
-登録）、`EndUndoEvent` で閉じる。その中で、レベル種別 2 つ（天端・仮）・階 2 つ（1000 / 4000）・
-レベルテンプレート 1 つ（相対Z −40）を作り、テンプレート経由のレベル付きのレイヤ（各階）と、
-上の手順のレベル無しのレイヤ X（1 階）を置いて、1 階のレベル付きのレイヤと X に構造材を
-1 本ずつ載せた。取り消しは `DoMenuName("Undo", 0)`（⌘Z と同じコマンド。
-[Plug-in Interop](Plug-in%20Interop.md) の 2）。プローブ（`story-layer-undo` の V1・V2 と、
-2 回走らせる `story-layer-undo-later` の V3）は役目を終えたので消してある。
+[#223](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/223) で実機確認済み
+（VW 2026 / mac。`kUndoSwapObjects` ＋ `AddAfterSwapObject` で作ったレイヤを登録。
+[表と手順](../Metrics/Layers%20and%20Stories.md#プラグイン自身の-undo-イベントの中で回して取り消した実測)）。
 
-| 見たもの | 閉じる前 | 全部登録（V1・V3） | **X だけ登録しない**（V2） |
-| --- | --- | --- | --- |
-| 階（`GetNumStories` / 名前で引く） | 2 / 在る | **0 / 無い** | **0 / 無い** |
-| レベル種別（天端・仮とも） | 在る（件数 7→9） | **無い**（件数 7） | **無い**（件数 7） |
-| レベルテンプレート | 在る（件数 7→8） | **無い**（件数 7） | **無い**（件数 7） |
-| クラス（`AddClass`。V3 だけ） | 在る | **無い** | — |
-| レベル付きのレイヤ（1 階・2 階） | 在る | **無い** | **無い** |
-| レベル無しのレイヤ X | 1 階・`''`・高さ 1000 | **無い** | **在る**: 階 **nil**・種別 `''`・高さ **1000** |
-| X の上の構造材 | 在る | （X ごと無い） | **消えた**（X に残った子は型 90・90・0） |
-
-- **レベル付きのレイヤ・レベル無しのレイヤで差は無い**——どちらも登録していれば消え、
-  階を持たない形で取り残されることもない。issue の問い（差が出るか）への答えは「出ない」。
-- **階・レベル種別（仮の種別も）・レベルテンプレート・クラスは「リソースなので残る」のではなく、
-  同じイベントの中で作っていれば一緒に消える**——**取り消し後の図面は作る前と件数まで同じ**
-  （[Undo](Undo.md)「戻らないもの」の【訂正】）。仮の種別の後始末は要らない。
-- **登録しなかったレイヤは残り、階を失う**（#221 の自動記録の取り消しと同じ壊れ方。高さは
-  結んでいたときの値 1000 のまま）。**上の構造材は登録していなくても消えた**——
-  構造材は VW 自身が記録していると読める【推定】。**X だけが空のまま取り残される**ので、
-  作ったレイヤは漏れなく登録する。
-- **コマンドをまたいでも同じ**（V3。1 回目のコマンドで作って閉じて返り、**別のコマンド**から
-  取り消した）。実際の取り込み（コマンドが終わってから利用者が ⌘Z）と同じ形である。
-  ただしこの回は 1 段目の取り消しでは何も戻らず、**2 段目で上の表のとおり全部消えた**——
-  間に MCP ブリッジの**別名保存**（`SaveActiveDocumentPath`）が段を 1 つ挟んでいたため
-  （[Undo](Undo.md)「別名保存は取り消しの段を 1 つ積む」）。
+- **階・レベル種別（仮の種別も）・レベルテンプレート・クラスも、同じイベントの中で作っていれば
+  一緒に消える**——取り消し後の図面は作る前と件数まで同じ（[Undo](Undo.md)「戻らないもの」の
+  【訂正】）。仮の種別の後始末は要らない。レベル付き・レベル無しで差は無い。
+- **登録しなかったレイヤは残り、階を失う**（高さは結んでいたときの値）。その上の構造材は
+  登録していなくても消えた（VW 自身が記録していると読める【推定】）。**作ったレイヤは漏れなく
+  登録する。**
+- コマンドをまたいで取り消しても同じ（ただし別名保存が段を 1 つ積む。[Undo](Undo.md)
+  「別名保存は取り消しの段を 1 つ積む」）。
 
 #### 階に属さないレイヤの上では、`eStoryObjectBound_Story` が「そのレイヤの高さ」へ落ちる
 
-**これが「レイヤが階に属していないと上階のレベルを指せない」の実測**である。
-同じバウンド（`fLayerLevelType` = `試験天端`）を、入れ物のレイヤだけ変えて
-`GetStoryObjectDataBoundHeight` に解かせた:
-
-| 入れ物のレイヤ | レイヤ高さ | 自階(`fBoundStory`=0) | 上階(1) | 下階(−1) |
-| --- | --- | --- | --- | --- |
-| 基準（レベル付き・1階） | 960 | **960** | **3960** | 960 |
-| A（素のレイヤ・1階へ結べなかった） | 0 | **0** | **0** | **0** |
-| B（同上） | 0 | **0** | **0** | **0** |
-| C（同上・3階のつもり） | 0 | **0** | **0** | **0** |
-
-**階に属さないレイヤでは 0 / 1 / −1 のどれを書いても同じ値**になり、構造材の両端が
-同じ絶対Zへ解決されて**0 長に潰れる**（実測: 両端とも `0`、`ResetObject` 後の差 `0`。
-基準のほうは 960 / 3960 で差 3000 と正しく立った）。
-
-**その「同じ値」はレイヤの高さである。** レベル無しのレイヤへ `SetElevation(2500)` を
-掛けてから解かせ直すと、**下端も上端も `2500`** になった（階の高さは 1800 のまま）。
-
-> **これは [Parametric Objects](Parametric%20Objects.md)「階やレベルを指すバウンドは
-> `eStoryObjectBound_Story` で書く」の表への条件追加である。** あちらの
-> 「`_Story` は**レイヤに依らず**一定」は、**入れ物のレイヤが階に属している場合**の話で、
-> **属していないレイヤでは `_Story` が `LayerElevation` と同じ振る舞いに落ちる**
-> （`fBoundStory` も `fLayerLevelType` も見ない）。
-> **`GetObjectBoundElevation` は `true` も例外も返さずにこの値を返す**ので、
-> **「階に属しているか」を書き込み側で確かめないと、0 長の原因が見えない。**
+- **階に属さないレイヤでは `fBoundStory` を 0 / 1 / −1 のどれにしても同じ値＝そのレイヤの高さ**
+  になり、構造材の両端が同じ Z へ解けて **0 長に潰れる**
+  （[表](../Metrics/Layers%20and%20Stories.md#階に属さないレイヤの上での-estoryobjectbound_story-の実測)）。
+- これは [Parametric Objects](Parametric%20Objects.md)「階やレベルを指すバウンドは
+  `eStoryObjectBound_Story` で書く」への条件追加——「`_Story` はレイヤに依らず一定」は**入れ物の
+  レイヤが階に属している場合**の話で、属さなければ `LayerElevation` と同じに落ちる
+  （`fBoundStory` も `fLayerLevelType` も見ない）。
+- **`GetObjectBoundElevation` は `true` も例外も返さずにこの値を返す**ので、**書き込み側で
+  「階に属しているか」を確かめる。**
 
 #### 階に属さないレイヤで、ほかに差が出たもの・出なかったもの
 
-| 見たもの | レベル付きのレイヤ | 階に属さないレイヤ |
-| --- | --- | --- |
-| 階を動かしたとき（`SetStoryElevation` 1000→1800） | レイヤ高さが 960 → **1760** へ追随 | 無関係（0 のまま） |
-| デザインレイヤの並び | **高さの降順**（1760 / 3960 / 6960） | **作った順**で、ストーリ従属レイヤの**背面**へ |
-| `InsertObjectAfter` での並べ替え | — | **効く**（A を最背面へ移せた） |
-| `SetViewportLayerVisibility` / `GetViewportLayerVisibility`（断面 VP） | `true` / 表示=0 | **`true` / 表示=0（差なし）** |
-| `DeleteObject` | — | **消える。** 階もその階のレベル付きレイヤも残る |
-
-- **並びは既存の知見（本ファイル冒頭「デザインレイヤの並びと並べ替え」）の追認**だが、
-  今回は**高さを持たせた階に属さないレイヤ**も混ざっていた——高さ 2500 の B が高さ 0 の
-  A / C より**前**に並んだ。**つまり「高さの降順」はストーリ従属レイヤの中の規則で、
-  階に属さないレイヤには掛からない**（作った順のまま、まとめて背面）。
-- ビューポートの表示レイヤは**書き込みも読み戻しも差が無い**。レイヤが階に属するかは
-  ここには効かない。
+- 階を動かしても無関係・**並びは作った順でストーリ従属レイヤの背面**（高さを持たせても
+  高さ順にはならない——「高さの降順」はストーリ従属レイヤの中の規則）・`InsertObjectAfter` は
+  効く・`DeleteObject` で消える（階は残る）・ビューポートの表示レイヤは差なし
+  （[表](../Metrics/Layers%20and%20Stories.md#階に属さないレイヤでほかに差が出たもの出なかったもの)）。
 
 ### レベルの高さは「階の高さ＋階内の相対Z」——SDK で作ったレベルもちゃんと持っている
 
-[issue #141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141) で
-**実機確認済み**（VW 2026 / mac。新規の空図面で、上の手順を 4 通りに変えてストーリを作り、
-3 つの口で読み戻した。以下は実行ログそのまま）。
+[#141](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/141) で実機確認済み
+（VW 2026 / mac。[4 通りの表と実物件の表](../Metrics/Layers%20and%20Stories.md#レベルの高さの読みの実測sdk-で作ったレベルを含む)）。
 
-| ストーリの作り方 | `GetStoryElevation` | `GetStoryLevelElevation` | 解決した絶対Z |
-| --- | --- | --- | --- |
-| 上の手順そのまま（`elevationOffset` = 0） | 2800 | **0** | **2800** |
-| ＋ あとから `SetStoryLevelElevation(story, 種別, 300)` | 5600 | **300** | **5900** |
-| `SetStoryElevation` を**レベルを足した後**に呼ぶ | 8400 | **0** | **8400** |
-| テンプレートの `elevationOffset` = 100 | 11200 | **100** | **11300** |
-
-- **`GetStoryLevelElevation` / `SetStoryLevelElevation` が扱うのは階内の相対Z**
-  （階の高さを含まない）。**絶対Z は「階の高さ ＋ 相対Z」**で、表の右端は
-  `GetStoryObjectDataBoundHeight` に解かせた値（`fBound = eStoryObjectBound_Story` ＋
-  `fBoundStory = 0` ＋ レベル種別。解き方は
-  [Parametric Objects](Parametric%20Objects.md)「階やレベルを指すバウンド」）。
-  （**レイヤ高さそのものを読む口は別にある**。下記「レイヤの高さ」。）
-- **テンプレートの `elevationOffset` がそのまま相対Z になる**（100 を渡せば 100）。
-- **`SetStoryLevelElevation` は相対Z を取る。** 300 を渡したら相対Z が 300・絶対Z が 5900
-  になった（＝絶対Z を渡す口ではない）。
-- **`SetStoryElevation` を呼ぶ順番は高さに効かない。** レベルを足した後に呼んでも絶対Z は
-  正しく 8400 になる。上の手順 4 で「レベルを足す前に呼ぶ」としているのは
-  **名前の衝突を避けるため**だけで、高さのためではない。
-- **`GetStoryLevelElevation` が `0` を返しても「レベルに高さが無い」ではない。**
-  `elevationOffset` を 0 にしたなら 0 が正しい。**高さの有無を見るなら絶対Z を読む**
-  （相対Z だけを見て「SDK で作ったレベルは高さを持っていない」と読み違えた——それが
-  #141 の出発点の見当で、**外れだった**）。
-
-**UI で作ったストーリも、まったく同じ持ち方をしている。** 同じプローブを実物件の図面
-（ストーリ 基礎 / 1階 / 2階 / 屋根、レベル種別 15 個）で走らせた実測:
-
-| ストーリ | 階の高さ | レベル種別 | 相対Z | 絶対Z |
-| --- | --- | --- | --- | --- |
-| 基礎 | 0 | `GL` / `床束`・`底盤天端` / `基礎天端` | 0 / 50 / 400 | 0 / 50 / 400 |
-| 1階 | 612 | `FL` / 他 4 つ | 0 / **−40** | 612 / 572 |
-| 2階 | 3571 | `FL` / 他 5 つ | 0 / **−40** | 3571 / 3531 |
-| 屋根 | 6374 | `軒高` ほか 5 つとも | 0 | 6374 |
-
-**相対Z は負にもなる**（`−40`）。**「UI で作ったストーリだけが高さを持っている」という
-ことは無い**——持ち方は同じで、SDK から作っても読み書きできる。
+- **`GetStoryLevelElevation` / `SetStoryLevelElevation` が扱うのは階内の相対Z**（階の高さを
+  含まない）。**絶対Z は「階の高さ＋相対Z」**（解き方は [Parametric Objects](Parametric%20Objects.md)
+  「階やレベルを指すバウンド」）。
+- **テンプレートの `elevationOffset` がそのまま相対Z になる。** `SetStoryLevelElevation` も
+  相対Z を取る（絶対Z を渡す口ではない）。
+- **`SetStoryElevation` を呼ぶ順は高さに効かない**（手順 4 の「先に呼ぶ」は名前の衝突を避ける
+  ためだけ）。
+- **`GetStoryLevelElevation` の `0` を「高さが無い」と読み違えない**（#141 の出発点の見当は外れ）。
+  高さの有無は絶対Z で見る。
+- **UI で作ったストーリも同じ持ち方**で、**相対Z は負にもなる**（`−40`）。
 
 ### レベル基準線が描くのは、この絶対Z である
 
-**同じ 1 回の実行で「描かれた数値」と「レベルの絶対Z」と「レイヤの高さ」を並べて測った**
-（実物件の図面。3 つ組を書いた個体を置いて読み、最後に消した）:
-
-| ストーリ / レベル種別 | レベルの絶対Z | レイヤの高さ | **描かれた数値** | 描かれた名前 |
-| --- | --- | --- | --- | --- |
-| 1階 / `FL` | 561 | 561 | **561** | `FL-1` |
-| 2階 / `登り梁` | 3325 | 3325 | **3325** | `登り梁-2` |
-| 屋根 / `軒高` | 5961 | 5961 | **5961** | `軒高-R` |
-| 基礎 / `底盤天端` | 50 | 50 | **50** | `底盤天端-F` |
-
-**3 つとも全行で一致した。** 新規の空図面（SDK で作ったストーリ）でも同じで、
-デザインレイヤへ置いた個体もシートレイヤへ置いた個体も絶対Z をそのまま描いた
-（`2800` / `5900` / `8400` / `11300`）。シートレイヤはストーリに属さないので、
-**読んでいるのは「その個体が乗っているレイヤの Z」ではなく、名前で指したストーリレベルの
-絶対Z** である。
-
-- **レイヤの高さ（レベルに紐付いたレイヤの Z）は、測った全行でレベルの絶対Z と一致した**
-  ——UI で作ったストーリでも、SDK で作ったストーリでも。**読む道**は
-  `eStoryObjectBound_LayerElevation` のバウンドをそのレイヤを入れ物にして
-  `GetStoryObjectDataBoundHeight` に解かせること。**【訂正】「VS の `GetLayerElevation`
-  に当たる ISDK の口は無い」と書いていたが誤り**で、`VWLayerObj::GetElevation` と
-  `ovLayerHeightInCurrUnits`(157) が同じ値を返す（下記「レイヤの高さ」。3 経路とも
-  一致すると実測済み）。**ずれ得るのかは確かめていない**【未確認】——
-  測った文書ではどれも一致していた。
-
-> **【突き合わせの誤りの記録】**「描かれた数値が絶対Z と一致しない」と一度書いた
-> （`FL-1` が 612 に対して 576 など）。**別々のファイルを見比べていた**のが原因で、
-> 数値はどちらも正しかった（一方は 1階=612、もう一方は 1階=561 の図面）。
-> **教訓: 2 つの数を比べるなら、同じ 1 回の実行で両方を測る。** 別の実行のログから
-> 引いてきた数と突き合わせてはいけない（実機の図面は人が触るので、間に変わる）。
+- **レベル基準線が描く数値・レベルの絶対Z・レイヤの高さは、測った全行で一致した**（UI 製でも
+  SDK 製のストーリでも。シートレイヤに置いた個体も同じ）——読むのは乗っているレイヤの Z ではなく、
+  **名前で指したストーリレベルの絶対Z**
+  （[表](../Metrics/Layers%20and%20Stories.md#レベル基準線が描く高さの実測)）。
+- **【訂正】`VWLayerObj::GetElevation` と `ovLayerHeightInCurrUnits`(157) がレイヤ高さを返す**
+  （当初の「VS の `GetLayerElevation` に当たる ISDK の口は無い」は誤り）。
+  `eStoryObjectBound_LayerElevation` を解かせる道も同じ値。レイヤ高さとレベルの絶対Z が
+  **ずれ得るのかは確かめていない**【未確認】。
+- **教訓: 2 つの数を比べるなら、同じ 1 回の実行で両方を測る**（別ファイルのログを見比べて
+  「一致しない」と一度誤った）。
 
 ### 注釈に高さが出るかは、ビューポートで決まる
 
-**レベル基準線を断面ビューポートの注釈へ置いたとき、数値が出るかどうかは
-「どのビューポートの注釈か」だけで決まる。** 実物件の図面で、同じレベル
-（1階 / `耐力壁`、絶対Z `540`）の 3 つ組を**その文書のビューポート 29 件すべて**の注釈へ
-1 本ずつ置いて読んだ実測（置いた個体は全部消した）:
-
-| ビューポート | `ovIsSectionViewport` | 表示レイヤ | **描かれた数値** |
-| --- | --- | --- | --- |
-| `Viewport-1`〜`6`（UI 製の伏図） | **false**（平面） | 5〜8 / 37 | **`0`** |
-| `Viewport-7`〜`29`（UI 製の断面・軸組） | **true**（断面） | 24 / 37 | **`540`** |
-| SDK の `CreateSectionViewport` 製・作った直後 | **true**（断面） | 0 / 38 | **`0`** |
-| SDK の `CreateSectionViewport` 製・**全レイヤを表示にした後** | **true**（断面） | **38 / 38** | **`0`** |
-
-ここから 2 つ言える。
-
-1. **平面（伏図）ビューポートの注釈では出ない。** 縦方向の基準が無いので当然で、
-   これは**名前ではなく `ovIsSectionViewport`（オブジェクト変数 1054）が `false` であること**で
-   確かめてある。
-2. **断面ビューポートでも、SDK の `CreateSectionViewport` で作ったものでは下ごしらえが
-   足りないと出ない。** `ovIsSectionViewport` は `true`（＝断面として成立している）なのに
-   **全レイヤを表示にしても `0` のまま**だった（`SetViewportLayerVisibility` が 38 枚とも
-   `true` を返し、読み戻しも 38 枚とも表示）。**差は「ビュー行列（`ovViewportViewMatrix`
-   ＝ 1050）が単位行列のまま残ること」。**
-
-   > **【訂正の記録】この「全レイヤを表示にしても `0`」は、クラスが非表示のままだった
-   > ためだった**（[#151](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/151)
-   > で 2 × 2 に振って実測。表示レイヤだけ／クラスだけでは 1050 は入らず、**両方**を表示へ
-   > 戻して更新したときだけ 1055 と同じ値が入る）。#147 の「1055 を 1050 へ写す」手順も
-   > **要らない**——正しい手順と実測値は [Viewports](Viewports.md)「SDK で作った断面
-   > ビューポートの注釈でレベル基準線に高さを出す」にある。
-
-**したがって、SDK から「名前＋高さ」を確実に出したいなら、置き先を選ぶ。**
+レベル基準線を注釈へ置いたとき、**数値が出るかは「どのビューポートの注釈か」だけで決まる**
+（実物件の 29 件で実測。[表](../Metrics/Layers%20and%20Stories.md#注釈に高さが出るかをビューポートごとに見た)）。
 
 | 置き先 | 高さ | 名前 |
 | --- | --- | --- |
@@ -720,65 +325,28 @@ import-ifc の `draw::ImportUndoScope` と同じ——`SetUndoMethod(kUndoSwapOb
 | SDK の `CreateSectionViewport` で作った断面ビューポートの注釈 | **表示レイヤとクラスを表示へ戻して更新すれば出る**（どちらかを欠くと `0`。[Viewports](Viewports.md)） | 出る |
 | 伏図（平面）ビューポートの注釈 | **`0`** | 出る |
 
-**名前はどこでも出る**（`耐力壁-1` のような「レベル種別-ストーリの接尾語」）。`0` になるのは
-数値だけなので、**`Elev` 欄（または `Elevation`）を読み戻して `0` でないことを確かめる**。
-`0` なら疑うのは**ストーリではなくビューポート**。
-
-**潰した筋（もう一度やらない）:**
-
-- **ストーリの作り方**——4 通り試してどれも高さは正しく入っていた（上記）。
-- **レイヤの表示（だけ）**——書き込みは効いている（読み戻しで確認）のに `0` のまま。全レイヤを
-  表示にして更新し、置いてある個体を `ResetObject` しても、新しく置いても、はじめから
-  表示にして作った 2 つ目のビューポートでも `0`。
-  **→ これは「筋が外れていた」のではなく「半分だった」**（#151）。**レイヤとクラスの両方**を
-  表示へ戻して更新すれば 1050 が入り、高さが出る（[Viewports](Viewports.md)）。
-- **断面ビューポートとして成立していないのでは**——`ovIsSectionViewport` は `true` だった。
-- **作り方の引数**——`depth` / 高さの範囲 / 断面線の位置と向きを 4 通り振っても `0`（#147）。
-- **断面線オブジェクトとの結び付き**——オブジェクト変数 1000〜1150 の総当りで
-  **ハンドル型の差は 0 件**（#147）。
+- **平面ビューポートの注釈では出ない**（`ovIsSectionViewport`（1054）が `false`）。
+- **【訂正】SDK 製の断面で「全レイヤを表示にしても `0`」だったのは、クラスが非表示のままだった
+  ため**（[#151](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/151)）。
+  差はビュー行列 `ovViewportViewMatrix`（1050）が単位行列のまま残ることで、**表示レイヤと
+  クラスの両方**を戻して更新すると入る。#147 の「1055 を 1050 へ写す」は要らない——手順は
+  [Viewports](Viewports.md)「SDK で作った断面ビューポートの注釈でレベル基準線に高さを出す」。
+- **名前はどこでも出る**（`耐力壁-1` の形）。**`Elev` 欄（または `Elevation`）を読み戻して `0` で
+  ないことを確かめ、`0` ならストーリではなくビューポートを疑う。**
+- 潰した筋（ストーリの作り方・作り方の引数・断面線との結び付き）は
+  [計測記録](../Metrics/Layers%20and%20Stories.md#注釈に高さが出るかをビューポートごとに見た)。
 
 ## 打ち切った調査: ビューポート単位のレイヤ重ね順上書き
 
-**結論: `SetViewportLayerStackingOverride` は書けない**（2 度試して確定）。呼び出しは毎回
-true を返すのに `GetNumViewportLayerStackingOverrides` は 0 のままで、OIP も
-「順序を上書き: いいえ」。デザインレイヤの並べ替え（`InsertObjectAfter`）が唯一の手段。
-
-**読み出しはできる**——GUI で「順序を上書き」を付けたビューポートを
-`GetNumViewportLayerStackingOverrides` / `GetViewportLayerStackingOverrideLayer` /
-`GetViewportLayerStackingOverride` で読むと 27 件が返り、レイヤ名も引けた:
-
-```
-共通=1  2-柱伏図記号=2 … 1-FL=17 … R-野地板=25  2-FL=26  2-野地板=27
-```
-
-つまり**記録の形式は分かっている**（位置は 1 始まり・**1 が最前面**・図面の全デザインレイヤに
-振る）。それでも書けない。実機で潰した呼び方は次の 3 通りで、いずれも記録 0 件:
-
-| 位置の基点・向き | 対象 | 呼ぶ時点 | 結果 |
-| --- | --- | --- | --- |
-| 0 始まり・0 が最背面 | その図に映るレイヤだけ（5 件） | 生成直後 | 記録 0 件 |
-| 1 始まり・1 が最前面 | 全デザインレイヤ（27 件） | 生成直後 | 記録 0 件 |
-| 1 始まり・1 が最前面 | 全デザインレイヤ（27 件） | **仕上げ・更新の後** | 記録 0 件 |
-
-同時に潰した可能性:
-
-- `CreateViewportLayerOverride` は**色・不透明度**の上書きの族（`SViewportLayerOverride` は
-  `fFillFore` / `fPenFore` / `fPercentOpacity`）で、重ね順とは別物。重ね順の族にだけ
-  `Create…` が無く、`Set…` が記録の作成を兼ねる建て付けなので、事前に作るものは無い。
-- **レイヤの索引は正しい。** ビューポート側の API はレイヤをハンドルではなく `InternalIndex`
-  で指す（`VWViewportObj::SetLayerVisibility` も索引。ハンドルを取るのは
-  `ISDK::SetViewportLayerVisibility` だけ）。`GetObjectInternalIndex(レイヤ)` がその索引で
-  あることは、読み出した索引からレイヤ名が全件引けたこと＋
-  `VWViewportObj::GetLayerVisibility(索引, …)` が読めることの両方で確認した。
-- **有効/無効を切り替えるオブジェクト変数は無い。** `ObjectVariables.h` を `stack` /
-  `override` で全文検索して該当なし（ヒットは `ovDimWitnessOverride` と
-  `ovViewportLightingDevice` だけ）。ビューポートの変数は 1030〜1079 に並ぶが重ね順は無い。
-  `ovSheetSaveStackLayers` / `ovSheetStackLayersStatus` は保存ビューの「レイヤを重ねる」で
-  別物。
-- **VectorScript にも重ね順上書きの関数が無い**（`vs.py` に `Stacking` のヒット無し）ので、
-  SDK 以外に手掛かりも無い。
+- **`SetViewportLayerStackingOverride` は書けない**（2 度試して確定）。毎回 `true` を返すのに
+  `GetNumViewportLayerStackingOverrides` は 0 のまま。**デザインレイヤの並べ替え
+  （`InsertObjectAfter`）が唯一の手段。**
+- **読み出しはできる**（GUI で付けた上書きが 27 件読め、位置は 1 始まり・1 が最前面・全デザイン
+  レイヤに振る）。形式が分かっていても書けない。潰した呼び方 3 通りと、`CreateViewportLayerOverride`
+  （色・不透明度の族で別物）・レイヤの索引（`InternalIndex`）・オブジェクト変数・VectorScript を
+  当たった記録は [計測記録](../Metrics/Layers%20and%20Stories.md#打ち切った調査-ビューポート単位のレイヤ重ね順上書き)。
 
 > **教訓**: setter の戻り値を信用しない。この族は書けなくても true を返すので、
-> **読み戻しで確かめる**しかない。同じ形の setter（`SetUseDocumentClassVis` も同様だった）に
-> 当たったら、まず GUI で作った実物を読んで「読める形式」と「書けるか」を切り分ける。
-> （[Investigation Techniques](Investigation%20Techniques.md)）
+> **読み戻しで確かめる**しかない（`SetUseDocumentClassVis` も同様）。同じ形の setter に当たったら、
+> まず GUI で作った実物を読んで「読める形式」と「書けるか」を切り分ける
+> （[Investigation Techniques](Investigation%20Techniques.md)）。

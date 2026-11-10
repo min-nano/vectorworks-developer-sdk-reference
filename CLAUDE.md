@@ -17,12 +17,13 @@ Vectorworks 公式の SDK リファレンス（[Vectorworks/developer-sdk](https
 | `README.md` | 公式リファレンスの入口＋このフォークの追加分への導線 | 追加分の節だけ触る |
 | `Info/` / `Versions/` | **上流（公式）由来のリファレンス** | **原則書き換えない**（上流の更新を取り込めるように保つ。誤りを見つけたら Findings 側に注記を書く） |
 | `SDK Index/` | **SDK の宣言索引**（生成物）。シグネチャ・enum の値・宣言位置を `Grep` で引く（[説明](SDK%20Index/README.md)） | **手で書き換えない**（週次の `sdk-index` が作り直して PR を立てる） |
-| `Findings/` | **実測知見**。トピック別のファイル＋[索引と規約](Findings/README.md) | ここが本体。知見はここへ足す |
+| `Findings/` | **実測知見の結論**。トピック別のファイル＋[索引と規約](Findings/README.md)。何が言えるか（結論・使い方・落とし穴）だけを短く書く | ここが本体。知見はここへ足す |
+| `Metrics/` | **計測記録**。`Findings/` と同じトピック名のファイルに、測った環境・見本・手順・計測用のコード・実測の表やダンプ・切り分けの経緯を置く（[分け方](Metrics/README.md)） | 調査のたびに足す。結論は Findings へ |
 | `plugin/` | **実機確認プラグイン**（VwSdkProbes）。メニュー 1 つから、複数の PR の調査コードを同居させて実機で走らせる（[説明](plugin/README.md)）。**ローカルの Claude Code からは MCP ブリッジで操作できる**（`plugin/mcp/`。下記「ローカルセッションから実機確認を回す」） | 仕組みを変えるときだけ |
 | `.mcp.json` / `.claude/settings.json` | MCP ブリッジのサーバ（`plugin/mcp/vw-mcp-server.py`）の登録と、道具の許可 | 道具の許可を変えるときだけ |
 | `probes/` | 調査用のコンパイルスニペット（[規約](probes/README.md)） | 調査中だけ。役目を終えたら消す |
 | `probes/runtime/` | **実機で走らせる調査（プローブ）**。1 調査 1 ディレクトリ（[規約](probes/runtime/README.md)） | 調査中だけ。役目を終えたら消す |
-| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`。Sync fork 相当）・SDK の宣言索引の作り直し（`sdk-index`）・プローブの自動公開（`probe-auto-update`）・公開済みリリースの点検（`probe-release-guard`）・issue を webhook へ流す（`issue-webhook`） | — |
+| `scripts/` / `.github/workflows/` | 調査用 CI（`ci-debug`）と待機スクリプト・lint・上流の取り込み（`upstream-sync`。Sync fork 相当）・SDK の宣言索引の作り直し（`sdk-index`）・プローブの自動公開（`probe-auto-update`）・公開済みリリースの点検（`probe-release-guard`） | — |
 | `CLAUDE.md`（本ファイル） | 作業時の規約。調査のフロー・PR とマージ・CI の待ち方 | — |
 
 ## 調査のフロー
@@ -47,7 +48,10 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
      ヘッダと構文チェックで答えが出る問いを、わざわざ実機へ持っていかない。
 4. **Findings へ反映する PR を作る。** 確認水準の印（無印＝実機確認済み・【推定】・
    【ヘッダ根拠】）を正直に付ける（[`Findings/README.md`](Findings/README.md)）。
-   調査に使ったスニペット・一時計装は PR をマージする前に消す（結論は文章で残る）。
+   **結論は `Findings/<トピック>.md` へ、測った記録は `Metrics/<トピック>.md` へ分けて書く**
+   （[`Metrics/README.md`](Metrics/README.md)）。調査に使ったスニペット・一時計装は PR を
+   マージする前に消す（結論は Findings に、何をどの順で呼んだか——コードの要点——と実測は
+   Metrics に文章で残る）。
    **印を付けたからといってマージしてよいわけではない**——その調査が確かめると決めた項目に
    未確認が残っているなら、答えが来るまで PR は open のまま待つ（下記「PR とマージ」3）。
    PR 本文に `Closes #<issue 番号>` を書いて issue と紐付ける——**プラグイン側はその
@@ -55,58 +59,20 @@ PR にし、必要な実機確認を経て Findings へ確定内容を反映す�
    issue 単位で確実に閉じること。
 5. **実機確認が要るものは確認後にマージする**（下記「PR とマージ」）。
 
-## issue が立ったら Claude のルーティンを起こす（`issue-webhook`）
-
-調査は issue 単位で回すが、「issue を立てた」から「調査が始まる」までを人が繋いでいると、
-繋ぎ忘れた分だけ調査が止まる。そこを埋めるのが
-[`.github/workflows/issue-webhook.yml`](.github/workflows/issue-webhook.yml)
-（実体は [`scripts/issue-webhook.sh`](scripts/issue-webhook.sh)）で、**issue が
-open されたら、その内容を JSON で外部の webhook（Claude のルーティンの入口）へ POST する**。
-
-送り先と認証は**コードに書かない**。次のシークレット / variables から受け取る
-（Settings → Secrets and variables → Actions）。
-
-| 名前 | 置き場所 | 中身 |
-| --- | --- | --- |
-| `CLAUDE_ROUTINE_WEBHOOK_URL` | シークレット（推奨。variable でも可） | 送り先の URL。`https://` のみ |
-| `CLAUDE_ROUTINE_WEBHOOK_TOKEN` | **シークレットのみ** | 認証トークン。URL にトークンを含む形式なら空でよい |
-| `CLAUDE_ROUTINE_WEBHOOK_TOKEN_HEADER` | variable（任意） | トークンを載せるヘッダ名。既定 `Authorization` |
-| `CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME` | variable（任意） | トークンの接頭辞。既定 `Bearer`。`none` なら素のトークン |
-| `CLAUDE_ROUTINE_WEBHOOK_HEADERS` | variable（任意。値が秘密ならシークレット） | 追加のヘッダ。1 行 1 つ、`名前: 値` |
-
-- **URL が無ければ何もしない**（run は成功で終わる）。シークレットを入れる前にマージしても
-  支障は無い。ただし手動実行（`workflow_dispatch`）のときだけは、設定漏れを取りこぼさない
-  ように失敗させる。
-- **送る中身は送り先で変わる**（`WEBHOOK_PAYLOAD_MODE`。既定 `auto`）。
-  **ルーティンを起こす口（`/v1/claude_code/routines/<id>/fire`）は `{"text": ...}` しか
-  受け取らない**ので、そこ宛てには `text` だけを送る（余計な鍵を足すと 400）。issue の
-  値——番号・題・URL・起票者・ラベル・本文——はその 1 本の文字列に畳む。それ以外の
-  送り先へは同じ `text` に構造化された `issue` を添えて送る。本文は 4000 文字で切り、
-  切ったことを `issue.body_truncated` に立てる。組み立ては `jq` で行う（issue の題や
-  本文をシェルへ展開しない——そこは他人が書ける文字列なので）。
-- **URL とトークンはコマンドライン引数に置かない**（`ps` から見えるため）。curl の設定
-  ファイル経由で渡し、ログには送り先のホストだけを出す。
-- **足りないヘッダは自動で補う**（設定するのは URL とトークンの 2 つで済ませたい）。
-  `api.anthropic.com` 宛てには `anthropic-version`（既定 `2023-06-01`）、ルーティンを
-  起こす口には更に `anthropic-beta`（既定 `experimental-cc-routine-2026-04-01`）。
-  前者が無いと 400 で `anthropic-version: header is required` が返る——実際に踏んだ
-  （[run](https://github.com/min-nano/vectorworks-developer-sdk-reference/actions/runs/34024387939)）。
-  明示が要るときは `CLAUDE_ROUTINE_WEBHOOK_HEADERS` に書けばそちらが勝つ。
-  API キー方式の送り先には `CLAUDE_ROUTINE_WEBHOOK_TOKEN_HEADER=x-api-key` と
-  `CLAUDE_ROUTINE_WEBHOOK_TOKEN_SCHEME=none` を組み合わせる。
-- 送信は一時的な失敗（接続断・429・5xx）のときだけ 3 回まで粘る。4xx は設定か中身の
-  誤りなので即座に失敗させる。
-- **動作確認は Actions の "Issue webhook" を `workflow_dispatch` で叩く**（入力 `issue` に
-  番号を入れる。`dry_run` を立てると POST せず送る中身だけ出す）。`issues` イベントは
-  デフォルトブランチのワークフロー定義でしか走らないので、作業ブランチでの確認はこの手で行う。
-
 ## 知見の書き方
 
+- **結論と計測記録を分ける。** `Findings/` には結論（何が言えるか・どう呼ぶか・何に気を
+  付けるか）を短く書き、根拠は `Metrics/` の同じトピックの節へリンクする。
+  `Metrics/` には測った環境（VW の版・OS・日付）・見本・手順・計測用のコード・実測の表・
+  ダンプ・切り分けの経緯を置く（[`Metrics/README.md`](Metrics/README.md)）。**Metrics には
+  計測の手順と結果だけを書き、結論・解釈・指針は書かない**（二か所に書くと、結論を直した
+  ときに片方が古いまま残る）。
 - **なぜ（根拠）と実測値を書く。** 「動かない」だけでなく、何を試してどう切り分けたかを
-  残す。表・実測の数値・ダンプは省略しない。
+  `Metrics/` に残す。表・実測の数値・ダンプは省略しない。
 - **確認水準を偽らない。** 実機で確かめていないことを確認済みのように書かない。
   【推定】【ヘッダ根拠】の印は、実機確認が取れた時点で外す。
-- **「できない」も知見。** 打ち切った調査は消さずに、潰した道と教訓ごと残す。
+- **「できない」も知見。** 打ち切った調査は消さずに残す（結論と教訓は `Findings/`、
+  潰した道の詳細は `Metrics/`）。
 - **実装例へのリンクは実プラグインのソースを指す**（`draw/DrawUtil` 等のパス表記）。
   こちらへコードを複製しない。
 - 日本語で書く。既存ファイルの密度・体裁（手折りの箇条書き）に合わせる。
@@ -314,7 +280,8 @@ open されたら、その内容を JSON で外部の webhook（Claude のルー
   ——同じ sha から、同居させる PR を変えて何度もビルドされるため。ID は「main のコミット＋
   各 PR の head」から計算するので、**同じ顔ぶれで作り直しても変わらない**
   （`scripts/gather-probes.sh` / `plugin/src/UpdateParse.h`）。
-- **役目を終えたプローブは消す**（結論は `Findings/` に文章で残る。上記「調査のフロー」4）。
+- **役目を終えたプローブは消す**（結論は `Findings/`、計測の記録は `Metrics/` に文章で残る。
+  上記「調査のフロー」4）。
   **常駐の煙試験は置かない**——調べているわけではないプローブがピッカーに並ぶと、
   いま確かめたいものと見分けが付かない。`probes/runtime/` が README だけになるのは
   正常な状態で、そのときのピッカーは入れ替えだけが選べる。雛形は
@@ -389,7 +356,9 @@ Bash(run_in_background: true):
 `conclusion=success` 以外は exit 1（`no-checks` は「チェックが 1 件も登録されなかった」、
 `timed-out-waiting` / `api-error` は「待機側が見届けられなかった」——CI の失敗ではない）。
 このリポジトリの PR CI は `lint.yml`（shellcheck / actionlint / clang-format / 無 SDK の
-単体テスト）と、
+単体テスト。**その中で Findings / Metrics のリンクとアンカーも点検する**——
+`scripts/check-md-links.py`。**文書だけの PR でも、見出しを変えてリンクが切れれば
+`unit-tests` が赤くなる**ので、そのときは見出しかリンクを直す）と、
 `plugin/src/**` など**プラグイン本体**を触ったときだけ走る
 `probe-build.yml`（mac / Windows の実ビルド）、そして `probes/runtime/**` を触ったときだけ
 走る `probe-auto-update.yml`（main のビルドを起動して**完了まで待つ**ので、mac /
