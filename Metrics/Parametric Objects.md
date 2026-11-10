@@ -2,13 +2,13 @@
 
 結論は [Findings「Parametric Objects」](../Findings/Parametric%20Objects.md)。ここには各調査で
 測った環境（VW の版・OS）・使ったプローブ・見本・手順・実測の表とログ・切り分けの経緯
-（潰した道・帰属の訂正）を、元の記録のまま置く。節の見出しは Findings と同じにしてある。
+（潰した道・帰属の訂正）を、元の記録のまま置く。節の並びは Findings と同じにしてある（見出しは記録の言い方にしてある）。
 
 > ここには計測の手順と結果だけを置く。結論・解釈は Findings にある。
 
 特に断りが無ければ VW 2026 / mac・新規の空図面での実測。
 
-## パスの型を間違えると「生成できるのに何も描かれない」
+## パスの型（3D / 2D）を替えた実測
 
 - 水平材: 2 頂点の 3D ポリラインに絶対 Z を持たせて渡したところ、構造材オブジェクトは
   数百本生成されたが、**長さ 0 で画面に何も出なかった**（OIP は「スパン 0 / 長さ 0」）。
@@ -16,13 +16,13 @@
 - 鉛直材（柱・小屋束）: `CreateNurbsCurve` ＋ `Add3DVertex` で下端 → 上端の 2 点を渡した。
   `Insert3DVertex` では頂点が増えなかった。
 
-## `VWPolygon2DObj` は既定で「開いた」折れ線
+## `VWPolygon2DObj` で `SetClosed(true)` を呼ばなかったときの実測
 
 頂点を一周ぶん足して `SetClosed(true)` を呼ばなかったところ、**最後の頂点から最初の頂点へ
 戻る辺が描かれなかった**（実機では直角三角形の**斜辺だけが出なかった**。3 辺のうち 2 辺は
 出ていた）。
 
-## 高さ・実体を最終的に決めるのは「解決済みストーリバウンドから `ResetObject` が作り直すパス」
+## ストーリバウンドと `ResetObject` 後のパス・高さの実測（#56）
 
 [issue #56](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/56) で
 実機確認（VW 2026 / mac。`probes/runtime/custom-object-path-coordinate-system/` で
@@ -34,7 +34,7 @@
 [issue #59](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/59) で
 「階だけが違う 2 本の `_Story` バウンド」を潰した結果は下記のとおり**白**だった。46 本の原因は
 [issue #61](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/61) で
-測った（下記「`ResetObject` がバウンドから作り直すのは…」）。
+測った（下記「`ResetObject` がバウンドからパスを作り直す長さの境目の実測（#61）」）。
 
 **観察**（鉛直材。X=Y=0 の 2 点）:
 
@@ -49,7 +49,7 @@
    `(0,0,0)→(0,0,-2959)` に書き換わった（符号が反転）。
 4. 両方のバウンドを同じ絶対Z（3531）へ解決させて `ResetObject` すると、パスは
    `(0,0,0)→(0,0,-0.000000)` になった（`z1-z0 = 0`）。バウンドを 1 本も持たないまま
-   `ResetObject` を呼んでも 0 長になった（下記「同じオブジェクトに 2 本のバウンドを書く」）。
+   `ResetObject` を呼んでも 0 長になった（下記「同じオブジェクトに 2 本のバウンドを書いた実測（ID 0 / 1。#59）」）。
 5. わざと大きく外れた絶対Z（`0→1`）のパスで新しいオブジェクトを作り、3 と同じバウンド
    （572/3531）を掛けて `ResetObject` すると、結果は 3 と寸分違わず一致した（挿入点
    `(0,0,3531)`、パス `(0,0,0)→(0,0,-2959)`）。長さが `(0, 1e-7)` の帯にあるパスでは
@@ -66,7 +66,7 @@
 **検証範囲**: 上記の 1〜5 は**鉛直材**（X=Y=0 の2点）で測ったもの。水平材・斜め材（両端が
 異なる X/Y を持つ）は [#73](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/73) /
 [#75](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/75) で測った
-（下記「鉛直でないパスでは…」「水平成分が 1e-7 以上ある部材は…」）。
+（下記「鉛直でないパスで潰れ方と残差を測った（#73）」「水平成分を持つ部材で 0 長の死角を測った（#75）」）。
 `eStoryObjectBound_Story`（他階基準）と `fLayerLevelType`（横架材天端等の名前付きレベル）
 は下記の節で測った。
 
@@ -81,7 +81,7 @@
   レコード（`fBound` / `fBoundStory` / `fLayerLevelType` / `fOffset`）。
   バウンドを解決した絶対Zだけを読み取れる `GetObjectBoundElevation(hObject, id)` がある。
 
-### `ResetObject` がバウンドから作り直すのは「長さ 0」か「長さ 1e-7 以上」のパスだけ（その間に死角がある）
+### `ResetObject` がバウンドからパスを作り直す長さの境目の実測（#61）
 
 [issue #61](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/61) で
 実機確認（VW 2026 / mac。`probes/runtime/reset-object-path-rebuild-threshold/` を
@@ -122,10 +122,10 @@
   で差 `2.96e-11` ＝ `2959 × (1e-7)²`）。非鉛直のパスは #75 で測った（下記
   「水平成分が 1e-7 以上ある部材は…」6）。
 
-#### これが「柱 46 本が長さ 0」の原因だった
+#### 「柱 46 本が長さ 0」の事故のパス長で測った
 
 事故の取り込みが渡していたパスは**長さ 2959**（＝3531 − 572）。この長さを作り直しに掛けると
-**1 ULP（`4.54747e-13`）が残った**（下記「その残差はどこで生まれたのか」）。事故は 197 本中
+**1 ULP（`4.54747e-13`）が残った**（下記「残差の出どころを測った（#67）」）。事故は 197 本中
 46 本。**実測で確かめたのは高さ 2959 の分で、残り 45 本それぞれの高さまでは数えていない。**
 実機で採った 3 地点の読み戻し（`4.54747e-13` が ①②③ とも変わらない）は、上の表の 2 行目と
 同じ値である。[#56](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/56)（パスの型・
@@ -144,7 +144,7 @@
 >    実機では 61 ケースで一致 35 / 不一致 26 で、「戻らないのに残差なし」も「戻るのに
 >    残差あり」も出た（下記 5）。
 
-#### その残差はどこで生まれたのか——**作り直しが「渡した長さの 1〜2 ULP」を残す**
+#### 残差の出どころを測った（#67）
 
 [issue #67](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/67) で
 実機確認（VW 2026 / mac。`probes/runtime/path-z-residual-origin/` を 3 版・4 回
@@ -192,7 +192,7 @@
 **掛ける**形）。`Kernel/Base/TypesFloat.cpp` に `kNearlyEqualEpsilonForDoubles = 1e-13`・
 `kWorldCoordBumpEpsilon = 1e-11` がある。
 
-#### どの長さ L が残差を残すのか——**大きさは式で言える。出るかどうかは言えない**
+#### 残差を残す長さ L を振った実測（#71）
 
 [issue #71](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/71) で
 実機確認（VW 2026 / mac。`probes/runtime/path-collapse-residual-rule/` で
@@ -265,9 +265,9 @@
 
 **7. 1〜6 は鉛直（`dx = dy = 0`）のパスで測ったもの。** 水平成分があるパスは
 [issue #73](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/73) で
-測った（下記「鉛直でないパスでは…」）。
+測った（下記「鉛直でないパスで潰れ方と残差を測った（#73）」）。
 
-#### 鉛直でないパスでは、潰れるのは Z の差だけ——**水平成分は残り、残差の規則は別物になる**
+#### 鉛直でないパスで潰れ方と残差を測った（#73）
 
 [issue #73](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/73) で
 実機確認（VW 2026 / mac。`probes/runtime/path-collapse-residual-oblique/` で
@@ -368,7 +368,7 @@ dz=3428  dx: 2010b2010b1bbb0000b0b2bb00b01bb011010b002120b202
 4 通りの始点——`(0,0,0)` / `(1000,0,0)` / `(0,0,572)` / `(1000,2000,3531)`——で通し、
 **4 件とも `−4.5474735088646412e-13`** でビット一致した。
 
-#### 水平成分が 1e-7 以上ある部材は「0 長の死角」に落ちない——**事故は鉛直材に固有**
+#### 水平成分を持つ部材で 0 長の死角を測った（#75）
 
 [issue #75](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/75) で
 実機確認（VW 2026 / mac。新規の空図面で
@@ -450,7 +450,7 @@ Z の差だけが span（3000）へ書き換わった:
 
 `(7e-8, 7e-8, …)` の増分は `3000 × (9.8995e-8)²` と一致した（#61 の鉛直では `L → L + H·L²`）。
 
-#### `SetCustomObjectPath` で差し替えたパスには、この判定が掛からない（バウンドの**両方**が書き換わる）
+#### `SetCustomObjectPath` で差し替えたパスの `ResetObject` 後とバウンドの実測
 
 一度 `ResetObject` を通したオブジェクトのパスを `SetCustomObjectPath` で差し替えると、
 その後の `ResetObject` はパスを作り直さなかった（0 長 / 1 ULP / 100 /
@@ -498,7 +498,7 @@ Z の差だけが span（3000）へ書き換わった:
 **−2959**」になった（`fBound` は `Story` のまま・基準の階もレベル種別もそのまま）。階を
 動かしたときの振る舞いは下記（#65）。
 
-#### 差し替えで `fOffset` を書き換えられた部材は、階を動かすと長さが変わる（＝潰れた部材が生えてくる）
+#### 差し替えで `fOffset` が書き換わった部材の階を動かした実測（#65）
 
 [issue #65](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/65) で
 実機確認（VW 2026 / mac。事故のモデル——1階 612 / 2階 3571、レベル種別 `耐力壁`
@@ -534,7 +534,7 @@ Z の差だけが span（3000）へ書き換わった:
 新しい解決Zで作り直された（ID 1 の `fOffset` を 5500 → 4500 にしたら、パスは `3000` →
 `2000` になった）。
 
-#### 2 つの経路を、最初の `ResetObject` より前に混ぜない
+#### 最初の `ResetObject` より前に `SetCustomObjectPath` で差し替えた実測
 
 **まだ一度も `ResetObject` を通していないオブジェクト**のパスを `SetCustomObjectPath` で
 差し替えてから `ResetObject` を呼ぶと、作り直しはされるが**長さが足りない**:
@@ -549,7 +549,7 @@ Z の差だけが span（3000）へ書き換わった:
 バウンドのレコードはこのとき書き換わっておらず、ID 1 は 5500 のままだったが、端点の
 絶対Zは 5400 / 5000 になった。
 
-### 階やレベルを指すバウンドは `eStoryObjectBound_Story` で書く（`LayerElevation` では跨がらない）
+### 階・レベルを指すバウンドを `eStoryObjectBound_Story` / `LayerElevation` で書き比べた実測（#56）
 
 [issue #56](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/56) で
 実機確認（VW 2026 / mac。実際に事故が起きたモデルで
@@ -560,7 +560,7 @@ Z の差だけが span（3000）へ書き換わった:
 > 事故を起こしたプラグインは `LayerElevation` で書く経路を持っていない（最初から
 > `fBound = eStoryObjectBound_Story`）ことを確かめた。下記の測定値はそのまま再現する。
 
-#### `EStoryObjectBound` の 3 つの値は「何を見るか」が違う
+#### `EStoryObjectBound` の 3 つの値が何へ解決されたか
 
 | `fBound` | 何に解決されるか | `fLayerLevelType` | `fBoundStory` |
 | --- | --- | --- | --- |
@@ -591,7 +591,7 @@ Z の差だけが span（3000）へ書き換わった:
 | `LayerWallHeight`（同上） | 572 / 572 | 572 / 572 | 572 / 572 |
 | `Story`（種別 `FL` / `耐力壁`） | 612 / 572 | **3571 / 3531** | 572 / 572 |
 
-#### 正しい書き方は VW 自身に聞ける
+#### OIP の選択肢の文字列から構造体へ戻して解いた実測
 
 `GetStoryBoundChoiceStrings`（OIP のポップアップに出る選択肢）を
 `GetStoryBoundDataFromChoiceString` で構造体へ戻し、`GetStoryObjectDataBoundHeight` で解いた。
@@ -610,7 +610,7 @@ Z の差だけが span（3000）へ書き換わった:
 階やレベルを指す選択肢はすべて `fBound = eStoryObjectBound_Story` だった。
 `LayerElevation` の選択肢は「レイヤの高さ」ただ 1 つで、`fLayerLevelType` は**空文字**だった。
 
-#### 上下端とも `LayerElevation` で書くと 0 長へ潰れる（機構）
+#### 上下端とも `LayerElevation` で書いた実測
 
 実測（レイヤ `1-耐力壁`＝572 に置いた構造材 PIO。上下端のバウンドを書き分け、
 `ResetObject` 後のパスを読み戻した）:
@@ -631,7 +631,7 @@ Z の差だけが span（3000）へ書き換わった:
 - `{Story, −1, FL}` は 572（＝container のレイヤ高さ）になった。下階（基礎）に `FL` は無い。
   データ点は 1 つ。
 
-### 同じオブジェクトに 2 本のバウンドを書く（ID 0 / 1。階だけが違っても独立に解決される）
+### 同じオブジェクトに 2 本のバウンドを書いた実測（ID 0 / 1。#59）
 
 [issue #59](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/59) で
 実機確認（VW 2026 / mac。`probes/runtime/story-bound-two-ids/` を事故のモデルで
@@ -656,7 +656,7 @@ Z の差だけが span（3000）へ書き換わった:
 - D: 完全に同一のレコードを 2 本書いても件数=2、ID も 0 と 1 で並んだ。解決結果は
   どちらも 572 で、パスは 0 長になった。
 
-#### バウンド ID は 0 と 1。`ID 0 がパスの始点`、`ID 1 が終点`
+#### バウンド ID と始点・終点の対応の観察
 
 - `CreateCustomObjectPath` 直後の構造材 PIO は `HasObjectStoryBounds=false` / 件数 0 で、
   `ResetObject` を挟んでも増えなかった。並んだのは `SetObjectStoryBound` で書いた ID だけ。
@@ -669,14 +669,14 @@ Z の差だけが span（3000）へ書き換わった:
   `ISDK.h` のこの ID のコメントは「2017 年に足されたストーリレベル対応を使う parametric 用の
   Story boundID」。
 
-#### `ResetObject` 後のパスが 0 長になるのは 2 通り（実測）
+#### `ResetObject` 後のパスが 0 長になったケース（2 通り）
 
 1. 上下端の解決済み絶対Zが一致したとき（上表 D。`572 / 572` → `z1−z0 = 0`）。
 2. バウンドが 1 本も無いまま `ResetObject` を呼んだとき。バウンドを書かずに
    `(0,0,0)→(0,0,2959)` のパスで作った構造材 PIO を `ResetObject` すると、パスは
    `(0,0,0)→(0,0,0)` になった（`−3` への書き込みが `false` で弾かれた回でも同じ）。
 
-#### 構造材のパスは **2D で渡す**——3D ポリゴンで渡すとバウンドが黙って無視される
+#### 構造材のパスを 2D / 3D ポリゴンで渡してバウンドの効き方を比べた（#196）
 
 [issue #196](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/196) で
 実機確認（VW 2026 / mac。`probes/runtime/datatag-slope-top-elevation/`。
@@ -712,7 +712,7 @@ API の表は Findings。ここには表の外で測った観察だけを置く:
   添字 0 で無効（前者は空文字、後者は `false`）、件数 N に対して有効なのは 1〜N だった。
   一覧は名前順に並び、2 本続けて足すと 1 本目が押し下げられ、どちらも `index=1` を返しうる。
 
-## 線分 PIO の両端と長さ——`LineLength` を持つ PIO にだけ `Set/GetLinearObjectPos` が効く
+## 線分 PIO の両端と長さ——`LineLength` の有無と `Set/GetLinearObjectPos` の実測
 
 [`Info/Parametric Object Types.md`](../Info/Parametric%20Object%20Types.md) は「線分 PIO
 （`kParametricSubType_Linear`）は行列＋**隠しパラメータ** `LineLength`（`kFieldCoordDisp`）で
@@ -734,7 +734,7 @@ API の表は Findings。ここには表の外で測った観察だけを置く:
   を待たずにその場で読み戻せた）、`Get` が両端を返した。持たない PIO では `Get` が
   `(0, 0), (0, 0)` を返し、`Set` は例外も戻り値も無く、行列も外接も 1mm も動かなかった。
 
-### 実測（組み込み PIO 10 件。`LineLength` の有無で 3 対 7 にきれいに割れた）
+### 実測（組み込み PIO 10 件。`LineLength` の有無で 3 対 7）
 
 | universal 名 | 内部 ID | パラメータ数 | `LineLength` | 作成直後の `GetLinearObjectPos` | `Set…` |
 | --- | --- | --- | --- | --- | --- |
@@ -757,7 +757,7 @@ API の表は Findings。ここには表の外で測った観察だけを置く:
   など）。
 - 型（`GetObjectTypeN`）は **10 件すべて 86** だった。
 
-### `Set…` が効く PIO では、行列の i 軸と `LineLength` が同時に書かれる
+### `Set…` を呼んだときの行列の i 軸と `LineLength` の実測
 
 `Break Line` の実測（1 本を順に振った。数値はログそのまま）:
 
@@ -781,7 +781,7 @@ API の表は Findings。ここには表の外で測った観察だけを置く:
   使っているのは線分（`VWLine2DObj`）と壁（`VWWallObj`）だけで、PIO のために使っている箇所は
   見つからなかった。
 
-### 両端の正体は「始端＝行列の offset」「終端＝offset ＋ `LineLength` × i 軸」
+### 両端と行列の offset・`LineLength` × i 軸の突き合わせ
 
 `Break Line` と `Joist` で測り、**両者で数値まで同一**だった（違ったのは外接だけ）。
 
@@ -797,7 +797,7 @@ API の表は Findings。ここには表の外で測った観察だけを置く:
   始端は動かず（外接の原点側 `left` / `bottom` も段 6 と段 7 で同じ値のままだった）。
 - 段 1: `CreateCustomObject(名前, 位置, 角度)` の位置がそのまま offset になった。
 
-### OIP でパラメータを編集しても、VW は行列も長さも触らない
+### OIP でパラメータを編集した前後の行列と長さの実測
 
 測り方は 2 段——プローブが 1 回目に読んだ値の**指紋を図形の名前へ書き込み**、利用者が OIP で
 編集し、2 回目に読み直して突き合わせる（OIP の編集は SDK から起こせず、`SetParamReal` ＋
@@ -821,14 +821,14 @@ API の表は Findings。ここには表の外で測った観察だけを置く:
   言う作りにしてある。
 - `Recalculate` の中から何が見えるかは
   [issue #183](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/183) で
-  測った（下記「`Recalculate` の中から見える環境は…」）。
+  測った（下記「`Recalculate` の中から見える環境を『取り込み時のリセット』と『OIP 編集』で比べた（#183）」）。
 
-## パラメータ名は実機の PIO 登録から採る
+## 推測したパラメータ名で setter を呼んだ実測
 
 VectorScript のエクスポートから推測した名前（`pitch` / `label` / 先頭大文字の
 `StructuralUse`）では **setter が黙って無視された**。
 
-### 名前の解決は「種別 × 文書」ごとに 1 度でよい——表はインスタンスに依らない
+### パラメータ表がインスタンス・文書で変わるかの実測（#82）
 
 [issue #82](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/82) で
 実機確認（VW 2026 / mac。構造材ツール `StructuralMember` を対象にプローブを
@@ -836,7 +836,7 @@ VectorScript のエクスポートから推測した名前（`pitch` / `label` /
 
 比べたのは `GetParamsCount` / `GetParamName(i)` / `GetParamLocalizedName(i)` が返す表。
 
-#### 何を変えても表は動かなかった（実測）
+#### 条件を変えて表を比べた実測
 
 構造材（`StructuralMember`）のパラメータは **181 件**。次のどれでも、**件数・並び・
 universal 名・ローカライズ名・ポップアップの選択肢の数が全索引で一致**した。
@@ -864,7 +864,7 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
   `GetParamName(i)` へ落ちる。どちらの経路も引数は索引（と種別）だけで、
   インスタンス固有の値は使っていない（オブジェクトはどのプラグインのものかを引くのに使う）。
 
-#### スタイルを当てても表は変わらない
+#### スタイルを当てて表を比べた実測
 
 文書にあったプラグインスタイル 9 本の素性を**スタイルのシンボル定義の中身から**読み取り
 （`FirstMemberObj` で辿り、中に入っている PIO の universal 名を見る）、`StructuralMember` の
@@ -884,11 +884,11 @@ universal 名・ローカライズ名・ポップアップの選択肢の数が�
 - スタイルを用意しようと `CreatePluginStyle` を呼ぶと、ダイアログ（「フォルダの指定」）が
   出たのに文書のスタイルは 1 本も増えず、渡したハンドルは無効になり、図面にあった構造材が
   型 86 から型 21 へ変わった（渡していない本まで）。この呼び出しは下記
-  「**`CreatePluginStyle` を呼んではいけない**」
+  「`CreatePluginStyle` を呼んだ記録（#98）」
   （[issue #98](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/98)）で
   測り直した。この調査では文書に元からあるスタイルを使った。
 
-#### ローカライズ名はアプリの資源から来る（文書ではない）
+#### ローカライズ名と資源（`GetLocalizedPluginParameter`）の突き合わせ
 
 `GetParamLocalizedName(i)` の結果を
 `gSDK->GetLocalizedPluginParameter("StructuralMember", universal 名)` と全索引で
@@ -1031,8 +1031,8 @@ universal 名は `<パーツ><欄>_<面>` という組み立てになってい�
   表に無かった。
 - **171〜176 の `B` / `B1` / `D` / `D1` は欄型 14（`kFieldStaticText`）**で、`B`=300 /
   `D`=600 は `MajorBreadth` / `MajorDepth` と同じ値だった（#169 で、寸法 4 欄を書くと
-  この 4 つは書いた値へ追随し、絵は 1mm も動かなかった——下記「構造材の断面は
-  `MemberType`（材質）が決める」の「手がかりは残るか」）。`traversalDone` / `traversalRoot`
+  この 4 つは書いた値へ追随し、絵は 1mm も動かなかった——下記「`MemberType`（材質）を振って断面と
+  `MajorDepth` の効き方を測った」の「効かない欄を書いた後に読めるものを並べた」）。`traversalDone` / `traversalRoot`
   （171/172）は真偽。
 
 ### 新規に作った 1 本の既定値
@@ -1097,7 +1097,7 @@ universal 名は `<パーツ><欄>_<面>` という組み立てになってい�
 | `AttributesMode`（179）/ `AttributesMode3D`（180） | 0＝オブジェクト / 1＝線種 / 2＝クラス / 3＝マテリアル |
 | `Member/CoverAttributes_3D`（162 / 166） | 0＝オブジェクト別 / **1＝クラス属性** |
 
-### クラス属性は効く——`FillStyle`=6 / `PenStyle`=4 で描画がクラスのものになる
+### `FillStyle`=6 / `PenStyle`=4 でクラス属性を当てた実測
 
 見分けが付くように、**クラス側を黄（塗り solid・線とも `(255,255,0)`・
 太さ 99）**、**per-part の色欄をマゼンタ `(255,0,255)`** にして食い違わせ、1 値 1 個体で
@@ -1130,7 +1130,7 @@ per-part のマゼンタが出続けた）。**値は書けていて読み戻せ
 イベントを閉じた後・戻った後の 4 時点で読み、変わった欄は 0。どの値でも子は
 塗りマゼンタ・稜線マゼンタ・クラスの黄は 0 か所のまま）。
 
-### 平面図で使われるのは `_Below`——3 面のどれが描かれるかは切断面との関係で決まる
+### 3 面（Above / At / Below）に目印を入れて平面図に描かれた面を見た
 
 実機確認（1 本の構造材に 3 面ぶん別々の目印を入れて 1 回だけ描いた。
 `MemberLineWeight` = 55/56/57、`CenterlineLineWeight` = 58/59/60、
@@ -1163,7 +1163,7 @@ VW へ戻った後に読み直しても、描かれた子は上表のまま（#2
 | 90 | `kUndoPlaceholderNode` | **undo の置き石**（下記） |
 | 0 | `kTermNode` | 終端 |
 
-### クラス欄（欄型 18 = `kFieldClassesPopup`）は**名前**で書く
+### クラス欄（欄型 18 = `kFieldClassesPopup`）の書き方を比べた
 
 | 書き方 | `GetParamValue` の読み戻し | `ResetObject` 後 | `GetParamClass` |
 | --- | --- | --- | --- |
@@ -1175,13 +1175,13 @@ VW へ戻った後に読み直しても、描かれた子は上表のまま（#2
   `kFieldClass`（欄型 23）用の口。
 - クラスは先に `AddClass` で文書へ作ってから書いた。無い名前を書いたときの挙動は見ていない。
 
-### 真偽欄は `GetParamBool` で読み戻す（文字列は `True` / `False`）
+### 真偽欄の読み戻し（文字列は `True` / `False`）
 
 `SetParamBool(索引, false)` の後、`GetParamValue(索引)` は **`False`** を返した（`0` では
 ない）。この調査の 1 版目は、書いた `"0"` と読み戻した `"False"` を突き合わせて「戻された」と
 誤判定した。
 
-### `ResetObject` 1 回ごとに undo の置き石（型 90）が 1 つ積もる
+### `ResetObject` を繰り返したときの undo の置き石（型 90）の数
 
 構造材 1 本へ `ResetObject` を繰り返すと、PIO の子に
 `kUndoPlaceholderNode`（型 90）が**1 回につきちょうど 1 つ**増えた（30 回で 29 個。
@@ -1196,10 +1196,10 @@ VW へ戻った後に読み直しても、描かれた子は上表のまま（#2
   断面のポリラインが消え、値を既定へ戻しても戻らなかった。`ResetObject` を 30 回
   繰り返すだけの個体では消えなかった。何が消したかはこの調査では切り分けず、
   [issue #166](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/166) で
-  測った（下記「構造材 PIO の子を消すのは『表示欄』で…」）。
+  測った（下記「構造材 PIO の子が消えた件を表示欄と属性モード（`AttributesMode`）で切り分けた（#166）」）。
 - この節の実測はすべて 1 値 1 個体で採り直したものである。
 
-### 取り込みで使う形（構造材＝クラススタイル・被覆と中心線は非表示・端部は両端）
+### 取り込みの形（構造材＝クラススタイル・被覆と中心線は非表示・端部は両端）で 1 本作った実測
 
 実機確認（次のコードで 1 本作り、読み戻しと描かれた子を確かめた）。
 
@@ -1236,7 +1236,7 @@ gSDK->ResetObject(member);                   // 1 回で足りる
   48 以降を採ったもの）。
 - 端部の表示欄は `StartCapDisplay_<面>` と `EndCapDisplay_<面>` の真偽 2 つだった。
 
-## 構造材の断面は `MemberType`（材質）が決める——`MajorDepth` が効くかどうかもここで決まる
+## `MemberType`（材質）を振って断面と `MajorDepth` の効き方を測った
 
 実機確認（VW 2026 / mac・日本語 UI・新規の空図面。
 `probes/runtime/member-profile-source/` を 3 版・計 4 回走らせた。**すべて 1 値 1 個体**で
@@ -1266,7 +1266,7 @@ gSDK->ResetObject(member);                   // 1 回で足りる
 
 欄型 14 の 3 欄も `SetParamValue` で書け、`0`（スチール）では書いた値で断面が変わった（下記）。
 
-### `0`（スチール）——カタログの綴りが断面を決める
+### `0`（スチール）——`ProfileSize` を書き替えた実測
 
 既定断面は AISC (Inch) の `W12 X 30` で、**幅Y 165.6 × 高さZ 313.4**（＝W12×30 の
 実寸 bf 6.49in / d 12.22in）。`ProfileSize` へ同じ系列の別項目を書いた:
@@ -1297,7 +1297,7 @@ gSDK->ResetObject(member);                   // 1 回で足りる
   シンボルは使われなかった。
 - 寸法 4 欄は 6 条件 16 個体で 1mm も動かなかった。
 
-### `1`（コンクリート）/ `2`（木）——寸法 4 欄がそのまま断面になる
+### `1`（コンクリート）/ `2`（木）——寸法 4 欄を書いた実測
 
 | 何をした | 幅Y × 高さZ | 群 |
 | --- | --- | --- |
@@ -1306,7 +1306,7 @@ gSDK->ResetObject(member);                   // 1 回で足りる
 
 - 切り替えた直後の 300 × 600 は `MajorBreadth` / `MajorDepth` の既定値と同じだった。
 - #169 の時点では外接だけを見て「矩形になる」と書いた。#173 で群の子の頂点まで突き合わせると
-  I 形（H 形）だった（下記「副幅・副高さは板厚」）。外接は `MajorBreadth` × `MajorDepth` に一致する。
+  I 形（H 形）だった（下記「副幅・副高さを振った断面の実測（#173）」）。外接は `MajorBreadth` × `MajorDepth` に一致する。
 - `MemberType`=`0` のまま寸法 4 欄を書いて（この時点では絵は 165.6 × 313.4 のまま）、
   あとから `MemberType`=`1` にして `ResetObject` した個体も 200 × 800 になった。
 - `角形鋼管` を書いても 300 × 600 のままで、そのあと寸法を書けば 200 × 800 になった。
@@ -1314,7 +1314,7 @@ gSDK->ResetObject(member);                   // 1 回で足りる
   `ProfileSymbol` を与えても変わらなかった（`2`（木）で確認）。
 - `MinorBreadth` / `MinorDepth` を変えても外接は変わらなかった（頂点は下記）。
 
-### 副幅・副高さは板厚——断面は矩形ではなく I 形である
+### 副幅・副高さを振った断面の実測（#173）
 
 実機確認（VW 2026 / mac・日本語 UI・新規の空図面。`probes/runtime/member-minor-dims/`
 を 3 版・計 3 回走らせた。**すべて 1 値 1 個体**で計 54 個体（27 ＋ 16 ＋ 11）。以下の数値は実行ログそのまま。
@@ -1348,7 +1348,7 @@ x＝材の幅(Y) / y＝材の高さ(Z)。下端は 0）:
 
 `B` / `B1` / `D` / `D1` の表示欄は、この 4 欄をそのまま写していた。
 
-#### 3D 実体が消えるのは輪郭が自己交差したとき——境界は `MajorDepth` の半分
+#### 3D 実体が消えた個体と `MajorDepth` の境界の実測
 
 `2d > D`（上下のフランジが交差する）にした個体では型 84（`kCSGTree`）が作られなかった
 ——`GetObjectCube` の高さが 0.0 になり、PIO の子が 9 → 8 に減った。断面群の `Polygon` は
@@ -1398,14 +1398,14 @@ x＝材の幅(Y) / y＝材の高さ(Z)。下端は 0）:
 
 
 
-#### 無垢の矩形断面が欲しいなら `MinorBreadth` に `MajorBreadth` と同じ値を書く
+#### `MinorBreadth` に `MajorBreadth` と同じ値を書いた実測
 
 `b`=`B` にした実測（`B`=300 / `D`=600 / `b`=300 / `d`=400）の 12 頂点は
 `(-150,0) (-150,400) (-150,400) (-150,200) (-150,200) (-150,600) (150,600) (150,200)
 (150,200) (150,400) (150,400) (150,0)` で、**x が ±150 の 2 値しか無い**（＝矩形）。
 実体もでき、外接は 300 × 600 だった。
 
-#### 壊れたことを書き手が知る道——**3D を数えるしかない**
+#### 断面が壊れた後に読めるものを並べた
 
 | 見られるもの | `2d > D` にした後 |
 | --- | --- |
@@ -1418,7 +1418,7 @@ x＝材の幅(Y) / y＝材の高さ(Z)。下端は 0）:
 
 `d` を 100 へ書き戻して `ResetObject` すると、型 84 が戻り、高さZ も 600 へ戻った。
 
-### `3`（カスタム）——`ProfileSymbol` が断面になる
+### `3`（カスタム）——`ProfileSymbol` を書いた実測
 
 | 何をした | 幅Y × 高さZ | 群の子 |
 | --- | --- | --- |
@@ -1433,7 +1433,7 @@ x＝材の幅(Y) / y＝材の高さ(Z)。下端は 0）:
 `ResetObject` で作った。`CreateSymbolDefinition` は名前を参照で受けて書き換えた（重複していれば
 別名になる）。
 
-### プロファイル（断面）グループは**生成物**——外から書いても消える
+### プロファイル（断面）グループを外から書いた実測
 
 `ISDK::GetCustomObjectProfileGroup` が返す群は、描かれた断面と一致した
 （既定の 1 本なら Polyline 1 つで外接 `(-82.8,0→82.8,313.4)`）。
@@ -1444,7 +1444,7 @@ x＝材の幅(Y) / y＝材の高さ(Z)。下端は 0）:
 - `GetCustomObjectSecondProfileGroup` と `GetCustomObjectProfileGroupInAux` は
   どちらも `nil` だった。
 
-### 効かない欄を書いたときに手がかりは残るか——**残らない**
+### 効かない欄を書いた後に読めるものを並べた
 
 `0`（スチール）の 1 本へ寸法 4 欄（200 / 60 / 800 / 90）を書いた後:
 
@@ -1456,7 +1456,7 @@ x＝材の幅(Y) / y＝材の高さ(Z)。下端は 0）:
 | `ProfileShape` / `ProfileSeries` / `ProfileSize` / `ProfileSymbol` | 不変 |
 | 外接・立方・群の外接 | **不変** |
 
-## パラメータの既定値は「文書」に記録される
+## 既定値を変えた PIO を、前に使った文書で取り込み直した実測
 
 実機での症状: 自作 PIO の記号の離れの既定（`SParametricParamDef` に書いた値）を 4 → 200 に
 変えたのに、その PIO を前に使った文書で取り込み直しても、ログはずっと `記号の離れ 4.0mm` の
@@ -1464,7 +1464,7 @@ x＝材の幅(Y) / y＝材の高さ(Z)。下端は 0）:
 コードを読む限り新しい値が入るはずなので、原因を PIO の外（レイヤ・重ね順）に探して
 遠回りした。
 
-## 生成時に「オブジェクトの設定」ダイアログが出る
+## 生成時に「オブジェクトの設定」ダイアログが出た記録
 
 `CreateCustomObject` は、その名前の PIO が文書に未定義なら定義を作り、その `prefWhen` の
 既定は `kCustomObjectPrefAlways`。自作 PIO で、**最初の 1 個だけ**ダイアログが出て処理が
@@ -1482,7 +1482,7 @@ VW 2026 / mac・新規の空図面。`probes/runtime/create-pio-with-params/` �
 | `CreateCustomObjectPath("Door", nil, nil, doRegen=false)` | 10.6 秒 | **出た**——再生成を止めても止まらない |
 | `DefineCustomObject(name, kCustomObjectPrefNever)`（51〜76ms）→ `CreateCustomObject` | 17〜27ms（窓）/ 305〜694ms（ドア） | 出ない（ドア・窓とも） |
 
-## パラメータを指定して作る口は無い——点の PIO も作成の時点で 1 回描く
+## パラメータを指定して 1 回の描画で作る経路を探した（#122）
 
 「作る → パラメトリックレコードを書く → `ResetObject`」を 1 回の描画にできるかを
 [issue #122](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/122) で
@@ -1569,7 +1569,7 @@ gSDK->ResetObject(h);                         // ここで 1 回だけ描く
 - 所要は各 1 回の実測で、`ResetObject` 1 回が 15〜19ms、作成時の 1 回が 10〜20ms。
   写す手間は測っていない。
 
-### 位置と角度は `SetEntityMatrix` で与える（描き直しを起こさない）
+### `SetEntityMatrix` で位置と角度を与えた実測
 
 `CreateCustomObjectPath(name, nil, nil, doRegen=false)` は原点・角度 0 に置く。
 `SetEntityMatrix`（0.00ms）で原点 (6000, 5000)・30° を与えても子は 1 のまま
@@ -1596,7 +1596,7 @@ gSDK->ResetObject(h);                         // ここで 1 回だけ描く
 
 測った記録は下の各節。
 
-### スタイルを当てると書いたバウンドはスタイルのものへ置き換わる
+### スタイルを当てた後のバウンドの実測（#112）
 
 [issue #112](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/112) で
 実機確認（VW 2026 / mac・新規の空図面。`probes/runtime/style-story-bound-overwrite/` を
@@ -1652,7 +1652,7 @@ gSDK->ResetObject(h);                         // ここで 1 回だけ描く
 2 度目は渡す前に `fBound` を 0 で埋めてから呼んでいる。両端を書いてあった材（上記 3・4）は、
 どれもレコードが素直に読み戻った。
 
-### バウンドだけ by-instance のスタイルは作れる——握っているのは `DialogStartElevationReference` 1 件
+### バウンドだけ by-instance のスタイルを作った実測（`DialogStartElevationReference`。#118）
 
 [issue #118](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/118) で
 実機確認（VW 2026 / mac・新規の空図面。`probes/runtime/style-bound-only-by-instance/` を
@@ -1695,7 +1695,7 @@ gSDK->SetPluginStyleParameterType(hSymDef, "DialogStartElevationReference",
 3. **1 本ごとに `ResetObject`**
 4. 最後に `UpdateStyledObjects` を 1 回
 
-#### `UpdateStyledObjects` はバウンドから作り直さない——差分を足すだけで、流した回数ぶん累積する
+#### `UpdateStyledObjects` を流したときのバウンドと長さの実測（#125）
 
 [issue #125](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/125) で
 実機確認（VW 2026 / mac・新規の空図面。`probes/runtime/update-styled-bound-delta/` を
@@ -1787,7 +1787,7 @@ undo イベントを閉じた後・VW へ戻って数十秒置いた後に 1 桁
 どちらも `Δz（前）2000 ＋ (新しい span − スタイル span 3000)` に一致した
 （2000 + 2500 = 4500 ／ 2000 − 2000 = 0）。
 
-#### パラメータの値を配るのは `UpdateStyledObjects` だけ（`ResetObject` では配られない）
+#### `UpdateStyledObjects` / `ResetObject` の前後でパラメータの値を読み比べた
 
 同じ 6 本（#118）を、`UpdateStyledObjects` を流す前と後で読み比べた実測:
 
@@ -1799,7 +1799,7 @@ undo イベントを閉じた後・VW へ戻って数十秒置いた後に 1 桁
 [#245](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/245): `ResetObject` だけの材は
 VW へ戻った後も `HON-GOTO`/120 のままだった。
 
-### **`CreatePluginStyle` を呼んではいけない**——スタイルは作られず、文書中の PIO が全滅する
+### `CreatePluginStyle` を呼んだ記録（#98）
 
 `gSDK->CreatePluginStyle(MCObjectHandle hObj)` を呼んだ記録
 （[issue #98](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/98)。
@@ -1815,7 +1815,7 @@ VW 2026 / mac・新規の空図面で 2 度実行。以下は実行ログその�
 | **残ったポリラインは全部「選択」状態になる** | 呼ぶ前の選択状態とは無関係 |
 | **資源は 1 つも増えない** | 資源ツリーを丸ごと数えて 535 → 537 件。増えた 2 件は**どちらもプローブ自身が作ったシンボル定義とその空レコード**。プラグインスタイルは 9 本のまま |
 | **渡したハンドルは無効になる** | 戻った直後に `GetParamsCount()` が 0、`GetRecordFormat()` が `0x0` |
-| `GetPluginStyleForTool` | 呼ぶ前も後も `true` / `ref=0`（下記「戻り値を成否と読まない」） |
+| `GetPluginStyleForTool` | 呼ぶ前も後も `true` / `ref=0`（下記「シンボル定義のサブタイプに PIO の内部 ID を書いてスタイルを作った記録（#98）」でも同じ） |
 
 頂点と外接を突き合わせた。構造材は
 `(0, y)`〜`(3000, y)` の 2 頂点のパスから作ってあり、呼ぶ前の PIO は断面のぶん高さを
@@ -1844,7 +1844,7 @@ VW 2026 / mac・新規の空図面で 2 度実行。以下は実行ログその�
 （`VWExtensionParametric.cpp:1328`）。VWFC の既定実装は
 `OnCreatePluginStyle` が `kObjectEventNotImplemented` を返す（同 1874 行）。
 
-### スタイルは SDK だけで作れる——**シンボル定義のサブタイプに PIO の内部 ID を書く**
+### シンボル定義のサブタイプに PIO の内部 ID を書いてスタイルを作った記録（#98）
 
 同 issue #98。次のコードで定義を組み立て、作ったスタイルを別の本へ当てて `styleRef` が
 付くところまで確かめた（ダイアログは 1 つも出なかった）。
@@ -1906,7 +1906,7 @@ VWParametricObj(target).SetStyle(ref);       // 当たる（styleRef が ref に
   `_ByCatalog` / `_ByMixed`。`MiniCadCallBacks.h`）。由来表の置き場はシンボル定義の
   タグ付きデータ（`'PSMP'`。`VWStyleSupport::InitFromSymbolDefinition`）。
 
-## ポップアップの値は表示文字ではなくキー
+## ポップアップの値と表示文字の対応（構造用途）
 
 **構造材ツール（`StructuralMember`）の「構造用途」の全項目**（実機で「構造材設定」の
 ドロップダウンを開いて確認。値は上から 0, 1, 2, …）:
@@ -1921,20 +1921,20 @@ VWParametricObj(target).SetStyle(ref);       // 当たる（styleRef が ref に
 | `5` | 小屋束 | `11` | 胴差し | `17` | その他 |
 
 その他のポップアップのキーは Findings の表。`MemberType` の 4 択は #169 で全項目を採った
-（上記「構造材の断面は `MemberType`（材質）が決める」）。
+（上記「`MemberType`（材質）を振って断面と `MajorDepth` の効き方を測った」）。
 
 ## 打ち切った調査: 構造材 PIO から「スパン」「部材長」をパラメータで読む
 
 [issue #95](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/95) で潰した道。
 
-### 「無い」と言い切れる根拠（3 つが独立に同じ答えを出している）
+### 「無い」と記録した 3 つの調べ（#95）
 
 1. **パラメータ表の全数列挙（実機）。** 構造材 PIO のパラメータは **181 件**で、
    その全件の universal 名・ローカライズ名は
    [issue #82](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/82)
    の実機実行（VW 2026 / mac・日本語 UI。
    [実行ログ全文](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/84#issuecomment-5737168941)）で
-   拾ってある（上記「名前の解決は『種別 × 文書』ごとに 1 度でよい」の表）。
+   拾ってある（上記「パラメータ表がインスタンス・文書で変わるかの実測（#82）」の表）。
    `Span` も、部材の軸方向の長さに当たるものも、181 件のどこにも無かった。
    長さらしい名前は**断面の寸法**（`MajorBreadth` 主幅 / `MinorBreadth` 副幅 /
    `MajorDepth` 主高さ / `MinorDepth` 副高さ、および同じ値を持つ `B` / `B1` / `D` / `D1`）と
@@ -2013,7 +2013,7 @@ VectorScript の宣言集 `vs.py`）の全数検索で探した記録（実機�
 - VectorScript を SDK から流す口として `IVectorScriptEngine::ExecuteScript(const TXString&)`
   ／ `IPythonScriptEngine::ExecuteScript`（`Interfaces/VectorWorks/Scripting/`）がある。
 
-## 自作 PIO を足すときの 3 点
+## 自作 PIO で実機で初めて出た 3 点
 
 自作 PIO（ホームズ君プラグインの `Extensions/ExtColumnMark`）で、CI が全て緑でも実機で
 初めて出たもの:
@@ -2031,7 +2031,7 @@ VectorScript の宣言集 `vs.py`）の全数検索で探した記録（実機�
 - プラグインを外して過去の図面を開くと、PIO が描いたジオメトリは保存されていて表示できた
   （更新はできない）。
 
-## `Recalculate` の中から見える環境は「取り込み時のリセット」と「OIP 編集」で**同じ**
+## `Recalculate` の中から見える環境を「取り込み時のリセット」と「OIP 編集」で比べた（#183）
 
 自前の PIO を登録して `Recalculate` の中から SDK を叩き、
 「外からの `ResetObject`」と「利用者が OIP でパラメータを編集したとき」で突き合わせた
@@ -2053,9 +2053,9 @@ VectorScript の宣言集 `vs.py`）の全数検索で探した記録（実機�
 | 編集したパラメータ（`TraceNote`） | `""` | `"何か1"` |
 
 被験 PIO は原点・無回転（offset=(0,0,0) U=(1,0,0)）に置いていた。原点から離し・回転させた
-PIO で測り直した結果は下記「[PIO の行列を読む口](#pio-の行列を読む口名前は-4-つ実体は-2-つ)」。
+PIO で測り直した結果は下記「[PIO の行列を読む口 4 つの実装を読んだ（VWFC）](#pio-の行列を読む口-4-つの実装を読んだvwfc)」。
 
-### リセットの理由は `OnAddState` で分かる（`kObjXPropAcceptStates` が要る）
+### `OnAddState` に届いたリセットの理由の実測
 
 `OnInitXProperties` で `kObjXPropAcceptStates` を立てて、`Recalculate` の直前に届いた
 `ObjectState::fSpecifier`（`ObjectEventCall` 由来）を記録した:
@@ -2069,7 +2069,7 @@ PIO で測り直した結果は下記「[PIO の行列を読む口](#pio-の行�
 立てていない版では `ObjectState::kAction` 自体が来なかった（[`Info/Parametric Extended Properties.md`](../Info/Parametric%20Extended%20Properties.md)）。
 OIP の編集 1 回で `Recalculate` は 1 回だった（2 回走ることはなかった）。
 
-### 最初の `Recalculate` では**自分の外接が読めない**
+### 最初の `Recalculate` で自分の外接を読んだ実測
 
 作成時（`kFirstRegenReset`）の `Recalculate` で `gSDK->GetObjectBounds(自分)` を呼ぶと、
 `true` を返すのに**中身は空の矩形**だった——`left` = `bottom` = `1.7976931348623157e308`
@@ -2077,7 +2077,7 @@ OIP の編集 1 回で `Recalculate` は 1 回だった（2 回走ることは�
 2 回目以降（`kObjectExternalReset` / `kParameterChangedReset`）は前回描いた絵の外接
 （幅=300 高=0）が返った。
 
-### SDK で登録した線分 PIO に `LineLength` は**無い**
+### SDK で登録した線分 PIO で `LineLength` を引いた実測
 
 サブタイプ `kParametricSubType_Linear` で登録した PIO のパラメータ表に出たのは
 **登録した 3 つだけ**で、`LineLength` は `Recalculate` の中からも外からも
@@ -2088,7 +2088,7 @@ OIP の編集 1 回で `Recalculate` は 1 回だった（2 回走ることは�
 `SetLinearObjectPos` で `(0,0)`–`(3000,0)` を与えてから読み戻しても、`Recalculate` の中でも
 外でも `A=(0,0) B=(0,0)` のままだった（例外も戻り値も無い）。
 
-### 測り方（この節の数値の出どころ）
+### 測り方（#183 の数値の出どころ）
 
 `Recalculate` の中はメニューコマンドから走るプローブでは踏めない——**立てられるのは
 自前の PIO の中だけ**なので、実機確認プラグインの殻へ調査用の PIO を 1 つ登録し、
@@ -2101,7 +2101,7 @@ OIP の編集 1 回で `Recalculate` は 1 回だった（2 回走ることは�
 （`TraceNote="…" TraceLength=…`）で、この行だけ `:` を含まないために突き合わせの鍵が
 値ごと切り出され、別項目として数えられていた。上の表はその 2 行を手で突き合わせたもの。
 
-## PIO の行列を読む口——名前は 4 つ、実体は 2 つ
+## PIO の行列を読む口 4 つの実装を読んだ（VWFC）
 
 PIO の配置（ローカル座標 → 世界座標の変換）を読む口の綴り 4 つを、同梱の VWFC 実装 `.cpp`
 で読んだ記録（[調査の作法](../Findings/Investigation%20Techniques.md)）。
@@ -2123,7 +2123,7 @@ PIO の配置（ローカル座標 → 世界座標の変換）を読む口の�
 
 「`Recalculate` の中で実際に何が返るか」は実機で測った（下記）。
 
-### **どの口も、どの文脈でも、実際の配置を返す**——行列は化けない
+### 4 口を `Recalculate` の中と外で読み比べた実測
 
 原点から離し・回転させた PIO（`off=(5000, 3000, 0)`・Z 軸まわり 30°）を
 自前で登録し、`Recalculate` の中で 4 口すべてを読んで**`Recalculate` の外から読んだ値
@@ -2151,12 +2151,12 @@ PIO の配置（ローカル座標 → 世界座標の変換）を読む口の�
 - `CreateCustomObject(名前, WorldPt(5000, 3000), 30.0)` の位置と角度がそのまま行列になった
   （第 3 引数は度。サブタイプは線分）。
 
-### **編集時だけローカル座標がずれたなら、疑うのは行列ではない**
+### 編集時だけローカル座標がずれる件（未測定）
 
 この節は測っていない（見込みは Findings）。#183 で確かめたのは「名前引きもレイヤ走査も
 どちらの文脈でも効く」ことまでで、同じ顔ぶれが返るかは確かめていない。
 
-### 測り方（この節の数値の出どころ）
+### 測り方（PR #186 の数値の出どころ）
 
 #183 と同じ形——実機確認プラグインの殻へ調査用の PIO を 1 つ登録し、`Recalculate` が読んだ
 値を一時ファイルへ書き溜め、プローブがその前後に印を入れて吐き出した
@@ -2179,13 +2179,13 @@ PIO の配置（ローカル座標 → 世界座標の変換）を読む口の�
 入ったかどうかは結果に載る「ビルドの素性」の `殻:` の行で見た（`main` のままなら入れ替え先が
 違う。id が新しくなっていても同じ）。
 
-## パラメータ変更を PIO へ伝える口は無い
+## パラメータ変更を PIO へ伝える口を探した（ヘッダを読んだ）
 
 ヘッダを読んだ記録: `kParameterChangedReset`（`ObjectStateData_ParamChanged`）は PIO 側が
 受け取るメッセージ（`IObjUpdateSupport::OnState`）で、外からこれを送る API は `ISDK` に
 見当たらなかった。
 
-## リセット（再生成）をまとめられるか——**まとめても速くならない。減らせるのは「回数」だけ**
+## リセット（再生成）をまとめられるかの実測（#81）
 
 構造材を 200〜400 本置く取り込みで、1 本ごとの `ResetObject` が効いて 1 本 93〜130ms
 掛かっている（[issue #81](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/81)）。
@@ -2221,7 +2221,7 @@ SDK 全体でこの引数を持つのはこの 1 本だけだった（`sdk-grep`
 既定は `true`。実機の内訳（下記「実測」）では、`doRegen=true` の「作る」側にも作り直し 1 回ぶんの
 時間が掛かっていた。
 
-### まとめて全部を作り直す口も無い（レイヤへの `ResetObject` も再描画も効かない）
+### まとめて作り直す口を叩いた実測（レイヤへの `ResetObject`・再描画）
 
 バウンドを書いただけ（`ResetObject` を呼んでいない）の構造材 5 本を置いて叩いた結果:
 
@@ -2237,10 +2237,10 @@ VectorScript の `ResetObject` は「どの型でも受ける」と書かれて�
   `ResetObject(レイヤ)` を掛けた材も、何も掛けない対照も、undo イベントを閉じた後・VW へ
   戻って数十秒置いた後もパスの Z 差は 1（作ったまま）だった。
 
-### `UpdateStyledObjects` はジオメトリの作り直しまで行う（issue #81 の (b)）——**バウンドが by-style のときは**
+### バウンドが by-style のスタイルで `UpdateStyledObjects` を流した実測（issue #81 の (b)）
 
 この節で使ったのはバウンドまで by-style のスタイル（by-instance のときは上記
-「[`UpdateStyledObjects` はバウンドから作り直さない](#updatestyledobjects-はバウンドから作り直さない差分を足すだけで流した回数ぶん累積する)」。
+「[`UpdateStyledObjects` を流したときのバウンドと長さの実測（#125）](#updatestyledobjects-を流したときのバウンドと長さの実測125)」。
 [#125](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/125)）。
 
 **スタイルを当てた PIO を `ResetObject` 抜きで 5 本置き、`UpdateStyledObjects` を 1 回だけ
@@ -2250,11 +2250,11 @@ span 3000）。
 - 順序は「スタイルを当てる → バウンドを書く → `UpdateStyledObjects`」。その後に 1 本ごとの
   `ResetObject` を重ねても値は変わらなかった（5 本とも 3000 のまま）。当てたスタイルの持つ
   バウンドも span 3000 だった（食い違うときは上記
-  「[スタイルを当てると書いたバウンドはスタイルのものへ置き換わる](#スタイルを当てると書いたバウンドはスタイルのものへ置き換わる)」）。
+  「[スタイルを当てた後のバウンドの実測（#112）](#スタイルを当てた後のバウンドの実測112)」）。
 - 5 本で 61.8ms ＝ **12.4ms/本**（1 本ごとの `ResetObject` は 11.5ms/本）。
 - VectorScript の説明は "Update all objects of the specified style."。
 
-### `doRegen=false` は速い。ただし**Z の差が 0 のパスで作る**こと（さもないと span + 渡した Z の差になる）
+### `doRegen=false` で水平材・斜め材を作った実測（#109）
 
 #81 は鉛直材だけを振った（そこでは Z の差 0 ＝ 0 長）。水平材・斜め材は
 [#109](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/109) で測った
@@ -2282,7 +2282,7 @@ Z の差、**平面長** は `sqrt(dx² + dy²)`。
 - 狂った本は 2 度目の `ResetObject` で正しい値に収まった（3001 → 3000、
   6000 → 3000.0000000000005、1 → −2.22e-16）。
 
-#### 端部オフセットとプラグインスタイルを当てても、結論は変わらない
+#### 端部オフセットとプラグインスタイルを当てた実測
 
 水平材・斜め材に**端部オフセット**（`StartOffset` = 150 ／ `EndOffset` = −250。読み戻しで
 確認）と**プラグインスタイル**（`SetPluginObjectStyle`。読み戻しで `styleRef` を確認）を、
@@ -2293,9 +2293,9 @@ true / false で 1 文字も違わなかった**（6 通り × 2）。
 バウンドが **2500 / 5500** になり（書いていない値）、dz が 3000 になった。当てたスタイルの元に
 した PIO はバウンド 2500 / 5500 の鉛直材だった。`doRegen` の true / false 両方で同じように
 起きた。[#112](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/112) に
-切り出して測った（上記「スタイルを当てると…」）。
+切り出して測った（上記「スタイルを当てた後のバウンドの実測（#112）」）。
 
-#### 自己修復（`SetCustomObjectPath` → もう一度 `ResetObject`）は `doRegen=false` でも効く
+#### `doRegen=false` で作った材で自己修復（`SetCustomObjectPath` → もう一度 `ResetObject`）を試した
 
 1 回目の後に長さを読み戻し、狂っていたら**正しい最終形のパス**を `SetCustomObjectPath` で
 差し替えてもう一度 `ResetObject` する、という直し方は、`doRegen=false` で作った材でも
@@ -2334,7 +2334,7 @@ true / false で 1 文字も違わなかった**（6 通り × 2）。
   リセット側は変わらなかった。
 - 第 2 パスへ寄せた版も 1 本あたりはほぼ同じだった（11.8ms）。
 
-## 構造材 PIO の子を消すのは「表示欄」で、属性モード（`AttributesMode`）ではない——しかも可逆
+## 構造材 PIO の子が消えた件を表示欄と属性モード（`AttributesMode`）で切り分けた（#166）
 
 「同じ構造材へ `AttributesMode` を 0 → 1 → 2 → 3 と書き換えて毎回 `ResetObject` を呼ぶと
 描画が段階的に消えていき、値を既定へ戻しても戻らない」という観測があった
@@ -2368,7 +2368,7 @@ true / false で 1 文字も違わなかった**（6 通り × 2）。
 - 3 面（`_Above` / `_At` / `_Below`）へ同じ値を書いての結果である。平面図で使われる面は
   `_Below` だけ（[#158](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/158)）。
 
-### 属性モードは何をしても子を動かさない（実測の網）
+### 属性モードを振って子を数えた（実測の網）
 
 | 振り方 | 子（幾何） |
 | --- | --- |
@@ -2384,13 +2384,13 @@ true / false で 1 文字も違わなかった**（6 通り × 2）。
 
 直後に作った新しい個体も、全部やり終えた後の新しい個体も既定どおりだった。
 
-### なぜ「消えた」と読めてしまったか——**子の型を決め打ちして数えない**
+### 「消えた」と読んだ経緯（子の型を決め打ちして数えていた）
 
 元の観測（#158 のプローブ）は、描かれた子を「型 5 / 21 / 84 のどれか」と決め打ちして
 数えていた。構造材の子には型 11（`kGroupNode`）が 2 つ居る。加えて、同じプローブが
 `AttributesMode` を振る前の段で表示欄を `false` にしていた。
 
-### ついでに確定したこと
+### ついでに測ったこと
 
 - 置き石（型 90 = `kUndoPlaceholderNode`）を 11 個積んだ状態でも、子の内訳は既定のままだった。
 - undo イベントが開いている間の `ResetObject` でも置き石は積もった（以前の記録は「プローブが
@@ -2404,5 +2404,5 @@ true / false で 1 文字も違わなかった**（6 通り × 2）。
 - `doRegen=false` で作った直後（`ResetObject` を通す前）に `GetObjectBounds` を呼ぶと、`true` を
   返して ±`DBL_MAX` の反転した矩形が返った（`GetObjectCube` も同じ）。
 - `MajorDepth` を 600 → 800 → 1000 と書いても、読み戻しは一致し、外接も立方も 1mm も動かなかった
-  （このときの個体は `MemberType`＝`0`。#169 で測り直した——上記「構造材の断面は `MemberType`
-  （材質）が決める」）。
+  （このときの個体は `MemberType`＝`0`。#169 で測り直した——上記「`MemberType`（材質）を振って断面と
+  `MajorDepth` の効き方を測った」）。
