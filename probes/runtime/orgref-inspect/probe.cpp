@@ -18,6 +18,9 @@
 #include <string>
 #include <vector>
 
+using namespace VectorWorks;
+using namespace VectorWorks::Filing;
+
 namespace
 {
 	std::string OriPtr(const void* p)
