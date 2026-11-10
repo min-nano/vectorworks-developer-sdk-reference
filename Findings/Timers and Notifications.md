@@ -26,7 +26,7 @@
 
 - **`ISDK.h` で登録・タイマー・アイドルに関わる宣言は 8 本だけ**で、周期実行に使えるのは
   **ダイアログのタイマー（`RegisterDialogForTimerEvents`）1 種類だけ**
-  （[一覧](../Metrics/Timers%20and%20Notifications.md#1-isdk-に暇なとき周期的にの口は無い)）。
+  （[一覧](../Metrics/Timers%20and%20Notifications.md#1-isdk-に暇なとき周期的にの口を探したヘッダソースを読んだ)）。
 - **`RegisterDialogForTimerEvents(dialogID, ms)` は「ダイアログが開いている間」の時計。**
   VWFC は `VWDialog::RegisterForTimerEvents` → `OnDialogTimer()`。**`RunDialogLayout` は
   モーダル**（[Layout Dialogs](Layout%20Dialogs.md)）なので常駐の受け付けには使えない——使うと利用者は
@@ -46,7 +46,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 - **`whichChange` は `Include/Kernel/Core/MCNotification.h` の `kNotify*`**（VW 2026 SDK に
   **184 個**）。**公式リファレンス（`Info/` / `Versions/`）には 1 行も載っていない**
-  （[型と例](../Metrics/Timers%20and%20Notifications.md#2-通知registernotificationprocedure--knotifyは出来事用で周期ではない)）。
+  （[型と例](../Metrics/Timers%20and%20Notifications.md#2-通知registernotificationprocedure--knotifyの宣言を読んだ)）。
 - **出来事が起きなければ 1 度も呼ばれない**ので、外からの要求を拾う時計にはならない（利用者が
   何も触らずにいれば永久に呼ばれない）。
 - **`kNotifyApplicationActivate` は「前面に戻った瞬間に拾い直す」のに使える**——間引かれる
@@ -83,7 +83,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 - **読み**は mac 881 回・Windows 423 回すべて成功・例外 0。
 - **書き**: **こちらのコードがスタックに 1 本も無い刻みから `CreateLocus` が通った**（mac・
-  Windows とも。[実測](../Metrics/Timers%20and%20Notifications.md#1-コマンドが戻った後も刻みgsdk-を読める書ける)）。
+  Windows とも。[実測](../Metrics/Timers%20and%20Notifications.md#1-コマンドが戻った後の刻みとgsdk-の読み書き)）。
 - mac は 2 回まわして再現した。間隔の最大は回によって違い、**上限は決まっていない**。
 - **図面が 1 枚も開いていなくても刻みは続き**、`gSDK` は落ちずに「文書が無い」を返す
   （ウェブパレットと違い、文書の有無に関わらず動く。下記 6）。
@@ -111,7 +111,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - **macOS: メニューコマンドはメインスレッドで走る。**
 - **macOS: `CFRunLoopRunInMode` は「短く刻んで何度も呼べば」回る**【訂正】。1 回で 0.6〜1.5 秒を
   取ると即座に戻り刻みは 0 回だが、**0.05 秒 × 12 回なら 8 回届き `kCFRunLoopRunTimedOut` で戻る**
-  （[実測](../Metrics/Timers%20and%20Notifications.md#4-プラットフォームごとの作法)）——短い刻みで呼べば、
+  （[実測](../Metrics/Timers%20and%20Notifications.md#4-プラットフォームごとの実測スレッドランループの回し方)）——短い刻みで呼べば、
   ちゃんと時間を使って刻みを配ってから `TimedOut` で戻る。待ちたいなら 0.05 秒ずつ回す。当初の「自分で回すことはできない」は誤り。
 - **macOS: 登録は `kCFRunLoopCommonModes` で足りる**（既定モードが共通モードに入っている）。
   全モードへ入れるとペーストボード・view-bridge のモードの分も拾える。主ランループのモードは 13 個。
@@ -141,7 +141,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 （mac。[issue #206](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/206)。
 測ったのは **VW のモーダル確認ダイアログ（`AlertQuestion`）の最中**。プローブは undo イベントを
 自分では開かず、`DeleteObject(h, useUndo=true)` で VW に開かせた。
-[作り方と実測](../Metrics/Timers%20and%20Notifications.md#6-vw-が-undo-イベントを開いたまま回している最中に当たったら読むのは安全書くと混ざる)）
+[作り方と実測](../Metrics/Timers%20and%20Notifications.md#6-vw-が-undo-イベントを開いたまま回している最中の刻み)）
 
 ドラッグ中・レンダリング中は下記 7——**そこでは VW はイベントを開いていない**ので、
 **「書くと混ざる」が当てはまるのはモーダルダイアログの最中だけ**。
@@ -152,12 +152,12 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
   1 回も届かない**（3 回とも 0 回。同じ瞬間に 2 本並べて比べた）。
 - **刻みの中から `gSDK` を読める**（全件成功）。
 - **刻みの中の `IsCurrentlyBuildingAnUndoEvent()` は信用できる**——イベントの状態だけを変えると
-  `yes` / `no` が入れ替わった（[実測](../Metrics/Timers%20and%20Notifications.md#刻みは届くただし-kcfrunloopcommonmodes-に登録した-1-本だけ)）。
+  `yes` / `no` が入れ替わった（[実測](../Metrics/Timers%20and%20Notifications.md#登録したモードごとの刻みの届き方)）。
 
 #### **書くと、そのとき開いていた undo イベントに混ざる**
 
 - **刻みの中で作ったものは、そのとき VW が開いていた undo イベントに入る。** 1 段目の取り消しで
-  それだけが消え、別の段の対照は 2 段目で消えた（段の境目の観測。[表](../Metrics/Timers%20and%20Notifications.md#書くとそのとき開いていた-undo-イベントに混ざる)）。
+  それだけが消え、別の段の対照は 2 段目で消えた（段の境目の観測。[表](../Metrics/Timers%20and%20Notifications.md#刻みから書いたものと-undo-イベントの実測)）。
 - **利用者が 1 回取り消すだけで、刻みが作ったものが無関係な作業と一緒に消える。** 逆に、刻みが
   作ったものだけを狙って残すことはできない。
 
@@ -187,7 +187,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 （mac。[issue #213](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/213)。
 ドラッグは `kNotifyBeginToolMode` → `kNotifyEndToolMode` の囲みで機械的に押さえた。
-[実測](../Metrics/Timers%20and%20Notifications.md#7-ツールのドラッグ中レンダリング中に当たったら届いて読めるがvw-はイベントを開いていない)）
+[実測](../Metrics/Timers%20and%20Notifications.md#7-ツールのドラッグ中レンダリング中の刻み)）
 
 #### 答え——**どちらの場面でも刻みは届き、`gSDK` を読める。そのとき VW のイベントは開いていない**
 
@@ -199,7 +199,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 - `kNotifyUndoEndEvent` は点取りの中で飛ぶが、**その瞬間の主ランループのモードは毎回 nil**
   （回っていない）。**刻みはランループが回る瞬間にしか配られないので、その窓に入れない**
-  （観測。[ログ](../Metrics/Timers%20and%20Notifications.md#なぜ開いていないかvw-はランループが回っていない区間でイベントを開閉している)）。
+  （観測。[ログ](../Metrics/Timers%20and%20Notifications.md#undo-イベントが開閉した瞬間のランループのモード)）。
 - 上記 4 の 3「こちらの同期処理には割り込まれない」の裏返しが、**VW 側の同期処理についても
   成り立つ**（推論ではなく、通知が飛んだ時点のモードを読んだ観測）。
 - **モーダル確認ダイアログ（上記 6）だけが、「VW がイベントを開けたまま入れ子のランループを回す」
@@ -210,14 +210,14 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - 利用者がメニューで描かせたレンダリングの間、**VW は入れ子の `NSModalPanelRunLoopMode` で
   イベントを回す**（上記 6 と同じモード）。共通モードのタイマーは 250 ms ちょうどで刻み続け、
   **既定モードだけのタイマーは 351.6 秒（5 分 52 秒）まるごと止まった**
-  （[実測](../Metrics/Timers%20and%20Notifications.md#レンダリング中は-nsmodalpanelrunloopmode既定モードだけのタイマーは6-分止まる)）。
+  （[実測](../Metrics/Timers%20and%20Notifications.md#レンダリング中のモードと既定モードだけのタイマーの刻み)）。
 - ＝レンダリング中は既定モードが 1 度も回らない。レンダリングのために VW が undo イベントを
   開くことはない。
 
 #### 既定モードだけのタイマーは、ふつうの操作でも十数秒から数分止まる
 
 - 7 回とも、共通モードの 1 本は 1〜2 秒（重い回で 9.7 秒）で戻り、**既定モードだけの 1 本は
-  十数秒〜30 秒（最大 62.6 秒）止まった**（[表](../Metrics/Timers%20and%20Notifications.md#既定モードだけのタイマーはふつうの操作でも十数秒から数分止まる)）。
+  十数秒〜30 秒（最大 62.6 秒）止まった**（[表](../Metrics/Timers%20and%20Notifications.md#ふつうの操作中の既定モードだけのタイマーの刻み)）。
 - **既定モードだけで組むと、受け付けが分単位で止まる。共通モード（か全モード）へ登録する。**
 
 #### 【落とし穴】**コマンドが undo イベントを開いたまま返すと、数十秒開いたままになる**
@@ -282,7 +282,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 ### 8. **図面が 1 枚も開いていないとき**の `GetCurrentLayer()`——**nullptr が返り、落ちない**（件数と常に一致）
 
 （mac / Windows。[issue #224](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/224)。
-[実測](../Metrics/Timers%20and%20Notifications.md#8-図面が-1-枚も開いていないときの-getcurrentlayernullptr-が返り落ちない件数と常に一致)）
+[実測](../Metrics/Timers%20and%20Notifications.md#8-図面が-1-枚も開いていないときの-getcurrentlayer-の実測)）
 
 - **全部閉じた後も、起動直後（殻の時計の最初の刻み・起動画面の頃）も `nullptr` が返り、落ちない**
   （mac / Windows）。
@@ -305,7 +305,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 ### 9. 刻みから **`CloseAllFilesAndQuitVectorworks(true, false)`** を呼ぶ——**呼べる。呼び出しは戻り、終了はその後のイベントループで起きる**
 
 （mac / Windows。[issue #230](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/230)。
-[実測](../Metrics/Timers%20and%20Notifications.md#9-刻みから-closeallfilesandquitvectorworkstrue-false-を呼ぶ呼べる呼び出しは戻り終了はその後のイベントループで起きる)）
+[実測](../Metrics/Timers%20and%20Notifications.md#9-刻みから-closeallfilesandquitvectorworkstrue-false-を呼んだ実測)）
 **mac と Windows で刻みの振る舞いがはっきり違う。**
 
 - **落ちない。** mac 6 回・Windows 3 回とも `atexit` まで届く正常終了。
@@ -403,7 +403,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 ## 5. ウェブパレットの JS タイマーは、隠れると 60 秒に 1 回まで間引かれる
 
 （mac。[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)
-の PR #192 / #194 の実機確認。[実測](../Metrics/Timers%20and%20Notifications.md#5-ウェブパレットの-js-タイマーは隠れると-60-秒に-1-回まで間引かれる)）
+の PR #192 / #194 の実機確認。[実測](../Metrics/Timers%20and%20Notifications.md#5-ウェブパレットの-js-タイマーを隠したときの実測)）
 
 - **パレットを閉じた（隠した）とき、または VW が裏に回ったとき、JS の `setInterval`（250 ms）が
   ちょうど 60 秒に 1 回まで間引かれる。** 出し直すとすぐ戻る。
@@ -429,7 +429,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 ## 6. 図面が 1 枚も開いていないと、ウェブパレットは出ない
 
-（mac。[実測](../Metrics/Timers%20and%20Notifications.md#6-図面が-1-枚も開いていないとウェブパレットは出ない)）
+（mac。[実測](../Metrics/Timers%20and%20Notifications.md#6-図面が-1-枚も開いていないときのウェブパレットの実測)）
 
 - **再起動直後、図面が 1 枚も無い画面では `SetWebPaletteVisibility(iid, true)` を呼んでも出ず、
   JS タイマーも動かない。** 図面を新規作成すると開いた状態で現れる。

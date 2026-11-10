@@ -32,7 +32,7 @@
 ## `UpdateViewport` は描く——が、**戻った時点では描き終わっていない**（#215）
 
 [#215](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/215) で実機確認済み
-（[数字](../Metrics/Viewports.md#updateviewport-は描くが戻った時点では描き終わっていない215)。
+（[数字](../Metrics/Viewports.md#updateviewport-から戻った時点の描画の実測215)。
 描画モード側は [周期実行と通知](Timers%20and%20Notifications.md) の 7 節）。
 
 - **表示レイヤを入れ（`SetViewportLayerVisibility(vp, layer, 0)`）`SetDirty(true)` を立ててから
@@ -71,7 +71,7 @@
 ### 断面に中身が入る条件——`1065` が主スイッチで、`1064` は「奥だけ」への絞り込み（#202）
 
 [#202](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/202) で 16 通りを
-総当たり（mac。VW へ戻った後も同じ——#245）。[測り方と表](../Metrics/Viewports.md#断面に中身が入る条件1065-が主スイッチで1064-は奥だけへの絞り込み202)。
+総当たり（mac。VW へ戻った後も同じ——#245）。[測り方と表](../Metrics/Viewports.md#断面に中身が入る条件1064-と-1065-の-16-通り202)。
 
 #### 切断面がモデルを**切っていない**とき——4 通りで全部違う
 
@@ -109,7 +109,7 @@
 
 - **#189 は 6 枚すべて両方 `true` で、#200 はモデルを片側にしか置いていなかった**——どちらの
   数値も正しく、規則が足りなかっただけ。#189 の E が空だったのは `pt3` と同じ側だからではなく
-  **`1064` を併せて立てていたから**（[突き合わせの表](../Metrics/Viewports.md#これで-189-と-200-の逆の結果が両方説明できる)）。
+  **`1064` を併せて立てていたから**（[突き合わせの表](../Metrics/Viewports.md#189-と-200-の逆の結果との突き合わせ)）。
 
 ### 【罠】作ったばかりの押し出しは、外接を読むか `ResetObject` するまで断面に映らない（#248）
 
@@ -136,7 +136,7 @@ VW 2026 Update 6・Windows で実測（[#248](https://github.com/min-nano/vector
 
 - **1050（`ovViewportViewMatrix`）が更新のときに断面の向きへ入るのは、表示レイヤとクラスの両方が
   表示になっているときだけ。** 片方だけでは単位行列のまま。**断面が描けたかは関係なく、可逆**
-  （VW へ戻った後も同じ。[2 × 2 の表](../Metrics/Viewports.md#sdk-で作った断面ビューポートの注釈でレベル基準線に高さを出す147--151-で訂正)）。
+  （VW へ戻った後も同じ。[2 × 2 の表](../Metrics/Viewports.md#sdk-で作った断面ビューポートの注釈でレベル基準線に高さを出す手順の実測147--151)）。
   #141 の「全レイヤを表示にしても `0`」の答えでもある（[Layers and Stories](Layers%20and%20Stories.md)）。
 
 ```cpp
@@ -173,12 +173,12 @@ gSDK->ResetObject(marker);                                     // → 絶対Z �
 
 - **効くのは 1050 ただ 1 つ**（1000〜1150 の差 14 件を書き分けた）。1055 は書けない。
 - 作り方の引数（`depth`・高さの範囲・断面線・`pt3`）でも、断面線との結び付きでも出ない
-  （[記録](../Metrics/Viewports.md#147-で潰した筋そのまま有効)）。
+  （[記録](../Metrics/Viewports.md#147-で潰した筋)）。
 
 ### 断面ビューポートの注釈に出るグリッド線（通り芯）——符号の位置を決めるのは `ShoulderLengthAtStart`（#189）
 
 [#189](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/189) で実機確認済み
-（mac・日本語 UI。[計測記録](../Metrics/Viewports.md#断面ビューポートの注釈に出るグリッド線通り芯符号の位置を決めるのは-shoulderlengthatstart189)）。
+（mac・日本語 UI。[計測記録](../Metrics/Viewports.md#断面ビューポートの注釈に出るグリッド線通り芯の実測189)）。
 
 #### 正体と見つけ方
 
@@ -215,7 +215,7 @@ gSDK->ResetObject(marker);                                     // → 絶対Z �
 - **符号（ラベル枠）を動かす欄は `ShoulderLengthAtStart`（水平線の長さ（先端））ただ 1 つ。**
   **単位は用紙 mm**（容れ物の縮尺が掛かる。1/100 で +10 → 1000、1/50 で +10 → 500）——
   **「用紙で 10mm 上げたい」なら縮尺に関わらず `+10`**
-  （[表](../Metrics/Viewports.md#符号を動かす欄shoulderlengthatstart単位は用紙-mm)）。
+  （[表](../Metrics/Viewports.md#符号を動かす欄を探した実測shoulderlengthatstart)）。
 - **`ShoulderLengthAtEnd` は絵を 1mm も動かさない**（`ShowBubbleAt` が `Start Point`）。
 - **書いた後に `ResetObject` が要る**（値は即読み戻せるが、絵は Reset まで動かない）。
 - **スタイルは握っていない**（`GetPluginStyleParameterType` が 2 = `_AllwaysByInstance`）——
@@ -225,14 +225,14 @@ gSDK->ResetObject(marker);                                     // → 絶対Z �
 
 - **符号の上端 ＝ 映っているモデルの上端 ＋ 用紙スケールの固定分**（1/100 で 1235・1/50 で 622.5
   ＝ 水平線とラベル枠の用紙 mm）。断面が空ならモデルの上端は 0 扱い
-  （[表](../Metrics/Viewports.md#符号の位置の基準は映っているモデルの上端高さ範囲では動かない)）。
+  （[表](../Metrics/Viewports.md#符号の位置の基準を-1-つずつ変えて測った実測)）。
 - **`endHeight` を広げても符号は動かない**（[plugin#181](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz/pull/181)
   で重なったままだった理由）。**用紙の上で動かす唯一の手は `ShoulderLengthAtStart` を足すこと。**
 
 #### 断面を空でなくするのに足を取られた記録（条件そのものは #202 で確定した）
 
 - 倒し方は上記「断面に中身が入る条件」を読む。#189 で出た数値と【訂正】は
-  [計測記録](../Metrics/Viewports.md#断面を空でなくするのに足を取られた記録条件そのものは-202-で確定した)。
+  [計測記録](../Metrics/Viewports.md#断面を空でなくするのに足を取られた記録189)。
 - **グリッド線は断面が空でも注釈に出る。** x の並びは見る側（`pt3`）で反転する。
 - この回では `ovViewportDisplay2DComponents`（1059）が書いても入らなかった（`true` を返し読み戻しは
   `false`）。
@@ -279,7 +279,7 @@ for (MCObjectHandle h = gSDK->FirstMemberObj(annotation); h != nil; h = gSDK->Ne
 ### GL は映っているモデルの高さに依らない——実測
 
 - 高さだけが違うモデルを映す 2 枚で、中身の下端は `0.0000` で一致した
-  （[表](../Metrics/Viewports.md#gl-は映っているモデルの高さに依らない実測)）。
+  （[表](../Metrics/Viewports.md#映すモデルの高さを変えたときの-gl-の実測)）。
 - 係数を解くなら**4 辺とも空枠の外へ出る大きさ**の矩形で測る（右上だけでは左下が空枠の縁のままに
   なり、無意味な k が出た）。
 
@@ -287,7 +287,7 @@ for (MCObjectHandle h = gSDK->FirstMemberObj(annotation); h != nil; h = gSDK->Ne
 
 - **ビューポートを `MoveObject` すると、注釈の中の図形の外接が「移動量 × 縮尺」ずれる**——
   **注釈空間は用紙座標を縮尺倍した写し**で、置いた値をそのまま読み戻せるのは動かしていない間だけ
-  （[表](../Metrics/Viewports.md#注釈座標はビューポートが用紙のどこに在るかを含む)）。
+  （[表](../Metrics/Viewports.md#ビューポートを用紙上で動かしたときの注釈座標の実測)）。
   プラグインの経験則（`draw/DrawUtil.h`）の正体で、作法は**測る → タグを置く → 動かす**
   （[Sheet Layers and Page Layout](Sheet%20Layers%20and%20Page%20Layout.md)）。
 - **GL を揃えて並べるなら外接を測らない。** `MoveObject` で **1025 を目標の用紙 y に合わせる**だけ
@@ -336,7 +336,7 @@ for (MCObjectHandle h = gSDK->FirstMemberObj(annotation); h != nil; h = gSDK->Ne
 ## 注釈の中の図形は、検索条件（criteria）では見つからない
 
 - **`ISDK::ForEachObjectInCriteria` は注釈の中の図形を 1 件も返さない**（8 本ある図面で 0 件）。
-  **探すなら自分で降りる**（[計測記録](../Metrics/Viewports.md#注釈の中の図形は検索条件criteriaでは見つからない)）:
+  **探すなら自分で降りる**（[計測記録](../Metrics/Viewports.md#注釈の中の図形を検索条件criteriaで探した実測)）:
 
 ```cpp
 // レイヤ → 直下 → グループ → ビューポートの注釈群 の順に降りる
@@ -370,7 +370,7 @@ gSDK->ForEachLayerN([](MCObjectHandle layer) { Walk(layer, 0); });
 ## `CreateViewport(parentHandle)` の `parentHandle` は「**どの容れ物に置くか**」
 
 [#175](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/175) で 3 回踏んだ
-（[表](../Metrics/Viewports.md#createviewportparenthandle-の-parenthandle-はどの容れ物に置くか)）。
+（[表](../Metrics/Viewports.md#createviewportparenthandle-の-parenthandle-に渡すものを変えた実測)）。
 
 - **デザインレイヤを渡すとデザインレイヤの上にでき、注釈を持てない**（`AddViewportAnnotationObject`
   が `false`、注釈群は `nil`）。他の呼び出しは全部成功するので気付けない。

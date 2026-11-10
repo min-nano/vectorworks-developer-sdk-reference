@@ -61,7 +61,7 @@ documents other than the current document"）。「今の文書を閉じてか�
 ## テンプレート（`.sta`）から新規文書は作れる——**専用 API ではなく `OpenDocumentPath` で**
 
 - **できる。** 「テンプレートから新規作成する」という名前の API は無く（ISDK / VWFC を検索して 0 件。
-  [検索の表](../Metrics/Documents.md#テンプレートstaから新規文書は作れる専用-api-ではなく-opendocumentpath-で)）、
+  [検索の表](../Metrics/Documents.md#テンプレートstaから新規文書を作る専用-api-を探した記録)）、
   **`.sta` のパスを `OpenDocumentPath` へ渡す**と、それを元にした無題の新規文書が開く（下記）。
 - **【訂正】** 「メニューコマンドを名前で起動する汎用 API 自体が無い」というかつての根拠は誤りで、
   `ISDK::DoMenuName(name, chunkIndex)` が実在する（[Plug-in Interop](Plug-in%20Interop.md) の 2。
@@ -76,7 +76,7 @@ documents other than the current document"）。「今の文書を閉じてか�
 
 - `OpenDocumentPath(IFileIdentifier*, bool)` に実在するファイルの `IFileIdentifier` を渡せば開ける
   （SDK の `VWFC/Tools/CatchSystemTest.cpp` の `TEST_OpenDocument` と同じ形。
-  [コード](../Metrics/Documents.md#既存ファイルvwx--staをパス指定で開ける実機確認済み)）。
+  [コード](../Metrics/Documents.md#既存ファイルvwx--staをパス指定で開く口を探したsdk-の自動テストを読んだ)）。
   `.sta` はテンプレートとして扱われる（下記）。
 
 ## 実機で確かめたこと（VW 2026 / macOS）
@@ -94,7 +94,7 @@ documents other than the current document"）。「今の文書を閉じてか�
 ### カレント文書とカレントレイヤは即座に新しい文書へ移る
 
 - **呼んだ瞬間に描画先が新しい文書へ移る**（`GetCurrentLayer()` も `GetActiveDocument()` も新しい文書を指し、
-  `CreateRectangle` は新しい文書に入る。[実測](../Metrics/Documents.md#カレント文書とカレントレイヤは即座に新しい文書へ移る)）。
+  `CreateRectangle` は新しい文書に入る。[実測](../Metrics/Documents.md#開く前後のカレント文書とカレントレイヤ)）。
 - **未保存の文書でも `GetActiveDocument` はパスを返す**（「アプリケーションのフォルダ＋無題の文書名」）。
   **保存済みかはパスの有無ではなく `outSaved` で見る。**
 - **無題の連番は VW のセッション全体で進む**（新規が「名称未設定 3」になった）。**名前から文書を同定しない。**
@@ -114,14 +114,14 @@ documents other than the current document"）。「今の文書を閉じてか�
   **`SetObjectName` で書くこともできた**（落ちない）。
 - **ただし `SetObjectName` は `false` を返した。** 成否は読み戻して確かめる。
 - 確かめたのは名前の書き換えだけ。**描くときは `SwitchToOpenFile` でその文書をアクティブにしてから**
-  （[実測](../Metrics/Documents.md#前の文書のハンドルは別の文書がアクティブでも読める)）。
+  （[実測](../Metrics/Documents.md#別の文書がアクティブな間に前の文書のハンドルを読んだ)）。
 
 ### 文書を開く・切り替える操作は undo イベントを開かない。**開いているイベントも壊さない**
 
 - 開く・`SwitchToOpenFile` の前後で `IsCurrentlyBuildingAnUndoEvent()` は `no`（自分で開いていなければ）。
 - **`IsCurrentlyBuildingAnUndoEvent()` は文書ごとの状態。** 文書 A でイベントを開いたまま B を開くと B では
   `no`、A へ戻ると `yes` で、中で作ったレイヤも残る
-  （[表](../Metrics/Documents.md#文書を開く切り替える操作は-undo-イベントを開かない開いているイベントも壊さない)）。
+  （[表](../Metrics/Documents.md#文書を開く切り替える操作と-undo-イベントの実測)）。
 - [Undo](Undo.md)「間接経路: スクリプトエンジン経由…」でイベントを終わらせていたのは取り消しの実行で、
   文書を開く操作ではない（切り分け済み）。
 - **イベントは開いた文書の中で閉じる**のが素直（記録がどちらの文書に積まれるかが曖昧になるため）。
@@ -134,7 +134,7 @@ documents other than the current document"）。「今の文書を閉じてか�
 ### `CloseDocument()` は **`false` を返しながら閉じている**——未保存の変更も黙って捨てる
 
 - **戻り値は当てにならない**（mac で 5 回とも `false` で 5 回とも閉じた）。**判定は `GetOpenFilesList` の件数でする。**
-  （この節は一度「閉じられない」と書いて訂正した。[実測](../Metrics/Documents.md#closedocument-は-false-を返しながら閉じている未保存の変更も黙って捨てる)）
+  （この節は一度「閉じられない」と書いて訂正した。[実測](../Metrics/Documents.md#closedocument-の戻り値と閉じたかの実測未保存の変更あり)）
 - **保存確認ダイアログは出ない**（73〜237 ms で戻る）。**未保存の変更は黙って捨てられ、人の作りかけを
   消しうる。** 自分が開いた文書だけを閉じるなどの判断は呼び出し側の責任
   （`outSaved` は未保存の変更を表さないので使えない。下記「未保存の変更ありは読めない」）。
@@ -167,7 +167,7 @@ documents other than the current document"）。「今の文書を閉じてか�
 
 - **`.sta` のパスを `OpenDocumentPath` へ渡すと、そのファイル自体ではなく、それを元にした無題の新規文書が
   開く**（`saved=no`。Finder で `.sta` をダブルクリックしたときと同じ扱い。
-  [ログ](../Metrics/Documents.md#sta-を渡すとテンプレートとして扱われる無題の新規文書が開く)）。
+  [ログ](../Metrics/Documents.md#sta-を-opendocumentpath-へ渡した実測)）。
 - **中身も引き継がれる**（`.sta` の中のレイヤが、開いた無題文書のカレントレイヤだった）。
   「テンプレート由来の初期状態は再現できない」という以前の結論は**誤り**だった。
 - **`.vwx` を渡したときは無題にならない**（パスは渡したパス、`saved=yes`）。**扱いを分けているのは拡張子**と
@@ -178,7 +178,7 @@ documents other than the current document"）。「今の文書を閉じてか�
 - 開いている文書のファイルを `OpenDocumentPath` へ渡すと **`false`**（20 ms。即座の拒否で、ダイアログではない）。
   閉じてから渡せば `true`。
 - **引っ掛かりやすい**: `SaveActiveDocumentPath` で保存するとその文書自身が保存先のファイルになるので、
-  **「保存 → そのパスを開く」は必ず失敗する**（[実測](../Metrics/Documents.md#既に開いているファイルはもう一度は開けない)）。
+  **「保存 → そのパスを開く」は必ず失敗する**（[実測](../Metrics/Documents.md#既に開いているファイルをもう一度開いた実測)）。
 - 同じファイルを**別の文字列**で開くと、拒否ではなくコピーで開く（下記 #294・#299）。
 
 ## 未保存の変更ありは読めない
@@ -292,7 +292,7 @@ gSDK->SwitchToOpenFile(originRef);
 
 ### `SaveActiveDocumentPath`——新しいパスへは通る。既存のファイルへは通らない
 
-[表](../Metrics/Documents.md#saveactivedocumentpath新しいパスへは通る既存のファイルへは通らない)（mac）。
+[表](../Metrics/Documents.md#saveactivedocumentpath-を新しいパス既存のファイルへ呼んだ実測)（mac）。
 
 - **まだ無いパスへは通る**（`GSError=0`・ダイアログなし。無題からも、保存済みの別名保存も）。
   **別名保存は「名前を付けて保存」と同じく、図面ごと保存先へ移る。** 元のファイルは保存した時点の中身のまま残り、
@@ -309,7 +309,7 @@ gSDK->SwitchToOpenFile(originRef);
 
 ### 「閉じる」（`DoMenuName("Close", 0)`）——**保存した直後なら確認なしに閉じる**。確認の有無は「保存済みか」では決まらない
 
-[表と切り分け](../Metrics/Documents.md#閉じるdomenunameclose-0保存した直後なら確認なしに閉じる確認の有無は保存済みかでは決まらない)（mac）。
+[表と切り分け](../Metrics/Documents.md#閉じるdomenunameclose-0で確認が出るかの実測)（mac）。
 
 - **戻り値はどの回も 0**（閉じても、キャンセルしても）。**成否は件数と対象の `fileRef` が残っているかで見る。**
 - **刻みの中から呼べる。** 確認が出たら**人が押すまで戻らない**。**キャンセルされても呼び出しは戻り、図面は残る。**
@@ -340,7 +340,7 @@ gSDK->SwitchToOpenFile(originRef);
 
 **問い**（[issue #283](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/283)）:
 上の mac の結果が Windows でも成り立つか。殻の `SetTimer` の刻みの中から測った
-（[環境](../Metrics/Documents.md#windows振る舞いは-mac-と同じ違うのはパスの比べ方と開ける図面は-8-枚まで)）。
+（[環境](../Metrics/Documents.md#windows-での実測283)）。
 
 #### パスの形——**渡した文字列がほぼそのまま残る**（区切りだけは `\` に揃う）
 
@@ -348,7 +348,7 @@ gSDK->SwitchToOpenFile(originRef);
   ファイルとしては存在しない。N はセッション全体の連番で、閉じても戻らない）。
 - **保存済みの図面のパスは、`SaveActiveDocumentPath` に渡した文字列がそのまま `GetOpenFilesList` に出る。**
   直るのは区切りだけ（`/` → `\`）。**ドライブ文字の大小・名前の大小・8.3 の短い名前は直らない**
-  ＝同じファイルが渡し方しだいで別の文字列になる（[例](../Metrics/Documents.md#パスの形渡した文字列がほぼそのまま残る区切りだけは--に揃う)）。
+  ＝同じファイルが渡し方しだいで別の文字列になる（[例](../Metrics/Documents.md#図面のパスの形windows)）。
 - `fIsInMemoryOnly` / `outSaved` は mac と同じ。
 - **260 文字以上のパスへは保存できない**（50331649・ダイアログなし。`LongPathsEnabled=0`）。境目は Win32 の
   `MAX_PATH`（260）で、これは終端の NUL を含む長さなので、使えるのは 259 文字（UTF-16 の単位）まで【推定】
@@ -358,7 +358,7 @@ gSDK->SwitchToOpenFile(originRef);
 
 - **「すでに開かれています」の判定は、開いている図面のパスとの文字列の完全一致**（大小も区別）らしい【推定：
   実装は見ていない。表の 6 通りの出方からの推定】。一致しなければ「ディスクにあるか」で**ダイアログなしで** 50331649
-  （[表](../Metrics/Documents.md#保存先が既にあるダイアログが出るのは開いている図面のパスと文字列が一致するときだけ)）。
+  （[表](../Metrics/Documents.md#保存先が既にあるときの実測windows)）。
 - **＝既にあるファイルへはどの形で渡しても保存できない。** ダイアログが出るかだけが文字列で変わる。
 - **自分のパスへの上書き保存も、文字列が完全一致のときだけ通る**（大小だけ違うと「既にある」で断られる）。
 
@@ -369,7 +369,7 @@ gSDK->SwitchToOpenFile(originRef);
 - **確認の窓のボタンの ID は標準と違う**: 「はい(&Y)」＝1・「キャンセル」＝6・「いいえ(&N)」＝7（`IDCANCEL`＝2 ではない）。
 - **確認の最中、`Close` を呼んだ `SetTimer` の刻み自身が入り直す**（16〜19 回。確認ダイアログのメッセージループが
   `WM_TIMER` を配る。`CloseAllFilesAndQuitVectorworks` の確認と同じ。[Timers and Notifications](Timers%20and%20Notifications.md)
-  の 4 の 9）。mac は入り直さない（[実測](../Metrics/Documents.md#閉じるdomenunameclose-0mac-と同じ確認の最中は同じ-settimer-が入り直す)）。
+  の 4 の 9）。mac は入り直さない（[実測](../Metrics/Documents.md#閉じるdomenunameclose-0の実測windows)）。
 
 #### 前面を戻す
 
@@ -381,7 +381,7 @@ gSDK->SwitchToOpenFile(originRef);
 - 8 枚開いた状態で `OpenDocumentPath(<.vwx>, false)` は警告（OK だけ）で止まり、押すと `false`。
 - **`OpenDocumentPath(nullptr, false)` は同じ警告を出したうえで `true` を返す**——図面は開いていない。
   **新規を開けたかは件数と前面の `fileRef` で確かめる**（プローブはこれで走り出しの図面を保存して閉じてしまった）。
-- mac に同じ上限があるかは測っていない（[実測](../Metrics/Documents.md#開いていられる図面は-8-枚まで9-枚目はダイアログで止まりopendocumentpathnullptr-は-true-を返す)）。
+- mac に同じ上限があるかは測っていない（[実測](../Metrics/Documents.md#9-枚目の図面を開いた実測windows)）。
 
 #### CLI への帰結（Windows）
 
@@ -406,7 +406,7 @@ gSDK->SwitchToOpenFile(originRef);
 **問い**（[issue #290](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/290)）:
 大きな図面でも `close` / `save` は呼び出しの中で終わるか。最中にイベントを回すか。どれだけかかるか。
 **測ったのは同梱ライブラリのコピー（270 MB・図形 5）と合成の図面（最大 51 MB）で、実務の図面ではない。
-所要は仮想マシンの値**（[所要の表・描画・応答なし・ファイルの書かれ方](../Metrics/Documents.md#大きな図面でも呼び出しの中で終わる290macwindows-は下の節実務の図面は測っていない)）。
+所要は仮想マシンの値**（[所要の表・描画・応答なし・ファイルの書かれ方](../Metrics/Documents.md#大きな図面の保存閉じるの所要290macwindows-は下の節実務の図面は測っていない)）。
 
 - **呼び出しの中で終わる。** 戻った直後の `GetOpenFilesList` は最終の状態で、ファイルも戻った直後から変わらない。
 - **最中はイベントを回さない**（ダイアログが出ない限り、タイマーは 0 回。最長 8.5 秒何も刻まない）。
@@ -430,7 +430,7 @@ gSDK->SwitchToOpenFile(originRef);
 ### Windows——同じく呼び出しの中で終わる。入り直すのはダイアログの間だけ（#290。**実務の図面は測っていない**）
 
 3D アクセラレーションのない ARM の VM のエミュレーションの値
-（[表](../Metrics/Documents.md#windows同じく呼び出しの中で終わる入り直すのはダイアログの間だけ290実務の図面は測っていない)）。
+（[表](../Metrics/Documents.md#大きな図面の保存閉じるの所要windows290実務の図面は測っていない)）。
 
 - **呼び出しの中で終わる**（mac と同じ）。
 - **ダイアログが出ない限り、最中に `SetTimer` は入り直さない**（最長 10.6 秒の呼び出しでも 0 回）。入り直すのは
@@ -478,12 +478,12 @@ gSDK->SwitchToOpenFile(originRef);
 
 - **人が開く（`open -a`）と確認が出る**が、**`OpenDocumentPath` は確認を出さずにコピーへ落ち、戻り値は `true`**。
   開いた図面のパス（`/Applications/VW2026/v2024 v2026.vwx`・`ro コピー 1`・`held コピー 1`）が渡したパスと違うことでしか
-  気付けない（[表と確認の文言](../Metrics/Documents.md#開いた図面の状態古い版読み取り専用使用中はどれも元のファイルに結び付かない)）。
+  気付けない（[表と確認の文言](../Metrics/Documents.md#古い版読み取り専用使用中のファイルを開いた実測)）。
 - 図形は元のファイルのまま読め、元のファイルは不変。変換後の名前のファイルは元のフォルダにできない。
 
 ### 上書き保存——`fIsInMemoryOnly=yes` の図面の「自分のパス」は、アプリのフォルダである
 
-[表と警告の文言](../Metrics/Documents.md#上書き保存fisinmemoryonlyyes-の図面の自分のパスはアプリのフォルダである)（mac）。
+[表と警告の文言](../Metrics/Documents.md#fisinmemoryonlyyes-の図面を自分のパスへ上書き保存した実測)（mac）。
 
 - コピー（古い版・読み取り専用・使用中）から元のファイルへの保存は 50331649・ダイアログなし。
 - **`GetOpenFilesList` のパスをそのまま保存先に渡すと、無題の図面やコピーでもアプリのフォルダ（`/Applications/VW2026/`）へ
@@ -520,7 +520,7 @@ gSDK->SwitchToOpenFile(originRef);
 
 ### 「このファイルはすでに開かれています。」の比べ方（mac）——**Windows と同じ文字列の完全一致**
 
-[表](../Metrics/Documents.md#このファイルはすでに開かれていますの比べ方macwindows-と同じ文字列の完全一致)。
+[表](../Metrics/Documents.md#このファイルはすでに開かれていますが出る文字列の比べ方mac)。
 
 - **判定は文字列の完全一致**（ファイルシステムの同一性を見ない）。**ファイルを移した / 消した後でも同じ文字列なら出る**ので、
   開いている図面の一覧とだけ比べている【推定】。大小違い・NFD 違いは、ファイルがあれば 50331649（既にある）、
@@ -584,7 +584,7 @@ gSDK->SwitchToOpenFile(originRef);
 
 **問い**（[issue #293](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/293)）: 保存済みの図面を自分のパスへ
 上書き保存する前に、どの OS の呼び出しで「ダイアログが出る」を当てられるか
-（[Windows と mac の表・ダイアログの文言・OS への問い合わせの答え](../Metrics/Documents.md#上書き保存の前に書き込めないと判定する293)）。
+（[Windows と mac の表・ダイアログの文言・OS への問い合わせの答え](../Metrics/Documents.md#上書き保存の前に書き込めないを判定する呼び出しを試した293)）。
 
 **Windows**:
 

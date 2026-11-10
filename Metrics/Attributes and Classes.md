@@ -11,7 +11,7 @@
 宣言の対応表（per-object と文書の既定の 2 段）は [Findings](../Findings/Attributes%20and%20Classes.md#クラスに従わせる口は-per-object-と文書の既定の-2-段で揃っているヘッダ根拠)。
 ここには実測で見つかった穴の記録だけを置く。
 
-### `GetDefaultOpacityByClass()`（1 旗版）は読み戻しに使えない
+### `GetDefaultOpacityByClass()`（1 旗版）の読み戻しの実測
 
 `SetDefaultOpacityByClass()` を呼んだ**後**も `GetDefaultOpacityByClass()` は `false` を
 返した。同じ状態で 2 旗版 `GetDefaultOpacityByClassN` は `pen=true fill=true` を返し、
@@ -40,7 +40,7 @@
   }
   ```
 
-## 費用は「属性の書き込み」ではなく「それが起こす PIO の作り直し」に掛かる
+## by-class の属性の書き込みの費用の実測（PIO と矩形）
 
 実測（VW 2026 / mac / 新規の空図面。`probes/runtime/byclass-attr-cost/`。
 構造材 PIO と矩形を各 20 個、1 呼び出しあたりの平均）:
@@ -69,7 +69,7 @@
    **7 つとも 0.00ms**（PIO でも）だった。
 4. `SetObjectClass` も 9.27ms（他の 6 つと同額）だった。
 
-## 回数を減らす道は「文書の既定を先に立てる」（＝ per-object の 8 つを呼ばない）
+## 文書の既定を先に立て、per-object の書き込みを呼ばずに作った実測
 
 実測（既定を立ててから作り、**per-object の書き込みを 1 度も呼ばずに**読み戻した）:
 
@@ -86,7 +86,7 @@
   by-instance のままだった（PIO 20 個中 1 個、矩形は 0 個しか by-class にならなかった）。
   1/20 の切り分けは次節、他の 6 旗が下りないことも次節の表。
 
-### マーカーの既定を下ろしているのは「PIO の作り直し（regen）」——1/20 の正体
+### マーカーの既定の by-class が 1/20 で下りた件の切り分け
 
 実測（VW 2026 / mac / 新規の空図面。`probes/runtime/default-arrow-byclass-drop/`。
 7 つの既定を立ててから、**1 つ作るごとに**文書の既定の 7 旗と、そのオブジェクトの 7 旗を
@@ -140,9 +140,9 @@
 **立て直した場合:** 「作る直前に `SetDefaultArrowByClass()` を呼ぶ」を 3 本続けたところ、
 **3 本とも継ぎ、3 本とも直後に下りた**（3/3）。
 
-### マーカーの既定 by-class は、意図して下ろせない
+### マーカーの既定 by-class を下ろす手を試した
 
-他の 5 つで旗が下りた手（「既定の値を書く」。下記「既定の by-class は…」）を
+他の 5 つで旗が下りた手（「既定の値を書く」。下記「既定の by-class を既定の値の書き戻しで下ろした実測」）を
 マーカーで試した。`SetDefaultArrowHeadsN` を書いても旗は下りなかった——
 **同じ値でも違う値でも**である（同じプローブ。値そのものは書けていた——`size` は
 `0.1250` → `0.2500` に変わった）。
@@ -156,12 +156,12 @@
 プローブの締めで他の 6 旗は走らせる前へ戻ったが、**マーカーの旗だけが
 「走らせる前 = no / 締めの後 = yes」のまま残った**。
 
-### `SetObjectClass` だけでは属性は by-instance のまま（前提は今も正しい）
+### `SetObjectClass` の前後の旗の実測
 
 生成直後も `SetObjectClass` の直後も、
 **7 つとも `false`** のままだった（PIO・矩形・球のいずれでも）。
 
-## クラスのマーカーは、per-object で有無を点けてはじめて描かれる
+## クラスのマーカーが描かれる条件の実測
 
 結論・書き方・有無を持つ口の対応表【ヘッダ根拠】は [Findings](../Findings/Attributes%20and%20Classes.md#クラスのマーカーはper-object-で有無を点けてはじめて描かれる)。
 
@@ -172,9 +172,9 @@
 dSize=0.2500・nAngle=45 を置いてある。
 
 **5 回走らせて、下の表の数値はすべて同じだった**（独立した 5 回の再現）。
-**最後は目視でも突き合わせてある**——下記「目で見ても同じだった」。
+**最後は目視でも突き合わせてある**——下記「目視での突き合わせ」。
 
-### 物差しの校正——`GetMarkerPolys` は「描かれるか」を映す。`GetObjectBounds` は映さない
+### 物差しの校正（`GetMarkerPolys` と `GetObjectBounds`）
 
 `GetMarkerPolys(object, startPoly&, endPoly&)`（`ISDK.h:851`）が**値はあるが消えている線**
 （per-object で `visibility=false`）で何を返すかを、値を持つ線・持たない線と並べて測った。
@@ -193,7 +193,7 @@ dSize=0.2500・nAngle=45 を置いてある。
 - 図形の種別は**どの様式でも 21**。境界の数値: 0.2500 インチ = 6.3500mm を 45° に倒した
   スラッシュで 6.3500 ÷ √2 = **4.4901**、1.9999 インチで **35.9199**、矢印（45° ではない）は
   **12.7000 × 6.3500** ＝ 0.5 × 0.25 インチだった。
-- `dSize=2.0000` が `1.9999` になるのは上限（下記「マーカーの大きさはインチで…」）。
+- `dSize=2.0000` が `1.9999` になるのは上限（下記「マーカーの大きさの単位・上限・読みの実測」）。
 
 「描かれているものを実体の図形に変える」系の口を 2 つ試した（2 インチ＝上限の塗り矢印を
 per-object で点けた対照でも、どちらもマーカーを映さなかった）:
@@ -203,7 +203,7 @@ per-object で点けた対照でも、どちらもマーカーを映さなかっ
 | `ConvertToGroup(object, 0)`（`ISDK.h:2731`。「グループに変換」） | **素の線では `nil`**——4 件すべて |
 | `ConvertObjectToLines(object, true, ConvertWireframeMode)`（`:2732`。「線に変換」） | レイヤの図形の数は 4 件とも同じだけ増え（2 → 3）、全体の境界も幅 0 のまま動かなかった |
 
-### クラス経由の道は、どれも描かれない（7 通り試した）
+### クラス経由の道を 7 通り試した
 
 | 線 | by-class の旗 | 新口の読み | 図形（始 / 終） |
 | --- | --- | --- | --- |
@@ -226,7 +226,7 @@ per-object で点けた対照でも、どちらもマーカーを映さなかっ
 - クラス側の口を新口から中口（`SetClMarker`）へ替えても変わらなかった。
 - 順序を逆にしても変わらなかった。
 
-### 目で見ても同じだった
+### 目視での突き合わせ
 
 `GetMarkerPolys` の結果を目視で突き合わせた。
 同じ図面に 4 本並べて（塗りのある矢印・1 インチ）確かめたもの:
@@ -238,7 +238,7 @@ per-object で点けた対照でも、どちらもマーカーを映さなかっ
 | クラスから読んで per-object へ書き写す＋`SetArrowByClass` | 見える |
 | **対照**: per-object で直に書いた | 見える |
 
-### ただし by-class そのものは生きている——per-object が渡すのは**有無だけ**
+### per-object で有無を点けた線でクラスの値を書き換えた実測
 
 書き写して `SetArrowByClass` を呼んだ線を
 残したまま、**クラスの値だけを**後から style=260（十字）・dSize=1.0000 へ書き換えた:
@@ -252,7 +252,7 @@ per-object で点けた対照でも、どちらもマーカーを映さなかっ
 ではなく、**クラスの新しい値（dSize=1.0000）の大きさの図形**になった。
 書き写しただけ（旗を立てていない）の線は、クラスを変えて測っていない。
 
-### 順序が効く——per-object へ書き写すのは `SetArrowByClass` より**先**
+### per-object へ書き写す順序（`SetArrowByClass` の前／後）を変えた実測
 
 `SetArrowByClass` を呼んだ後に per-object のマーカーを書くと、`GetArrowByClass` が
 `no` に戻った。図形は出た（#120 の測り。**この順序の回は上の表に行として載っておらず、
@@ -260,7 +260,7 @@ per-object で点けた対照でも、どちらもマーカーを映さなかっ
 「上の表の行」を指していたが、その行は最初から無かった）。
 SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 
-### by-class の線では、per-object の読みは信用できない
+### by-class の線で per-object の口を読んだ実測
 
 - 何も書き写していない by-class の線は、旗が `yes` でも `GetObjBeginningMarker` が
   `false`（`ok=no`）を返した。
@@ -268,7 +268,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
   描かれていたのはスラッシュ**（境界 4.4901 × 4.4901 は 45° のスラッシュのもの）だった。
   クラスを dSize=1.0000 へ変えた後も、**読みは dSize=0.2500 のまま**で図形だけが大きくなった。
 
-### 文書の既定から生まれた線は per-object の値を持つ（クラス経由だけが特別）
+### 文書の既定から生まれた線の per-object の読み
 
 既定のマーカーを立ててから生まれた線を読んだ（[#94](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/94)）:
 
@@ -277,12 +277,12 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 | `SetDefaultBeginningMarker`（visibility=true）を立ててから生まれた線 | ok=yes **vis=yes** style=259 dSize=0.2500 | **あり / あり**（4.4901 × 4.4901） |
 | **対照**: 既定を戻した後（vis=no）に生まれた線 | ok=no vis=no | なし / なし |
 
-## 既定の by-class は「既定の値を書き戻す」と下りる（退避・復元できる）
+## 既定の by-class を既定の値の書き戻しで下ろした実測
 
 下ろす専用の口が無いこと・既定の値を読む／書く口の対応表【ヘッダ根拠】は
 [Findings](../Findings/Attributes%20and%20Classes.md#下ろす専用の口は無いヘッダ根拠)。
 
-### 既定の値を書くと、その属性の旗だけが下りる
+### 既定の値を 1 本ずつ書き戻したときの旗の実測
 
 実測（VW 2026 / mac / 新規の空図面。`probes/runtime/default-byclass-restore/`。
 5 つを立てた状態から、**退避しておいた値を 1 本ずつ書き戻して**、書くたびに 5 旗を
@@ -306,12 +306,12 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
    （`penFore=257 penBack=256 fillFore=257 fillBack=256 / lineWeight=2 penPat=2 fillPat=1`）。
 4. `SetDefault*ByClass()` を 5 つ立てた**後**に読んだ既定の値も、立てる前と同じだった。
 
-### 戻した後に作ったものは by-instance で生まれる
+### 戻した後に作った矩形と PIO の旗と値
 
 戻した後に作った**矩形と構造材 PIO**は、どちらも **5 旗とも no** で、値は**退避した既定と
 一致**した（上記と同じプローブ）。
 
-## 文書の既定のマーカーの有無は、旧口（`ArrowHeads`）では読めも消せもしない
+## 文書の既定のマーカーの有無を旧口（`ArrowHeads`）で読み書きした実測
 
 測った口（いずれも `Interfaces/VectorWorks/ISDK.h`）。`ArrowHeads` 系が古い方で、
 `SMarkerStyle` と **`visibility`（有無）を別々の引数で持つ**系統が別にある。
@@ -324,7 +324,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 次の 2 つの穴は、どちらも**`SetDefaultArrowByClass()` を一度も呼んでいない図面**
 （by-class の旗は全区間 `no`）で出た。
 
-### 穴 1: `GetDefaultArrowHeadsN` の `ending` は、終点ではなく `starting` を返す
+### その 1: `GetDefaultArrowHeadsN` の `ending` の読みの実測
 
 実測（VW 2026 / mac。組み合わせごとに `OpenDocumentPath(nullptr, false)` で新しい空の
 図面を開き、真っさらな既定から測った。`probes/runtime/default-arrow-heads-false/`）。
@@ -343,7 +343,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
   `end=no` を返した。
 - `starting` は 4 行とも書いたとおりだった。
 
-### 穴 2: `SetDefaultArrowHeadsN` は `starting` / `ending` の `false` を無視する
+### その 2: `SetDefaultArrowHeadsN` に `false` を書いた実測
 
 上の各行のあと、続けて `(start=no, end=no)` を**`size` を変えて**書いた
 （`size` が変わったかで、呼び出しが届いたかを見る）:
@@ -356,7 +356,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 
 `style` と `size` は書いたとおりに変わり、点いていた端は 3 経路とも点いたままだった。
 
-### 消すには新口の `visibility=false` を使う（これが退避・復元の道）
+### 新口の `visibility=false` で消した実測
 
 同じ 3 つの状態から `SetDefaultBeginningMarker(mstyle, false)` /
 `SetDefaultEndMarker(mstyle, false)` を呼ぶと、**3 経路とも `no` になった**
@@ -368,7 +368,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 - 戻り値（`Boolean`）は、`visibility=false` を書いて実際に消えた回も、消えなかった旧口の
   呼び出しも、区別が付かなかった。
 
-### per-object（`SetArrowHeadsN(h, …)`）は 2 つとも正しい
+### per-object（`SetArrowHeadsN(h, …)`）で同じ組み合わせを通した実測
 
 線を 1 本ごとに新しく引いて同じ電池を通したところ、per-object では:
 
@@ -377,7 +377,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 - `SetArrowHeadsN(h, no, no, …)` で**マーカーが消えた**（3 通りとも消えた）。
 - 旧口を一度も通さず、新口だけで点けて消すこともできた。
 
-### #104 の観測は、この 2 つで説明が付く
+### #104 の観測との突き合わせ
 
 [#104](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/104)
 で観測したのは「`(yes, no)` を書いたら `(yes, yes)` と読めた」「退避した `(no, no)` を
@@ -390,40 +390,40 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 当時は「by-class のときに getter が嘘をつくのでは」と疑ったが、旗を一度も立てていない
 図面で同じ食い違いが再現した。
 
-### 余録: `style=0` は「マーカー無し」ではない
+### 余録: `style=0` で書いた実測
 
 実測では `style=0` のまま `visible` が `yes` にも `no` にもなった。`0` はどの口でも
 **矢印**を指した（新口の `MarkerType` では `kArrowMarker = 0`、旧口の番号でも `0` は
-塗り矢印。下記「マーカーの様式は口ごとに別の番号体系」）。
+塗り矢印。下記「マーカーの様式の番号を口ごとに書いて読んだ実測」）。
 
 > **経緯:** この節には以前「`ArrowType` は `Sint32` で、値は `MarkerType` の体系である
 > 【ヘッダ根拠】」と書いていたが、[#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)
 > の実測で誤りと分かり消した。`Kernel/API/MiniCadCallBacks.h` は 756 行目から
 > `ArrowType`（`arArrow = 0` … `arCross = 4`）と `MarkerType`（`kArrowMarker = 0` …）の
 > **2 つの体系を続けて**定義しており、**隣の enum を読み違えていた**。正しい対応の実測は
-> 下記「マーカーの様式は口ごとに別の番号体系」。`Sint32` であることと、`0` が「無し」では
+> 下記「マーカーの様式の番号を口ごとに書いて読んだ実測」。`Sint32` であることと、`0` が「無し」では
 > ないことだけが合っていた。
 
-### 余録: `GetObjBeginningMarker` が `false` を返したら、出力引数を読まない
+### 余録: `GetObjBeginningMarker` が `false` を返したときの出力引数
 
 **マーカーを一度も設定していない線では `false` が返り**、
 そのとき `mstyle` / `visibility` には**その図面の既定とも無関係な値**が入っていた
 （既定が `size=0.0472` の図面で `size=0.1250`）。**設定した後は `true`** に変わった。
 戻り値の意味は #106 の問いではないので追っていない。
 
-### per-object のマーカーの `size` が書いたとおりに読めないのは、読みが丸まるから
+### per-object のマーカーの `size` の書きと読みの食い違い（#108）
 
 `SetArrowHeadsN(h, …, size=3.0000)` と書くと、読み戻しは旧口 `2.0000` / 新口 `1.8000`
 だった。切り分けは [#108](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/108)
 （下記「マーカーの大きさ」の上限の表と丸めの表）。
 
-## マーカーの大きさはインチで、上限があり、per-object の旧口の読みだけが丸まる
+## マーカーの大きさの単位・上限・読みの実測
 
 実測（VW 2026 / mac / 新規の空図面。`probes/runtime/arrow-head-size/`。
 書いた値を **0.0100〜12.0000 の 16 点で掃引**し、**旧口・新口・ポイント口の 3 経路**で
 読み戻した。測ったのはプローブが自分で開いて閉じる空の図面の中だけ）。
 
-### 単位はインチ。図面の単位にも縮尺にも依らない
+### 単位の実測（ポイントの口・図面の単位・縮尺）
 
 - VWFC は `sizeInMilimeters = sizeInInch * 25.4` と換算している
   （`SDKLib/Source/VWSDK/VWFC/VWObjects/VWObjectAttributes.cpp:568-605`）。
@@ -436,7 +436,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
   まったく同じ）。
 - `N` の付かない旧口の引数名は VWFC で `sizeInPoints`。
 
-### 上限がある——約 2.0 インチ（≈50.8mm）。書く口で切られ方が違う
+### 上限の実測（書く口ごと）
 
 | 書く口 | 書いたとおり入る範囲 | 超えたとき |
 | --- | --- | --- |
@@ -452,7 +452,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
   微小な量子化が出た）。
 - 2 インチより大きい値が入る口は、測った口には無かった。
 
-### マーカーの大きさの格納形式（1/16384 インチ単位の 16 ビット整数）と上限の実測
+### 中口の `size` を掃引した実測（格納形式と上限）
 
 **中口（`Get/SetMarker`）の `size` を掃引した**
 （[#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116)。
@@ -482,7 +482,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 - 中口へ `36` を渡すと **0.0022 インチ**になった（`Get/SetArrowHeads` では 36 ポイント
   = 0.5 インチ）。
 
-### per-object の `GetArrowHeadsN` は大きさを**整数インチに丸めて**返す（読みに使ってはいけない）
+### per-object の `GetArrowHeadsN` の大きさの読みを新口と比べた実測
 
 同じ線を新口と旧口で読み比べた（#108 の出発点だった食い違い）:
 
@@ -500,7 +500,7 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
   1.2500 → 1.2500）。
 - 旧口で書いた値は（1.8 インチの上限まで）新口では書いたとおりに読めた。
 
-### per-object の `size=0.0000` は「未設定」と「0.5 インチ未満」の両方を意味する
+### per-object の旧口で `size=0.0000` が読めた線
 
 | 線 | 旧口 `…N` の `size` | 新口の戻り値 | 新口 `dSize` |
 | --- | --- | --- | --- |
@@ -510,30 +510,30 @@ SDK の参照実装は「書き写し → `SetArrowByClass`」の順である。
 
 - 明示的に `0` を書くと `dSize=0.0000` で `visible=yes` だった。
 
-### `dWidth` は書いても入らない
+### `dWidth` を書いた実測
 
 新口で `dSize=0.5000` と **`dWidth=0.2500`** を書いて読み直すと、`dSize` は `0.5000` に
 なったが **`dWidth` は `0.0000` のまま**だった。`nThicknessBasis` と `dThickness` も
 測った全区間で `0` / `0.0000` だった（`nAngle` は全区間 `15` で、振っていない）。
 
-### 様式（根種別）を変えても、大きさの振る舞いは変わらない
+### 様式（根種別）を変えて大きさを測った実測
 
 `kArrowMarker` / `kCircleMarker` / `kDimSlashMarker` / `kOpenBaseNoFillMarker` の 4 つで
 測って、**すべて** 0.5000 → 0.5000、3.0000 → 1.8000 だった。
 
 ここで旧口へ書いた `style` の `0` / `2` / `3` / `1280` は、新口ではそれぞれ
-`0` / `1280` / `2` / `2048` として読めた（番号体系の実測は下記「マーカーの様式は口ごとに
-別の番号体系——`ArrowType` は `MarkerType` ではない」。
+`0` / `1280` / `2` / `2048` として読めた（番号体系の実測は下記「マーカーの様式の番号を口ごとに
+書いて読んだ実測」。
 [#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)）。
 
-## マーカーの様式は口ごとに別の番号体系——`ArrowType` は `MarkerType` ではない
+## マーカーの様式の番号を口ごとに書いて読んだ実測
 
 口ごとの書き・読みの対応表は [Findings](../Findings/Attributes%20and%20Classes.md#マーカーの様式は口ごとに別の番号体系arrowtype-は-markertype-ではない)。
 実測（VW 2026 / mac。`probes/runtime/marker-style-mapping/`。
 [#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)。
 [実測ログ](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/115#issuecomment-5822033817)）。
 
-### per-object の旧口（`SetArrowHeadsN`）は `EMarkerType` の番号 0〜6
+### per-object の旧口（`SetArrowHeadsN`）に番号を書いた実測
 
 `EMarkerType` は VWFC のヘッダにある並び（`VWFC/VWFCLibrary.h:62`。
 `kMarkerFilledArrow = 0` … `kMarkerCross = 6`）。1 つの値につき新しい線を 1 本引いて
@@ -556,7 +556,7 @@ per-object の旧口で書き、新口で読み戻した:
 - `kMarkerEmptyArrow`（白矢印）に入ったのは塗り無しの `256`、`kMarkerEmptyBall`（白丸）に
   入ったのは白塗りの `130` だった。
 
-### 範囲外は飽和でも下位ビットでもない——per-object は一律 `2048`
+### per-object の旧口に範囲外の番号を書いた実測
 
 `20` / `50` / `100` / `126` / `127` / `128` / `129` / `255` / `256` / `259` / `260` /
 `261` / `512` / `1024` / `1280` / `2048` / `3072` / `4096` / `16384` / `32767` /
@@ -570,7 +570,7 @@ per-object の旧口で書き、新口で読み戻した:
 
 #110 で `1280` を書いて `2048` が読めたのも、この範囲外の振る舞いと同じだった。
 
-### 文書の既定の旧口（`SetDefaultArrowHeadsN`）は**別の表**——`ArrowType` の enum 0〜4
+### 文書の既定の旧口（`SetDefaultArrowHeadsN`）に番号を書いた実測
 
 文書の既定側へ同じ番号を書いた。読めた値は `MiniCadCallBacks.h:756` の `ArrowType` の enum
 （`arArrow = 0`, `arTightArrow = 1`, `arBall = 2`, `arSlash = 3`, `arCross = 4`）の並びと一致した:
@@ -588,7 +588,7 @@ per-object の旧口で書き、新口で読み戻した:
 `3` は per-object では丸（`kCircleMarker`）、文書の既定ではスラッシュ
 （`kNoFillDimSlashMarker`）になった。
 
-### 旧口の `style` の**読み**は、どちらの体系でもない——使ってはいけない
+### 旧口の `style` の読みの実測
 
 `GetArrowHeadsN` / `GetDefaultArrowHeadsN` の `style` を読んだ。per-object で 0〜19 を
 書いて読み直すと、
@@ -597,13 +597,13 @@ per-object の旧口で書き、新口で読み戻した:
 `0` / `1` / `2` の 3 つだけがそのまま返り、`259` / `260` / `261` / `6` / `7` / `11` /
 `128` / `256` / `1280` / `2048` / `3072` / `32768` / `16384` は**すべて `0`** になった。
 
-### マスク（`kMarkerRootTypeMask` ほか）は `MarkerType` の値にだけ意味がある
+### マスク（`kMarkerRootTypeMask` ほか）の値と旧口の読み
 
 ヘッダの値: `kMarkerRootTypeMask = 127` / `kMarkerFillMask = 896` / `kMarkerBaseMask = 7168` /
 `kMarkerHalfTickMask = 24576` / `kMarkerTailMask = 32768`。旧口の `style` の読みは
 ほぼ `0` だった（上記）。
 
-### 新口（`SetObjBeginningMarker`）は `MarkerType` をそのまま往復させる
+### 新口（`SetObjBeginningMarker`）で `MarkerType` を往復させた実測
 
 21 個の `MarkerType` を書いて読み直し、
 **17 個はそのまま往復した**（`0` / `1` / `2` / `6` / `7` / `11` / `128` / `256` /
@@ -623,7 +623,7 @@ per-object の旧口で書き、新口で読み戻した:
 往復した。`kDoubleLineMarker`（`268` になる）はヘッダのその注記に挙がっていないが、
 同じく `256` が足された。
 
-### 中口（`Set/GetMarker`）——読みは `MarkerType`、書きは `EMarkerType` の番号
+### 中口（`Set/GetMarker`）で書いて読んだ実測
 
 `SetMarker(h, MarkerType style, short size, short angle, Boolean start, Boolean end)` /
 `GetMarker(…)`（`Interfaces/VectorWorks/ISDK.h:1401` / `:941`）は角度を引数に持つ。
@@ -636,10 +636,10 @@ per-object の旧口で書き、新口で読み戻した:
   （線色塗りの矢印）になった**（旧口の範囲外は `2048`）。
 - `kCircleMarker`（`2`）を `SetMarker` へ渡すと、番号の `2`（`kMarkerOpenArrow`）として
   「開いた矢印」（`1280`）になった。
-- `size` は 1/16384 インチだった（上記「正体: 大きさは 1/16384 インチの 16 ビット整数」）。
+- `size` は 1/16384 インチだった（上記「中口の `size` を掃引した実測（格納形式と上限）」）。
   `36` を渡すと **0.0022 インチ**、`0.2500` インチは `4096`、`1.0000` インチは `16384`。
 
-### 角度（`nAngle`）——**書ける。ただし角度を持たない様式がある**
+### 角度（`nAngle`）を書いた実測
 
 **経緯:** 以前は「書けるのは中口だけ」と書いていたが、
 [#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116) で測り直した
@@ -657,9 +657,9 @@ per-object の旧口で書き、新口で読み戻した:
 | **旧口**（`Set(Default)ArrowHeadsN`） | **書けない**（引数が無い）。様式ごとの既定が入る（矢印 15 / 丸 0 / スラッシュ・十字 45） |
 | **新口**（`SMarkerStyle.nAngle`） | **書ける。ただし根が丸・投げ縄・矩形・二重線・`10` の様式では `1` になる** |
 | **中口**（`SetMarker` の `angle`） | **書ける。丸にも書ける**（新口が潰す様式でも入る）——ただし**届く様式は番号 0〜6 の 7 つだけ** |
-| **クラスの 2 つの口** | per-object とまったく同じ（下記「クラスの口も…」） |
+| **クラスの 2 つの口** | per-object とまったく同じ（下記「クラスの口で書いて読んだ実測」） |
 
-#### 角度が入る根・入らない根（新口で `style` ＋ `dSize` ＋ `nAngle` を 1 回で書いた）
+#### 根ごとに角度を書いた実測（新口で `style` ＋ `dSize` ＋ `nAngle` を 1 回で書いた）
 
 25 点の総当たり。**入らないのは 5 つの根**で、塗り・台・尾・半の変種は関係ない
 （丸は `2` も `130`（＋白）も `258`（＋塗り無し）も同じく `1`）。
@@ -674,7 +674,7 @@ per-object の旧口で書き、新口で読み戻した:
 - `8` を書くと `256`（矢印＋塗り無し）になった。`9` と `10` はそのまま読み戻せた。
 - `nAngle` は `Sint8`（`MiniCadCallBacks.h:841`）。`-128`〜`127` がそのまま入った。
 
-#### 丸は「角度を持てない」のではない——**新口の書き込みが潰している**
+#### 丸に新口と中口の両方から角度を書いた実測
 
 同じ 14 点を、丸に対して**新口と中口の両方から**書いた:
 
@@ -689,7 +689,7 @@ per-object の旧口で書き、新口で読み戻した:
 
 - 中口の `angle` は `short` だが、`180` を書くと `-76`（= 180 − 256）が読めた。
 
-### クラスの口も per-object とまったく同じ体系
+### クラスの口で書いて読んだ実測
 
 `Set/GetClassBeginningMarker`（`SMarkerStyle`。`ISDK.h:734` / `:743`）と
 `Set/GetClMarker`（`MarkerType` ＋ `size` ＋ `angle`。`:739` / `:748`）は、
@@ -705,7 +705,7 @@ per-object の旧口で書き、新口で読み戻した:
   `ISDK.h` に `CreateClass` の類は無く、クラスを作る口として挙がるのは
   `AddGuidesClass()`（`ISDK.h:1353`）だった（ヘッダを読んだ）。
 
-## クラスの一覧は `ForEachClass` で列挙する——順序は作った順、ゲストは `NNA#<n>_` 付きで後ろに足される
+## `ForEachClass` でクラスを列挙した実測
 
 図面のクラスを全部なめる口は `ISDK::ForEachClass(Boolean doGuestClasses,
 std::function<void(MCObjectHandle h)>)`（`ISDK.h:2697`）ひとつで、VWFC の
@@ -720,7 +720,7 @@ VW 2026 の実測（[#280](https://github.com/min-nano/vectorworks-developer-sdk
   クラスの ID、`GetObjectName(h)` が名前で、**`ClassIDToName(id)` と同じ文字列**、
   `ClassNameToID(名前)` で同じ ID へ戻る（全件で往復一致）。
 - **`IsObjectFromReferencedFile(h)` は、参照先から来たゲストのクラスでも `false`** だった
-  （下記「ゲスト」）。
+  （下記「`doGuestClasses` を立てて参照のある図面で列挙した実測」）。
 - 図面を 2 枚開いて切り替えると、
   タイマーの刻みから呼んだ同じ呼び出しが 6 件 → 2 件に変わった。
 
@@ -740,7 +740,7 @@ VW 2026 の実測（[#280](https://github.com/min-nano/vectorworks-developer-sdk
 - **無いクラス名の `ClassNameToID` は `0` ではなく `-1`** を返した。このプローブは最初
   「`== 0` なら無い」と判定していて、無いクラスを「ある」と読んだ。
 
-### 順序は ID の順（作った順）。名前順でもオーガナイザの順でもない
+### 列挙の順序の実測
 
 `zz280-最後` → `AA280-最初` → `mm280` → `P280-子-孫` の順に `AddClass` すると、ID は
 11〜14 になり、`ForEachClass` は **一般(2)・寸法(3)・zz280-最後(11)・AA280-最初(12)・
@@ -750,7 +750,7 @@ mm280(13)・P280-子-孫(14)** の順で渡した。`ClassIDToName` で ID 順�
 オーガナイザ（クラスタブ）は名前の昇順で並んだ（`AA280-最初`・`mm280`・`P280-子-孫`・
 `zz280-最後`・一般・寸法。目視）。顔ぶれは 6 件で一致した。
 
-### 階層名（`-` 区切り）は 1 つのクラス。親は作られない
+### 階層名（`-` 区切り）で `AddClass` した実測
 
 `AddClass("P280-子-孫")` の後、
 `ClassNameToID("P280")` も `ClassNameToID("P280-子")` も `-1`（無い）だった。列挙にも
@@ -760,7 +760,7 @@ mm280(13)・P280-子-孫(14)** の順で渡した。`ClassIDToName` で ID 順�
 `P280` と `子` の行は属性の欄が空だった（平らな表示に切り替えると `P280-子-孫` の 1 行に
 なった。目視）。
 
-### `doGuestClasses` は「参照している図面のクラス」を足す
+### `doGuestClasses` を立てて参照のある図面で列挙した実測
 
 ゲストのクラスを 2 つ（`G280-ゲスト` / `G280-親-子`）だけ足した図面を保存し、別の図面から
 **オーガナイザの「ファイル参照」タブで参照を 1 つ足しただけ**（ビューポートは作らない）で
@@ -783,7 +783,7 @@ mm280(13)・P280-子-孫(14)** の順で渡した。`ClassIDToName` で ID 順�
 - デザインレイヤビューポートで参照した場合の顔ぶれは測っていない（ファイル参照だけで
   ゲストが入ることまで）。
 
-### タイマーの刻みから呼べる。図面 0 枚でも落ちない
+### タイマーの刻みと図面 0 枚で呼んだ実測
 
 - OS のタイマー（`SetTimer`、Windows）の刻みから、呼び出しの最中（13 刻み）・呼び出しが
   戻った後（5 分で約 1000 刻み）とも普通に呼べ、件数はそのときのアクティブな図面のものだった。

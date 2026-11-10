@@ -34,7 +34,7 @@
 - **`SetDefaultOpacityByClass()` の後も `false` を返すが、書き込みは効いている**（2 旗版
   `GetDefaultOpacityByClassN` は `pen=true fill=true`、その後に作ったものは 20/20 が by-class）。
   既定を確かめるなら `GetDefaultOpacityByClassN`。per-object の `GetOpacityByClass(h)` は正しい
-  （[実測](../Metrics/Attributes%20and%20Classes.md#getdefaultopacitybyclass1-旗版は読み戻しに使えない)）。
+  （[実測](../Metrics/Attributes%20and%20Classes.md#getdefaultopacitybyclass1-旗版の読み戻しの実測)）。
 - **同じ形の穴がマーカーにもある**（書き込みも効かない）。一覧は下記
   「[読み戻しに使えない口](#読み戻しに使えない口ここまでに分かっているもの)」。
 
@@ -51,7 +51,7 @@
 
 - **by-class の書き込みそのものは無料。高いのは PIO を作り直させたときだけ**（構造材 PIO で
   1 呼び出し約 **9ms**、矩形・球は 0.00ms。
-  [実測の表](../Metrics/Attributes%20and%20Classes.md#費用は属性の書き込みではなくそれが起こす-pio-の作り直しに掛かる)）。
+  [実測の表](../Metrics/Attributes%20and%20Classes.md#by-class-の属性の書き込みの費用の実測pio-と矩形)）。
 - **効くのは「PIO かどうか」で、「実体を持つか」ではない**（球は 3D ソリッドでも 7 つとも無料）。
 - **`SetArrowByClass`（マーカー）だけは PIO でも無料**——マーカーの by-class 化は作り直しを
   起こさない。「文書の既定で既に by-class だから」ではない（新規の図面では 7 つとも既定は `false`）。
@@ -65,7 +65,7 @@
 
 - **`SetDefaultClass` と 7 つの `SetDefault*ByClass()` を作る前に立てると、生まれたものは
   最初からそのクラスに属し、属性も by-class になる**（PIO・矩形とも 20 / 20）。per-object の
-  書き込みは要らない（マーカーを除く。下記。[実測](../Metrics/Attributes%20and%20Classes.md#回数を減らす道は文書の既定を先に立てる-per-object-の-8-つを呼ばない)）。
+  書き込みは要らない（マーカーを除く。下記。[実測](../Metrics/Attributes%20and%20Classes.md#文書の既定を先に立てper-object-の書き込みを呼ばずに作った実測)）。
 - **既定を立てる費用は無視してよい**（8 回で 0.01ms）。クラスの数に比例するので、クラスが
   変わるたびに `SetDefaultClass` を呼び直す。**作成も速くなる**（PIO で 14.56 → 12.05ms/個）。
 - **「作る前」でなければ効かない**（既定は生まれる瞬間に読まれる）。
@@ -80,7 +80,7 @@
 - **マーカーの既定の旗は、PIO の再生成で 1 回下りる。** 作成（`doRegen=true`）でも
   `ResetObject` でも下りる。`CreateCustomObjectPath(..., doRegen=false)` なら下りない。
   矩形の作成・`ResetObject` では下りない
-  （[実測の表](../Metrics/Attributes%20and%20Classes.md#マーカーの既定を下ろしているのはpio-の作り直しregen120-の正体)）。
+  （[実測の表](../Metrics/Attributes%20and%20Classes.md#マーカーの既定の-by-class-が-120-で下りた件の切り分け)）。
 - **`UpdateStyledObjects` でも下りるはず**【推定】（ジオメトリを作り直すため。直接は測っていない）。
 - **旗は「立っている間に生まれた最初のもの」にだけ継がれ、その PIO 自身の再生成で下りる**——
   これが 1/20。矩形が先なら矩形が継ぐ。**他の 6 旗は全区間 `yes` のまま。**
@@ -93,7 +93,7 @@
 
 - **`SetDefaultArrowHeadsN` を書いても旗は下りない**（同じ値でも違う値でも。値そのものは
   書けている）。**下ろす道は「PIO を 1 つ再生成する」しか無く、後始末に使えない**
-  （[実測](../Metrics/Attributes%20and%20Classes.md#マーカーの既定-by-class-は意図して下ろせない)）。
+  （[実測](../Metrics/Attributes%20and%20Classes.md#マーカーの既定-by-class-を下ろす手を試した)）。
 
 > **帰結: `SetDefaultArrowByClass()` を呼んではいけない。** 呼ぶと**その図面の既定を
 > 元へ戻せない**（実測でも締めの後にマーカーの旗だけが残った）。継承もされない旗を、
@@ -168,7 +168,7 @@ successful」＝**成否**である。**クラス属性の口を全数当たっ�
 
 - **`GetMarkerPolys(object, startPoly&, endPoly&)`（`ISDK.h:851`）は有無に従う**——同じ値でも
   `visibility=false` の線では図形を返さない。**「描かれているか」を目視なしで知る唯一の口**
-  （[校正の表](../Metrics/Attributes%20and%20Classes.md#物差しの校正getmarkerpolys-は描かれるかを映すgetobjectbounds-は映さない)）。
+  （[校正の表](../Metrics/Attributes%20and%20Classes.md#物差しの校正getmarkerpolys-と-getobjectbounds)）。
 - **線の `GetObjectBounds` はマーカーを含まない**（1.9999 インチのマーカーでも幅 0 のまま）。
   場所を計算するなら `GetMarkerPolys` の図形の境界を自分で足す。図形の種別はどの様式でも 21。
 - **`ConvertToGroup` / `ConvertObjectToLines` はマーカーを映さない**（前者は素の線で `nil`
@@ -179,7 +179,7 @@ successful」＝**成否**である。**クラス属性の口を全数当たっ�
 
 - **`GetArrowByClass` が `yes` でも絵には何も無い。** `ResetObject`・`SetClUseGraphic(true)`・
   クラス側を中口（`SetClMarker`）で書く・順序を逆にする、のどれでも出ない。出るのは
-  per-object へ書き写した線だけ（[実測の表](../Metrics/Attributes%20and%20Classes.md#クラス経由の道はどれも描かれない7-通り試した)）。
+  per-object へ書き写した線だけ（[実測の表](../Metrics/Attributes%20and%20Classes.md#クラス経由の道を-7-通り試した)）。
 - **`SetClUseGraphic`（クラスの「グラフィック属性を使用」）は関係ない。** VWFC の参照実装が
   この旗で `SetArrowByClass` を囲っているのは**ほかの 5 つの属性と揃えているだけ**で、
   マーカーが出る条件ではない。
@@ -188,13 +188,13 @@ successful」＝**成否**である。**クラス属性の口を全数当たっ�
 
 - 4 本並べて目視でも、**クラスに入れて `SetArrowByClass` しただけの線は見えず**、書き写した線と
   per-object で直に書いた線だけが見えた——`GetMarkerPolys` の「図形なし」は「絵に出ていない」
-  と読んでよい（[実測](../Metrics/Attributes%20and%20Classes.md#目で見ても同じだった)）。
+  と読んでよい（[実測](../Metrics/Attributes%20and%20Classes.md#目視での突き合わせ)）。
 
 ### ただし by-class そのものは生きている——per-object が渡すのは**有無だけ**
 
 - 書き写して `SetArrowByClass` を呼んだ線は、**クラスの値を後から変えると、クラスの新しい値で
   描き直される**（0.25 → 1.0 インチ）。**per-object への書き写しは「有無を点ける」ためだけ**で、
-  値の出どころはクラスのまま（[実測](../Metrics/Attributes%20and%20Classes.md#ただし-by-class-そのものは生きているper-object-が渡すのは有無だけ)）。
+  値の出どころはクラスのまま（[実測](../Metrics/Attributes%20and%20Classes.md#per-object-で有無を点けた線でクラスの値を書き換えた実測)）。
 - 書き写しただけ（旗を立てない）の線はクラスに追随しないはず【推定】（測っていない）。
 
 ### 順序が効く——per-object へ書き写すのは `SetArrowByClass` より**先**
@@ -202,21 +202,21 @@ successful」＝**成否**である。**クラス属性の口を全数当たっ�
 - **`SetArrowByClass` の後に per-object のマーカーを書くと、by-class の旗が下りる**
   （`GetArrowByClass` が `no`）。図形は出るが per-object の値で、クラスに追随しない。
   **SDK の参照実装が「書き写し → `SetArrowByClass`」の順である理由がこれ**で、逆順では
-  by-class にならない（[実測](../Metrics/Attributes%20and%20Classes.md#順序が効くper-object-へ書き写すのは-setarrowbyclass-より先)）。
+  by-class にならない（[実測](../Metrics/Attributes%20and%20Classes.md#per-object-へ書き写す順序setarrowbyclass-の前後を変えた実測)）。
 
 ### by-class の線では、per-object の読みは信用できない
 
 - 書き写していない by-class の線は `GetObjBeginningMarker` が `false`。書き写した線は読めるが
   **値が嘘**（`style=0` と読めてスラッシュが描かれていた。クラスを変えても dSize は旧値のまま）。
   **by-class の線のマーカーはクラスの口（`GetClassBeginningMarker`）で読む**
-  （[実測](../Metrics/Attributes%20and%20Classes.md#by-class-の線ではper-object-の読みは信用できない)）。
+  （[実測](../Metrics/Attributes%20and%20Classes.md#by-class-の線で-per-object-の口を読んだ実測)）。
 
 ### 文書の既定から生まれた線は per-object の値を持つ（クラス経由だけが特別）
 
 - **`SetDefaultBeginningMarker`（visibility=true）を立ててから生まれた線は、有無ごと per-object
   の値を持って描かれる**（[#94](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/94)）。
   詰まるのはクラス経由だけで、理由は「クラス側に有無が無い」の 1 点
-  （[実測](../Metrics/Attributes%20and%20Classes.md#文書の既定から生まれた線は-per-object-の値を持つクラス経由だけが特別)）。
+  （[実測](../Metrics/Attributes%20and%20Classes.md#文書の既定から生まれた線の-per-object-の読み)）。
 
 ## 既定の by-class は「既定の値を書き戻す」と下りる（退避・復元できる）
 
@@ -260,7 +260,7 @@ successful」＝**成否**である。**クラス属性の口を全数当たっ�
 ### 既定の値を書くと、その属性の旗だけが下りる
 
 - **対応は 1 対 1**（色だけが 1 対 2——`SetDefaultColors` 1 本でペン色と面色の両方が下りる）
-  （[実測の表](../Metrics/Attributes%20and%20Classes.md#既定の値を書くとその属性の旗だけが下りる)）。
+  （[実測の表](../Metrics/Attributes%20and%20Classes.md#既定の値を-1-本ずつ書き戻したときの旗の実測)）。
 - **同じ値を書いても旗は下りる**（退避した値そのものを書いて下りた）。
 - **値は完全に往復する。旗を立てても値は壊れない**（旗と値は別に持たれている）。退避を
   「立てる前」に済ませ忘れても取り返せる（とはいえ、退避は先に済ませるのが素直）。
@@ -331,20 +331,20 @@ if (savedFPatByClass)    gSDK->SetDefaultFPatByClass();
 
 - **`ending` は終点の状態ではなく `starting` のコピー**（OR でもない）。新口と、直後に引いた
   線は書いたとおり。**文書の既定の終点の有無は旧口では読めない。** `starting` は正しい
-  （[実測の表](../Metrics/Attributes%20and%20Classes.md#穴-1-getdefaultarrowheadsn-の-ending-は終点ではなく-starting-を返す)）。
+  （[実測の表](../Metrics/Attributes%20and%20Classes.md#その-1-getdefaultarrowheadsn-の-ending-の読みの実測)）。
 
 ### 穴 2: `SetDefaultArrowHeadsN` は `starting` / `ending` の `false` を無視する
 
 - **一度点けたマーカーはこの口では消せない。** `style` と `size` は往復するのに、真偽値は
   点ける向きにしか効かない（3 経路で一致——読みの嘘ではなく書き込みが無視されている。
-  [実測](../Metrics/Attributes%20and%20Classes.md#穴-2-setdefaultarrowheadsn-は-starting--ending-の-false-を無視する)）。
+  [実測](../Metrics/Attributes%20and%20Classes.md#その-2-setdefaultarrowheadsn-に-false-を書いた実測)）。
 
 ### 消すには新口の `visibility=false` を使う（これが退避・復元の道）
 
 - `SetDefaultBeginningMarker(mstyle, false)` / `SetDefaultEndMarker(mstyle, false)` で
   **3 経路とも `no` になった。** 復元は「**新口で消してから、旧口で点け直す**」の 2 手——
   どちらの口も実測できている向きだけを使う
-  （[実測](../Metrics/Attributes%20and%20Classes.md#消すには新口の-visibilityfalse-を使うこれが退避復元の道)）。
+  （[実測](../Metrics/Attributes%20and%20Classes.md#新口の-visibilityfalse-で消した実測)）。
 
 ```cpp
 // --- 退避: 有無は新口で読む（旧口の ending は信用できない） ---------------
@@ -405,7 +405,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 - 以前ここにあった「`ArrowType` は `MarkerType` の体系【ヘッダ根拠】」は**誤り**で消した
   （`MiniCadCallBacks.h` の隣の enum を読み違えていた。正しい対応は下記「マーカーの様式は
   口ごとに別の番号体系」。[#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)。
-  [経緯](../Metrics/Attributes%20and%20Classes.md#余録-style0-はマーカー無しではない)）。
+  [経緯](../Metrics/Attributes%20and%20Classes.md#余録-style0-で書いた実測)）。
 
 ### 余録: `GetObjBeginningMarker` が `false` を返したら、出力引数を読まない
 
@@ -420,7 +420,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 ## マーカーの大きさはインチで、上限があり、per-object の旧口の読みだけが丸まる
 
 測った範囲は 0.0100〜12.0000 の 16 点・旧口 / 新口 / ポイント口の 3 経路
-（[実測](../Metrics/Attributes%20and%20Classes.md#マーカーの大きさはインチで上限がありper-object-の旧口の読みだけが丸まる)）。
+（[実測](../Metrics/Attributes%20and%20Classes.md#マーカーの大きさの単位上限読みの実測)）。
 
 ### 単位はインチ。図面の単位にも縮尺にも依らない
 
@@ -434,7 +434,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 - **旧口**（`SetArrowHeadsN` / `SetDefaultArrowHeadsN` / ポイントの `SetArrowHeads`）は
   **1.8000 インチ**（130 ポイント）で頭打ち。**新口**（`SetObjBeginningMarker` / `…EndMarker`）は
   **1.9999 インチ**で頭打ち。文書の既定も同じ上限。下は素直（0.0100 も入る）
-  （[実測の表](../Metrics/Attributes%20and%20Classes.md#上限がある約-20-インチ508mm書く口で切られ方が違う)）。
+  （[実測の表](../Metrics/Attributes%20and%20Classes.md#上限の実測書く口ごと)）。
 - **2 インチより大きくする道は、測った口には無い。**
 
 ### 正体: 大きさは **1/16384 インチの 16 ビット整数**——だから上限が約 2 インチになる
@@ -442,7 +442,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 - **中口（`Get/SetMarker`）の `size`（`short`）は 1/16384 インチ**（11 点すべてで
   `dSize = size ÷ 16384`。ポイントではない）。上限 1.999939 = 32767 ÷ 16384 は `short` の上限
   （[#116](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/116)。
-  [実測の表](../Metrics/Attributes%20and%20Classes.md#マーカーの大きさの格納形式116384-インチ単位の-16-ビット整数と上限の実測)）。
+  [実測の表](../Metrics/Attributes%20and%20Classes.md#中口の-size-を掃引した実測格納形式と上限)）。
 - **新口の `dSize` も 1/16384 インチへ量子化される。** 文書の既定の「0.0100 → 0.0099」も同じ
   筋【推定】。
 - **同じ `short` でも `Get/SetArrowHeads` は 1/72 インチ、`Get/SetMarker` は 1/16384 インチ。**
@@ -452,7 +452,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 
 - **四捨五入して整数インチ**（0.25 以下は 0、0.5〜1.25 は 1、1.5 以上は 2）。丸めるのは
   per-object だけで、`GetDefaultArrowHeadsN` は書いた値を返す。書き込みは壊れていない
-  （[実測の表](../Metrics/Attributes%20and%20Classes.md#per-object-の-getarrowheadsn-は大きさを整数インチに丸めて返す読みに使ってはいけない)）。
+  （[実測の表](../Metrics/Attributes%20and%20Classes.md#per-object-の-getarrowheadsn-の大きさの読みを新口と比べた実測)）。
 - ポイント口の値を 72 で割って丸めているらしい【推定】。
 
 > **per-object のマーカーの大きさを読むなら `GetArrowHeadsN` を使わない。**
@@ -463,7 +463,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 ### per-object の `size=0.0000` は「未設定」と「0.5 インチ未満」の両方を意味する
 
 - 旧口の `0.0000` だけでは区別が付かない。**区別は新口の戻り値で付く**（`no` なら未設定）。
-  `0` は本当に 0 として書ける（[実測](../Metrics/Attributes%20and%20Classes.md#per-object-の-size00000-は未設定と05-インチ未満の両方を意味する)）。
+  `0` は本当に 0 として書ける（[実測](../Metrics/Attributes%20and%20Classes.md#per-object-の旧口で-size00000-が読めた線)）。
 
 ### `dWidth` は書いても入らない
 
@@ -481,7 +481,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 `MarkerType` の定数（`kCircleMarker` など）を渡してはいけない。** `MarkerType` をそのまま
 **書ける**のは新口（`Set…BeginningMarker` / `Set…EndMarker`——クラスのものも含む）だけ
 （[#113](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/113)。
-[実測](../Metrics/Attributes%20and%20Classes.md#マーカーの様式は口ごとに別の番号体系arrowtype-は-markertype-ではない)）。
+[実測](../Metrics/Attributes%20and%20Classes.md#マーカーの様式の番号を口ごとに書いて読んだ実測)）。
 
 | 口 | 呼び出し | `style` に**書く**と | `style` を**読む**と |
 | --- | --- | --- | --- |
@@ -498,7 +498,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
   `0`→`0` / `1`→`256` / `2`→`1280` / `3`→`2` / `4`→`130` / `5`→`259` / `6`→`260` の `MarkerType` に
   なる。`nAngle` も様式ごとの既定（矢印 15 / 丸 0 / スラッシュ・十字 45）が入る（#108 で
   「全区間 `15`」と読めたのは、振っていた様式がすべて矢印の仲間だったから）
-  （[対応表](../Metrics/Attributes%20and%20Classes.md#per-object-の旧口setarrowheadsnは-emarkertype-の番号-06)）。
+  （[対応表](../Metrics/Attributes%20and%20Classes.md#per-object-の旧口setarrowheadsnに番号を書いた実測)）。
 - **VWFC の名前と入る値は言葉として一致しない**（`kMarkerEmptyArrow` は塗り無し `256`、
   `kMarkerEmptyBall` は白塗り `130`）。名前ではなく数値で読む。
 
@@ -513,7 +513,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 - `MiniCadCallBacks.h:756` の `ArrowType`（`arArrow = 0` / `arTightArrow = 1` / `arBall = 2` /
   `arSlash = 3` / `arCross = 4`）で解釈され、`0` / `1` / `2` / `259` / `260` になる。**範囲外は `0`**。
   生まれた線も同じ値を持つので、既定の読みの嘘ではなく本当にその値が書かれている
-  （[対応表](../Metrics/Attributes%20and%20Classes.md#文書の既定の旧口setdefaultarrowheadsnは別の表arrowtype-の-enum-04)）。
+  （[対応表](../Metrics/Attributes%20and%20Classes.md#文書の既定の旧口setdefaultarrowheadsnに番号を書いた実測)）。
 - **同じ番号が 2 つの口で別の様式を指す**（`3` は per-object で丸、既定でスラッシュ）。
   **だから旧口では様式を指定しない。**
 
@@ -533,7 +533,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 
 - **様式を指定する道はここ。** 21 個中 17 個がそのまま往復し、残る 4 つ（`3` / `4` / `5` /
   `12`）は VW が `kNoFillMarker`（256）を足して補正した。**複合定数（`kNoFillDimSlashMarker = 259`
-  など）を最初から渡せば往復する**（[実測](../Metrics/Attributes%20and%20Classes.md#新口setobjbeginningmarkerは-markertype-をそのまま往復させる)）。
+  など）を最初から渡せば往復する**（[実測](../Metrics/Attributes%20and%20Classes.md#新口setobjbeginningmarkerで-markertype-を往復させた実測)）。
 
 ### 中口（`Set/GetMarker`）——読みは `MarkerType`、書きは `EMarkerType` の番号
 
@@ -550,7 +550,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
   #113 が 9 点すべてで `1` を読んだのは、角度を振るときの様式を丸に固定していたため）。
   `nAngle` は `Sint8`（`MiniCadCallBacks.h:841`）で `-128`〜`127`。
 - **新口で書くと、根が丸 `2`・投げ縄 `5`・`10`・矩形 `11`・二重線 `12` の様式では `1` になる**
-  （[実測](../Metrics/Attributes%20and%20Classes.md#角度nangle書けるただし角度を持たない様式がある)）。
+  （[実測](../Metrics/Attributes%20and%20Classes.md#角度nangleを書いた実測)）。
 - **旧口は角度を書けない**（様式ごとの既定）。**中口は丸にも書ける**が、届く様式は番号 0〜6 の
   7 つだけ。中口の `angle` は `short` だが行き先は `Sint8`（`180` → `-76`）。
 
@@ -576,7 +576,7 @@ gSDK->SetDefaultArrowHeadsN(savedBeginVisible, savedEndVisible, savedStyle, save
 - `Set/GetClassBeginningMarker`（`ISDK.h:734` / `:743`）は新口と、`Set/GetClMarker`
   （`:739` / `:748`）は中口と同じに振る舞う。**どちらも `visibility` を持たない。**
   `SetClMarker(index, kCircleMarker, …)` も「開いた矢印」になる
-  （[実測](../Metrics/Attributes%20and%20Classes.md#クラスの口も-per-object-とまったく同じ体系)）。
+  （[実測](../Metrics/Attributes%20and%20Classes.md#クラスの口で書いて読んだ実測)）。
 - **クラスを作る口は `AddGuidesClass()`（`ISDK.h:1353`）だけ。** `ClassNameToID` は新しい名前を
   渡してもクラスを作らない（実測）。`ISDK.h` に `CreateClass` の類は無い。
 - クラスへ置いた値は、per-object で有無を点けない限り描かれない（上記）。
@@ -621,7 +621,7 @@ std::function<void(MCObjectHandle h)>)`（`ISDK.h:2697`）ひとつ。VWFC の
 これを包んで、型が `kClassDefNode`（94）のものだけを `GetObjectInternalIndex(h)` で
 `VWClass` にして渡すだけ【ソース根拠】。以下は Windows・VW 2026 の実測
 （[#280](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/280)。
-[実測](../Metrics/Attributes%20and%20Classes.md#クラスの一覧は-foreachclass-で列挙する順序は作った順ゲストは-nnan_-付きで後ろに足される)）。
+[実測](../Metrics/Attributes%20and%20Classes.md#foreachclass-でクラスを列挙した実測)）。
 
 ### 渡ってくるもの
 
@@ -656,7 +656,7 @@ std::function<void(MCObjectHandle h)>)`（`ISDK.h:2697`）ひとつ。VWFC の
 - **`true` にすると、ファイル参照した図面のクラスが `NNA#<n>_<参照先での名前>` という名前で
   自分のクラスの後ろ（ID 順）に足される**（参照先の「一般」「寸法」も入る）。ゲストは
   この図面のクラス表に実在し、ID は `MaxClassID()` を超える
-  （[実測の表](../Metrics/Attributes%20and%20Classes.md#doguestclasses-は参照している図面のクラスを足す)）。
+  （[実測の表](../Metrics/Attributes%20and%20Classes.md#doguestclasses-を立てて参照のある図面で列挙した実測)）。
 - `<n>` は参照の番号と見られる【推定】（参照 1 つでしか測っていない）。
 - **オーガナイザとナビゲーションパレットにゲストは出ない。** 画面と揃えるなら `doGuestClasses=false`。
 - ゲストの見分けは「`false` の列挙に無い」か名前の `NNA#` 接頭辞（前者が確か）。
