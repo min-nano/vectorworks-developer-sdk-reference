@@ -354,6 +354,18 @@ Claude Code ──MCP(stdio)──▶ plugin/mcp/vw-mcp-server.py ──ファ�
   ```bash
   touch "$(getconf DARWIN_USER_TEMP_DIR)VwSdkProbes-mcp/common-modes"
   ```
+- **起動の途中の刻みから終了を頼む記録**（issue #312。測るための道具で、調べ終えたら外す）。
+  プローブは走らせるまで読み込まれないので、起動画面の頃や起動時のダイアログの最中の刻みは
+  殻でしか測れない。**Vectorworks を止めてから一時ディレクトリに頼み札
+  `VwSdkProbes-startup-quit.request` を置いて起動する**と、殻が 50 ms の時計（mac は共通モード）
+  を動かし、札の 1 行（`first` / `ms=<N>` / `modal=<N>` / `go` / `never`）の時機に
+  `CloseAllFilesAndQuitVectorworks(true, false)` を 1 度呼んで、並びを
+  `VwSdkProbes-startup-quit.txt` へ書く（`go` は `VwSdkProbes-startup-quit.go` が現れた刻み）。
+  **札は読んだ時点で `.used` へ改名される**（置いたままだと起動のたびに終わるため）。
+  中身の意味は `src/StartupQuit.h`。
+  ```bash
+  echo first > "$(getconf DARWIN_USER_TEMP_DIR)VwSdkProbes-startup-quit.request"
+  ```
 - **Vectorworks を使えるのは 1 度に 1 つのセッションだけ。** 最初の操作で占有を取り、他の
   セッションの操作は断られる（`vw_lock_status` の `wait` で空くのを待てる）。最後の操作から
   60 分で解ける（CI の往復を待てる長さ）。
