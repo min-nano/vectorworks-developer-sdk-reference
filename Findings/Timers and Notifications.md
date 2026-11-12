@@ -18,6 +18,8 @@
 | **プラグインから「描き直して、終わるまで待つ」ことはできるか** | **できない。** `SetRenderMode(…, immediate=true, doProgress=true)` は **3D のビューでも 0 ms で戻り、戻った後にイベントループを回しても何も起きない**（＝描いていない。32 回とも）。描かせられるのは**ビューポートの `UpdateViewport`** だけだが、それも**戻った時点では描き終わっていない**（戻った後にランループが 545 ms 吸われる）。**終わりを知る口も通知も無く、`IsDirty()` も戻り値も完了を表さない**（下記 7 の「道具について」） |
 | CEF に隠れたページのタイマーを間引かせない口は SDK にあるか | **無い。** SDK 全体で CEF に触れる口は `WebDlgEnableConsole`（コンソールログの出力）ただ 1 つ【ソース根拠】（下記 5） |
 | 刻みから **`CloseAllFilesAndQuitVectorworks(true, false)`** を呼ぶと | **呼べる・落ちない（mac / Windows とも実測）。呼び出しは戻り、プロセスはその後に正常終了（`atexit` まで届く。mac 4〜8 秒後・Windows 28〜30 秒後）。** 確認をキャンセルすれば何も変わらず戻る。**確認の最中、呼んだタイマー自身は mac では刻まないが Windows では入り直す**——そこから 2 度目を呼ぶと確認が 2 つ重なるので、「呼び出しの最中」を旗で持って見送る。**`kNotifyBeforeApplicationQuit` はキャンセルされても届く**。終了の回は、刻みが止まった後・`atexit` の直前に `plugin_module_main` へ `kPluginModuleDeinit` が届く（下記 4 の 9） |
+| **起動の途中**（ホーム画面の前）の刻みから終了を呼ぶと（mac） | **終わらない。** 起動画面の前半には刻みが来ず、届くのは Cineware の起動待ちと「開発元不明のプラグイン」のダイアログの間だけ。どちらも呼び出しは戻り `kNotifyBeforeApplicationQuit` も届くが、**Cineware の待ちでは起動画面のまま止まり SIGKILL でしか止まらない**。ダイアログの間なら頼みは捨てられ、「続ける」でそのまま起動する（下記 4 の 9。Windows は未測定） |
+| 終了の呼び出しが**戻った後**の刻みから、もう一度呼ぶと（mac） | **何も起きない。** 0〜1 ms で戻り、終わり方も変わらない（8 回続けても同じ）。2 度目以降に `kNotifyBeforeApplicationQuit` は届かない（下記 4 の 9。Windows は未測定） |
 | **利用者が閉じる**（メニューの「終了」）とき、刻みはいつまで来るか（Windows） | **`kNotifyBeforeApplicationQuit` の後には 1 度も来ない**（11 回）。閉じる指示から BApQ までの数 ms〜63 ms に 0〜2 回来るだけ。その後 -2（約 7〜9 秒後）・`atexit`（約 27〜29 秒後）まで刻みは無い。**＝閉じていく途中に刻みから `gSDK` を呼ぶ場面は無い**（下記 4 の 9「Windows」） |
 | **図面が 1 枚も開いていない**とき、刻みから `GetCurrentLayer()` を呼ぶと | **`nullptr` が返り、落ちない**（閉じた後も起動直後も）。`GetOpenFilesList()` の件数と**刻みごとに常に一致**（mac 1 万 2 千回余り・Windows 3 万 5 千回余りで食い違い 0）。ただし**閉じた文書のレイヤと別の文書のレイヤが同じアドレスで返る**ので、ハンドルは刻みごとに引き直す（mac / Windows とも。下記 4 の 8） |
 | 図面が開いていないときにウェブパレットを出せるか | **出す口は無い**（`SetWebPaletteVisibility` を呼んでも出ないのは実測）。**「文書が無い間は動かない」前提で設計する**（下記 6） |
@@ -395,6 +397,56 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - 11 回中 1 回（図面を閉じてホーム画面へ戻した後に閉じた回）、**終了の途中に `libcef.dll_unloaded`
   の `0xC0000005` で落ちた**。刻みは `BApQ` 以降 0 回なので刻みが落としたものではない
   （[Plug-in Modules](Plug-in%20Modules.md)「OS タイマーを持つ常駐プラグイン…」と同じモジュール）。
+
+#### 起動の途中の刻みから（issue #312）
+
+（[issue #312](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/312)。
+[実測](../Metrics/Timers%20and%20Notifications.md#起動の途中の刻みから呼んだ実測)。
+**mac だけ。Windows はまだ測っていない**——下記は Windows には当てはめない。）
+
+- **起動画面の前半には刻みが来ない**（mac）。殻が `plugin_module_main` で時計を動かしても、
+  最初の刻みは**モジュールの読み込みから 10.7〜15.2 秒後**。その後も、起動を終える前の
+  **約 13 秒は刻みが 1 度も来ない**（ワークスペースの読み込み〜起動の終わり）。
+  起動の途中で刻みが届くのは、次の 2 つの間だけだった。
+  - **Cinema4D（Cineware）の起動を待つ間**——`applicationDidFinishLaunching` の中の
+    `CMaxonRenderDevice::Startup()` → `WaitUntilCinewareIsRunning` が `runUntilDate:` を回す。
+    起動画面は出たまま。
+  - **「開発元不明のプラグイン」のダイアログの間**（`NSModalPanelRunLoopMode`。共通モードの時計だけ）。
+- **そこから呼ぶと、呼び出しは 17〜35 ms で戻り、`kNotifyBeforeApplicationQuit` も届くが、
+  Vectorworks は終わらない。** 落ちもせず、「サポートファイルの読み込みに失敗しました。」も
+  出なかった。終わり方は場面で違う:
+
+  | 呼んだ場面 | その後 |
+  | --- | --- |
+  | Cineware の起動を待つ間（3 回） | **起動画面のまま止まる**（目視）。刻みは 50 ms ごとに来続け `gSDK` も読めるが、起動は先へ進まず、`atexit` も -2 も来ない。**SIGTERM でも終わらず、SIGKILL で止めるしかなかった** |
+  | ダイアログの間（2 回） | ダイアログが開いたまま残る（目視）。**利用者が「続ける」を押すと、そのまま起動を続けてホーム画面まで進み、ふつうに使えた**（目視）——**終了の頼みは黙って捨てられた** |
+  | 起動を終えた後（2 回。比べるため） | 4 の 9 と同じ。155〜187 ms で戻り、5〜6 秒後に `atexit` |
+
+- **止まる仕組み【推定】**（止まったプロセスのスタックから）: 呼び出しは終了の AppleEvent を
+  積むだけで戻り、その AppleEvent が **Cineware の起動待ちの `runUntilDate:` の中で**処理される
+  （`_handleAEQuit` → `terminate:`）。VW の終了処理が `CMaxonRenderDevice::IsRunning()` →
+  `IsCinewareInitialized` で Cineware を待ち、その待ちが同じスタックの外側の起動待ちの上に
+  入れ子になって、どちらも明けない。ダイアログの間は、モーダルのループが AppleEvent を
+  処理しないので `terminate:` に入らない。
+- **帰結**: mac では、**起動を終える前（ホーム画面が出る前）に終了を頼んではいけない**。
+  頼んでも戻り値は無く、`kNotifyBeforeApplicationQuit` も届くので、呼んだ側からは失敗が
+  見えない。そのうえ Cineware の待ちに当たると、**殺す以外に止められない**。
+  「起動を終えたか」を刻みの側から確かめる口は SDK に見当たらない【未確認】。
+
+#### 戻った後の刻みから、もう一度呼ぶ（issue #313）
+
+（[issue #313](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/313)。
+[実測](../Metrics/Timers%20and%20Notifications.md#戻った後の刻みから-2-度目を呼んだ実測)。
+**mac だけ。Windows はまだ測っていない。**）
+
+- **何も起きない**（mac。図面 0 枚・2 周）。戻った後に届いた**最初の刻み**から 2 度目を呼んでも、
+  **届いた刻みのたびに**呼んでも（8 回。最後の刻みを含む）、**落ちず、どれも 0〜1 ms で戻った**。
+- **終わり方は 1 度だけ呼んだ回と変わらない。** 1 度目が戻ってから `atexit` まで 4.4〜9.5 秒、
+  -2 は `atexit` の約 0.35 秒前（1 度だけ呼んだ回は 4.7〜6.0 秒）。
+- **2 度目以降には `kNotifyBeforeApplicationQuit` が届かない**（全部で 1 回）——保存の確認の
+  **最中**に 2 度目を呼んだ回（上記。2 度呼べば 2 回届く）とは違う。
+- **帰結**: 「終了の呼び出しの最中」の旗は**戻ったら下ろしてよい**（mac）。戻った後の刻みから
+  呼び直されても害は無い。
 
 **まとめ（mac / Windows）**: 刻みから終了を呼んでよい。**「終了の呼び出しの最中」を旗で持ち、その間の
 要求は見送る**（Windows では必須）。タイマーを止める必要は無く、止めたいなら `kPluginModuleDeinit`
