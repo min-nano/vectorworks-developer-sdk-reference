@@ -19,6 +19,7 @@
 #include "McpBridge.h"
 #include "ProbeLibrary.h"
 #include "ProbeMenu.h"
+#include "StartupQuit.h"
 
 #include <chrono>
 #include <filesystem>
@@ -129,6 +130,10 @@ extern "C" Sint32 GS_EXTERNAL_ENTRY plugin_module_main(Sint32 action, void* modu
 	// （一時ディレクトリのファイルで受け渡す）。最初の刻みは 10 秒後なので、ここでは
 	// 何も待たない。何度呼ばれても 1 度しか動かさない。
 	vwprobe::StartMcpBridgeClock();
+
+	// **起動の途中の刻みから終了を頼む記録**（StartupQuit.h。issue #312）。頼み札が
+	// 無ければ exists を 1 度見るだけ。
+	vwprobe::StartStartupQuitWatch();
 
 	return reply;
 }
