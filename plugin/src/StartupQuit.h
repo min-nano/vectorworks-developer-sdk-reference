@@ -19,6 +19,20 @@
 //	    go          一時ディレクトリに `VwSdkProbes-startup-quit.go` が現れた刻みで呼ぶ
 //	                （人や AI が画面を見て「いま」と合図する。起動を終えた直後など）
 //	    never       呼ばない（起動の並びだけ記録する）
+//	    mark=<名前>[+<ms>]
+//	                目印が初めて見えてから ms 以後の最初の刻みで呼ぶ（issue #317）。名前は
+//	                通知の 4 文字（`WKSL` `NWKS` `AppA` `DlgO` など）・`home`（`VW User Log.txt`
+//	                に `Section = HomeScreen` の行が現れた）・`endofstartup`（同 `End of
+//	                Startup`）・`ready`（`IsDocumentReady()` が真）・`ws`（
+//	                `GetCurrentWorkspaceFileName` が空でない）
+//
+//	2 行目以降は選択肢。`reg=init` を書くと、通知を `plugin_module_main` の中で登録する
+//	（既定は最初の刻みで登録する）。
+//
+//	**起動を終えた目印の候補も並べて書く**（issue #317）: 登録した通知（`kSqNotifies`）の
+//	到着、刻みごとの `IsDocumentReady()` / `GetCurrentWorkspaceFileName` / mac の NSApp の
+//	見えている窓（主窓・モーダル）の変わり目、`VW User Log.txt` に増えた起動の行
+//	（`startupTIMER` / `HomeScreen` / `SHUTDOWN`）。目印が初めて見えたら `mark <名前>` を書く。
 //
 //	呼ぶのは `CloseAllFilesAndQuitVectorworks(true, false)` を 1 度だけ。刻み（50 ms。mac は
 //	`kCFRunLoopCommonModes`、Windows は留めた殻の `SetTimer(nullptr, …)`）が、状態（モード・

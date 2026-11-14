@@ -9,16 +9,29 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #if GS_MAC
 #	include <CoreFoundation/CoreFoundation.h>
+#	include <objc/message.h>
+#	include <objc/runtime.h>
+#	include <sys/stat.h>
+#	include <sys/sysctl.h>
 #	include <unistd.h>
 #else
 #	include <processthreadsapi.h>
+#endif
+
+#if GS_MAC
+// libobjc が公開している（ヘッダには無い）。刻みの中で作られる NSString などを片付ける。
+extern "C" void* objc_autoreleasePoolPush(void);
+extern "C" void objc_autoreleasePoolPop(void*);
 #endif
 
 namespace vwprobe
@@ -37,6 +50,7 @@ namespace vwprobe
 			kSqModal,
 			kSqGo,
 			kSqNever,
+			kSqMark,
 		};
 
 		struct SqState
@@ -58,6 +72,19 @@ namespace vwprobe
 			long long notifyQuit = 0;
 			bool stopped = false;
 			std::string lastKey;
+			// issue #317: 起動を終えた目印の候補
+			std::string markName;	 // mark=<名前>+<ms> の名前
+			bool regAtInit = false;	 // reg=init: 通知を plugin_module_main で登録する
+			bool registered = false; // 通知を登録したか
+			std::map<std::string, long long> marks; // 目印 → 最初に見えた t_ms
+			std::map<std::string, long long> notifyCount;
+			long long stateLines = 0;
+			// VW User Log.txt を追う
+			std::string userLogPath;
+			unsigned long long userLogOffset = 0;
+			unsigned long long userLogIno = 0;
+			bool userLogKnown = false;
+			std::string userLogRest; // 改行で終わっていない残り
 		};
 
 		SqState* gSq = nullptr; // 意図して leak する（Vectorworks が終わるまで持つ）
@@ -181,6 +208,291 @@ namespace vwprobe
 			return (int)list.GetSize();
 		}
 
+		const int kSqStateLinesMax = 600;		 // 状態の変わり目を書く上限
+		const long long kSqNotifyLinesEach = 30; // 通知ごとに 1 行ずつ書く上限
+
+		// 目印が初めて見えた時刻を覚える（2 度目以降は何もしない）。
+		void SqMark(const std::string& name, const std::string& why)
+		{
+			if (gSq == nullptr || gSq->marks.count(name) != 0)
+				return;
+			gSq->marks[name] = SqElapsedMs();
+			SqLog("mark " + name + " (" + why + ") mode=" + SqMode());
+		}
+
+		std::string SqFourCC(Sint32 v)
+		{
+			std::string out;
+			for (int shift = 24; shift >= 0; shift -= 8)
+			{
+				const char c = (char)((v >> shift) & 0xFF);
+				out += (c >= 0x20 && c < 0x7F) ? c : '?';
+			}
+			return out;
+		}
+
+		// 登録する通知（issue #317 の候補と、起動の前後で届きうるもの）。
+		const Sint32 kSqNotifies[] = {
+			kNotifyNewWrkSpace,
+			kNotifyNewWrkSpaceLoaded,
+			kNotifyApplicationActivate,
+			kNotifyDialogDisplayImminent,
+			kNotifyApplicationShutdown,
+			kNotifyPrefsChanged,
+			kNotifyPrefsReset,
+			kNotifyThemeChanged,
+			kNotifyDocPreOpen,
+			kNotifyDocOpen,
+			kNotifyDocChange,
+			kNotifyDocClose,
+			kNotifyMenuDone,
+			kNotifyUpdate,
+			kNotifyToolChange,
+			kNotifyBeforePendingUpdate,
+			kNotifyAfterPendingUpdate,
+			kNotifyWorkspaceEditorRequested,
+			kNotifyPlugInUpdate,
+		};
+
+		void SqNotifyAny(StatusID id, StatusData data)
+		{
+			if (gSq == nullptr)
+				return;
+			const std::string code = SqFourCC((Sint32)id);
+			const long long n = ++gSq->notifyCount[code];
+			if (n <= kSqNotifyLinesEach)
+				SqLog("notify " + code + " n=" + std::to_string(n) +
+					  " data=" + std::to_string((long long)data) + " mode=" + SqMode());
+			SqMark(code, "通知");
+		}
+
+		void SqRegisterNotifies(const char* where)
+		{
+			if (gSq == nullptr || gSq->registered)
+				return;
+			gSq->registered = true;
+			std::string ok;
+			std::string ng;
+			for (Sint32 code : kSqNotifies)
+			{
+				const Boolean reg = gSDK->RegisterNotificationProcedure(&SqNotifyAny, code);
+				(reg ? ok : ng) += SqFourCC(code) + " ";
+			}
+			SqLog(std::string("register where=") + where + " ok=[" + ok + "] ng=[" + ng + "]");
+		}
+
+		std::string SqUtf8Tx(const TXString& text)
+		{
+			const char* const raw = static_cast<const char*>(text);
+			return raw != nullptr ? std::string(raw) : std::string();
+		}
+
+		// 状態を読む gSDK の口（issue #317 の候補）。
+		std::string SqSdkState(bool& ready, std::string& ws)
+		{
+			ready = gSDK->IsDocumentReady();
+			TXString name;
+			gSDK->GetCurrentWorkspaceFileName(name);
+			ws = SqUtf8Tx(name);
+			return std::string("ready=") + (ready ? "1" : "0") + " ws='" + ws + "'";
+		}
+
+#if GS_MAC
+		// NSApp の見えている窓を「クラス:題」で並べる（objc ランタイムで読む。AppKit の
+		// ヘッダは SDK のヘッダとぶつかりうるので入れない）。
+		id SqMsg(id obj, const char* sel)
+		{
+			if (obj == nil)
+				return nil;
+			return ((id(*)(id, SEL))objc_msgSend)(obj, sel_registerName(sel));
+		}
+		std::string SqNsString(id str)
+		{
+			if (str == nil)
+				return std::string();
+			const char* c =
+				((const char* (*)(id, SEL))objc_msgSend)(str, sel_registerName("UTF8String"));
+			return c != nullptr ? std::string(c) : std::string();
+		}
+		std::string SqWindowName(id w)
+		{
+			return std::string(object_getClassName(w)) + ":" + SqNsString(SqMsg(w, "title"));
+		}
+		std::string SqNsWindows()
+		{
+			void* pool = objc_autoreleasePoolPush();
+			std::string out;
+			id app = ((id(*)(id, SEL))objc_msgSend)((id)objc_getClass("NSApplication"),
+													sel_registerName("sharedApplication"));
+			id wins = SqMsg(app, "windows");
+			const unsigned long n =
+				wins == nil
+					? 0
+					: ((unsigned long (*)(id, SEL))objc_msgSend)(wins, sel_registerName("count"));
+			int visible = 0;
+			std::string list;
+			for (unsigned long i = 0; i < n; ++i)
+			{
+				id w = ((id(*)(id, SEL, unsigned long))objc_msgSend)(
+					wins, sel_registerName("objectAtIndex:"), i);
+				if (!((BOOL(*)(id, SEL))objc_msgSend)(w, sel_registerName("isVisible")))
+					continue;
+				++visible;
+				if (!list.empty())
+					list += " | ";
+				list += SqWindowName(w);
+			}
+			id modal = SqMsg(app, "modalWindow");
+			id mainW = SqMsg(app, "mainWindow");
+			out = "nswin=" + std::to_string(visible) + "/" + std::to_string(n) + " main=[" +
+				  (mainW == nil ? std::string("-") : SqWindowName(mainW)) + "] modal=[" +
+				  (modal == nil ? std::string("-") : SqWindowName(modal)) + "] wins=[" + list + "]";
+			objc_autoreleasePoolPop(pool);
+			return out;
+		}
+
+		long long SqProcStartWallMs()
+		{
+			int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, (int)::getpid()};
+			struct kinfo_proc info;
+			size_t size = sizeof(info);
+			std::memset(&info, 0, sizeof(info));
+			if (::sysctl(mib, 4, &info, &size, nullptr, 0) != 0)
+				return -1;
+			return (long long)info.kp_proc.p_starttime.tv_sec * 1000 +
+				   info.kp_proc.p_starttime.tv_usec / 1000;
+		}
+#endif
+
+		std::string SqUserLogPath()
+		{
+#if GS_MAC
+			const char* home = std::getenv("HOME");
+			if (home == nullptr)
+				return std::string();
+			return std::string(home) +
+				   "/Library/Application Support/Vectorworks/2026/VW User Log.txt";
+#else
+			const char* appData = std::getenv("APPDATA");
+			if (appData == nullptr)
+				return std::string();
+			return std::string(appData) + "\\Nemetschek\\Vectorworks\\2026\\VW User Log.txt";
+#endif
+		}
+
+		bool SqUserLogStat(unsigned long long& size, unsigned long long& ino)
+		{
+#if GS_MAC
+			struct stat sb;
+			if (::stat(gSq->userLogPath.c_str(), &sb) != 0)
+				return false;
+			size = (unsigned long long)sb.st_size;
+			ino = (unsigned long long)sb.st_ino;
+			return true;
+#else
+			std::error_code ec;
+			const auto sz = std::filesystem::file_size(gSq->userLogPath, ec);
+			if (ec)
+				return false;
+			size = (unsigned long long)sz;
+			ino = 0;
+			return true;
+#endif
+		}
+
+		// "key":"value" の value を抜く（JSON 1 行。ざっくりで足りる）。
+		std::string SqJsonField(const std::string& line, const char* key)
+		{
+			const std::string pat = std::string("\"") + key + "\":\"";
+			const size_t at = line.find(pat);
+			if (at == std::string::npos)
+				return std::string();
+			const size_t begin = at + pat.size();
+			const size_t end = line.find('"', begin);
+			return line.substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+		}
+
+		void SqUserLogLine(const std::string& line)
+		{
+			const std::string cat = SqJsonField(line, "cat");
+			if (cat != "startupTIMER" && cat != "HomeScreen" && cat != "SHUTDOWN")
+				return;
+			const std::string msg = SqJsonField(line, "message");
+			SqLog("userlog cat=" + cat + " ts='" + SqJsonField(line, "ts") + "' message='" + msg +
+				  "'");
+			if (msg.find("Section = HomeScreen") != std::string::npos)
+				SqMark("home", "VW User Log.txt");
+			if (msg.rfind("End of Startup", 0) == 0)
+				SqMark("endofstartup", "VW User Log.txt");
+		}
+
+		// 刻みのたびに、増えた分だけ読む。差し替わったら（inode が変わる・縮む）頭から読む。
+		void SqPollUserLog()
+		{
+			SqState* st = gSq;
+			if (st == nullptr || st->userLogPath.empty())
+				return;
+			unsigned long long size = 0;
+			unsigned long long ino = 0;
+			if (!SqUserLogStat(size, ino))
+				return;
+			if (!st->userLogKnown)
+				return;
+			if (ino != st->userLogIno || size < st->userLogOffset)
+			{
+				SqLog("userlog-replaced size=" + std::to_string(size) + " (前 " +
+					  std::to_string(st->userLogOffset) + ")");
+				st->userLogIno = ino;
+				st->userLogOffset = 0;
+				st->userLogRest.clear();
+			}
+			if (size <= st->userLogOffset)
+				return;
+			std::ifstream in(st->userLogPath, std::ios::binary);
+			if (!in)
+				return;
+			in.seekg((std::streamoff)st->userLogOffset);
+			std::string chunk((size_t)(size - st->userLogOffset), '\0');
+			in.read(&chunk[0], (std::streamsize)chunk.size());
+			chunk.resize((size_t)in.gcount());
+			st->userLogOffset += chunk.size();
+			std::string buf = st->userLogRest + chunk;
+			size_t start = 0;
+			for (;;)
+			{
+				const size_t nl = buf.find('\n', start);
+				if (nl == std::string::npos)
+					break;
+				SqUserLogLine(buf.substr(start, nl - start));
+				start = nl + 1;
+			}
+			st->userLogRest = buf.substr(start);
+		}
+
+		void SqUserLogInit()
+		{
+			SqState* st = gSq;
+			st->userLogPath = SqUserLogPath();
+			unsigned long long size = 0;
+			unsigned long long ino = 0;
+			if (!st->userLogPath.empty() && SqUserLogStat(size, ino))
+			{
+				st->userLogOffset = size;
+				st->userLogIno = ino;
+				st->userLogKnown = true;
+				SqLog("userlog-start size=" + std::to_string(size) + " path='" + st->userLogPath +
+					  "'");
+			}
+			else
+			{
+				// まだ無い。現れたら頭から読む。
+				st->userLogKnown = true;
+				st->userLogOffset = 0;
+				st->userLogIno = 0;
+				SqLog("userlog-start (まだ無い) path='" + st->userLogPath + "'");
+			}
+		}
+
 		void SqNotifyBeforeQuit(StatusID, StatusData)
 		{
 			if (gSq == nullptr)
@@ -241,9 +553,14 @@ namespace vwprobe
 			const long long gap = st->lastTickMs >= 0 ? now - st->lastTickMs : 0;
 			st->lastTickMs = now;
 			const std::string mode = SqMode();
+			if (st->ticks == 1)
+				SqLog("first-tick mode=" + mode);
+			SqRegisterNotifies("first-tick");
+			SqPollUserLog();
 
 			if (st->called)
 			{
+				SqPollUserLog();
 				++st->ticksAfterReturn;
 				if (st->ticksAfterReturn <= kSqAfterReturnLines)
 					SqLog("tick-after-return n=" + std::to_string(st->ticksAfterReturn) +
@@ -265,10 +582,22 @@ namespace vwprobe
 			std::string key = "windows=[" + scan.list + "]";
 #endif
 			key += " docs=" + std::to_string(SqDocCount());
+			bool ready = false;
+			std::string ws;
+			key += " " + SqSdkState(ready, ws);
+			if (ready)
+				SqMark("ready", "IsDocumentReady");
+			if (!ws.empty())
+				SqMark("ws", "GetCurrentWorkspaceFileName");
+#if GS_MAC
+			key += " " + SqNsWindows();
+#endif
 			if (key != st->lastKey)
 			{
-				SqLog("state tick=" + std::to_string(st->ticks) + " gap_ms=" + std::to_string(gap) +
-					  " " + key);
+				++st->stateLines;
+				if (st->stateLines <= kSqStateLinesMax)
+					SqLog("state tick=" + std::to_string(st->ticks) +
+						  " gap_ms=" + std::to_string(gap) + " " + key);
 				st->lastKey = key;
 			}
 			if (modal && st->modalSinceMs < 0)
@@ -303,6 +632,13 @@ namespace vwprobe
 			}
 			case kSqNever:
 				break;
+			case kSqMark:
+			{
+				const auto it = st->marks.find(st->markName);
+				fire = it != st->marks.end() && now - it->second >= st->param;
+				reason = "mark " + st->markName + "+" + std::to_string(st->param);
+				break;
+			}
 			}
 			if (fire)
 			{
@@ -370,6 +706,18 @@ namespace vwprobe
 				st.when = kSqModal;
 				st.param = std::atoll(s.c_str() + 6);
 			}
+			else if (s.rfind("mark=", 0) == 0)
+			{
+				// mark=<名前>[+<ms>]。名前は通知の 4 文字（WKSL など）・home・endofstartup・
+				// ready・ws。
+				st.when = kSqMark;
+				const std::string rest = s.substr(5);
+				const size_t plus = rest.find('+');
+				st.markName = rest.substr(0, plus);
+				st.param = plus == std::string::npos ? 0 : std::atoll(rest.c_str() + plus + 1);
+				if (st.markName.empty())
+					return false;
+			}
 			else
 				return false;
 			return true;
@@ -388,9 +736,18 @@ namespace vwprobe
 		if (!std::filesystem::exists(request, ec))
 			return;
 		std::string line;
+		std::vector<std::string> options; // 2 行目以降（reg=init など）
 		{
 			std::ifstream in(request);
 			std::getline(in, line);
+			std::string opt;
+			while (std::getline(in, opt))
+			{
+				while (!opt.empty() && (opt.back() == '\r' || opt.back() == ' '))
+					opt.pop_back();
+				if (!opt.empty())
+					options.push_back(opt);
+			}
 		}
 		// **札は読んだら退ける**——置いたままだと、起動のたびに終わってしまう。
 		std::filesystem::path used = request;
@@ -415,8 +772,21 @@ namespace vwprobe
 #else
 		const long long pid = (long long)::GetCurrentProcessId();
 #endif
-		SqLog("start request='" + st->request + "' pid=" + std::to_string(pid) +
-			  " mode=" + SqMode());
+		std::string optText;
+		for (const std::string& opt : options)
+		{
+			optText += opt + " ";
+			if (opt == "reg=init")
+				st->regAtInit = true;
+		}
+		SqLog("start request='" + st->request + "' options=[" + optText +
+			  "] pid=" + std::to_string(pid) + " mode=" + SqMode());
+#if GS_MAC
+		SqLog("process-start wall_ms=" + std::to_string(SqProcStartWallMs()));
+#endif
+		SqUserLogInit();
+		if (st->regAtInit)
+			SqRegisterNotifies("plugin_module_main");
 
 #if GS_MAC
 		const CFAbsoluteTime interval = kSqIntervalMs / 1000.0;

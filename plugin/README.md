@@ -363,6 +363,9 @@ Claude Code ──MCP(stdio)──▶ plugin/mcp/vw-mcp-server.py ──ファ�
   `VwSdkProbes-startup-quit.txt` へ書く（`go` は `VwSdkProbes-startup-quit.go` が現れた刻み）。
   **札は読んだ時点で `.used` へ改名される**（置いたままだと起動のたびに終わるため）。
   中身の意味は `src/StartupQuit.h`。
+  issue #317 で、**起動を終えた目印の候補**（通知の到着・`IsDocumentReady()`・ワークスペース名・
+  mac の窓・`VW User Log.txt` の起動の行）も並べて書くようにし、札に `mark=<名前>[+<ms>]`
+  （目印が見えてから呼ぶ）と 2 行目の `reg=init`（通知を `plugin_module_main` で登録する）を足した。
   ```bash
   echo first > "$(getconf DARWIN_USER_TEMP_DIR)VwSdkProbes-startup-quit.request"
   ```
