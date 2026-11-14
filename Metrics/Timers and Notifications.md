@@ -881,9 +881,13 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 | 5 | `never`（`reg=init`） | 出す | 10.8 | 22.0 | — | — | — | — | — | **来ない**（4 分） | — | — （SIGKILL） |
 | 8 | `mark=BEFO+0` | 出す | 10.4 | 20.3 | — | — | — | — | — | **来ない**（7 分） | **呼ばない** | — （SIGKILL） |
 | 9 | `mark=BEFO+0` | 出す | 9.4 | 19.3 | — | — | — | — | — | **来ない**（5 分） | **呼ばない** | — （SIGKILL） |
+| 10 | `mark=BEFO+0` | 出す → 人が「続ける」 | 12.3 | 24.2 | 25.0 | 28.0 | 35.1 | 66.9 | 69.3 | 69.5 | 70.2 / 70.4（219 ms） | 74.6 |
 
 （1 回目だけ殻の読み込みまで 28.7 秒かかった（ほかは 9.4〜10.9 秒）。その回の
 `After Paramatrics PrepareEarly` の `TTIME` は 26.6 秒だった。）
+
+（10 回目の `After Cinema4D Startup`〜`End of Startup` は `CLOCKTIME`。ダイアログで待った時間は
+`CLOCKTIME` に入っておらず、`ts` は起動の行がどれも 66.9 秒——「続ける」の後にまとめて書かれた。）
 
 - **起動の途中に届いた通知**: どの回も `TLCh`（`kNotifyToolChange`）が最初の刻みの 2.1〜3.6 秒後に
   1 回だけ（`(ランループの外)`）。**`NWKS`・`WKSL`・`AppA` は 9 回とも 1 度も届かなかった**
@@ -910,10 +914,20 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
   起動画面の `NSWindow`・パレット 6 枚・`NNADialogWindow`（題「開発元不明のプラグイン」。
   `modalWindow` もこれ）で、**`NNAApplicationWindow` は無かった**。`VW User Log.txt` は差し替わったが
   起動の行は 1 行も書かれなかった。**`BEFO` / `AFTE` / `DOCC` は 4〜7 分のあいだ 1 度も届かなかった。**
-  誰も「続ける」を押さなかった（人に頼んだ 2 回は押されず、AI の画面操作は許可されなかった）。
+  5・8・9 回目は誰も「続ける」を押さなかった（人に頼んだ 2 回は押されず、AI の画面操作は許可されなかった）。
   `osascript` の終了の頼みにも応えず、`sample` のメインスレッドは
   `-[NSApplication runModalForWindow:]` の中だった。
-- **「続ける」を押した後**（`BEFO` が来て呼び、終わるか）は**まだ測っていない**。
+- **「続ける」を押した回（10）**: ダイアログまでは 5・8・9 回目と同じ（最初の刻みの 6.7 秒後の
+  30.9 秒に `DlgO`、31.7 秒の刻みで `NSModalPanelRunLoopMode` のままワークスペース名が見えた）。
+  人が「続ける」を押したのは、`DONE` が 3 回続けて届いた 61.5 秒と読んだ（押した時刻そのものは
+  記録していない）。その後 7.9 秒刻みが来ず（`max_gap_ms=7895`）、69.3 秒の刻みで `VW User Log.txt` の
+  起動の行の全部（`Start of SetUp` 〜 `Dialog opened, Section = HomeScreen, Source = VWLaunch`）が
+  見え、**0.20 秒後の 69.5 秒に最初の `BEFO`**、続いて `DOCC`・`AFTE`。`HomeScreen` の行の `ts` の
+  2.6 秒後だった。`BEFO` の 0.62 秒後の刻みから `CloseAllFilesAndQuitVectorworks(true, false)` を
+  呼び（図面 0 枚）、`kNotifyBeforeApplicationQuit` が 1 回届き、**219 ms で戻った**。戻った後に
+  `APSD` が初めて届き、`VW User Log.txt` に `Terminate Application (ShellAPI::QuitApplication(false))`、
+  戻って 4.3 秒後に `atexit`、プロセスは起動から 75.6 秒で終わった（`osascript` も SIGKILL も
+  使っていない）。画面に何か出たかは見ていない（人の目視なし）。
 
 ## 5. ウェブパレットの JS タイマーを隠したときの実測
 
