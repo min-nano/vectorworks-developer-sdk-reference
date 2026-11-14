@@ -745,7 +745,7 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 **実測**（VW 2026 Update 6（Build 872399）/ macOS 27.0.1・arm64。2026-11-12。殻
 `1f9530621896`（ビルド `32f039385a3c`）。
 [issue #312](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/312)。
-**Windows は未測定**。）
+**Windows は未測定**——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)。）
 
 プローブは走らせるまで読み込まれないので、殻に記録を足した（`plugin/src/StartupQuit.cpp`。
 [PR #314](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/314)）。
@@ -812,10 +812,11 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 
 #### 戻った後の刻みから 2 度目を呼んだ実測
 
-**実測**（VW 2026 Update 6 / macOS 27.0.1・arm64。2026-11-12。`probes/runtime/quit-twice/`、
+**実測**（VW 2026 Update 6 / macOS 27.0.1・arm64。2026-11-12。`probes/runtime/quit-twice/`（マージ前に消した。
+#315 のブランチのコミット `91dc35b`）、
 ビルド `32f039385a3c`。ローカルの Claude Code から MCP ブリッジで走らせた。
 [issue #313](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/313)。
-**Windows は未測定**。）
+**Windows は未測定**——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)。）
 
 #230 の `quit-from-timer` と同じ作り（駆動 100 ms・観測 50 ms の 2 本。どちらも
 `kCFRunLoopCommonModes`。書き溜めを次に走らせたときに報告する）。図面は刻みの中で一時

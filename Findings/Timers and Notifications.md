@@ -18,8 +18,8 @@
 | **プラグインから「描き直して、終わるまで待つ」ことはできるか** | **できない。** `SetRenderMode(…, immediate=true, doProgress=true)` は **3D のビューでも 0 ms で戻り、戻った後にイベントループを回しても何も起きない**（＝描いていない。32 回とも）。描かせられるのは**ビューポートの `UpdateViewport`** だけだが、それも**戻った時点では描き終わっていない**（戻った後にランループが 545 ms 吸われる）。**終わりを知る口も通知も無く、`IsDirty()` も戻り値も完了を表さない**（下記 7 の「道具について」） |
 | CEF に隠れたページのタイマーを間引かせない口は SDK にあるか | **無い。** SDK 全体で CEF に触れる口は `WebDlgEnableConsole`（コンソールログの出力）ただ 1 つ【ソース根拠】（下記 5） |
 | 刻みから **`CloseAllFilesAndQuitVectorworks(true, false)`** を呼ぶと | **呼べる・落ちない（mac / Windows とも実測）。呼び出しは戻り、プロセスはその後に正常終了（`atexit` まで届く。mac 4〜8 秒後・Windows 28〜30 秒後）。** 確認をキャンセルすれば何も変わらず戻る。**確認の最中、呼んだタイマー自身は mac では刻まないが Windows では入り直す**——そこから 2 度目を呼ぶと確認が 2 つ重なるので、「呼び出しの最中」を旗で持って見送る。**`kNotifyBeforeApplicationQuit` はキャンセルされても届く**。終了の回は、刻みが止まった後・`atexit` の直前に `plugin_module_main` へ `kPluginModuleDeinit` が届く（下記 4 の 9） |
-| **起動の途中**（ホーム画面の前）の刻みから終了を呼ぶと（mac） | **終わらない。** 起動画面の前半には刻みが来ず、届くのは Cineware の起動待ちと「開発元不明のプラグイン」のダイアログの間だけ。どちらも呼び出しは戻り `kNotifyBeforeApplicationQuit` も届くが、**Cineware の待ちでは起動画面のまま止まり SIGKILL でしか止まらない**。ダイアログの間なら頼みは捨てられ、「続ける」でそのまま起動する（下記 4 の 9。Windows は未測定） |
-| 終了の呼び出しが**戻った後**の刻みから、もう一度呼ぶと（mac） | **何も起きない。** 0〜1 ms で戻り、終わり方も変わらない（8 回続けても同じ）。2 度目以降に `kNotifyBeforeApplicationQuit` は届かない（下記 4 の 9。Windows は未測定） |
+| **起動の途中**（ホーム画面の前）の刻みから終了を呼ぶと（mac） | **終わらない。** 起動画面の前半には刻みが来ず、届くのは Cineware の起動待ちと「開発元不明のプラグイン」のダイアログの間だけ。どちらも呼び出しは戻り `kNotifyBeforeApplicationQuit` も届くが、**Cineware の待ちでは起動画面のまま止まり SIGKILL でしか止まらない**。ダイアログの間なら頼みは捨てられ、「続ける」でそのまま起動する（下記 4 の 9。Windows は未測定——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)） |
+| 終了の呼び出しが**戻った後**の刻みから、もう一度呼ぶと（mac） | **何も起きない。** 0〜1 ms で戻り、終わり方も変わらない（8 回続けても同じ）。2 度目以降に `kNotifyBeforeApplicationQuit` は届かない（下記 4 の 9。Windows は未測定——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)） |
 | **利用者が閉じる**（メニューの「終了」）とき、刻みはいつまで来るか（Windows） | **`kNotifyBeforeApplicationQuit` の後には 1 度も来ない**（11 回）。閉じる指示から BApQ までの数 ms〜63 ms に 0〜2 回来るだけ。その後 -2（約 7〜9 秒後）・`atexit`（約 27〜29 秒後）まで刻みは無い。**＝閉じていく途中に刻みから `gSDK` を呼ぶ場面は無い**（下記 4 の 9「Windows」） |
 | **図面が 1 枚も開いていない**とき、刻みから `GetCurrentLayer()` を呼ぶと | **`nullptr` が返り、落ちない**（閉じた後も起動直後も）。`GetOpenFilesList()` の件数と**刻みごとに常に一致**（mac 1 万 2 千回余り・Windows 3 万 5 千回余りで食い違い 0）。ただし**閉じた文書のレイヤと別の文書のレイヤが同じアドレスで返る**ので、ハンドルは刻みごとに引き直す（mac / Windows とも。下記 4 の 8） |
 | 図面が開いていないときにウェブパレットを出せるか | **出す口は無い**（`SetWebPaletteVisibility` を呼んでも出ないのは実測）。**「文書が無い間は動かない」前提で設計する**（下記 6） |
@@ -402,7 +402,8 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 （[issue #312](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/312)。
 [実測](../Metrics/Timers%20and%20Notifications.md#起動の途中の刻みから呼んだ実測)。
-**mac だけ。Windows はまだ測っていない**——下記は Windows には当てはめない。）
+**mac だけ。Windows はまだ測っていない**——下記は Windows には当てはめない。Windows の仮想環境で
+DirectX を有効にできず保留中で、[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316) で測る。）
 
 - **起動画面の前半には刻みが来ない**（mac）。殻が `plugin_module_main` で時計を動かしても、
   最初の刻みは**モジュールの読み込みから 10.7〜15.2 秒後**。その後も、起動を終える前の
@@ -437,7 +438,7 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 
 （[issue #313](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/313)。
 [実測](../Metrics/Timers%20and%20Notifications.md#戻った後の刻みから-2-度目を呼んだ実測)。
-**mac だけ。Windows はまだ測っていない。**）
+**mac だけ。Windows はまだ測っていない**（[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316) で測る）。）
 
 - **何も起きない**（mac。図面 0 枚・2 周）。戻った後に届いた**最初の刻み**から 2 度目を呼んでも、
   **届いた刻みのたびに**呼んでも（8 回。最後の刻みを含む）、**落ちず、どれも 0〜1 ms で戻った**。
