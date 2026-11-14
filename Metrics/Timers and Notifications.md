@@ -844,6 +844,77 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 - `kNotifyBeforeApplicationQuit` は 1 度目の呼び出しの中で 1 回だけ届き、2 度目以降には
   届かなかった。
 
+#### 起動を終えた目印を探した実測
+
+**実測**（VW 2026 Update 6（Build 872399）/ macOS 27.0.1・arm64。2026-11-14。殻
+`94376182bb4c`（ビルド `f4b6c6464fae`）。
+[issue #317](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/317)。
+**Windows は未測定**——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)。）
+
+#312 の殻の記録（`plugin/src/StartupQuit.cpp`）に、目印の候補を並べて書く記録を足した
+（[PR #318](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/318)）。
+
+- **通知**: `RegisterNotificationProcedure` で 19 種（`NWKS` `WKSL` `AppA` `DlgO` `APSD` `PrCh`
+  `PrfR` `ThCg` `dc0p` `dcop` `DOCC` `DCLS` `DONE` `updt` `TLCh` `BEFO` `AFTE` `WKEd` `PlUp`）を
+  登録し、届くたびに書いた。登録は札の 2 行目 `reg=init` のときは `plugin_module_main` の中、
+  ほかは最初の刻みで行った。**登録はどれも成功した**（戻り値は全部真）。
+- **状態**: 刻みごとに `IsDocumentReady()`・`GetCurrentWorkspaceFileName`・図面の数・mac の
+  NSApp の見えている窓（objc ランタイムで `windows` / `mainWindow` / `modalWindow` を読んだ）を
+  読み、変わったときに書いた。
+- **`VW User Log.txt`**（`~/Library/Application Support/Vectorworks/2026/`）: 刻みのたびに
+  増えた分を読み、`cat` が `startupTIMER` / `HomeScreen` / `SHUTDOWN` の行を書いた。
+- 起動は `open -a`。「開発元不明のプラグイン」のダイアログは #312 と同じく
+  `SavedSettingsUser.xml` の `<UnknownPluginsDialog><Date>` を 2 日前にして出した。
+  呼ばない回は 75〜90 秒後に `osascript` で終了を頼み、30 秒で終わらなければ `sample` を採って
+  SIGKILL した。
+- 時刻は**プロセスの起動（`sysctl` の `p_starttime`）からの秒**。`VW User Log.txt` の
+  `CLOCKTIME` と `ts` の 3 つ目の数（秒）も並べた（どちらも起動からの秒として読んだ）。
+
+| 回 | 札 | ダイアログ | 殻の読み込み | 最初の刻み | `After Cinema4D Startup` | `After Loading Workspace` | `End of Startup` | `HomeScreen` の行の `ts` | 空きの後の最初の刻み | 最初の `BEFO` | 呼んだ / 戻った | `atexit` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | `never`（`reg=init`） | 出さない | 28.7 | 41.4 | 41.8 | 44.9 | 60.7 | 62.2 | 65.0 | 65.2 | — | 94.8（`osascript`） |
+| 2 | `never` | 出さない | 10.9 | 21.3 | 22.2 | 25.1 | 31.9 | 32.9 | 35.6 | 35.8 | — | 80.2（`osascript`） |
+| 3 | `mark=home+0` | 出さない | 10.7 | 20.5 | 21.6 | 24.2 | 31.3 | 32.3 | 35.1 | 35.3 | 35.8 / 36.0（211 ms） | 40.5 |
+| 4 | `mark=ws+0` | 出さない | 10.3 | 25.4 | 26.6 | 29.5 | 36.8 | 37.9 | 40.6 | 40.8 | 41.3 / 41.5（195 ms） | 46.1 |
+| 6 | `mark=BEFO+0` | 出さない | 10.1 | 20.4 | 21.2 | 23.6 | 30.5 | 31.5 | 34.3 | 34.5 | 34.9 / 35.1（207 ms） | 39.7 |
+| 7 | `mark=BEFO+0` | 出さない | 10.6 | 20.3 | 21.0 | 23.4 | 30.2 | 31.3 | 39.2 | 39.4 | 39.9 / 40.1（214 ms） | 44.6 |
+| 5 | `never`（`reg=init`） | 出す | 10.8 | 22.0 | — | — | — | — | — | **来ない**（4 分） | — | — （SIGKILL） |
+| 8 | `mark=BEFO+0` | 出す | 10.4 | 20.3 | — | — | — | — | — | **来ない**（7 分） | **呼ばない** | — （SIGKILL） |
+| 9 | `mark=BEFO+0` | 出す | 9.4 | 19.3 | — | — | — | — | — | **来ない**（5 分） | **呼ばない** | — （SIGKILL） |
+
+（1 回目だけ殻の読み込みまで 28.7 秒かかった（ほかは 9.4〜10.9 秒）。その回の
+`After Paramatrics PrepareEarly` の `TTIME` は 26.6 秒だった。）
+
+- **起動の途中に届いた通知**: どの回も `TLCh`（`kNotifyToolChange`）が最初の刻みの 2.1〜3.6 秒後に
+  1 回だけ（`(ランループの外)`）。**`NWKS`・`WKSL`・`AppA` は 9 回とも 1 度も届かなかった**
+  （`reg=init` で `plugin_module_main` の中から登録した 1・5 回目も同じ）。`osascript` の終了や
+  終了の呼び出しの後にも届かなかった。
+- **ダイアログを出さない回**: 最初の刻みから 1.6〜2.0 秒で既定のモードへ移った後、
+  **11.6〜21.3 秒刻みが来なかった**（`max_gap_ms`）。空きの後の最初の刻みで、次の 4 つが
+  **同時に**見えた——`GetCurrentWorkspaceFileName` が `Architect 2026`（それまでは空）、見えている窓に
+  `NNAApplicationWindow`（それまでは起動画面の `NSWindow` 1 枚）、`VW User Log.txt` の起動の行の
+  全部（`Start of SetUp` から `Dialog opened, Section = HomeScreen` まで。**ファイルはその間に
+  別のファイルへ差し替わり（inode が変わる）、起動の行はまとめて書かれていた**）。その
+  0.16〜0.19 秒後に**最初の `BEFO`（`kNotifyBeforePendingUpdate`）**、続いて `DOCC`・`AFTE` が届いた
+  （`BEFO` / `AFTE` はその後 20 ms ほどの間隔で対になって続いた）。空きの後の最初の刻みは
+  `HomeScreen` の行の `ts` の 2.7〜7.9 秒後だった。`IsDocumentReady()` はどの回もずっと偽
+  （図面 0 枚）。`mainWindow` / `modalWindow` はどちらも空のままだった。
+- **目印の後に呼んだ回（3・4・6・7）**: 4 回とも 195〜214 ms で戻り、`kNotifyBeforeApplicationQuit` が
+  1 回届き、戻って 4.5〜4.6 秒後に `atexit`。`VW User Log.txt` に `Terminate Application
+  (ShellAPI::QuitApplication(false))`。ほかに画面に何か出たかは見ていない（人の目視なし）。
+  呼んだのは、`home` / `ws` は目印が見えた刻みの次の刻み（記録の作りで 1 刻み遅れる）、
+  `BEFO` は届いた後の最初の刻み。目印が見えてから呼ぶまで 0.45〜0.74 秒。
+- **ダイアログを出した回（5・8・9）**: 最初の刻みの約 6.4〜6.7 秒後に `DONE`・`DlgO`
+  （`kNotifyDialogDisplayImminent`）が届き、その 0.7 秒後の刻みから `NSModalPanelRunLoopMode`。
+  **そのときにはもう `GetCurrentWorkspaceFileName` が `Architect 2026` を返した。** 見えている窓は
+  起動画面の `NSWindow`・パレット 6 枚・`NNADialogWindow`（題「開発元不明のプラグイン」。
+  `modalWindow` もこれ）で、**`NNAApplicationWindow` は無かった**。`VW User Log.txt` は差し替わったが
+  起動の行は 1 行も書かれなかった。**`BEFO` / `AFTE` / `DOCC` は 4〜7 分のあいだ 1 度も届かなかった。**
+  誰も「続ける」を押さなかった（人に頼んだ 2 回は押されず、AI の画面操作は許可されなかった）。
+  `osascript` の終了の頼みにも応えず、`sample` のメインスレッドは
+  `-[NSApplication runModalForWindow:]` の中だった。
+- **「続ける」を押した後**（`BEFO` が来て呼び、終わるか）は**まだ測っていない**。
+
 ## 5. ウェブパレットの JS タイマーを隠したときの実測
 
 **実測**（VW 2026 / macOS arm64。[vectorworks-plugin-import-ifc-homeskz](https://github.com/min-nano/vectorworks-plugin-import-ifc-homeskz)

@@ -19,6 +19,7 @@
 | CEF に隠れたページのタイマーを間引かせない口は SDK にあるか | **無い。** SDK 全体で CEF に触れる口は `WebDlgEnableConsole`（コンソールログの出力）ただ 1 つ【ソース根拠】（下記 5） |
 | 刻みから **`CloseAllFilesAndQuitVectorworks(true, false)`** を呼ぶと | **呼べる・落ちない（mac / Windows とも実測）。呼び出しは戻り、プロセスはその後に正常終了（`atexit` まで届く。mac 4〜8 秒後・Windows 28〜30 秒後）。** 確認をキャンセルすれば何も変わらず戻る。**確認の最中、呼んだタイマー自身は mac では刻まないが Windows では入り直す**——そこから 2 度目を呼ぶと確認が 2 つ重なるので、「呼び出しの最中」を旗で持って見送る。**`kNotifyBeforeApplicationQuit` はキャンセルされても届く**。終了の回は、刻みが止まった後・`atexit` の直前に `plugin_module_main` へ `kPluginModuleDeinit` が届く（下記 4 の 9） |
 | **起動の途中**（ホーム画面の前）の刻みから終了を呼ぶと（mac） | **終わらない。** 起動画面の前半には刻みが来ず、届くのは Cineware の起動待ちと「開発元不明のプラグイン」のダイアログの間だけ。どちらも呼び出しは戻り `kNotifyBeforeApplicationQuit` も届くが、**Cineware の待ちでは起動画面のまま止まり SIGKILL でしか止まらない**。ダイアログの間なら頼みは捨てられ、「続ける」でそのまま起動する（下記 4 の 9。Windows は未測定——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)） |
+| **起動を終えた（ホーム画面が出た）こと**を刻みの側から知るには（mac） | **最初の `kNotifyBeforePendingUpdate`（`'BEFO'`）を目印にする。** VW のアイドルから来る通知で、起動画面・Cineware の起動待ち・「開発元不明のプラグイン」のダイアログの間には届かず、ホーム画面の後に初めて届く。その後の刻みから終了を呼ぶとふつうに終わる。`kNotifyNewWrkSpaceLoaded` / `kNotifyApplicationActivate` は起動では届かず、ワークスペース名はダイアログの間にもう読める（下記 4 の 9「起動を終えた目印」。ダイアログの後は【未確認】。Windows は未測定） |
 | 終了の呼び出しが**戻った後**の刻みから、もう一度呼ぶと（mac） | **何も起きない。** 0〜1 ms で戻り、終わり方も変わらない（8 回続けても同じ）。2 度目以降に `kNotifyBeforeApplicationQuit` は届かない（下記 4 の 9。Windows は未測定——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)） |
 | **利用者が閉じる**（メニューの「終了」）とき、刻みはいつまで来るか（Windows） | **`kNotifyBeforeApplicationQuit` の後には 1 度も来ない**（11 回）。閉じる指示から BApQ までの数 ms〜63 ms に 0〜2 回来るだけ。その後 -2（約 7〜9 秒後）・`atexit`（約 27〜29 秒後）まで刻みは無い。**＝閉じていく途中に刻みから `gSDK` を呼ぶ場面は無い**（下記 4 の 9「Windows」） |
 | **図面が 1 枚も開いていない**とき、刻みから `GetCurrentLayer()` を呼ぶと | **`nullptr` が返り、落ちない**（閉じた後も起動直後も）。`GetOpenFilesList()` の件数と**刻みごとに常に一致**（mac 1 万 2 千回余り・Windows 3 万 5 千回余りで食い違い 0）。ただし**閉じた文書のレイヤと別の文書のレイヤが同じアドレスで返る**ので、ハンドルは刻みごとに引き直す（mac / Windows とも。下記 4 の 8） |
@@ -432,7 +433,7 @@ DirectX を有効にできず保留中で、[#316](https://github.com/min-nano/v
 - **帰結**: mac では、**起動を終える前（ホーム画面が出る前）に終了を頼んではいけない**。
   頼んでも戻り値は無く、`kNotifyBeforeApplicationQuit` も届くので、呼んだ側からは失敗が
   見えない。そのうえ Cineware の待ちに当たると、**殺す以外に止められない**。
-  「起動を終えたか」を刻みの側から確かめる口は SDK に見当たらない【未確認】。
+  「起動を終えたか」を確かめる目印は、下記「起動を終えた目印」（#317）。
 
 #### 戻った後の刻みから、もう一度呼ぶ（issue #313）
 
@@ -448,6 +449,43 @@ DirectX を有効にできず保留中で、[#316](https://github.com/min-nano/v
   **最中**に 2 度目を呼んだ回（上記。2 度呼べば 2 回届く）とは違う。
 - **帰結**: 「終了の呼び出しの最中」の旗は**戻ったら下ろしてよい**（mac）。戻った後の刻みから
   呼び直されても害は無い。
+
+#### 起動を終えた目印（issue #317）
+
+（[issue #317](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/317)。
+[実測](../Metrics/Timers%20and%20Notifications.md#起動を終えた目印を探した実測)。
+**mac だけ。Windows はまだ測っていない**（[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316) で測る）。）
+
+- **SDK の中の目印は「最初の `kNotifyBeforePendingUpdate`（`'BEFO'`）」**（mac）。
+  `RegisterNotificationProcedure(proc, kNotifyBeforePendingUpdate)` を `plugin_module_main`
+  か最初の刻みで登録しておけば、**ホーム画面が出た後に初めて届く**（起動画面・Cineware の起動待ち・
+  「開発元不明のプラグイン」のダイアログの間には 1 度も届かない）。ヘッダのコメントどおり
+  VW のアイドル（`OnIdle`）から来るので、**起動を終えてアイドルに入った**しるしと読める。
+  - ダイアログを出さない 6 回: ホーム画面の行（`VW User Log.txt`）の 2.9〜8.1 秒後に届いた。
+  - ダイアログを出した 3 回: ダイアログが開いている 4〜7 分のあいだ 1 度も届かなかった。
+  - その後は 20 ms ほどの間隔で何度も届く。目印に使うのは**最初の 1 回**で、旗を立てるだけにする
+    （通知の中から終了を呼ばない。呼ぶのは次の刻みで）。
+- **目印の後の刻みから `CloseAllFilesAndQuitVectorworks(true, false)` を呼ぶと、ふつうに終わる**
+  （ダイアログを出さない回。`BEFO` の後 2 回・ホーム画面の行の後 1 回・ワークスペース名の後 1 回）。
+  195〜214 ms で戻り、`kNotifyBeforeApplicationQuit` が 1 回届き、4.5〜4.6 秒後に `atexit`。
+- **ダイアログで「続ける」を押した後に `BEFO` が来て、そこから呼んで終わるか**は
+  まだ確かめていない【未確認】（押せなかった）。
+- **目印に使えないもの**:
+
+  | 候補 | 結果 |
+  | --- | --- |
+  | `kNotifyNewWrkSpace`（`'NWKS'`）・`kNotifyNewWrkSpaceLoaded`（`'WKSL'`） | **起動では届かない**（9 回とも。`plugin_module_main` で登録しても）。名前に反して、起動時のワークスペースの読み込みでは送られない |
+  | `kNotifyApplicationActivate`（`'AppA'`） | **起動では届かない**（9 回とも） |
+  | `kNotifyDialogDisplayImminent`（`'DlgO'`） | 「開発元不明のプラグイン」のダイアログの直前に届く。ホーム画面では届かない |
+  | `GetCurrentWorkspaceFileName` が空でなくなる | **ダイアログの間にもう名前を返す**（起動の途中でワークスペースを読み終える）。ダイアログが出ないときは、刻みの空きのせいでホーム画面の後に初めて見えるだけ |
+  | `IsDocumentReady()` | 図面が 0 枚の間ずっと偽。起動とは関係しない |
+  | `VW User Log.txt` の `Section = HomeScreen` の行 | mac にも書かれ、ホーム画面の後にしか現れない（ダイアログの間は起動の行が 1 行も無い）。**ただし SDK の外**——ファイルの場所が版で変わり、起動の行は差し替えたファイルにまとめて書かれる。プラグインの中では `BEFO` で足りる |
+  | NSApp の窓に `NNAApplicationWindow` が見える | ホーム画面の後にしか見えない（ダイアログの間は無い）が、VW の内部のクラス名に頼るので使わない |
+
+- **刻みは起動を終える前に 11.6〜21.3 秒空く**（#312 の約 13 秒と同じ区間）。ワークスペースの読み込み〜
+  ホーム画面の間で、空きの後の最初の刻みが来たときにはもうホーム画面が出ている。
+- **ダイアログの間は `osascript` の終了の頼みにも応えない**（`runModalForWindow:` の中。#312 の
+  「頼みは捨てられる」と同じ）。
 
 **まとめ（mac / Windows）**: 刻みから終了を呼んでよい。**「終了の呼び出しの最中」を旗で持ち、その間の
 要求は見送る**（Windows では必須）。タイマーを止める必要は無く、止めたいなら `kPluginModuleDeinit`
