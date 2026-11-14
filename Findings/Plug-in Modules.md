@@ -181,9 +181,12 @@ VW 2026。被験体は `cli`（署名なし／アドホック署名）。[起動
   なら押せる。**mac は `kCFRunLoopCommonModes` に登録したタイマーからなら同じことができる**
   （ダイアログは `NSModalPanelRunLoopMode` のモーダルで、既定のモードのタイマーは刻まない。
   下の「mac も…」）。ボタンは `AXPress` で押せる。
-- **SDK に有効にする口は無い【ヘッダ根拠】。Authenticode の署名では消えない見込み
-  【バイナリ根拠】**——「開発元」は Vectorworks のパートナープログラムが発行する
-  クレデンシャルで、Windows の署名ではない（下記）。署名して試すのは [#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)。
+- **SDK に有効にする口は無い【ヘッダ根拠】。Authenticode の署名では消えない**——
+  自己署名で付けても「開発元不明」のままだった（実測。信頼された認証局の証明書では未確認
+  だが、Authenticode を検証する箇所が無い【バイナリ根拠】）。「開発元」は Vectorworks の
+  パートナープログラムが発行するクレデンシャルで、Windows の署名ではない（下記）。
+- **2 本以上を有効にすると、記録は 1 本の暗号文に決まった順で並ぶ**（`cli` が先。有効にした
+  順に依らない）。1 本を消しても残りは有効のまま（下の「置き場所と形」。#260）。
 - **macOS も同じ。** 記録は `~/Library/Application Support/Vectorworks/2026/Settings/ExceptionsMissingCredentials.bin`
   に**バンドル（`cli.vwlibrary`）のフルパス**で残り、`install` の手順（フォルダごと
   付け替え・中身も別ビルド）でも有効のまま、閾値はほぼ 24 時間ちょうど（下の「macOS」）。
@@ -234,8 +237,9 @@ VW 2026。被験体は `cli`（署名なし／アドホック署名）。[起動
 - **有効化の記録**: `%APPDATA%\Nemetschek\Vectorworks\2026\Settings\ExceptionsMissingCredentials.bin`。
   先頭 8 バイトが平文の長さ、続いて 16 バイト単位の暗号文——**フルパスそのものを鍵も IV も固定の
   ブロック暗号で暗号化している**（同じ平文は同じ暗号文になる。[詳細](../Metrics/Plug-in%20Modules.md#置き場所と形)）。何も有効で
-  なければ 8 バイト。**プラグインが 2 本以上のときの並べ方は見ていない**
-  （[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+  なければ 8 バイト。**2 本以上のときは 1 本の暗号文に「パス＋終端」を続けて並べ、並びは
+  決まっている**（`cli` が `VwSdkProbes` より先。有効にした順に依らない）。1 本を消しても残りは
+  有効のまま（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
 - **間引きの基準**: `Settings\SavedSettingsUser.xml` の `<Vectorworks><UnknownPluginsDialog><Date>`
   （日;月;年;時;分。ローカル時刻）。
 - **レジストリ**（`HKCU\Software\Nemetschek\Vectorworks 31` 以下）には何も無い。
@@ -250,7 +254,9 @@ VW 2026。被験体は `cli`（署名なし／アドホック署名）。[起動
 - **Authenticode は使っていない見込み**（本体と同梱の `.vlb` / `.dll` に `WinVerifyTrust` が無い。
   exe の `CryptQueryObject` / `CertGetNameStringA` は curl の schannel の文字列と並んでおり、
   そちらの持ち物と読める）。
-  **署名して試してはいない**（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+- **自己署名の Authenticode を付けても「開発元不明」・「無効」のまま（実測）**。有効化した記録も
+  署名の無いときとバイト単位で同じだった（[#260](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/260)）。
+  信頼された認証局の証明書では試していない（`WinVerifyTrust` が無いので変わる見込みは無い【バイナリ根拠】）。
 
 ### SDK【ヘッダ根拠】
 
