@@ -333,7 +333,9 @@ if(APPLE)
 				"-F${VW_SDK_LIB}"
 				"-framework VWMM"
 				"-framework Carbon"
-				"-framework Cocoa")
+				"-framework Cocoa"
+				# StartupQuit.cpp が objc ランタイムで NSApp の窓を読む（issue #317）。
+				"-lobjc")
 else()
 	target_include_directories(${VW_PLUGIN_NAME} PRIVATE "${VW_SDK_INCLUDE}/OnlyWin")
 
