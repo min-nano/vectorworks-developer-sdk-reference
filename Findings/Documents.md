@@ -832,6 +832,11 @@ SDK の説明文は「Closes all files and then gracefully quits Vectorworks」�
   タイマーから呼ばれる C++）の中**からも機能した（import-ifc の M23 / M38）。
 - **OS のタイマーの刻みの中からも呼べる**（mac で実測。[Timers and
   Notifications](Timers%20and%20Notifications.md) の 4 の 9）。
+- **起動の途中の刻みから呼んでも、終わらない**（このリポジトリの mac の実測。#312。
+  [Timers and Notifications](Timers%20and%20Notifications.md) の 4 の 9「起動の途中の刻みから」）。
+  上の「異常終了」は再現せず、**Cinema4D（Cineware）の起動待ちの間なら起動画面のまま止まって
+  SIGKILL でしか止まらず**、「開発元不明のプラグイン」のダイアログの間なら頼みが捨てられて
+  そのまま起動した。`plugin_module_main` の中から呼んだ形（上記）は測っていない。
 - 以前このページは、この制約の出典を「Plug-in Modules」としていたが、**Plug-in Modules に
   その節があったことは一度も無い**（`git log -S` で確認）。
 
@@ -848,6 +853,8 @@ SDK の説明文は「Closes all files and then gracefully quits Vectorworks」�
 - **確認で「キャンセル」すると、呼び出しはそのまま戻り、図面は開いたまま残る。**
   Vectorworks は動き続け、`gSDK` もふつうに呼べる。**戻り値が無いので、キャンセルされたことは
   `GetOpenFilesList()` の件数（減っていない）か、プロセスが生きていることで知る。**
+- **戻った後（終わっていく途中）にもう一度呼んでも、何も起きない**（mac。#313）。0〜1 ms で
+  戻り、終わり方も変わらない。
 - **確認の最中にもう一度呼ぶと、確認が 2 つ重なって出る。** 落ちはしない。Windows では
   呼んだタイマー自身が確認の最中に入り直すので、「呼び出しの最中」を旗で持って見送る。
 - **`kNotifyBeforeApplicationQuit` は確認の前に届き、キャンセルされても届く。**

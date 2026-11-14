@@ -10,7 +10,7 @@
 出どころは MCP ブリッジ——外からの要求を拾うために、ウェブパレットの HTML の
 `setInterval`（250 ms）から C++ を呼んでいたが、**パレットを隠すと 60 秒に 1 回まで
 間引かれる**ことが実機で分かった（下記 5）。
-続く問いは issue #205 / #206 / #213 / #215 / #224 / #230 / #235 / #269 で測った
+続く問いは issue #205 / #206 / #213 / #215 / #224 / #230 / #235 / #269 / #312 / #313 で測った
 （各節の冒頭に環境とビルドを書く）。
 
 ## 1. ISDK に「暇なとき・周期的に」の口を探した（ヘッダ・ソースを読んだ）
@@ -739,6 +739,110 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
   （[Plug-in Modules](Plug-in%20Modules.md)「OS タイマーを持つ常駐プラグイン…」）。
   この回は**ブリッジが図面を閉じてホーム画面へ戻った後**に閉じていた（#257 は起動して
   ホーム画面から閉じただけ）。同じ形の 0 枚の回は 5 回中 1 回。
+
+#### 起動の途中の刻みから呼んだ実測
+
+**実測**（VW 2026 Update 6（Build 872399）/ macOS 27.0.1・arm64。2026-11-12。殻
+`1f9530621896`（ビルド `32f039385a3c`）。
+[issue #312](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/312)。
+**Windows は未測定**——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)。）
+
+プローブは走らせるまで読み込まれないので、殻に記録を足した（`plugin/src/StartupQuit.cpp`。
+[PR #314](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/314)）。
+一時ディレクトリに頼み札 `VwSdkProbes-startup-quit.request` を置いて起動すると、殻が
+`plugin_module_main` で 50 ms の `CFRunLoopTimer` を `kCFRunLoopCommonModes` に登録し、
+札の時機に `CloseAllFilesAndQuitVectorworks(true, false)` を 1 度だけ呼ぶ。刻みはモードと
+図面の数が変わったとき・呼び出しの前後・戻った後の刻み（200 行まで）・
+`kNotifyBeforeApplicationQuit`・`atexit` を 1 行ずつ書く。殻の action の記録（-1 / -2）も
+同時に取った。
+
+- 起動は `open -a` で行い、プロセスの生死を 0.2 秒ごとに見た。150〜600 秒で終わらなければ
+  `sample` でメインスレッドのスタックを採り、SIGKILL で止めた。
+- 「開発元不明のプラグイン」のダイアログは、VW を止めて `SavedSettingsUser.xml` の
+  `<UnknownPluginsDialog><Date>` を 2 日前にして出した。出さない回は今の時刻にした
+  （`Plug-ins` には `cli` と `VwSdkProbes` を置いた）。
+- 画面は人が見た（Vectorworks の画面操作は許可されなかった）。
+- 時刻は**モジュールの読み込み（`plugin_module_main` の -1）から**の ms。
+
+| 札 | ダイアログ | 呼んだ時刻 | そのときのモード | 呼び出しの所要 | `BApQ` | 戻った後 | 結末 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `never`（呼ばない） | 出さない | — | — | — | — | — | 最初の刻みは +15203（`NSEventTrackingRunLoopMode`）、+17457 から `kCFRunLoopDefaultMode`。ふつうに起動した |
+| `first` | 出さない | +12079（最初の刻み） | `NSEventTrackingRunLoopMode` | 32 ms | 1 回 | 858 ms 後から `kCFRunLoopDefaultMode` で 50 ms ごとに刻み、`docs=0`。120 秒で 2387 刻み | **終わらない。** 180 秒後も生きていた。画面は**起動画面だけ**（人の目視）。ブリッジ（既定モードの時計）も応えた。SIGTERM で 20 秒終わらず、SIGKILL |
+| `first` | 出さない | +10731（最初の刻み） | `NSEventTrackingRunLoopMode` | 17 ms | 1 回 | 同上 | 149 秒後も生きていた。SIGKILL |
+| `ms=12000` | 出さない | +12302（最初の刻み） | `NSEventTrackingRunLoopMode` | 27 ms | 1 回 | 同上 | 150 秒後も生きていた。SIGKILL |
+| `modal=1000` | 出す | +20202（ダイアログの最初の刻み +19283 の 1 秒後） | `NSModalPanelRunLoopMode` | 25 ms | 1 回 | `NSModalPanelRunLoopMode` で 50 ms ごと | 179 秒後も生きていた。SIGKILL |
+| `modal=1000` | 出す | +20202（同 +19162 の 1 秒後） | `NSModalPanelRunLoopMode` | 35 ms | 1 回 | 同上 | ダイアログは**起動画面の上に開いたまま**、ほかに重なったものは無い（人の目視・スクリーンショット）。呼んでから約 2 分後に人が「続ける」を押すと、1 秒以内にモーダルを抜け、**ホーム画面まで進んでふつうに使えた**（人の目視）。押してから 7 分たっても `atexit` も -2 も来なかった |
+| `ms=20000` | 出さない | +26408 | `kCFRunLoopDefaultMode` | 155 ms | 1 回 | +3.0 秒と +3.5 秒に `NSEventTrackingRunLoopMode` で 2 刻み | 戻って 5.4 秒後に `atexit`（-2 はその 0.36 秒前）。この回の呼び出しは `End of Startup` の後で、ホーム画面が出る頃だった（下記） |
+| `go`（起動から 100 秒後に合図） | 出さない | +88151 | `kCFRunLoopDefaultMode` | 187 ms | 1 回 | +3.5〜+4.1 秒に 4 刻み | 戻って 6.4 秒後に `atexit`（-2 は 0.47 秒前） |
+
+- **起動の途中の刻みの空き**: どの回も、最初の刻みは +10.7〜15.2 秒、+12.4〜13.4 秒あたりで
+  既定のモードに変わった後、**次の刻みまで約 13.3〜13.4 秒空いた**（`ms=20000` の回は
+  `max_gap_ms=13405`、`go` の回は 13314）。ダイアログを出した回は、既定のモードの刻みの後、
+  5.2〜5.4 秒空いてダイアログの `NSModalPanelRunLoopMode` の刻みが来た。
+- **`VW User Log.txt` の起動の記録**（`ms=20000` の回。`CLOCKTIME` は起動からの秒）:
+  `After Splash Screen Close` 15.8 → `After Cinema4D Startup` 22.1 → `After Loading Workspace`
+  24.7 → `End of Startup` 32.3 → `Dialog opened, Section = HomeScreen` → 呼び出し → `Terminate
+  Application (ShellAPI::QuitApplication(false))`。モジュールの読み込みは起動から約 12 秒
+  （`open -a` からの壁時計）。最初の刻み（読み込みの +10.7 秒前後）は `Cinema4D Startup` の
+  区間に当たる。
+- **止まったプロセスのメインスレッド**（`sample`。`first` の 2 回目と `ms=12000`）:
+  ```
+  -[NSApplication _postDidFinishNotification]
+   … Vectorworks …
+   CMaxonRenderDevice::Startup()
+    WaitUntilCinewareIsRunning(int, int (*)(void*))
+     IsCinewareInitialized → -[NSRunLoop runUntilDate:]
+      … c4d_base.xlib … → -[NSApplication nextEventMatchingMask:…]
+       … __52-[NSApplication(NSAppleEventHandling) _handleAEQuit]_block_invoke
+        -[NSApplication _terminateFromSender:askIfShouldTerminate:saveWindows:]
+         -[NSApplication terminate:] → 通知 → … Vectorworks …
+          CMaxonRenderDevice::IsRedshiftAvailable()
+           CMaxonRenderDevice::IsRunning()
+            IsCinewareRunning(int (*)(void*)) → IsCinewareInitialized
+             -[NSRunLoop runUntilDate:]（ここで回り続ける）
+  ```
+  最初の `first` の回の 1 回目の `sample`（呼んでから約 6 分後）にも `_handleAEQuit` →
+  `terminate:` → `CMaxonRenderDevice::IsRunning()` が同じ並びで出た。
+- **ダイアログの回のメインスレッド**: 呼んだ後 179 秒たっても
+  `_postDidFinishNotification` → `runModalForWindow:` の中で、`terminate:` /
+  `_handleAEQuit` は無かった。「続ける」の後の `sample` には `runModalForWindow:`・
+  `terminate:`・`WaitUntilCinewareIsRunning` のどれも無く、`-[NSApplication run]` の
+  ふつうのイベントループにいた。
+- どの回もクラッシュレポートは出ず、`VW User Log.txt` に「サポートファイル」の行は無かった。
+
+#### 戻った後の刻みから 2 度目を呼んだ実測
+
+**実測**（VW 2026 Update 6 / macOS 27.0.1・arm64。2026-11-12。`probes/runtime/quit-twice/`（マージ前に消した。
+#315 のブランチのコミット `91dc35b`）、
+ビルド `32f039385a3c`。ローカルの Claude Code から MCP ブリッジで走らせた。
+[issue #313](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/313)。
+**Windows は未測定**——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)。）
+
+#230 の `quit-from-timer` と同じ作り（駆動 100 ms・観測 50 ms の 2 本。どちらも
+`kCFRunLoopCommonModes`。書き溜めを次に走らせたときに報告する）。図面は刻みの中で一時
+ファイルへ保存して `CloseDocument()` で閉じ、0 枚になってから 1 度目を呼んだ。戻った後に
+届いた刻みでは、駆動・観測の**先に来たほう**が 2 度目を呼んだ。段は `once`（1 度だけ）・
+`first`（戻った後の最初の刻みで 1 回）・`every`（戻った後の刻みのたび。上限 50 回）。
+3 段を 2 周回した。時刻は 1 度目が戻ってからの ms。
+
+| 段 | 周 | 1 度目の所要 | 戻った後に呼んだ回数・時刻・所要 | `BApQ` | 戻る → `atexit` | -2 → `atexit` | 最後の刻み → `atexit` |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `once` | 1 | 152 ms | — | 1 回 | 5978 ms | （記録なし） | 2078 ms |
+| `once` | 2 | 145 ms | — | 1 回 | 4703 ms | 348 ms | 1998 ms |
+| `first` | 1 | 180 ms | 1 回・+2173（`NSEventTrackingRunLoopMode`）・0 ms | 1 回 | 4735 ms | 337 ms | 2001 ms |
+| `first` | 2 | 153 ms | 1 回・+1818（同）・1 ms | 1 回 | 4413 ms | 359 ms | 1972 ms |
+| `every` | 1 | 151 ms | 8 回・+2153〜+2722（同）・各 0〜1 ms | 1 回 | 4571 ms | 314 ms | 1849 ms |
+| `every` | 2 | 150 ms | 8 回・+7000〜+7517（同）・各 0〜1 ms | 1 回 | 9499 ms | 351 ms | 1982 ms |
+
+- **6 回とも落ちず、`atexit` まで届いた**（呼んでから次の起動まで、毎回プロセスが消えるのを
+  確かめた）。保存の確認などのダイアログは出なかった（`DocClose` は 1 回、図面は 0 枚のまま）。
+- 2 度目の呼び出しの後も、`GetOpenFilesList()`（0 件）・`GetCurrentLayer()`（`nullptr`）は
+  落ちずに返った。
+- 戻った後の刻みは、`once` の 2 周目だけ戻った直後に `kCFRunLoopDefaultMode` で 1 回来て、
+  ほかはどれも戻って約 1.8〜7.0 秒空いてから `NSEventTrackingRunLoopMode` で 3〜6 回来た。
+  2 度目を呼んだのはその最初の刻み。
+- `kNotifyBeforeApplicationQuit` は 1 度目の呼び出しの中で 1 回だけ届き、2 度目以降には
+  届かなかった。
 
 ## 5. ウェブパレットの JS タイマーを隠したときの実測
 
