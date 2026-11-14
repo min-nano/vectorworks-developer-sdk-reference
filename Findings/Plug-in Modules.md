@@ -226,8 +226,9 @@ VW 2026。被験体は `cli`（署名なし／アドホック署名）。[起動
 - ダイアログの最中の `IsCurrentlyBuildingAnUndoEvent()` は `no`（利用者が開いた環境設定などの
   最中の `yes` とは違う）。
 - **ボタンは AX の `AXPress` で押せる。** ダイアログが出たことは `VW User Log.txt` の
-  `Dialog[OPEN]: ID-10002 (UnknownDeveloperPlugIns)` で分かる（表示言語に依らない【推定】）が、
-  縮む前の行を拾わないよう時刻で確かめる。
+  `Dialog[OPEN]: ID-10002 (UnknownDeveloperPlugIns)` で分かる（内部名は表示言語に依らない【推定】）が、
+  縮む前の行を拾わないよう時刻で確かめる。**ID は種類ではなく起動の中の通し番号**で、10002 はその起動で
+  最初に出たダイアログという意味にすぎない（[Dialogs from Other Processes](Dialogs%20from%20Other%20Processes.md)。#302）。
 
 ### 置き場所と形
 

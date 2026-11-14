@@ -67,6 +67,7 @@
 | [TXString](TXString.md) | 文字列型。`const char*` / `std::string` からの暗黙変換・**リテラルで多重定義が曖昧になる**・UTF-8 の出し入れ | — |
 | [Plug-in Interop](Plug-in%20Interop.md) | **プラグイン間の呼び出し**。ほかのプラグインの機能を名前で呼ぶ 4 つの経路（`CallPluginLibrary` / `DoMenuName` / スクリプトエンジン / C の ABI）・引数と結果の受け渡し・呼ばれる側の作り方。**`DoMenuName` の【訂正】を含む**・**`DoMenuName` の【訂正】を含む** | [Metrics](../Metrics/Plug-in%20Interop.md) |
 | [Plug-in Modules](Plug-in%20Modules.md) | モジュールの読み込みは起動時のみ・Windows は起動時に読み込み直す（OS に預ける前に PIN）・開発元不明ダイアログはフルパスで記憶・殻と本体に割れば再起動なしで入れ替え・**【罠】Windows の VW は起動時にモジュールを読み込み直す**（mac は読み込み直さない。【訂正】を含む） | [Metrics](../Metrics/Plug-in%20Modules.md) |
+| [Dialogs from Other Processes](Dialogs%20from%20Other%20Processes.md) | **ダイアログを別のプロセスから見つけ、読み、押す**（CLI の `dialog list` / `dialog press` の土台）。mac は `AXModal` が目印で許可は責任プロセスで数える。Windows は可視のボタンを持つ `#32770` で `BM_CLICK`、低い整合性レベルからは読めるが押せない。どちらも「押せた」の答えは当てにならず、重なったら上だけを押す | — |
 | [Documents](Documents.md) | 図面を開く・作る・保存・閉じる。テンプレートは `.sta` を `OpenDocumentPath` で開く・**`CloseDocument()` は確認なしに捨て、戻り値は当てにならない**・未保存の変更は読めない・上書き保存のダイアログの事前判定（mac / Windows） | [Metrics](../Metrics/Documents.md) |
 | [Investigation Techniques](Investigation%20Techniques.md) | 調査の作法。読み戻す・描かれた図形を測る・正解と差分を取る・setter の戻り値を信用しない・`APP_API_*` は呼べない・**Windows 版 SDK は mac 版と同一**・同じ呼び出しの中の値は後で変わりうる | [Metrics](../Metrics/Investigation%20Techniques.md) |
 
