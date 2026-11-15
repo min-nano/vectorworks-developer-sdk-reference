@@ -748,6 +748,43 @@ cmake -S plugin -B build -DVW_SDK_DIR=... \
   -DVW_PROBE_MANIFEST="$PWD/build-probes/manifest.cmake"
 ```
 
+### 手元の設定をプリセットに置く（`CMakeUserPresets.json`）
+
+SDK の場所は各自の Mac に固有なので、**コミットしない** `plugin/CMakeUserPresets.json` に
+書いておくと、以後は `-DVW_SDK_DIR` を毎回渡さずに済む（Claude のシェルでも、人の
+ターミナルや IDE でも同じ設定になる）。プリセット名は Vectorworks の版（`vw2026`）にする。
+SDK を同じ場所に置けば、他のプラグインのリポジトリとも同じ SDK を共有できる。
+
+```json
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "vw2026",
+      "binaryDir": "${sourceDir}/build-vw2026",
+      "cacheVariables": {
+        "VW_SDK_DIR": "$env{HOME}/vw-sdk/2026-NNA-eng-mac-SDK",
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    }
+  ],
+  "buildPresets": [{ "name": "vw2026", "configurePreset": "vw2026", "jobs": 4 }]
+}
+```
+
+```bash
+cd plugin && cmake --preset vw2026 && cmake --build --preset vw2026
+```
+
+- SDK は CI と同じ範囲を `scripts/fetch-vw-sdk.sh` で取る（`VW_SDK_PARTS=plugin`、
+  展開後およそ 800 MB）:
+  `VW_SDK_DIR=~/vw-sdk/2026-NNA-eng-mac-SDK VW_SDK_URL=https://release.vectorworks.net/latest/Vectorworks/2026-NNA-eng-mac-SDK.zip VW_SDK_PARTS=plugin scripts/fetch-vw-sdk.sh`
+  URL は "latest" なので、SDK の版が上がったら消して取り直す。
+- CMake 3.21 以上が要る（プリセットの `version: 3`）。Xcode が無くても
+  Command Line Tools だけでビルドできる（CI は Xcode 16.2 なのでコンパイラの版は違う）。
+- `plugin/CMakeUserPresets.json` と `plugin/build-vw2026/` は `.gitignore` 済み。
+  `.worktreeinclude` に載せてあるので、Claude Code が作る worktree にも写される。
+
 ## ソースの構成
 
 | ファイル | 中身 |

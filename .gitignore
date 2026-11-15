@@ -1,1 +1,6 @@
 __pycache__/
+
+# ローカルビルド（各自の CMakeUserPresets.json。プリセット vw2026 のビルド先は plugin/build-vw2026）
+/plugin/CMakeUserPresets.json
+/plugin/build-vw2026/
+/.claude/settings.local.json
