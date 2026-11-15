@@ -1,10 +1,12 @@
 __pycache__/
 
 # ローカルビルド。各自の設定（SDK の場所など）と、ビルド先（プリセットの build-<版>/、
-# plugin/README.md の手順の build/）。版ごとに足さずに済むよう型で除外する。
+# plugin/README.md の手順の build/、PR を混ぜて作るときに gather-probes.sh が作る build-probes/）。
+# 版ごとに足さずに済むよう型で除外する。
 /plugin/CMakeUserPresets.json
 /plugin/build*/
 /build/
+/build-probes/
 
 # Claude Code の各自の設定
 /.claude/settings.local.json

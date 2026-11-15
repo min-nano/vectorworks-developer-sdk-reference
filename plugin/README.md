@@ -808,8 +808,7 @@ cd plugin && cmake --preset vw2026 && cmake --build --preset vw2026
   Windows は Visual Studio の生成器を使うので、このプリセットは使わない（上の `cmake -S plugin -B build -A x64`）。
 - `plugin/CMakeUserPresets.json` とビルド先（`plugin/build*/`）は `.gitignore` 済み。
   `.worktreeinclude` に載せてあるので、Claude Code が作る worktree にも写る。ただし**ビルド先は
-  worktree ごとに別になる**（`${sourceDir}` の下）ので、worktree を作るたびに一から組み直す
-  （この Mac で 10 秒ほど）。
+  worktree ごとに別になる**（`${sourceDir}` の下）ので、worktree を作るたびに一から組み直す。
 
 ## ソースの構成
 
