@@ -748,6 +748,68 @@ cmake -S plugin -B build -DVW_SDK_DIR=... \
   -DVW_PROBE_MANIFEST="$PWD/build-probes/manifest.cmake"
 ```
 
+### プリセットで組む（macOS。`CMakePresets.json` ＋ `CMakeUserPresets.json`）
+
+手元のビルドの共通設定（ビルド先 `plugin/build-vw2026/`・ビルドタイプ `RelWithDebInfo`・
+生成器 `Unix Makefiles`）は、コミットしてある [`CMakePresets.json`](CMakePresets.json) の
+隠しプリセット `vw2026-base` にある。**各自の Mac に固有なもの——SDK の場所と並列数——だけ**を、
+コミットしない `plugin/CMakeUserPresets.json` に書き、`vw2026-base` を継いだ `vw2026` を作る
+（Claude のシェルでも、人のターミナルや IDE でも同じ設定になる）。プリセット名は
+Vectorworks の版にする。
+
+```json
+{
+  "version": 2,
+  "configurePresets": [
+    {
+      "name": "vw2026",
+      "inherits": "vw2026-base",
+      "cacheVariables": { "VW_SDK_DIR": "/Users/<you>/vw-sdk/2026-NNA-eng-mac-SDK" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "vw2026", "inherits": "vw2026-base", "configurePreset": "vw2026", "jobs": 4 }
+  ]
+}
+```
+
+```bash
+cd plugin && cmake --preset vw2026 && cmake --build --preset vw2026
+```
+
+- **`VW_SDK_DIR` はリポジトリの外の絶対パスで書く**（`$env{HOME}/...` でもよい）。worktree へは
+  このファイルしか写らないので、リポジトリの中の相対パスにすると worktree では SDK が見つからない。
+  環境変数 `VW_SDK_DIR` を使っているなら、`cacheVariables` ごと省けばそちらが使われる
+  （書くと環境変数より優先される）。SDK を同じ場所に置けば、他のプラグインのリポジトリとも
+  1 つの SDK を共有できる。
+- **`jobs` はマシンに合わせる**（目安はコア数。メモリの少ない Mac で Vectorworks と並べて動かすなら
+  半分ほどに抑える）。
+- SDK は CI と同じ範囲を `scripts/fetch-vw-sdk.sh` で取る（`VW_SDK_PARTS=plugin`、展開後およそ
+  800 MB）。**`VW_SDK_URL` は `.github/workflows/probe-build.yml` の mac ジョブの `env` と同じものを
+  使う**（ここへは写さない。版が上がったときに片方だけ古くなるため）。URL は "latest" なので、
+  SDK の版が上がったら消して取り直す。
+- **プリセットのビルドは全ターゲットを一度に作る**が、CI は殻（`--target VwSdkProbes`）を先に作り、
+  本体は `scripts/build-payloads.sh` で群ごとに作る。だから作業ツリーの `probes/runtime/` に
+  コンパイルできないプローブが 1 本でもあると、**手元ではビルド全体が止まる**（CI ではその群が
+  「※本体なし」になるだけ）。殻が壊れたのか見分けたいときは、殻だけを先に作る:
+  `cmake --build --preset vw2026 --target VwSdkProbes`
+- **ビルドタイプは `RelWithDebInfo`**（最適化しつつデバッグ情報を付けるので、Vectorworks が
+  落ちたとき lldb で場所を追える）。CI の `Release` とは最適化の段（`-O2` / `-O3`）と
+  デバッグ情報が違う（`NDEBUG` はどちらでも定義される）。最適化の違いで出方の変わる不具合は
+  `RelWithDebInfo` では再現しないことがあるので、そのときは `-DCMAKE_BUILD_TYPE=Release` で作り直す。
+- **手元のビルドは公開ビルドと別物として扱われる。** マニフェストを持たないので、ビルド ID と
+  殻の ID が `local` になり、ピッカー先頭の `＊ 新しいプローブビルドを確認して入れ替える…`
+  では常に「新しいものがある」と出る。**選ぶと公開版で丸ごと置き換わる**ので、手元のビルドで
+  追っている最中は選ばない。また CI のような署名はしていないので、入れて試すときは殻と本体の
+  両方に自分でかける（`codesign --force --deep --sign - VwSdkProbes.vwlibrary` と、各
+  `.vwpayload` に `codesign --force --sign -`。「使い方」の PR の成果物を入れる手順と同じ）。
+- CMake 3.20 以上で足りる（プリセットはスキーマの `version: 2`）。Xcode が無くても
+  Command Line Tools だけでビルドできる（CI は Xcode 16.2 なので、コンパイラの版は違う）。
+  Windows は Visual Studio の生成器を使うので、このプリセットは使わない（上の `cmake -S plugin -B build -A x64`）。
+- `plugin/CMakeUserPresets.json` とビルド先（`plugin/build*/`）は `.gitignore` 済み。
+  `.worktreeinclude` に載せてあるので、Claude Code が作る worktree にも写る。ただし**ビルド先は
+  worktree ごとに別になる**（`${sourceDir}` の下）ので、worktree を作るたびに一から組み直す。
+
 ## ソースの構成
 
 | ファイル | 中身 |
