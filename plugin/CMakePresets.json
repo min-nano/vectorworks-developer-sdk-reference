@@ -4,7 +4,7 @@
     {
       "name": "vw2026-base",
       "hidden": true,
-      "description": "Vectorworks 2026 の手元のビルド（macOS 専用）の共通設定。SDK の場所は CMakeUserPresets.json の vw2026 で継いで足す",
+      "description": "Vectorworks 2026 の手元のビルド（macOS）の共通設定。各自の vw2026 プリセットが継ぐ",
       "generator": "Unix Makefiles",
       "binaryDir": "${sourceDir}/build-vw2026",
       "cacheVariables": {
