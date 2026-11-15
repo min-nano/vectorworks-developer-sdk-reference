@@ -566,7 +566,10 @@ gSDK->SwitchToOpenFile(originRef);
 [issue #291](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/291)。描画で落ちない Windows を用意できないので、
 測れた範囲と理由を書いて閉じた（[表と落ちた記録](../Metrics/Documents.md#windowsほかの-vectorworks-が開くファイルと測れなかった残り291)）。
 
-- **2 つ目の Vectorworks はこの計算機では起動できない**（窓を出さずに消える。単一の起動に見える【推定】）。
+- **2 つ目の Vectorworks はこの計算機では起動できない。** 窓を出さず、エラーも出さずに 12 秒ほどで終了コード 0 で終わる
+  （まれに `libcef.dll` の中のアクセス違反で落ちる）。**引数のファイルは 1 つ目へ渡る**（#302）。同じ利用者のセッションでは
+  1 つしか動かない作り【推定】（仕様と書いた資料は見ていない）。CEF の単一起動（ProcessSingleton）は理由ではない（別の
+  `--user-data-dir` でも同じ）。何で 1 つ目を見つけているかは分かっていない。mac は `open -n` で 2 つ目が動くので **OS で違う**。
 - **外部のプロセスがファイルを書き込みで握っている状態が「使用中」の代わりになり、mac と同じくコピーに落ちる**
   （`OpenDocumentPath` は `true`・確認なしで `held コピー 1`・`fIsInMemoryOnly=yes`。元のファイルへの保存は 50331649）。
   書き込み・共有は読み取りのみ（`FileShare.Read`）で握る形が、2 つ目の VW が見るはずの状態【推定】。
