@@ -764,7 +764,7 @@ SDK を同じ場所に置けば、他のプラグインのリポジトリとも�
       "binaryDir": "${sourceDir}/build-vw2026",
       "cacheVariables": {
         "VW_SDK_DIR": "$env{HOME}/vw-sdk/2026-NNA-eng-mac-SDK",
-        "CMAKE_BUILD_TYPE": "Release"
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
       }
     }
   ],
@@ -780,6 +780,9 @@ cd plugin && cmake --preset vw2026 && cmake --build --preset vw2026
   展開後およそ 800 MB）:
   `VW_SDK_DIR=~/vw-sdk/2026-NNA-eng-mac-SDK VW_SDK_URL=https://release.vectorworks.net/latest/Vectorworks/2026-NNA-eng-mac-SDK.zip VW_SDK_PARTS=plugin scripts/fetch-vw-sdk.sh`
   URL は "latest" なので、SDK の版が上がったら消して取り直す。
+- ビルドタイプは `RelWithDebInfo`（最適化しつつデバッグ情報を付ける。Vectorworks が
+  落ちたとき lldb で場所を追える）。CI の `Release` とは最適化の段（`-O2` / `-O3`）と
+  デバッグ情報だけが違い、`NDEBUG` はどちらでも定義される。
 - CMake 3.21 以上が要る（プリセットの `version: 3`）。Xcode が無くても
   Command Line Tools だけでビルドできる（CI は Xcode 16.2 なのでコンパイラの版は違う）。
 - `plugin/CMakeUserPresets.json` と `plugin/build-vw2026/` は `.gitignore` 済み。
