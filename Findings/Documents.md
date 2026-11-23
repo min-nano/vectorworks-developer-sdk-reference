@@ -193,7 +193,8 @@ documents other than the current document"）。「今の文書を閉じてか�
   一覧が空なら保存を呼ばない。
 - **CLI への帰結**: `close` の後か `quit` の前で、一覧が空のときだけ `GetActiveDocument` が `false` になるまで
   `CloseDocument()` を呼ぶ（回数に上限を付ける）。閉じる順の工夫だけに頼らない（枠の順は SDK から読めない）。
-- **未確認**: Windows。確認で「保存」を押したとき何が書かれるか。
+- **未確認**: Windows。取り消した後に閉じる形。確認で「保存」を押したとき何が書かれるか
+  （[issue #323](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/323) に切り出した）。
 
 ### `.sta` を渡すとテンプレートとして扱われる——**無題の新規文書が開く**
 
