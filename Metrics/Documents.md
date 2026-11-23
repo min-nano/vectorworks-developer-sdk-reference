@@ -235,6 +235,66 @@ mac でも保存の警告の間に見張りが 11〜12 回刻んで OK を押し
   閉じた後に `/Applications/VW2026/` にもファイルは残らない（2 つ目の VW の `.held.lck` は残ったまま）。
 - 無題・未保存の変更あり・無変更の場面は、この節の上（mac の元の測定）にある。
 
+#### 閉じた図面が残り、終了で保存の確認が出る（#321。mac）
+
+**問い**（[issue #321](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/321)）:
+`CloseDocument()` で閉じた図面について、終了が保存の確認を出す条件・残る場所・避ける手立て。
+
+**環境**: VW 2026（31.6.0、build 872399）/ macOS 27.2.1。プローブ `ghost-close`（本体のビルド `c3a1b4c34d8f`。
+最初の 1 回だけ `b501b1358fe8`）を MCP ブリッジで走らせた＝**殻のタイマーの刻みの中**。2026-11-23。
+
+**手順**: 走り出しの新規図面を閉じて 0 枚にしてから、`OpenDocumentPath(nullptr)` で A, B, … を開き、
+`SwitchToOpenFile` → `CloseDocument()` で閉じた（「切替なし」と書いた回だけ前面をそのまま閉じた）。変更は
+undo イベントの中の矩形（event）。`CloseAllFilesAndQuitVectorworks(true, false)` の間だけ 100 ms の見張りの
+タイマー（共通モード）を仕掛け、出た窓の文言を書いて「キャンセル」を押した。最初の回だけ、見張りが確認と同時に
+出る飾りの窓を取り違えたので、画面操作で「キャンセル」を押した。回の間は残りが無くなるまで `CloseDocument()`。
+GAD は 0 枚になった後の `GetActiveDocument`。「—」は終了を頼んでいない。
+
+| 形 | GAD | 終了の確認 |
+| --- | --- | --- |
+| A event。A→B | A | 出る |
+| A 無題・無変更。A→B | A | 出る |
+| A 無題・イベントの外の矩形。A→B | A | 出る |
+| A 保存 → `MarkCurrentDocChanged()`。A→B | A | 出る |
+| A 保存 → レイヤを足す。A→B | A | 出る |
+| A 保存 → event。A→B | A | 出る |
+| A 保存 → event → `ClearUndoTableDueToUnsupportedAction()`。A→B | A | 出る |
+| A 保存 → event → `EndAndRemoveUndoEvent()`（yes）。A→B | A | 出る |
+| A 保存 → event → `DoMenuName("Undo")` が -3（取り消せていない）。A→B | A | 出る |
+| A 保存・無変更。A→B | A | 出ない（終了した） |
+| A 保存 → event → 上書き保存。A→B | A | 出ない（終了した） |
+| A event、切替と閉じる間・閉じた後に 1.5 秒ずつイベントを回す。A→B | A | — |
+| B event。切替なしで B→A | `false` | — |
+| A event。B→A | `false` | — |
+| A を前へ、B を前へ戻して B→A | `false` | — |
+| A を前へ、B へ切り替えて閉じ、A | `false` | — |
+| A を前へ、B を前へ、A へ切り替えて A→B | A | — |
+| 3 枚。A→B→C | B、もう一度 `CloseDocument()` で A | — |
+| 3 枚。B→A→C | B、もう一度で A | — |
+| 3 枚。A→C→B | A | — |
+| 3 枚（A,B event）。A→B→C | B、もう一度で A | B の確認、キャンセル → `CloseDocument()` → A の確認、キャンセル → `CloseDocument()` → GAD `false`、確認なしで終了 |
+| 3 枚（A 無題 event、B 保存・無変更）。A→B→C | B | 出ない（終了した） |
+| 3 枚。B を閉じ D を開き、C→D→A / D→C→A | `false` / `false` | — |
+| A を閉じ D を開き、B→D | `false` | — |
+| A を閉じ D を開き、D→B（切替なし / あり） | D（A は出ない） | — |
+| 2 枚残した上で N を開いて閉じる | B、もう一度で N（A は出ない） | — |
+| A を閉じ、保存済み・無変更の B が開いたまま終了（2 回） | — | 出ない（終了した） |
+| A event。A→B、`CloseAllFilesAndQuitVectorworks(false, false)` | A | 出ない（終了した） |
+| A event。A→B、メニューの ⌘Q の項目を起こす | A | 出る（キャンセルで残りは同じ） |
+| A event。A→B、確認のキャンセルの後、`CloseDocument()`（7 ms）→ 終了 | A → `false` | 出ない（終了した） |
+| A 残りのまま、新規を 1 枚開いて閉じる（前の回の残り 1 枚。`b501b1358fe8` で残し `c3a1b4c34d8f` で続けた） | `false` | 出ない（終了した） |
+| A 保存 → event。A→B、確認で「保存しない」 | A | 出る。戻った後に終了 |
+
+- 残っている間の口（最初の回）: `GetOpenFilesList` 0 件、`IApplication::GetDocumentsCount` 0、`GetCurrentLayer` nil、
+  `IsDocumentReady` `false`、`GetActiveDocument` `true`（`outSaved=no`）。B が開いている間の
+  `SwitchToOpenFile(閉じた A の fileRef)` は `false`。隠れた `NNADocumentWindow` は残らない図面も含め全部残り、
+  どれも `isDocumentEdited=yes` だった。
+- 保存済みの A の GAD のパスは、元のパスではなく `/Applications/VW2026/<ファイル名>`。
+- 同じ形でも、閉じた直後に B が前面になる回と、前面なし（1 件）になる回があった。残るかは同じ。
+- 片付けの `CloseDocument()` は 0〜22 ms、戻り値 `false`。
+- **残った図面で `SaveActiveDocumentPath(新しいパス)`**: 2 回とも SIGSEGV（`EXC_BAD_ACCESS`、
+  `GcSave` から `Vectorworks` の中）。1 回目は終了を頼んだ後の起動、2 回目は頼んでいない起動。ファイルはできなかった。
+
 ### `.sta` を `OpenDocumentPath` へ渡した実測
 
 `.sta` の拡張子を持つファイルのパスを `OpenDocumentPath` へ渡したときのログ:
