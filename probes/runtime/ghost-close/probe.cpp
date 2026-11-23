@@ -7,7 +7,7 @@
 //	一時ディレクトリの VwSdkProbes-ghost-close.do を 1 行ずつ行う（読んだら消す）。# は注釈。
 //	図面は new / open で付けた名前で指す（before = 走り出しに前面だった図面）。
 //	  new <名> / open <名> <P> / front <名> / close（前面を CloseDocument）/ closemenu
-//	  drop <名>（front → close）/ saveto <P> / save / docs / mark（MarkCurrentDocChanged）
+//	  drop <名>（front → close）/ saveto <P> / save / docs / active / mark（MarkCurrentDocChanged）
 //	  rect（イベントの外）/ event（イベントの中）/ layer（イベントの中）/ undo
 //	  clearundo / endremove / pump <ms>（OS のイベントも配る）
 //	  peek（閉じた図面が別の口から見えるか）/ quit ask|force / quitmenu（mac）
@@ -391,8 +391,15 @@ namespace
 			if (w->before.count(h) != 0 || w->logged.count(h) != 0)
 				continue;
 			w->logged.insert(h);
-			w->dialog = h;
-			w->seenAt = now;
+			bool hasButton = false;
+			for (const SdControl& c : SdControlsOf(h))
+				hasButton = hasButton || c.isButton;
+			// 確認と一緒に飾りの窓（ボタンなし）も出る。押す相手はボタンのある窓だけ。
+			if (hasButton)
+			{
+				w->dialog = h;
+				w->seenAt = now;
+			}
 			w->probe->log(w->tag + ":   [" + std::to_string(now) + "ms] 新しい窓 " +
 						  SdWindowText(h));
 			for (const SdControl& c : SdControlsOf(h))
@@ -527,6 +534,17 @@ namespace
 		probe.log("  SwitchToOpenFile(" + name + ")=" + SdFlag(ok) + " 前面=" + SdActivePath());
 	}
 
+	// 前面の図面の口が何を返すか（1 行）。
+	void GcActive(vwprobe::Report& probe)
+	{
+		bool saved = false;
+		Filing::IFileIdentifierPtr active(Filing::IID_FileIdentifier);
+		const bool got = gSDK->GetActiveDocument(&active, saved);
+		probe.log("  active: 件数=" + std::to_string(SdDocs().size()) +
+				  " GetActiveDocument=" + SdFlag(got) + " outSaved=" + SdFlag(saved) +
+				  " path=" + (got ? SdPathOf(active) : std::string("-")));
+	}
+
 	void GcClose(vwprobe::Report& probe, bool menu)
 	{
 		const std::size_t before = SdDocs().size();
@@ -540,6 +558,7 @@ namespace
 		watch.report(std::string(menu ? "DoMenuName(Close)=" : "CloseDocument=") +
 					 std::to_string(r) + " " + path + " 件数 " + std::to_string(before) + " -> " +
 					 std::to_string(SdDocs().size()) + " 前面=" + SdActivePath());
+		GcActive(probe);
 	}
 
 	void GcSave(vwprobe::Report& probe, const std::string& path)
@@ -548,6 +567,7 @@ namespace
 		fileID->Set(TXString(path.c_str()));
 		SdWatchScope watch(probe, "save");
 		const GSError err = gSDK->SaveActiveDocumentPath(fileID);
+		GcActive(probe);
 		watch.report("GSError=" + std::to_string(static_cast<long long>(err)) + " " + path);
 	}
 
@@ -736,6 +756,8 @@ namespace
 			GcSave(probe, arg);
 		else if (verb == "save")
 			GcSave(probe, SdActivePath());
+		else if (verb == "active")
+			GcActive(probe);
 		else if (verb == "docs")
 			SdLogDocs(probe, "docs");
 		else if (verb == "mark")
