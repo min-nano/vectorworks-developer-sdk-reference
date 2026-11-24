@@ -168,7 +168,7 @@ documents other than the current document"）。「今の文書を閉じてか�
 [issue #323](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/323)（Windows）。
 [実測（mac）](../Metrics/Documents.md#閉じた図面が残り終了で保存の確認が出る321mac)・
 [実測（Windows）](../Metrics/Documents.md#閉じた図面が残り終了で保存の確認が出る323windowsvw-2025)。
-以下は mac（VW 2026）で測ったもの。Windows で確かめた範囲は下の「Windows」。
+この直後の箇条は mac（VW 2026）で測ったもの。Windows で確かめた範囲は、下の「Windows（VW 2025）でも残り…」の項。
 
 - **`CloseDocument()` で閉じた図面が VW の中に残ることがある**（以下「残った図面」）。`GetOpenFilesList`・
   `IApplication::GetDocumentsCount` は 0、`GetCurrentLayer` は nil、`SwitchToOpenFile(閉じた fileRef)` は
@@ -202,12 +202,15 @@ documents other than the current document"）。「今の文書を閉じてか�
   - 上の片付け（一覧が空で `GetActiveDocument` が真の間だけ `CloseDocument()`）を最後の図面を閉じた直後に行うと、
     先に閉じた図面がもう一度閉じられ（VW のログの `FILING: quiet closing`）、終了の確認は出なかった（無題・保存済み、
     `CloseAllFilesAndQuitVectorworks(true, false)`・メニューの「終了」）。保存済みの図面のファイルは書き換わらない。
-  - 後に開いたものから閉じた形・1 枚だけの形では、片付けは何もせず（`GetActiveDocument` が偽）、確認も出なかった。
+  - 後に開いたものから閉じた形・1 枚だけの形では、片付けは `CloseDocument()` を呼ばず（ログに出ない。ここから
+    `GetActiveDocument` が偽だったと見た。各 1 回）、確認も出なかった。
   - `GetActiveDocument` の値は直に読んでいない。片付けが `CloseDocument()` を呼んだか（ログ）で見た。
 - **最後の図面を UI の「閉じる」で閉じると、残った図面も消える**（Windows（VW 2025）。mac は【推定】）。
-  `CloseDocument()` で図面を残したあと、最後の図面を Ctrl+W で閉じて終了を頼むと、片付けをしなくても確認は
-  出なかった（2 枚・3 枚の 2 形）。mac（VW 2026）は、⌘W で閉じたあとの終了で確認が出ず、終了の前の片付けも
-  何もしなかった（残っていなかった）ことからの推定。
+  `CloseDocument()` で図面を残したあと、最後の図面を UI の「閉じる」で閉じて終了を頼むと、片付けをしなくても
+  確認は出なかった（2 枚・3 枚の 2 形。各 1 回）。3 枚の形で残っていた枚数は見ていない（上の mac の枠の推定では
+  2 枚残る形だが、`CloseDocument()` で最後を閉じたときのように 1 枚しか消えないのかは確かめていない）。
+  mac（VW 2026）は、⌘W で閉じたあとの終了で確認が出ず、終了の前の片付けも `CloseDocument()` を呼ばなかった
+  （残っていなかった）。片付けの無い版で確認が出ないことは見ていない（各版 1 回）ので【推定】とする。
 - **未確認**: Windows の VW 2026。取り消した後に閉じる形。確認で「保存」を押したとき何が書かれるか。
   Windows で `GetActiveDocument`・`GetCurrentLayer` の値を直に読むこと
   （[issue #323](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/323)）。
@@ -898,7 +901,7 @@ SDK の説明文は「Closes all files and then gracefully quits Vectorworks」�
 
 - **呼び出しは戻る。** 図面を閉じ終えてから戻り（保存済み・図面 0 枚なら mac 99〜196 ms・
   Windows 711〜1287 ms）、**プロセスはその後に正常に終わる**（`atexit` まで届く。mac は
-  4〜8 秒後・Windows は 28〜30 秒後）。
+  4〜8 秒後・Windows は 28〜30 秒後。どちらも VW 2026）。
 - **保存の確認は「未保存の変更」がある文書にだけ出る**（`bAskForSave=true`）。
   保存済みの文書・図面 0 枚なら確認なしで終わる。
 - **一覧が空でも確認が出ることがある**（mac・Windows（VW 2025）。`CloseDocument()` で閉じた図面が残っているとき。上の

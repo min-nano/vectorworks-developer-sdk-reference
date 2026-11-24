@@ -295,6 +295,36 @@ GAD は 0 枚になった後の `GetActiveDocument`。「—」は終了を頼�
 - **残った図面で `SaveActiveDocumentPath(新しいパス)`**: 2 回とも SIGSEGV（`EXC_BAD_ACCESS`、
   `GcSave` から `Vectorworks` の中）。1 回目は終了を頼んだ後の起動、2 回目は頼んでいない起動。ファイルはできなかった。
 
+**CLI のプラグインから同じ形を走らせた回（mac）**: VW 2026（31.6.0、build 872399）/ macOS。2026-11-23。
+[vectorworks-plugin-command-line-interface](https://github.com/min-nano/vectorworks-plugin-command-line-interface)
+の PR #104 のプレリリース（`4c2eab2`・`0b1e0bd`。どちらも片付けあり）を `vw2026 install` で入れ、CLI から呼んだ
+（VwSdkProbes も入った状態）。利用者が実機で走らせ、PR に書いた結果
+（[`4c2eab2`](https://github.com/min-nano/vectorworks-plugin-command-line-interface/pull/104#issuecomment-7096103371)・[`0b1e0bd`](https://github.com/min-nano/vectorworks-plugin-command-line-interface/pull/104#issuecomment-7116717936)）を写した。
+道具・片付け・「片付けのログ」の意味は、下の Windows の節の手順と同じ。変更は UI で描いた矩形（変更ありの回は
+`object_counts` で見た）。確認の有無は、人が答えずにプロセスが終わったことと、VW のログに `closing (4)` が無い
+ことで見た（`0b1e0bd` のメニューの「終了」だけは、押した約 2 秒後の画面も 1 回見た）。各形 1 回。
+
+| 版 | 形（A を先に開く） | 終了の確認 | 片付けのログ |
+| --- | --- | --- | --- |
+| `4c2eab2` | 無題 A・B、A を変更。`close` A → B → `quit` | 出ない（6 秒で停止） | 出た |
+| `4c2eab2` | 保存済み A・B、A を変更。`close` A → B → `quit` | 出ない（6 秒） | 出た |
+| `4c2eab2` | 保存済み A・B、A を変更。`close` A → B → メニューの「終了」 | 出ない | 出た |
+| `4c2eab2` | 保存済み A・B、変更なし。`close` A → B → `quit` | 出ない（5 秒） | 出た |
+| `4c2eab2` | 保存済み A・B、A を変更。`close` B → A → `quit` | 出ない（6 秒） | 出ない |
+| `4c2eab2` | 保存済み 1 枚を変更。`close` → `quit` | 出ない（8 秒） | 出ない |
+| `4c2eab2` | 保存済み A・B、A を変更。`close` A → B を UI（⌘W）で閉じる → `quit` | 出ない（6 秒） | 出ない |
+| `0b1e0bd` | 無題 A・B、A を変更。`close` A → B → `quit` | 出ない（5 秒） | 出た |
+| `0b1e0bd` | 保存済み A・B、A を変更。`close` A → B → `quit` | 出ない（5 秒） | 出た |
+| `0b1e0bd` | 保存済み A・B、A を変更。`close` A → B → メニューの「終了」 | 出ない | 出た |
+| `0b1e0bd` | 保存済み A・B、A を変更。`close` B → A → `quit` | 出ない（5 秒） | 出ない |
+| `0b1e0bd` | 保存済み 1 枚を変更。`close` → `quit` | 出ない（6 秒） | 出ない |
+| `0b1e0bd` | 保存済み A・B、A を変更。`close` A → B を UI（⌘W）で閉じる → `quit` | 出ない（5 秒） | 出ない |
+
+- UI で閉じた形では、`quit` の呼び出しの間にも片付けの `quiet closing` は出なかった（ほかの形の `quit` の間は、
+  出典に書かれていない）。
+- 保存済みの A・B のファイルは、保存のあと・`close` のあと・終了のあとでハッシュが同じ。
+- 秒数がどこからどこまでかは、出典に書かれていない。片付けの無い版（`abde98f`）で、UI で閉じた形は走らせていない。
+
 #### 閉じた図面が残り、終了で保存の確認が出る（#323。Windows・VW 2025）
 
 **問い**（[issue #323](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/323)）:
@@ -312,39 +342,37 @@ GAD は 0 枚になった後の `GetActiveDocument`。「—」は終了を頼�
 見た）。保存済みの図面は道具 `save` で新しいパスへ保存したもの。道具 `close` は、`GetOpenFilesList` で引いた図面を
 `SwitchToOpenFile` で前に出して `CloseDocument()` を呼ぶ。片付けありの版の `close` は、閉じたあとの一覧が空なら、
 一覧が空で `GetActiveDocument` が真の間 `CloseDocument()` を呼ぶ（上限 64 回）。道具 `quit` は一覧が空であることを
-確かめ（片付けありの版は同じ片付けをしてから）、`CloseAllFilesAndQuitVectorworks(true, false)` を呼ぶ。「片付けの
-ログ」は VW のログに、最後の図面を閉じた直後、先に閉じた図面の `FILING: quiet closing (31)` がもう一度出たか。
+確かめ（空でなければ断る）、片付けありの版はそのあと同じ片付けをして、`CloseAllFilesAndQuitVectorworks(true, false)`
+を呼ぶ。「片付けのログ」は VW のログに、最後の図面を閉じた直後（`close` の中）、先に閉じた図面の
+`FILING: quiet closing (31)` がもう一度出たか。`quit` の中については、`quit` の呼び出しの間に同じ行が出たかを見た。
 確認の有無は、終了の最中の画面（数秒おきに 1〜2 枚）と、人が答えずに終わったかで見た。各形 1 回。
 
 | 版 | 形（A を先に開く） | 終了の確認 | 片付けのログ |
 | --- | --- | --- | --- |
 | `abde98f` | 無題 A・B、A を変更。`close` A → B → `quit` | 出る（「名称未設定 1」。`documents` は空。「いいえ」で終了、終了コード 0） | — |
-| `abde98f` | 無題 A・B、A を変更。`close` A → B を UI（Ctrl+W）で閉じる → `quit` | 出ない | — |
-| `abde98f` | 3 枚、A・B を変更。`close` A・B → 3 枚目を UI で閉じる → `quit` | 出ない | — |
+| `abde98f` | 無題 A・B、A を変更。`close` A → B を UI の「閉じる」で閉じる → `quit` | 出ない | — |
+| `abde98f` | 3 枚、A・B を変更。`close` A・B → 3 枚目を UI の「閉じる」で閉じる → `quit` | 出ない | — |
 | `4c2eab2` | 無題 A・B、A を変更。`close` A → B → `quit` | 出ない | 出た |
 | `4c2eab2` | 保存済み A・B、A を変更。`close` A → B → メニューの「終了」 | 出ない（終了コード 0） | 出た |
 | `4c2eab2` | 保存済み A・B、A を変更。`close` A → B → `quit` | 出ない（終了コード 0） | 出た |
 | `4c2eab2` | 無題 A・B、A を変更。`close` B → A → `quit` | 出ない（画面は見ていない。14 秒で終了） | 見ていない |
 | `4c2eab2` | 無題 1 枚を変更。`close` → `quit` | 出ない（画面は見ていない。16 秒で終了） | 見ていない |
-| `4c2eab2` | 無題 A・B、A を変更。`close` A → B を UI で閉じる → `quit` | 出ない | 出ない |
+| `4c2eab2` | 無題 A・B、A を変更。`close` A → B を UI（Ctrl+W）で閉じる → `quit` | 出ない | 出ない |
 | `0b1e0bd` | 無題 A・B、A を変更。`close` A → B → `quit` | 出ない | 出た |
 | `0b1e0bd` | 保存済み A・B、A を変更。`close` A → B → メニューの「終了」 | 出ない | 出た |
 | `0b1e0bd` | 無題 A・B、A を変更。`close` B → A → `quit` | 出ない | 出ない |
 | `0b1e0bd` | 無題 1 枚を変更。`close` → `quit` | 出ない | 出ない |
-| `0b1e0bd` | 無題 A・B、A を変更。`close` A → B を UI で閉じる → `quit` | 出ない | 出ない |
+| `0b1e0bd` | 無題 A・B、A を変更。`close` A → B を UI（Ctrl+W）で閉じる → `quit` | 出ない | 出ない |
 
 - 保存済みの A・B のファイルは、保存のあと・`close` のあと・終了のあとで SHA-256（先頭 16 桁）と更新時刻が同じ
   （`4c2eab2` の `quit` の回・`0b1e0bd` のメニューの「終了」の回）。
-- 片付けありの版の `quit` の中で、片付けのログが出た回は無い。
-- `quit` での終了は 11〜15 秒（`0b1e0bd`）。
+- 片付けありの版の UI で閉じた形では、`quit` の呼び出しの間にも片付けの `quiet closing` は出なかった（ほかの形の
+  `quit` の間は、出典に書かれていない）。
+- `quit` での終了は 11〜15 秒（`0b1e0bd`）。この秒数と上の 14 秒・16 秒が、どこからどこまでを測ったものかは、
+  出典に書かれていない。
+- `abde98f` の UI で閉じた 2 形は、出典に「UI で閉じる」とだけあり、Ctrl+W かメニューかは書かれていない。
 - `0b1e0bd` の無題 A・B を `close` A → B の順に閉じた回は、矩形を確かめるため、閉じる前に A のタブを前面にした。
 - `GetActiveDocument` の値は読んでいない（片付けが `CloseDocument()` を呼んだかをログで見た）。
-
-**mac の同じプラグインの回**（VW 2026（31.6.0、build 872399）/ macOS。`4c2eab2`・`0b1e0bd`。2026-11-23。
-[`4c2eab2`](https://github.com/min-nano/vectorworks-plugin-command-line-interface/pull/104#issuecomment-7096103371)・
-[`0b1e0bd`](https://github.com/min-nano/vectorworks-plugin-command-line-interface/pull/104#issuecomment-7116717936)）:
-保存済み A・B、A を変更。`close` A → B を UI（⌘W）で閉じる → `quit`: 確認なし（人が答えずに終わり、ログに
-`closing (4)` が無い）。片付けのログは `close` でも `quit` でも出なかった（各版 1 回）。片付けの無い版では見ていない。
 
 ### `.sta` を `OpenDocumentPath` へ渡した実測
 
