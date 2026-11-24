@@ -21,7 +21,7 @@
   ファイルの更新時刻**で確かめる。
 - **`CloseDocument()` は確認を出さずに捨てる**（mac / Windows）。「閉じる」（`DoMenuName("Close", 0)`）は
   確認を出しうる。**「未保存の変更があるか」は SDK から読めない**（読めるのは「ディスクにあるか」だけ）。
-- **`CloseDocument()` は閉じる順によって図面を中に残し、あとの終了で確認を出す**（mac。#321）。
+- **`CloseDocument()` は閉じる順によって図面を中に残し、あとの終了で確認を出す**（mac・Windows（VW 2025）。#321・#323）。
 - **既にあるファイルへの別名保存はできない**（ダイアログなしの 50331649、開いている図面と文字列が
   完全一致なら警告で止まる）。**上書き保存でダイアログが出る場面は、呼ぶ前に OS に聞けば当てられる**
   （mac と Windows で聞き方が違う。下記 #293・#298・#304）。
@@ -162,10 +162,13 @@ documents other than the current document"）。「今の文書を閉じてか�
 - **`.<名前>.lck` は閉じると消える。** コピーは元のフォルダに `.lck` を作らず、閉じた後にアプリのフォルダにも
   ファイルは残らない。
 
-#### 閉じた図面が残り、終了で保存の確認が出る（#321。mac。**Windows は未確認**）
+#### 閉じた図面が残り、終了で保存の確認が出る（#321・#323。mac・Windows）
 
-[issue #321](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/321)。
-[実測](../Metrics/Documents.md#閉じた図面が残り終了で保存の確認が出る321mac)。
+[issue #321](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/321)（mac）・
+[issue #323](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/323)（Windows）。
+[実測（mac）](../Metrics/Documents.md#閉じた図面が残り終了で保存の確認が出る321mac)・
+[実測（Windows）](../Metrics/Documents.md#閉じた図面が残り終了で保存の確認が出る323windowsvw-2025)。
+以下は mac（VW 2026）で測ったもの。Windows で確かめた範囲は下の「Windows」。
 
 - **`CloseDocument()` で閉じた図面が VW の中に残ることがある**（以下「残った図面」）。`GetOpenFilesList`・
   `IApplication::GetDocumentsCount` は 0、`GetCurrentLayer` は nil、`SwitchToOpenFile(閉じた fileRef)` は
@@ -193,8 +196,21 @@ documents other than the current document"）。「今の文書を閉じてか�
   一覧が空なら保存を呼ばない。
 - **CLI への帰結**: `close` の後か `quit` の前で、一覧が空のときだけ `GetActiveDocument` が `false` になるまで
   `CloseDocument()` を呼ぶ（回数に上限を付ける）。閉じる順の工夫だけに頼らない（枠の順は SDK から読めない）。
-- **未確認**: Windows。取り消した後に閉じる形。確認で「保存」を押したとき何が書かれるか
-  （[issue #323](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/323) に切り出した）。
+- **Windows（VW 2025）でも残り、同じ片付けで確認が出なくなる**（#323。VW 2026 の Windows は未確認）。
+  - 先に開いた無題の図面を変更し、先・後の順に `CloseDocument()` で閉じると、一覧が空なのに終了で、先に閉じた
+    図面（「名称未設定 1」）の保存の確認が出た。
+  - 上の片付け（一覧が空で `GetActiveDocument` が真の間だけ `CloseDocument()`）を最後の図面を閉じた直後に行うと、
+    先に閉じた図面がもう一度閉じられ（VW のログの `FILING: quiet closing`）、終了の確認は出なかった（無題・保存済み、
+    `CloseAllFilesAndQuitVectorworks(true, false)`・メニューの「終了」）。保存済みの図面のファイルは書き換わらない。
+  - 後に開いたものから閉じた形・1 枚だけの形では、片付けは何もせず（`GetActiveDocument` が偽）、確認も出なかった。
+  - `GetActiveDocument` の値は直に読んでいない。片付けが `CloseDocument()` を呼んだか（ログ）で見た。
+- **最後の図面を UI の「閉じる」で閉じると、残った図面も消える**（Windows（VW 2025）。mac は【推定】）。
+  `CloseDocument()` で図面を残したあと、最後の図面を Ctrl+W で閉じて終了を頼むと、片付けをしなくても確認は
+  出なかった（2 枚・3 枚の 2 形）。mac（VW 2026）は、⌘W で閉じたあとの終了で確認が出ず、終了の前の片付けも
+  何もしなかった（残っていなかった）ことからの推定。
+- **未確認**: Windows の VW 2026。取り消した後に閉じる形。確認で「保存」を押したとき何が書かれるか。
+  Windows で `GetActiveDocument`・`GetCurrentLayer` の値を直に読むこと
+  （[issue #323](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/323)）。
 
 ### `.sta` を渡すとテンプレートとして扱われる——**無題の新規文書が開く**
 
@@ -885,8 +901,8 @@ SDK の説明文は「Closes all files and then gracefully quits Vectorworks」�
   4〜8 秒後・Windows は 28〜30 秒後）。
 - **保存の確認は「未保存の変更」がある文書にだけ出る**（`bAskForSave=true`）。
   保存済みの文書・図面 0 枚なら確認なしで終わる。
-- **一覧が空でも確認が出ることがある**（mac。`CloseDocument()` で閉じた図面が残っているとき。上の
-  [#321](#閉じた図面が残り終了で保存の確認が出る321macwindows-は未確認)）。
+- **一覧が空でも確認が出ることがある**（mac・Windows（VW 2025）。`CloseDocument()` で閉じた図面が残っているとき。上の
+  [#321・#323](#閉じた図面が残り終了で保存の確認が出る321323macwindows)）。
 - **確認で「キャンセル」すると、呼び出しはそのまま戻り、図面は開いたまま残る。**
   Vectorworks は動き続け、`gSDK` もふつうに呼べる。**戻り値が無いので、キャンセルされたことは
   `GetOpenFilesList()` の件数（減っていない）か、プロセスが生きていることで知る。**
