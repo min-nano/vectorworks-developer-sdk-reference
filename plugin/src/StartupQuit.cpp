@@ -376,7 +376,7 @@ namespace vwprobe
 			const char* appData = std::getenv("APPDATA");
 			if (appData == nullptr)
 				return std::string();
-			return std::string(appData) + "\\Nemetschek\\Vectorworks\\2025\\VW User Log.txt";
+			return std::string(appData) + "\\Nemetschek\\Vectorworks\\2026\\VW User Log.txt";
 #endif
 		}
 

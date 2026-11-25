@@ -10,7 +10,7 @@
 出どころは MCP ブリッジ——外からの要求を拾うために、ウェブパレットの HTML の
 `setInterval`（250 ms）から C++ を呼んでいたが、**パレットを隠すと 60 秒に 1 回まで
 間引かれる**ことが実機で分かった（下記 5）。
-続く問いは issue #205 / #206 / #213 / #215 / #224 / #230 / #235 / #269 / #312 / #313 / #325 で測った
+続く問いは issue #205 / #206 / #213 / #215 / #224 / #230 / #235 / #269 / #312 / #313 / #316 / #325 で測った
 （各節の冒頭に環境とビルドを書く）。
 
 ## 1. ISDK に「暇なとき・周期的に」の口を探した（ヘッダ・ソースを読んだ）
@@ -793,7 +793,7 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 **実測**（VW 2026 Update 6（Build 872399）/ macOS 27.0.1・arm64。2026-11-12。殻
 `1f9530621896`（ビルド `32f039385a3c`）。
 [issue #312](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/312)。
-**Windows は未測定**——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)。）
+Windows は下記「Windows で起動の途中・戻った後を測った実測」。）
 
 プローブは走らせるまで読み込まれないので、殻に記録を足した（`plugin/src/StartupQuit.cpp`。
 [PR #314](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/314)）。
@@ -864,7 +864,7 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 #315 のブランチのコミット `91dc35b`）、
 ビルド `32f039385a3c`。ローカルの Claude Code から MCP ブリッジで走らせた。
 [issue #313](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/313)。
-**Windows は未測定**——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)。）
+Windows は下記「Windows で起動の途中・戻った後を測った実測」。）
 
 #230 の `quit-from-timer` と同じ作り（駆動 100 ms・観測 50 ms の 2 本。どちらも
 `kCFRunLoopCommonModes`。書き溜めを次に走らせたときに報告する）。図面は刻みの中で一時
@@ -892,12 +892,61 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
 - `kNotifyBeforeApplicationQuit` は 1 度目の呼び出しの中で 1 回だけ届き、2 度目以降には
   届かなかった。
 
+#### Windows で起動の途中・戻った後を測った実測
+
+**実測**（VW 2025（30.8.0 build 841679）/ Windows 11 Pro・仮想環境。2026-11-25。PR #329 のビルド
+`ed72918a9a70`（殻 `44274523dccb`。VW 2025 の SDK で組み、`VW User Log.txt` の場所だけ 2025 に向けた）。
+[issue #316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)。）
+
+道具は #312・#317 の殻の記録（`plugin/src/StartupQuit.cpp`。`SetTimer` 50 ms）と、#313 のプローブ
+`quit-twice`（コミット `91dc35b` から戻し、マージ前に消した）。殻の `module_main` の記録も取った。
+起動はプロセスを直接起動し、終了コードは `WaitForExit` で取った。札は 2 行目に `reg=init`。
+
+- VW 2025 の exe には `UnknownDeveloperPlugIns`・`UnknownPluginsDialog` の文字列が無い（2026 の exe にはある）。
+  「開発元不明のプラグイン」のダイアログを出す回は走らせていない。
+- 起動のときに、`Plug-ins` には `cli` と `VwSdkProbes` を置いた（下の表に書いた回を除く）。
+
+**起動の途中（40 回）**: 最初の刻みは殻の読み込みから 29.95〜48.89 秒後（最初の 1 回だけ 48.9 秒、ほかは
+30.0〜40.5 秒）。最初の刻みの 22〜78 ms 後に `HomeScreen` の行が見え、その 39〜374 ms 後に最初の `BEFO`。
+最初の刻みより前に届いた通知は `TLCh` 1 回だけ。`NWKS`・`WKSL`・`AppA`・`DlgO`・`DONE` は 0 回。
+
+| 札 | `cli` | 回数 | 呼んだ時刻（ホーム画面の行から） | 呼び出しの所要 | 結末 |
+| --- | --- | --- | --- | --- | --- |
+| `never`（呼ばない。`taskkill` で閉じた） | あり | 1 | — | — | 約 15 秒後に `atexit` |
+| `first`（1 周目。残りを片付けず） | あり | 3 | 2〜4 ms | 742・831・800 ms | 1・3 回目は 150 秒後も残り、`atexit` なし（3 回目は 6 分後も残った）。2 回目は終了コード 0 |
+| `first`（2 周目。毎回片付けて） | あり | 3 | 1〜7 ms | 609〜1439 ms | 3 回とも 200 秒後も残った |
+| `mark=BEFO+0`（2 周目） | あり | 3 | 2.5〜3.0 秒 | 626〜1189 ms | 1 回目は終了コード 0、2・3 回目は 200 秒後も残った |
+| `mark=BEFO+30000` | あり | 3 | 30.1 秒 | 611〜702 ms | 3 回とも終了コード 0 |
+| `mark=BEFO+5000` | あり | 3 | 5.1 秒 | 543〜582 ms | 3 回とも終了コード 0 |
+| `mark=BEFO+15000` | あり | 3 | 15.1 秒 | 561〜572 ms | 3 回とも終了コード 0 |
+| `never` ＋ ホーム画面の後に `WM_CLOSE`（約 4 秒後） | あり | 3 | — | — | 3 回とも終了コード 0 |
+| `first` | **なし** | 3 | 2〜5 ms | 1167〜1531 ms | 3 回とも終了コード 0 |
+| `mark=BEFO+0` | **なし** | 3 | 2.3〜2.9 秒 | 593〜824 ms | 3 回とも終了コード 0 |
+| `first`（`cli` を戻して確かめ直し） | あり | 2 | 2 ms | 1523・1557 ms | 2 回とも終了コード 0 |
+| `first`（交互） | あり | 5 | 3〜16 ms | 1214〜1613 ms | 4 回は終了コード 0、1 回（4 回目）は終了コード `0xE06D7363`・`atexit` なし |
+| `first`（交互） | **なし** | 5 | 3〜6 ms | 1028〜1973 ms | 5 回とも終了コード 0 |
+
+- 表の順に走らせた（1 周目と 2 周目の間に残りのプロセスを止めて片付けた。1 周目の 2・3 回目は前の回の残りと重なった）。
+- 終了を呼んだ 36 回すべてで `kNotifyBeforeApplicationQuit` は 1 回、戻った後の刻み 0 回、呼び出しの最中の入り直し 0 回、図面は 0 枚。
+  -2 と -5 は残った回にも届いた。残った本体は窓を 1 つも持たず、CPU は 5 秒で 0.03 秒。
+  子プロセス（GPU・ネットワーク）と `vectorworks_error_handler` も残った。
+- 残らなかった回は、呼び出しが戻って 10.5〜11.8 秒後に `atexit`。
+
+**戻った後にもう一度（`quit-twice`。1 周）**: 図面は新規の空図面 1 枚を一時ファイルへ保存して閉じ、0 枚で呼んだ。
+新規図面のときに出るグラフィックカードの警告は画面で OK を押した。
+
+| 段 | 1 度目の所要 | 戻った後の刻み | 2 度目の呼び出し | `BApQ` | 戻る → -2 | 戻る → `atexit` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `once` | 768 ms | 0 回 | — | 1 回 | 5230 ms | 13.8 秒 |
+| `first` | 690 ms | 0 回 | 0 回 | 1 回 | 4759 ms | 12.8 秒 |
+| `every` | 675 ms | 0 回 | 0 回 | 1 回 | 4474 ms | 12.8 秒 |
+
 #### 起動を終えた目印を探した実測
 
 **実測**（VW 2026 Update 6（Build 872399）/ macOS 27.0.1・arm64。2026-11-14。殻
 `94376182bb4c`（ビルド `f4b6c6464fae`）。
 [issue #317](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/317)。
-**Windows は未測定**——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)。）
+Windows は下記「Windows で起動の途中・戻った後を測った実測」。）
 
 #312 の殻の記録（`plugin/src/StartupQuit.cpp`）に、目印の候補を並べて書く記録を足した
 （[PR #318](https://github.com/min-nano/vectorworks-developer-sdk-reference/pull/318)）。
