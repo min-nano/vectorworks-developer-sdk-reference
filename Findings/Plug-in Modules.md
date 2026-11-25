@@ -118,7 +118,7 @@ VM・VW 2026 は x64 のエミュレーション。[実測](../Metrics/Plug-in%2
 - **利用者が閉じる道でも `kPluginModuleDeinit`（-2）は終わる前に 1 回届く**（閉じて 7〜14 秒後、
   その 0.5 秒後に -5、-2 の 19〜21 秒後に終了）。刻みから `CloseAllFilesAndQuitVectorworks` を呼んだ道
   （[Timers and Notifications](Timers%20and%20Notifications.md) 4 の 9）と同じ並び。刻みは
-  **`kNotifyBeforeApplicationQuit` の後には来ない**（同 4 の 9「利用者が閉じる道の刻み」。#269）。
+  **`kNotifyBeforeApplicationQuit` の後には来ない**（同 4 の 9「利用者が閉じる道の刻み」。#269。**mac では来る**——#325）。
 - ホーム画面が出た直後に閉じるとタイトルの無いダイアログが開いていることがあり、終わるまで
   38〜50 秒かかる。**起動の途中（ホーム画面の前）に送った `CloseMainWindow` は捨てられる**——
   終了の途中を作るのにこの手は使えない。

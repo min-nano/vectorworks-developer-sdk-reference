@@ -22,6 +22,7 @@
 | **起動を終えた（ホーム画面が出た）こと**を刻みの側から知るには（mac） | **最初の `kNotifyBeforePendingUpdate`（`'BEFO'`）を目印にする。** VW のアイドルから来る通知で、起動画面・Cineware の起動待ち・「開発元不明のプラグイン」のダイアログの間には届かず、ホーム画面の後に初めて届く。その後の刻みから終了を呼ぶとふつうに終わる。`kNotifyNewWrkSpaceLoaded` / `kNotifyApplicationActivate` は起動では届かず、ワークスペース名はダイアログの間にもう読めるダイアログで「続ける」を押した後も同じ（下記 4 の 9「起動を終えた目印」。Windows は未測定） |
 | 終了の呼び出しが**戻った後**の刻みから、もう一度呼ぶと（mac） | **何も起きない。** 0〜1 ms で戻り、終わり方も変わらない（8 回続けても同じ）。2 度目以降に `kNotifyBeforeApplicationQuit` は届かない（下記 4 の 9。Windows は未測定——[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)） |
 | **利用者が閉じる**（メニューの「終了」）とき、刻みはいつまで来るか（Windows） | **`kNotifyBeforeApplicationQuit` の後には 1 度も来ない**（11 回）。閉じる指示から BApQ までの数 ms〜63 ms に 0〜2 回来るだけ。その後 -2（約 7〜9 秒後）・`atexit`（約 27〜29 秒後）まで刻みは無い。**＝閉じていく途中に刻みから `gSDK` を呼ぶ場面は無い**（下記 4 の 9「Windows」） |
+| **利用者が閉じる**（メニューの「終了」・⌘Q）とき、刻みはいつまで来るか（mac） | **`kNotifyBeforeApplicationQuit` の後にも 3〜5 回来る**（7 回とも。図面が閉じた後の 2.2〜4.9 秒の間。モードは `NSEventTrackingRunLoopMode`）。**そこから読んでも落ちず、`GetOpenFilesList()` は 0 件・`GetCurrentLayer()` は `nullptr`。** -2 の後には来ない。終了コードは 0 で、**タイマーを止めなくてよい**（下記 4 の 9「利用者が閉じる道の刻み（mac）」） |
 | **図面が 1 枚も開いていない**とき、刻みから `GetCurrentLayer()` を呼ぶと | **`nullptr` が返り、落ちない**（閉じた後も起動直後も）。`GetOpenFilesList()` の件数と**刻みごとに常に一致**（mac 1 万 2 千回余り・Windows 3 万 5 千回余りで食い違い 0）。ただし**閉じた文書のレイヤと別の文書のレイヤが同じアドレスで返る**ので、ハンドルは刻みごとに引き直す（mac / Windows とも。下記 4 の 8） |
 | 図面が開いていないときにウェブパレットを出せるか | **出す口は無い**（`SetWebPaletteVisibility` を呼んでも出ないのは実測）。**「文書が無い間は動かない」前提で設計する**（下記 6） |
 
@@ -398,6 +399,30 @@ gSDK->UnregisterNotificationProcedure(proc, kNotifyDocOpen); // ISDK.h:1759
 - 11 回中 1 回（図面を閉じてホーム画面へ戻した後に閉じた回）、**終了の途中に `libcef.dll_unloaded`
   の `0xC0000005` で落ちた**。刻みは `BApQ` 以降 0 回なので刻みが落としたものではない
   （[Plug-in Modules](Plug-in%20Modules.md)「OS タイマーを持つ常駐プラグイン…」と同じモジュール）。
+
+#### 利用者が閉じる道の刻み（mac）
+
+（[issue #325](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/325)。
+[8 回の表](../Metrics/Timers%20and%20Notifications.md#利用者が閉じる道の刻みmac)。
+タイマーは 50 ms・`kCFRunLoopCommonModes`）
+
+- **Windows と違い、`kNotifyBeforeApplicationQuit`（`BApQ`）の後にも刻みが 3〜5 回届く**（仕掛けた
+  7 回とも。メニューの「終了」6 回・⌘Q 1 回）。図面が閉じた後に、0.1〜2.1 秒の間に固まって届く。
+  最後の刻みから -2 まで 1.6〜2.4 秒空き、**-2 の後には 1 度も来ない**。
+- **その刻みから `gSDK` を読んでよい**（読んだのは `GetOpenFilesList`・`GetCurrentLayer`・
+  `IsCurrentlyBuildingAnUndoEvent`・`IsDocumentReady`・`GetCurrentWorkspaceFileName`）。落ちず、図面は
+  もう閉じているので**0 件・`nullptr`・`no`**。**書く側は測っていない**——0 件なら何もしない作りにする。
+- **届くのは `NSEventTrackingRunLoopMode` の間だけ**だった。
+- **保存の確認の最中も刻み続け、読める**（`NSModalPanelRunLoopMode`。図面は開いたまま＝`docs=1`、
+  undo は `no`）。「キャンセル」すれば刻みもそのまま続く。**`BApQ` は確認より前に、キャンセルされる
+  回にも届く**（刻みから頼む道と同じ。「終わる」合図にならない）。
+- 並びは **メニューの指示 → `BApQ`（0〜1 ms）→（保存の確認）→ `DocClose` → 刻み 3〜5 回 → -2 →
+  -5 → `NSApplicationWillTerminateNotification` → `atexit` → 終了**。`BApQ` から `atexit` まで、確認の
+  無い回で 4.9〜8.9 秒。
+- **終わり方は変わらない**: 終了コードを取れた 6 回はすべて 0、クラッシュレポートは 1 件も無い。
+  プラグイン（`cli` と VwSdkProbes）を外した対照 1 回も 0。`gSDK` を読まない回でも刻みの届き方は同じ。
+- **帰結: mac でも終了の途中にタイマーを止めなくてよい。** ただし「`BApQ` の後に刻みは来ない」を
+  当てにしてはいけない（Windows だけで成り立つ）。
 
 #### 起動の途中の刻みから（issue #312）
 

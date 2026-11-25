@@ -10,7 +10,7 @@
 出どころは MCP ブリッジ——外からの要求を拾うために、ウェブパレットの HTML の
 `setInterval`（250 ms）から C++ を呼んでいたが、**パレットを隠すと 60 秒に 1 回まで
 間引かれる**ことが実機で分かった（下記 5）。
-続く問いは issue #205 / #206 / #213 / #215 / #224 / #230 / #235 / #269 / #312 / #313 で測った
+続く問いは issue #205 / #206 / #213 / #215 / #224 / #230 / #235 / #269 / #312 / #313 / #325 で測った
 （各節の冒頭に環境とビルドを書く）。
 
 ## 1. ISDK に「暇なとき・周期的に」の口を探した（ヘッダ・ソースを読んだ）
@@ -739,6 +739,54 @@ Vectorworks が終わるので、報告は返らない。**刻みが 1 行ずつ
   （[Plug-in Modules](Plug-in%20Modules.md)「OS タイマーを持つ常駐プラグイン…」）。
   この回は**ブリッジが図面を閉じてホーム画面へ戻った後**に閉じていた（#257 は起動して
   ホーム画面から閉じただけ）。同じ形の 0 枚の回は 5 回中 1 回。
+
+#### 利用者が閉じる道の刻み（mac）
+
+**実測**（VW 2026 Update 6（31.6.0 Build 872399）/ macOS 27.2.1・arm64 の仮想マシン。2026-11-25。殻
+`94376182bb4c`（ビルド `b501b1358fe8`）・本体 `3032bce48ee0`。`cli` プラグインも入れたまま。
+[issue #325](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/325)）。
+
+プローブ `user-quit-mac`（#269 の `user-quit-ticks` を広げたもの）が 50 ms の `CFRunLoopTimer` を
+`kCFRunLoopCommonModes` に登録し（本体はピン留め）、刻みごとに壁時計のミリ秒とモードを 1 行書いて
+閉じ、続けて `GetOpenFilesList`・`IsCurrentlyBuildingAnUndoEvent`・`GetCurrentLayer`・
+`GetCurrentWorkspaceFileName`・`IsDocumentReady` を読んで、もう 1 行書く。`kNotifyBeforeApplicationQuit`・
+`kNotifyDocClose`・`atexit`・殻の action の記録（-2・-5）のほか、`CFNotificationCenterGetLocalCenter()` で
+`NSMenuDidBeginTracking` / `DidEndTracking` / `WillSendAction` / `DidSendAction` と
+`NSApplicationWillTerminate` の通知を受けて同じ時計で書いた。
+
+- 「終了」は人がメニューから選んだ（B2 だけ ⌘Q）。A2 以降は Vectorworks の実行ファイルを
+  子プロセスとして起動し、`wait` で終了コードを取った。A1 は `open` で起動したので取れていない。
+- 図面はブリッジが開いて一時ファイルへ保存したもの。0 枚の回はそれを `vw_cleanup` で閉じてから。
+  「変更あり」は刻みの中で `MarkCurrentDocChanged()` を呼んで作った。
+- A2 は起動の行き違いで Vectorworks がもう 1 つ立ち上がり、`SIGTERM` で終わらせてから「終了」を押した
+  （刻みの記録は 1 つのプロセスのもの）。
+
+時刻は**終わった回の `BApQ`** からの ms（C1・C2 は 2 度目の `BApQ` から）。
+
+| 回 | 図面 | `gSDK` | 操作 | `DocClose` | `BApQ` の後の刻み（確認の最中を除く） | -2 | `WillTerminate` | `atexit` | 終了 | 終了コード |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A1 | 1 枚・保存済み | 読む | メニュー | +44 | 5 回（+2388〜+3406） | +5191 | +6049 | +6059 | +7281 | 未取得 |
+| A2 | 1 枚・保存済み | 読む | メニュー | +65 | 3 回（+2845〜+2920） | +4523 | +4846 | +4876 | +5333 | 0 |
+| B1 | 0 枚 | 読む | メニュー | 無し | 4 回（+2216〜+2898） | +4876 | +5318 | +5326 | +6318 | 0 |
+| B2 | 0 枚 | 読む | ⌘Q | 無し | 5 回（+2804〜+4877） | +7318 | +8781 | +8933 | +10957 | 0 |
+| C1 | 1 枚・変更あり | 読む | メニュー → キャンセル → メニュー → 保存しない | +11417 | 5 回（+13811〜+14470） | +16365 | +16839 | +16849 | +17808 | 0 |
+| C2 | 1 枚・変更あり | 読む | 同上 | +7174 | 5 回（+9326〜+10034） | +11713 | +12112 | +12147 | +13041 | 0 |
+| D1 | 1 枚・保存済み | 読まない | メニュー | +78 | 4 回（+2343〜+3232） | +4984 | +5455 | +5462 | +6498 | 0 |
+| N1 | 0 枚（ホーム画面のまま） | プラグイン無し | メニュー | — | — | — | — | — | — | 0 |
+
+- `BApQ` の後の刻み（確認の最中を除く）は 31 回とも `NSEventTrackingRunLoopMode`。読む回の 27 回は
+  どれも `docs=0 undo=no layer=無し ready=no`、ワークスペース名は読めた。-2 の後の刻みは 0 回。
+- 読む 6 回の全刻み 42212 回で、読みの前の行と後の行の数が一致した（読みの途中で止まった刻みは無い）。
+  `undo=yes` は 0 回。
+- メニューを開いている間は `NSEventTrackingRunLoopMode` で 50 ms ごとに刻んだ。追跡が終わって
+  `WillSendAction` と `BApQ` は 0〜2 ms 後。⌘Q の回は追跡の通知が無く `WillSendAction` から始まる。
+- 保存の確認の最中（`NSModalPanelRunLoopMode`）: C1 は 1 度目 182 刻み（9.0 秒）・2 度目 226 刻み
+  （11.2 秒）、C2 は 144 刻み（7.3 秒）・141 刻み（7.0 秒）。どれも `docs=1 undo=no layer=有り ready=yes`。
+  1 度目はキャンセルの 0.1〜0.2 秒後に `NSMenuDidSendAction` が届き、以後 `kCFRunLoopDefaultMode` で
+  刻み続けた。終わった回には `NSMenuDidSendAction` は届かなかった。
+- クラッシュレポート（`~/Library/Logs/DiagnosticReports`）は 8 回とも増えなかった。
+- 対照 N1 は `VwSdkProbes.vwlibrary` と `cli` を `Plug-Ins` の外へ退けて起動し、`lsof` で読み込まれて
+  いないことを確かめた（測った後に戻した）。
 
 #### 起動の途中の刻みから呼んだ実測
 
