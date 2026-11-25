@@ -526,7 +526,7 @@ Windows の **VW 2025**。終了の宣言 `CloseAllFilesAndQuitVectorworks` は 
   `Section = HomeScreen` の行がもう書かれていて（22〜78 ms の差）、ワークスペース名も読める。
   **＝mac のように、起動画面の途中から終了を頼んでしまう場面が無い**（Cineware の起動待ちの間にも来ない）。
   - **「開発元不明のプラグイン」のダイアログの間は測れていない【未確認】。** VW 2025 の exe にこの
-    ダイアログの文字列が無く（2026 にはある）、2025 では出せない。2026 のライセンスが要る（[#316](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/316)）。
+    ダイアログの文字列が無く（2026 にはある）、2025 では出せない。2026 のライセンスが要る（[#330](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/330)）。
 - **`BEFO`（`kNotifyBeforePendingUpdate`）も起動を終えた後に初めて届く**（ホーム画面の行が見えた 39〜374 ms 後。
   最初の刻みより前に届いた通知は `TLCh` だけ）。`NWKS`・`WKSL`・`AppA`・`DlgO` は 40 回とも 1 度も届かない
   （mac では `DlgO` は「開発元不明」のダイアログで届く）。
