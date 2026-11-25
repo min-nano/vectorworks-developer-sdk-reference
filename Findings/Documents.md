@@ -196,7 +196,8 @@ documents other than the current document"）。「今の文書を閉じてか�
   一覧が空なら保存を呼ばない。
 - **CLI への帰結**: `close` の後か `quit` の前で、一覧が空のときだけ `GetActiveDocument` が `false` になるまで
   `CloseDocument()` を呼ぶ（回数に上限を付ける）。閉じる順の工夫だけに頼らない（枠の順は SDK から読めない）。
-- **Windows（VW 2025）でも残り、同じ片付けで確認が出なくなる**（#323。VW 2026 の Windows は未確認）。
+- **Windows（VW 2025）でも残り、同じ片付けで確認が出なくなる**（#323。VW 2026 の Windows は
+  測っていないが、ここで使う `ISDK` の宣言と `IApplication.h` が 2025 と 2026 の SDK で同じなので、同じと扱う）。
   - 先に開いた無題の図面を変更し、先・後の順に `CloseDocument()` で閉じると、一覧が空なのに終了で、先に閉じた
     図面（「名称未設定 1」）の保存の確認が出た。
   - 上の片付け（一覧が空で `GetActiveDocument` が真の間だけ `CloseDocument()`）を最後の図面を閉じた直後に行うと、
@@ -204,16 +205,26 @@ documents other than the current document"）。「今の文書を閉じてか�
     `CloseAllFilesAndQuitVectorworks(true, false)`・メニューの「終了」）。保存済みの図面のファイルは書き換わらない。
   - 後に開いたものから閉じた形・1 枚だけの形では、片付けは `CloseDocument()` を呼ばず（ログに出ない。ここから
     `GetActiveDocument` が偽だったと見た。各 1 回）、確認も出なかった。
-  - `GetActiveDocument` の値は直に読んでいない。片付けが `CloseDocument()` を呼んだか（ログ）で見た。
+  - **`GetActiveDocument` で見分けられる**（直に読んだ）: 残ると `true`（閉じた図面の名前。`outSaved=no`）、後に開いた
+    ものから閉じた形・1 枚の形では `false`。`GetCurrentLayer` はどちらも nil で、見分けに使えない。3 枚を A→B→C の
+    順に閉じると B・A の 2 枚が残り、`CloseDocument()` 1 回で 1 枚ずつ消えて `false` になる。保存済みの図面の
+    パスがアプリのフォルダになるのも mac と同じ。
+  - **取り消した後に閉じても残り、確認が出る**（保存済み → 矩形 → 取り消し。1 回）。
+  - **【危険】確認で「はい」を押すと、終了の呼び出しが戻らない**（保存済み 2 回・無題 1 回の 3 回とも。プログラムからの
+    押下でも画面のクリックでも）。保存済みのファイルは書かれず、無題でも保存先を聞かれず、Vectorworks は終わらない
+    （長いもので約 3 分見た）。「キャンセル」は戻り、残った図面はそのまま。mac では未確認。
+  - **【罠】一覧が空で残りも無い（`GetActiveDocument` が `false`）ときに `CloseDocument()` を呼ぶと、`GetActiveDocument` が
+    `true`・空のパスになった**（1 回）。片付けは `true` を見てから呼ぶ。
+  - 操作の間にメッセージを回さない回では VW が 6 回落ちた（残りの無い回でも 1 回。4 秒ずつ回した回では 0 回）。この VM は
+    描画で落ちやすく（[Layer Objects](Layer%20Objects.md#windows-の-vm-では描画のスレッドで落ち続けた)）、残りとの関係は分からない。
 - **最後の図面を UI の「閉じる」で閉じると、残った図面も消える**（Windows（VW 2025）。mac は【推定】）。
   `CloseDocument()` で図面を残したあと、最後の図面を UI の「閉じる」で閉じて終了を頼むと、片付けをしなくても
-  確認は出なかった（2 枚・3 枚の 2 形。各 1 回）。3 枚の形で残っていた枚数は見ていない（上の mac の枠の推定では
-  2 枚残る形だが、`CloseDocument()` で最後を閉じたときのように 1 枚しか消えないのかは確かめていない）。
+  確認は出なかった（2 枚・3 枚の 2 形。各 1 回）。
+  **2 枚残る形でも 1 回で全部消える**: 3 枚の A・B を `CloseDocument()` で閉じ、保存済みの C を
+  `DoMenuName("Close", 0)` で閉じると `GetActiveDocument` は `false`（1 回）。C も `CloseDocument()` なら 2 枚残る。
   mac（VW 2026）は、⌘W で閉じたあとの終了で確認が出ず、終了の前の片付けも `CloseDocument()` を呼ばなかった
   （残っていなかった）。片付けの無い版で確認が出ないことは見ていない（各版 1 回）ので【推定】とする。
-- **未確認**: Windows の VW 2026。取り消した後に閉じる形。確認で「保存」を押したとき何が書かれるか。
-  Windows で `GetActiveDocument`・`GetCurrentLayer` の値を直に読むこと
-  （[issue #323](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/323)）。
+- **未確認**: mac で、取り消した後に閉じる形・確認で「保存」を押したとき。
 
 ### `.sta` を渡すとテンプレートとして扱われる——**無題の新規文書が開く**
 

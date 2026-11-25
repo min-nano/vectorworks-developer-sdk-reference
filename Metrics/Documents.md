@@ -374,6 +374,56 @@ GAD は 0 枚になった後の `GetActiveDocument`。「—」は終了を頼�
 - `0b1e0bd` の無題 A・B を `close` A → B の順に閉じた回は、矩形を確かめるため、閉じる前に A のタブを前面にした。
 - `GetActiveDocument` の値は読んでいない（片付けが `CloseDocument()` を呼んだかをログで見た）。
 
+**プローブで直に読んだ回（Windows・VW 2025）**: VW 2025（30.8.0、build 841679）/ Windows 11（DirectX の無い仮想環境）。
+2026-11-25。プローブ `ghost-close`（#321 のもの〔PR #322 のコミット `575fc69`〕に、`GetCurrentLayer` の値・カレントレイヤの
+図形の数・ファイルの大きさと更新時刻・開いている図面を名前で引く口を足した。PR #328 のコミット `0c654f9`）を、2025 の SDK
+（`2025-NNA-eng-win-SDK`）でビルドした殻・本体（ビルド `f61aaaef93fe`）で、ブリッジ＝殻のタイマーの刻みの中から走らせた。
+図面は `OpenDocumentPath(nullptr)`、変更は undo イベントの中の矩形。「閉じる」は `DoMenuName("Close", 0)`。
+確認は 100 ms の見張りのタイマーが文言を書いた。
+
+宣言の比較: 2025 と 2026 の `ISDK.h` から `CloseDocument`・`GetActiveDocument`・`GetOpenFilesList`・`SwitchToOpenFile`・
+`CloseAllFilesAndQuitVectorworks`・`GetCurrentLayer`・`OpenDocumentPath`・`SaveActiveDocumentPath`・`DoMenuName`・
+`IsDocumentReady`・`MarkCurrentDocChanged`・`EndUndoEvent` などの行を抜いて `diff`（差なし。`IApplication.h` の行も含め 20 行ずつ）。
+`struct SOpenFileInformation` と `IApplication.h` の全体も差なし。
+
+操作の間に 4 秒ずつメッセージを回した回（GAD は一覧が空になった後の `GetActiveDocument`。`GetCurrentLayer` はどれも nil）:
+
+| 形 | GAD | 終了の確認 |
+| --- | --- | --- |
+| A 保存 → event。A→B、終了 | `true`（`C:\Program Files\VW2025\d-a.vwx`、`outSaved=no`） | 「ファイル「d-a.vwx」で行った変更を保存しますか?」。見張りが「はい」を `BM_CLICK` → 戻らない |
+| 同上（`h-a.vwx`。見張りは押さない） | 同上 | 同じ確認。画面で「はい」をクリック → 戻らない |
+| A 無題 event。A→B、終了（見張りは押さない） | `true` | 「名称未設定 2」の確認。画面で「はい」をクリック → 戻らない。保存先の窓は出ない |
+| A 保存 → event → `DoMenuName("Undo", 0)`。A→B、終了 | `true`（`u-a.vwx`） | 出る。見張りが「キャンセル」→ 戻った（1283 ms）。GAD は `true` のまま、`CloseDocument()` 1 回（439 ms）で `false` |
+| 無題 3 枚（A・B event）。A→B→C | B、`CloseDocument()` で A、もう 1 回で `false`（493・446 ms） | — |
+| 無題 A・B（event）と保存済みの C。A→B、C を「閉じる」 | `false`（「閉じる」の戻り値 0。新しい窓なし） | — |
+
+- 「はい」の後: 保存済みの 2 回は `d-a.vwx`・`h-a.vwx` の大きさと更新時刻が変わらず、VW のログは `FILING: closing (4)` の後に
+  保存の行が無い。プロセスは残り、ホーム画面のまま。1 回目は CPU がほぼ動かず、メッセージには応えた。
+  見た長さは 1 回目が約 3 分、2 回目が 2 分前後、3 回目（無題）が 30 秒余り。どれも強制終了した。
+- 最後の形の後、GAD が `false` の状態で `CloseDocument()` を呼ぶと（75 ms）、GAD が `true`・空のパスになった。
+- 取り消しは、`DoMenuName("Undo", 0)` が 0、状態バーが「取り消し: ghost」。もう一度呼ぶと（次の実行）0 で、状態バーが
+  「取り消しできる処理がありません」。画面に矩形は無かった。カレントレイヤを `FirstMemberObj` / `NextObject` で数えると、
+  空 1・矩形の後 2・取り消しの後も 2。
+- 下の 3 形は同じ起動で続けて走らせた。片付けた後に新規の図面を開いても落ちなかった（2 回）。
+
+メッセージを回さない回（同じ呼び出しの中で続けて操作した）で読めた GAD: 無題 A（event）→ B を A→B の順で閉じる 4 回とも
+`true`（A の名前）。うち `CloseDocument()` で片付けて戻った 2 回は `false`（387・467 ms）。B→A の順（1 回）・1 枚だけ（2 回）は
+`false`。閉じた A への `SwitchToOpenFile` は `false`。
+
+メッセージを回さない回では VW が 6 回落ちた（イベントログに残った 2 回は 0xc0000005・実行先 0 番地）。落ちた所:
+
+| 回 | 直前まで | 最後に通った所 |
+| --- | --- | --- |
+| 1 | 起動直後。A→B で残し、`SwitchToOpenFile(A)` | 片付けの `CloseDocument()` |
+| 2 | 残して片付けた（GAD `false`） | 続けて新規を開く |
+| 3 | 残して片付け、呼び出しを終えた | 次の呼び出しの前後（新規を開く） |
+| 4 | 残したまま（片付けなし） | 続けて新規を開く |
+| 5 | 残りなし（1 枚閉じ、新規 1 枚に矩形）で呼び出しを終えた | 次の呼び出しの前後 |
+| 6 | 2 枚の A を閉じた（一覧は C だけ） | C の「閉じる」 |
+
+後から閉じる形 → 新規を 2 回開いた対照（メッセージを回さない。残りなし）は落ちなかった。メッセージを回した 6 形（起動 4 回）では
+1 度も落ちていない。
+
 ### `.sta` を `OpenDocumentPath` へ渡した実測
 
 `.sta` の拡張子を持つファイルのパスを `OpenDocumentPath` へ渡したときのログ:
