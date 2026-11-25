@@ -748,7 +748,8 @@ namespace
 		MCObjectHandle layer = gSDK->GetCurrentLayer();
 		if (layer != nullptr)
 		{
-			for (MCObjectHandle h = gSDK->FirstMemberObj(layer); h != nullptr; h = gSDK->NextObject(h))
+			MCObjectHandle h = gSDK->FirstMemberObj(layer);
+			for (; h != nullptr; h = gSDK->NextObject(h))
 				++n;
 		}
 		probe.log("  図形の数=" + std::to_string(n) + " 前面=" + SdActivePath());
@@ -759,8 +760,13 @@ namespace
 		std::error_code ec;
 		const auto size = sdfs::file_size(SdPath(path), ec);
 		const auto t = sdfs::last_write_time(SdPath(path), ec);
-		probe.log("  stat " + path + (ec ? " 無い" : " 大きさ=" + std::to_string(size) + " 更新=" +
-			std::to_string(t.time_since_epoch().count())));
+		if (ec)
+		{
+			probe.log("  stat 無い " + path);
+			return;
+		}
+		const std::string when = std::to_string(t.time_since_epoch().count());
+		probe.log("  stat 大きさ=" + std::to_string(size) + " 更新=" + when + " " + path);
 	}
 
 	void GcRun(vwprobe::Report& probe, const std::string& line, const std::string& work)
