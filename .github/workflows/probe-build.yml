@@ -399,10 +399,10 @@ jobs:
     runs-on: windows-latest
 
     env:
-      VW_SDK_URL: https://release.vectorworks.net/latest/Vectorworks/2026-NNA-eng-win-SDK.zip
-      VW_SDK_DIR: ${{ github.workspace }}/vw-sdk-plugin-win
+      VW_SDK_URL: https://release.vectorworks.net/latest/Vectorworks/2025-NNA-eng-win-SDK.zip
+      VW_SDK_DIR: ${{ github.workspace }}/vw-sdk-2025-plugin-win
       # キャッシュキーの前半。後半は配布中の SDK の版（ETag）で、scripts/vw-sdk-cache-key.sh が付ける。
-      VW_SDK_CACHE_PREFIX: vw-sdk-2026-NNA-win-plugin
+      VW_SDK_CACHE_PREFIX: vw-sdk-2025-NNA-win-plugin
       VW_SDK_PARTS: plugin
       BUILD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       VW_BUILD_BRANCH: ${{ github.head_ref || github.ref_name }}
