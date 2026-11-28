@@ -63,6 +63,7 @@
 | [Plug-in Interop](Plug-in%20Interop.md) | [Findings](../Findings/Plug-in%20Interop.md) |
 | [Plug-in Modules](Plug-in%20Modules.md) | [Findings](../Findings/Plug-in%20Modules.md) |
 | [Documents](Documents.md) | [Findings](../Findings/Documents.md) |
+| [PDF Export](PDF%20Export.md) | [Findings](../Findings/PDF%20Export.md) |
 | [Investigation Techniques](Investigation%20Techniques.md) | [Findings](../Findings/Investigation%20Techniques.md) |
 
 計測の記録が無いトピック（ヘッダ根拠だけのもの・短いもの）は、Metrics 側のファイルを
