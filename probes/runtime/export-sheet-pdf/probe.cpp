@@ -495,6 +495,31 @@ VW_PROBE("export-sheet-pdf", "シートレイヤを PDF に", "IExportPDF の指
 			all.push_back({nullptr, name});
 		}
 		EpExport(probe, pdf, "シートを全部 1 つに", dir / "all-sheets.pdf", all);
+
+		// 書き出した PDF から文字を取り出すと、数字が記号に、一部の漢字が部首の文字に化けた
+		// （GUI のパブリッシュの PDF は化けない）。フォントの埋め込み方の設定で変わるかを見る。
+		// 化けたかは、出力を mac の PDFKit で読んで外から確かめる。
+		struct EpVariant
+		{
+			std::string tag;
+			bool subset;
+			Filing::SExportPDFOptions::TStandardFormat format;
+		};
+		for (const EpVariant& v :
+			 {EpVariant{"subset-off", false, Filing::SExportPDFOptions::ePDF},
+			  EpVariant{"pdf-a2u", true, Filing::SExportPDFOptions::ePDF_A2U},
+			  EpVariant{"pdf-a2u-subset-off", false, Filing::SExportPDFOptions::ePDF_A2U}})
+		{
+			Filing::SExportPDFOptions f = opts;
+			f.fSubsetFonts = v.subset;
+			f.fStandardFormat = v.format;
+			EpSetOptions(probe, pdf, f, "フォント " + v.tag);
+			EpExport(probe, pdf, "フォント " + v.tag + "「" + names.front() + "」",
+					 dir / (v.tag + "-" + EpSafe(names.front()) + ".pdf"),
+					 {{nullptr, names.front()}});
+			EpExport(probe, pdf, "フォント " + v.tag + " 全部", dir / (v.tag + "-all.pdf"), all);
+		}
+		EpSetOptions(probe, pdf, opts, "フォントを戻す");
 		if (gSDK->GetNumSavedViews() > 0)
 		{
 			TXString view;
