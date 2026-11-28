@@ -194,7 +194,9 @@ namespace
 			}
 			++count;
 			const auto size = psfs::file_size(p, ec);
-			const auto mtime = psfs::last_write_time(p, ec).time_since_epoch().count();
+			// mac の file_clock の数は 128 ビットなので、to_string に渡せる型へ揃える。
+			const auto mtime =
+				static_cast<long long>(psfs::last_write_time(p, ec).time_since_epoch().count());
 			std::ifstream in(p, std::ios::binary);
 			const std::string bytes((std::istreambuf_iterator<char>(in)),
 									std::istreambuf_iterator<char>());
