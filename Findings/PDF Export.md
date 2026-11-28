@@ -20,7 +20,7 @@ VW 2026 の macOS（Apple Silicon）で確認。手順・ログ・比べた結�
 | ISDK の `OpenPDFDocument(path)` の並びは使えるか | **使えない。** 設定のダイアログ（`AcquireExportPDFSettingsAndLocation`）を先に出していないと `OpenPDFDocument` が `false` を返し、ファイルもできない |
 | 前面でない図面のシートを書き出せるか | **前面にしてからなら書き出せる。** 前面の図面から後ろの図面のシートの名前を渡すと、無い名前と同じく失敗する |
 | 書き終わるのはいつか | **`ClosePDFDocument` から戻った時点。** 戻った直後と 2 秒後でファイルの大きさと更新時刻は変わらなかった |
-| 図面に跡が残るか | **残らない。** undo の記録は開かれず、現在のレイヤも書き出す前のまま |
+| 図面に跡が残るか | **undo の記録と現在のレイヤには残らない。** undo の記録は開かれず、現在のレイヤも書き出す前のまま（ビューポートの更新などで図面の中身が変わったかは、未保存の変更を読めないので測っていない。[Documents](Documents.md)） |
 
 ## 呼び方
 
@@ -102,8 +102,4 @@ pdf->SetOptions(saved);                  // 人の設定を戻す
 
 ## 未確認のまま残っているもの
 
-- **Windows で同じに振る舞うか**は確かめていない。
-- 図面の中身（ビューポートの更新・プラグインオブジェクトのリセット・ワークシートの再計算）が
-  書き出しで変わったかは確かめていない（未保存の変更は読めない。[Documents](Documents.md)）。
-- パブリッシュ（`IPublish::PublishSavedSet`）は動かしていない。作れない以上、書き出す対象を
-  呼ぶ側が決める用途には使えないため。
+- **Windows で同じに振る舞うか**（[issue #334](https://github.com/min-nano/vectorworks-developer-sdk-reference/issues/334)）。
