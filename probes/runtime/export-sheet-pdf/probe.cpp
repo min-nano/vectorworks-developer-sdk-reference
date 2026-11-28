@@ -10,8 +10,8 @@
 //
 //	前半はブリッジの空図面（new_document=true の前面）にシートレイヤを 2 枚作って測る。後半は、
 //	後ろに開いている図面のうちシートレイヤのある最初の 1 つを前面にし、シートごとと全部をまとめた
-//	PDF を書き出す（GUI のパブリッシュの PDF と見比べるため）。後半の図面は現在のレイヤと前面を
-//	元に戻し、図形は作らない。
+//	PDF を、シートの名前で指定して書き出す（GUI のパブリッシュの PDF と見比べるため）。後半の図面には
+//	図形を作らず、前面を元に戻す。
 //	出力は一時ディレクトリの VwSdkProbes-export-pdf/<時刻>/ の下。消さずに残す。
 //
 
@@ -457,7 +457,8 @@ VW_PROBE("export-sheet-pdf", "シートレイヤを PDF に", "IExportPDF の指
 	}
 	EpLogFolder(probe, front, "前面の出力");
 
-	// 9. 後ろの図面のうち、シートレイヤのある最初の 1 つ。図形は作らず、現在のレイヤと前面を戻す。
+	// 9. 後ろの図面のうち、シートレイヤのある最初の 1 つ。シートは名前で指定する（前半で、現在の
+	//    レイヤに依らず名前のシートが書き出されると分かったため）。図形は作らず、前面を戻す。
 	for (const EpDoc& d : EpDocs())
 	{
 		if (d.ref == startRef)
@@ -469,18 +470,29 @@ VW_PROBE("export-sheet-pdf", "シートレイヤを PDF に", "IExportPDF の指
 		EpLogSheets(probe, sheets, "fileRef " + std::to_string(d.ref));
 		if (sheets.empty())
 			continue;
-		EpLogSavedViews(probe, "fileRef " + std::to_string(d.ref));
-		MCObjectHandle before = gSDK->GetCurrentLayer();
-		const epfs::path dir = base / ("doc-" + std::to_string(d.ref));
-		epfs::create_directories(dir, ec);
-		std::vector<EpStep> all;
+		std::vector<std::string> names;
 		const size_t limit = std::min<size_t>(sheets.size(), 20);
 		for (size_t i = 0; i < limit; ++i)
+			names.push_back(EpName(sheets[i]));
+		const epfs::path dir = base / ("doc-" + std::to_string(d.ref));
+		epfs::create_directories(dir, ec);
+
+		// 前面でない図面のシートの名前を、前面（シートの名前が無い図面）から渡す。
+		probe.log("SwitchToOpenFile(" + std::to_string(startRef) +
+				  ")=" + EpFlag(gSDK->SwitchToOpenFile(startRef)));
+		EpExport(probe, pdf, "前面でない図面のシート「" + names.front() + "」",
+				 dir / "back-name-from-front.pdf", {{nullptr, names.front()}});
+		probe.log("SwitchToOpenFile(" + std::to_string(d.ref) +
+				  ")=" + EpFlag(gSDK->SwitchToOpenFile(d.ref)));
+		EpLogSavedViews(probe, "fileRef " + std::to_string(d.ref));
+		EpLogState(probe, "名前で書き出す前");
+
+		std::vector<EpStep> all;
+		for (const std::string& name : names)
 		{
-			const std::string name = EpName(sheets[i]);
 			EpExport(probe, pdf, "シート「" + name + "」", dir / (EpSafe(name) + ".pdf"),
-					 {{sheets[i], ""}});
-			all.push_back({sheets[i], ""});
+					 {{nullptr, name}});
+			all.push_back({nullptr, name});
 		}
 		EpExport(probe, pdf, "シートを全部 1 つに", dir / "all-sheets.pdf", all);
 		if (gSDK->GetNumSavedViews() > 0)
@@ -492,8 +504,7 @@ VW_PROBE("export-sheet-pdf", "シートレイヤを PDF に", "IExportPDF の指
 			EpExport(probe, pdf, "保存したビュー「" + EpStr(view) + "」", dir / "saved-view.pdf",
 					 {{nullptr, EpStr(view)}});
 		}
-		gSDK->SetCurrentLayer(before);
-		EpLogState(probe, "戻した後");
+		EpLogState(probe, "名前で書き出した後");
 		EpLogFolder(probe, dir, "fileRef " + std::to_string(d.ref) + " の出力");
 		break;
 	}
