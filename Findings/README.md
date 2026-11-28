@@ -68,6 +68,7 @@
 | [Plug-in Interop](Plug-in%20Interop.md) | **プラグイン間の呼び出し**。ほかのプラグインの機能を名前で呼ぶ 4 つの経路（`CallPluginLibrary` / `DoMenuName` / スクリプトエンジン / C の ABI）・引数と結果の受け渡し・呼ばれる側の作り方。**`DoMenuName` の【訂正】を含む**・**`DoMenuName` の【訂正】を含む** | [Metrics](../Metrics/Plug-in%20Interop.md) |
 | [Plug-in Modules](Plug-in%20Modules.md) | モジュールの読み込みは起動時のみ・Windows は起動時に読み込み直す（OS に預ける前に PIN）・開発元不明ダイアログはフルパスで記憶・殻と本体に割れば再起動なしで入れ替え・**【罠】Windows の VW は起動時にモジュールを読み込み直す**（mac は読み込み直さない。【訂正】を含む） | [Metrics](../Metrics/Plug-in%20Modules.md) |
 | [Documents](Documents.md) | 図面を開く・作る・保存・閉じる。テンプレートは `.sta` を `OpenDocumentPath` で開く・**`CloseDocument()` は確認なしに捨て、戻り値は当てにならない**・未保存の変更は読めない・上書き保存のダイアログの事前判定（mac / Windows） | [Metrics](../Metrics/Documents.md) |
+| [PDF Export](PDF%20Export.md) | シートレイヤをダイアログなしに PDF へ書き出す（`IExportPDF`）。**シートは名前で指定**・1 つの PDF に何枚でも・GUI の書き出しと画素まで同じ・**失敗しても成功を返す場面がある（無いフォルダ）**・パブリッシュのセットは作れない・**埋め込む書体は計算機次第（可変フォントで ToUnicode が崩れる）** | [Metrics](../Metrics/PDF%20Export.md) |
 | [Investigation Techniques](Investigation%20Techniques.md) | 調査の作法。読み戻す・描かれた図形を測る・正解と差分を取る・setter の戻り値を信用しない・`APP_API_*` は呼べない・**Windows 版 SDK は mac 版と同一**・同じ呼び出しの中の値は後で変わりうる | [Metrics](../Metrics/Investigation%20Techniques.md) |
 
 ## 知見を足すときの決まり
